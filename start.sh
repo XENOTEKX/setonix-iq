@@ -3,11 +3,10 @@
 # Setonix Agent - Quick Start Script
 #
 # Usage:
-#   ./start.sh                 # Start dashboard server on port 8080
-#   ./start.sh --port 9000     # Custom port
-#   ./start.sh pipeline        # Run CI/CD pipeline then start server
-#   ./start.sh profile [FILE]  # Run profiling then start server
-#   ./start.sh generate        # Just regenerate API data (no server)
+#   ./start.sh                 # Generate dashboard + push to GitHub
+#   ./start.sh pipeline        # Run CI/CD pipeline, generate + push
+#   ./start.sh profile [FILE]  # Run profiling, generate + push
+#   ./start.sh generate        # Just regenerate + push
 #   ./start.sh status          # Show allocation + job status
 #
 set -euo pipefail
@@ -16,7 +15,7 @@ AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IQTREE_DIR="/scratch/pawsey1351/asamuel/iqtree3"
 PIPELINE="$IQTREE_DIR/setonix-ci/run_pipeline.sh"
 PROFILER="$IQTREE_DIR/setonix-ci/run_profiling.sh"
-PORT="${2:-8080}"
+REPO_URL="https://github.com/XENOTEKX/setonix-iq.git"
 
 # Colors
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
@@ -46,18 +45,24 @@ check_links() {
   fi
 }
 
+sync_to_github() {
+  cd "$AGENT_DIR"
+  if [[ -d .git ]]; then
+    echo -e "${BLUE}Pushing to GitHub...${NC}"
+    git add -A
+    git commit -m "Update dashboard $(date '+%Y-%m-%d %H:%M')" 2>/dev/null || echo "No changes to commit"
+    git push origin main 2>&1 && echo -e "${GREEN}Pushed! On Mac run: cd setonix-iq && git pull && open dashboard.html${NC}" || echo -e "${RED}Push failed — check auth${NC}"
+  else
+    echo -e "${YELLOW}Git not initialized. Run: git init && git remote add origin $REPO_URL${NC}"
+  fi
+}
+
 cmd_start() {
   banner
   check_links
   echo -e "${GREEN}Generating dashboard...${NC}"
   python3 "$AGENT_DIR/serve.py"
-  echo ""
-  echo -e "${CYAN}To view the dashboard:${NC}"
-  echo -e "  1. In VS Code Explorer, right-click ${BLUE}dashboard.html${NC} → ${GREEN}Download${NC}"
-  echo -e "  2. Open the downloaded file in Safari"
-  echo -e ""
-  echo -e "  Or view directly in VS Code Simple Browser:"
-  echo -e "  ${BLUE}Cmd+Shift+P → Simple Browser: Show → file path${NC}"
+  sync_to_github
 }
 
 cmd_pipeline() {
@@ -68,6 +73,7 @@ cmd_pipeline() {
   check_links
   echo -e "${GREEN}Pipeline done. Generating dashboard...${NC}"
   python3 "$AGENT_DIR/serve.py"
+  sync_to_github
 }
 
 cmd_profile() {
@@ -80,11 +86,13 @@ cmd_profile() {
   check_links
   echo -e "${GREEN}Profiling done. Generating dashboard...${NC}"
   python3 "$AGENT_DIR/serve.py"
+  sync_to_github
 }
 
 cmd_generate() {
   check_links
   python3 "$AGENT_DIR/serve.py"
+  sync_to_github
 }
 
 cmd_status() {
@@ -108,9 +116,9 @@ case "${1:-start}" in
   profile)        cmd_profile "$@" ;;
   generate)       cmd_generate ;;
   status)         cmd_status ;;
-  --port)         PORT="$2"; cmd_start ;;
+  sync)           sync_to_github ;;
   -h|--help)
-    echo "Usage: $0 [start|pipeline|profile|generate|status] [--port PORT]"
+    echo "Usage: $0 [start|pipeline|profile|generate|status|sync]"
     ;;
   *)
     echo "Unknown command: $1"
