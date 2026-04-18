@@ -11,6 +11,7 @@ from pathlib import Path
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'results')
 PROFILES_DIR = os.path.join(os.path.dirname(__file__), '..', 'profiles')
+DEEP_PROFILES_DIR = os.path.join(os.path.dirname(__file__), '..', 'deep_profiles')
 LOGS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'logs')
 
 
@@ -148,5 +149,55 @@ def get_all_runs():
     return runs
 
 
+def profile_id_to_datetime(slurm_id, sys_info):
+    """Convert a SLURM job ID to date-time string using system info date."""
+    date_str = sys_info.get('date', '')
+    if date_str:
+        m = re.match(r'(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})', date_str)
+        if m:
+            return '%s_%s%s%s' % (m.group(1), m.group(2), m.group(3), m.group(4))
+    return 'profile_%s' % slurm_id
+
+
+def get_all_profiles():
+    """Return structured data for all deep profiling sessions.
+
+    Reads deep_profile_*.json from website/deep_profiles/ (Setonix symlink).
+    Falls back to logs/profiles/<id>.json for local/offline use.
+    """
+    profiles = []
+
+    # Try reading from symlinked deep_profiles directory (Setonix)
+    if os.path.isdir(DEEP_PROFILES_DIR):
+        for f in sorted(glob.glob(os.path.join(DEEP_PROFILES_DIR, 'deep_profile_*.json'))):
+            try:
+                with open(f) as fh:
+                    p = json.load(fh)
+                # Convert profile_id from SLURM ID to date-time
+                raw_id = p.get('profile_id', '')
+                sys_info = p.get('system', {})
+                p['profile_id'] = profile_id_to_datetime(raw_id, sys_info)
+                p['slurm_id'] = raw_id
+                profiles.append(p)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+    # Fallback: read from committed logs/profiles/
+    if not profiles:
+        profiles_dir = os.path.join(LOGS_DIR, 'profiles')
+        if os.path.isdir(profiles_dir):
+            for f in sorted(glob.glob(os.path.join(profiles_dir, '*.json'))):
+                try:
+                    with open(f) as fh:
+                        profiles.append(json.load(fh))
+                except (json.JSONDecodeError, IOError):
+                    continue
+
+    return profiles
+
+
 if __name__ == '__main__':
+    print('=== Runs ===')
     print(json.dumps(get_all_runs(), indent=2))
+    print('\n=== Profiles ===')
+    print(json.dumps(get_all_profiles(), indent=2))

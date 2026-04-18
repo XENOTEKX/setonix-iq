@@ -24,12 +24,13 @@ DOCS_DIR = os.path.join(SCRIPT_DIR, 'docs')
 LOGS_DIR = os.path.join(SCRIPT_DIR, 'logs')
 
 sys.path.insert(0, API_DIR)
-from data import get_all_runs
+from data import get_all_runs, get_all_profiles
 
 
 def generate():
     """Generate self-contained dashboard HTML with embedded data."""
     runs = get_all_runs()
+    profiles = get_all_profiles()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     # Write JSON for reference
@@ -45,6 +46,14 @@ def generate():
         with open(run_path, 'w') as f:
             json.dump(run, f, indent=2)
 
+    # Export individual per-profile JSON files to logs/profiles/
+    profiles_log_dir = os.path.join(LOGS_DIR, 'profiles')
+    os.makedirs(profiles_log_dir, exist_ok=True)
+    for prof in profiles:
+        prof_path = os.path.join(profiles_log_dir, '%s.json' % prof['profile_id'])
+        with open(prof_path, 'w') as f:
+            json.dump(prof, f, indent=2)
+
     # Read the template
     template_path = os.path.join(WEBSITE_DIR, 'index.html')
     with open(template_path) as f:
@@ -53,6 +62,7 @@ def generate():
     # Find the <script> block and replace the data loading
     # We'll inject DATA right at the start of the script and replace loadData
     data_json = json.dumps(runs)
+    profiles_json = json.dumps(profiles)
 
     # Build the replacement script block
     old_script_start = '// ============ State ============'
@@ -61,7 +71,7 @@ def generate():
     start_idx = template.index(old_script_start)
     end_idx = template.rindex(old_script_end) + len(old_script_end)
 
-    new_script = build_script(data_json, now)
+    new_script = build_script(data_json, profiles_json, now)
 
     output_html = template[:start_idx] + new_script + template[end_idx:]
 
@@ -83,15 +93,17 @@ def generate():
 
     print("Generated: %s" % output_path)
     print("Also: %s" % root_path)
-    print("Runs: %d | Generated: %s" % (len(runs), now))
+    print("Runs: %d | Profiles: %d | Generated: %s" % (len(runs), len(profiles), now))
     return output_path
 
 
-def build_script(data_json, generated_time):
+def build_script(data_json, profiles_json, generated_time):
     """Build the complete JavaScript block with embedded data."""
     return '''// ============ State ============
 var DATA = %s;
+var PROFILES = %s;
 var currentRunIdx = DATA.length - 1;
+var currentProfileIdx = PROFILES.length - 1;
 var charts = {};
 var timingChartType = 'bar';
 var expandedRunId = null;
@@ -560,19 +572,261 @@ function filterTests(status, btn) {
 }
 
 // ============ Profiling ============
+function switchProfile(idx) {
+  currentProfileIdx = parseInt(idx);
+  renderProfiling(DATA[currentRunIdx]);
+}
+
+function toggleCmds() {
+  var el = document.getElementById('profilingCmds');
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function getActiveProfile() {
+  if (PROFILES.length > 0 && currentProfileIdx >= 0 && currentProfileIdx < PROFILES.length)
+    return PROFILES[currentProfileIdx];
+  return null;
+}
+
+function renderProfileMetric(val, lbl, color) {
+  return '<div class="profile-metric"><div class="val" style="color:' + color + '">' + val + '</div><div class="lbl">' + lbl + '</div></div>';
+}
+
 function renderProfiling(run) {
-  var m = (run.profile && run.profile.metrics) || {};
-  var grid = document.getElementById('profileGrid');
-  var items = [
-    { val: m.IPC || 'N/A', lbl: 'IPC', color: '#3b82f6' },
-    { val: m['cache-miss-rate'] ? m['cache-miss-rate'] + '%%' : 'N/A', lbl: 'Cache Miss Rate', color: '#eab308' },
-    { val: m['L1-dcache-miss-rate'] ? m['L1-dcache-miss-rate'] + '%%' : 'N/A', lbl: 'L1 D-Cache Miss', color: '#f97316' },
-    { val: m['branch-miss-rate'] ? m['branch-miss-rate'] + '%%' : 'N/A', lbl: 'Branch Mispredict', color: '#22c55e' },
-    { val: m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A', lbl: 'Instructions', color: '#8b5cf6' }
+  var prof = getActiveProfile();
+  var sel = document.getElementById('profRunSelector');
+
+  if (PROFILES.length > 0) {
+    sel.innerHTML = PROFILES.map(function(p, i) {
+      return '<option value="' + i + '"' + (i === currentProfileIdx ? ' selected' : '') + '>' + p.profile_id + ' (' + p.dataset + ', T' + p.threads + ')</option>';
+    }).join('');
+    sel.onchange = function() { switchProfile(this.value); };
+  } else {
+    sel.innerHTML = DATA.map(function(r, i) {
+      return '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>Run ' + r.run_id + '</option>';
+    }).join('');
+    sel.onchange = function() { switchRun(this.value); };
+  }
+
+  if (prof) {
+    renderDeepProfile(prof);
+  } else {
+    renderBasicProfile(run);
+  }
+}
+
+function renderDeepProfile(prof) {
+  var cpu = prof.cpu || {};
+  var c = cpu.counters || {};
+  var d = cpu.derived || {};
+  var hotspots = cpu.hotspots || [];
+  var gpu = prof.gpu || {};
+  var hw = gpu.hardware || {};
+  var cmds = prof.commands || {};
+
+  var cmdEl = document.getElementById('profilingCmds');
+  var cmdItems = [
+    { label: 'Modules', cmd: cmds.modules || '' },
+    { label: 'perf stat', cmd: cmds.perf_stat || '' },
+    { label: 'perf record', cmd: cmds.perf_record || '' },
+    { label: 'rocprofv3 kernel', cmd: cmds.rocprofv3_kernel || '' },
+    { label: 'rocprofv3 HIP', cmd: cmds.rocprofv3_hip || '' },
+    { label: 'rocprofv3 memory', cmd: cmds.rocprofv3_memory || '' },
+    { label: 'rocm-smi', cmd: cmds.rocm_smi || '' },
   ];
-  grid.innerHTML = items.map(function(it) {
-    return '<div class="profile-metric"><div class="val" style="color:' + it.color + '">' + it.val + '</div><div class="lbl">' + it.lbl + '</div></div>';
+  cmdEl.innerHTML = cmdItems.filter(function(it) { return it.cmd; }).map(function(it) {
+    return '<div class="cmd-item"><span class="cmd-label">' + it.label + '</span><code>' + escHtml(it.cmd) + '</code>' +
+      '<button class="btn-sm" onclick="copySingleCmd(\\'' + escAttr(it.cmd) + '\\', this)">Copy</button></div>';
   }).join('');
+  document.getElementById('profilingCmdsCard').style.display = '';
+
+  var grid1 = document.getElementById('profileGrid');
+  grid1.innerHTML = [
+    renderProfileMetric(d.IPC || 'N/A', 'IPC', '#3b82f6'),
+    renderProfileMetric(d['frontend-stall-rate'] != null ? d['frontend-stall-rate'] + '%%' : 'N/A', 'Frontend Stalls', '#ef4444'),
+    renderProfileMetric(d['backend-stall-rate'] != null ? d['backend-stall-rate'] + '%%' : 'N/A', 'Backend Stalls', '#f97316'),
+    renderProfileMetric(c.instructions ? (c.instructions / 1e9).toFixed(1) + 'B' : 'N/A', 'Instructions', '#8b5cf6'),
+    renderProfileMetric(c.cycles ? (c.cycles / 1e9).toFixed(1) + 'B' : 'N/A', 'Cycles', '#06b6d4'),
+  ].join('');
+
+  var grid2 = document.getElementById('profileGrid2');
+  grid2.innerHTML = [
+    renderProfileMetric(d['cache-miss-rate'] != null ? d['cache-miss-rate'] + '%%' : 'N/A', 'Cache Miss Rate', '#eab308'),
+    renderProfileMetric(d['L1-dcache-miss-rate'] != null ? d['L1-dcache-miss-rate'] + '%%' : 'N/A', 'L1 D-Cache Miss', '#f97316'),
+    renderProfileMetric(d['LLC-miss-rate'] != null ? d['LLC-miss-rate'] + '%%' : 'N/A', 'LLC Miss Rate', '#ec4899'),
+    renderProfileMetric(d['dTLB-miss-rate'] != null ? d['dTLB-miss-rate'] + '%%' : 'N/A', 'dTLB Miss Rate', '#14b8a6'),
+    renderProfileMetric(d['branch-miss-rate'] != null ? d['branch-miss-rate'] + '%%' : 'N/A', 'Branch Mispredict', '#22c55e'),
+  ].join('');
+
+  if (charts.counter) charts.counter.destroy();
+  var counterCtx = document.getElementById('counterChart').getContext('2d');
+  var counterKeys = ['cycles','instructions','cache-references','cache-misses','branch-instructions','branch-misses',
+    'L1-dcache-loads','L1-dcache-load-misses','LLC-loads','LLC-load-misses','dTLB-loads','dTLB-load-misses'];
+  charts.counter = new Chart(counterCtx, {
+    type: 'bar',
+    data: {
+      labels: counterKeys.map(function(k) { return k.replace('L1-dcache-','L1-').replace('-instructions','-instr').replace('-references','-refs').replace('-load-misses','-miss').replace('-loads',''); }),
+      datasets: [{ data: counterKeys.map(function(k) { return c[k] || 0; }), backgroundColor: '#3b82f688', borderColor: '#3b82f6', borderWidth: 1, borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45, font: { size: 9 } } },
+        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, type: 'logarithmic' }
+      }
+    }
+  });
+
+  if (charts.stall) charts.stall.destroy();
+  var stallCtx = document.getElementById('stallChart').getContext('2d');
+  var feStall = d['frontend-stall-rate'] || 0;
+  var beStall = d['backend-stall-rate'] || 0;
+  var retiring = Math.max(0, 100 - feStall - beStall);
+  charts.stall = new Chart(stallCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Frontend Stalls', 'Backend Stalls', 'Retiring/Useful'],
+      datasets: [{ data: [feStall, beStall, retiring],
+        backgroundColor: ['#ef4444', '#f97316', '#22c55e'],
+        borderColor: '#0f1923', borderWidth: 2 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '55%%',
+      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12 } } }
+    }
+  });
+
+  var hsEl = document.getElementById('hotspotContainer');
+  if (hotspots.length > 0) {
+    hsEl.innerHTML = hotspots.map(function(h) {
+      var barColor = h.percent > 30 ? '#ef4444' : h.percent > 10 ? '#f97316' : '#3b82f6';
+      return '<div class="hotspot-row">' +
+        '<div class="hotspot-pct" style="color:' + barColor + '">' + h.percent.toFixed(1) + '%%</div>' +
+        '<div class="hotspot-bar-wrap"><div class="hotspot-bar" style="width:' + Math.min(h.percent * 2, 100) + '%%;background:' + barColor + '"></div></div>' +
+        '<div class="hotspot-func" title="' + escHtml(h['function']) + '">' + escHtml(h['function']) + '</div>' +
+        '<div class="hotspot-module">' + escHtml(h.module || '') + '</div></div>';
+    }).join('');
+  } else {
+    hsEl.innerHTML = '<div class="no-data-msg">No hotspot data. Run deep profiling with perf record.</div>';
+  }
+
+  var gpuGrid = document.getElementById('profileGpuGrid');
+  if (Object.keys(hw).length > 0) {
+    gpuGrid.innerHTML = [
+      renderProfileMetric(hw.temperature_c != null ? hw.temperature_c + '\\u00b0C' : 'N/A', 'Temperature', '#22c55e'),
+      renderProfileMetric(hw.power_w != null ? hw.power_w + 'W' : 'N/A', 'Power', '#eab308'),
+      renderProfileMetric(hw.utilization_pct != null ? hw.utilization_pct + '%%' : 'N/A', 'GPU Util', '#3b82f6'),
+      renderProfileMetric(hw.vram_used_mb != null ? (hw.vram_used_mb / 1024).toFixed(1) + 'GB' : 'N/A', 'VRAM Used', '#8b5cf6'),
+      renderProfileMetric(hw.clock_mhz != null ? hw.clock_mhz + 'MHz' : 'N/A', 'GPU Clock', '#06b6d4'),
+    ].join('');
+  } else {
+    gpuGrid.innerHTML = '<div class="no-data-msg" style="grid-column:1/-1;">No GPU hardware metrics. Run deep profiling on a GPU node.</div>';
+  }
+
+  var traceEl = document.getElementById('gpuTraceContainer');
+  var kernels = gpu.kernels || [];
+  var hipCalls = gpu.hip_calls || [];
+  var memCopies = gpu.memory_copies || [];
+
+  if (kernels.length > 0) {
+    traceEl.innerHTML = '<h3 style="margin:12px 16px 8px;font-size:0.85rem;color:var(--text3);">GPU Kernel Dispatches</h3>' +
+      '<table class="gpu-trace-table"><thead><tr><th>Kernel</th><th>Duration</th><th>Grid Size</th><th>Block Size</th></tr></thead><tbody>' +
+      kernels.map(function(k) {
+        return '<tr><td style="font-family:monospace;font-size:0.75rem;">' + escHtml(k.kernel_name) + '</td>' +
+          '<td>' + (k.duration_ns / 1e6).toFixed(3) + ' ms</td><td>' + k.grid_size + '</td><td>' + k.block_size + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } else if (hipCalls.length > 0) {
+    traceEl.innerHTML = '<h3 style="margin:12px 16px 8px;font-size:0.85rem;color:var(--text3);">HIP API Calls</h3>' +
+      '<table class="gpu-trace-table"><thead><tr><th>Function</th><th>Duration</th><th>Correlation ID</th></tr></thead><tbody>' +
+      hipCalls.slice(0, 50).map(function(h) {
+        return '<tr><td style="font-family:monospace;font-size:0.75rem;">' + escHtml(h['function']) + '</td>' +
+          '<td>' + (h.duration_ns / 1e6).toFixed(3) + ' ms</td><td>' + h.correlation_id + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } else {
+    traceEl.innerHTML = '<div class="no-data-msg">No GPU kernel dispatches detected. GPU traces will appear after HIP kernels are integrated.</div>';
+  }
+
+  if (memCopies.length > 0) {
+    traceEl.innerHTML += '<h3 style="margin:20px 16px 8px;font-size:0.85rem;color:var(--text3);">Memory Copies</h3>' +
+      '<table class="gpu-trace-table"><thead><tr><th>Direction</th><th>Size</th><th>Duration</th></tr></thead><tbody>' +
+      memCopies.map(function(mc) {
+        var sizeStr = mc.size_bytes > 1e6 ? (mc.size_bytes / 1e6).toFixed(1) + ' MB' : (mc.size_bytes / 1e3).toFixed(1) + ' KB';
+        return '<tr><td>' + mc.direction + '</td><td>' + sizeStr + '</td><td>' + (mc.duration_ns / 1e6).toFixed(3) + ' ms</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  if (charts.ipcTrend) charts.ipcTrend.destroy();
+  var ipcCtx = document.getElementById('ipcTrendChart').getContext('2d');
+  var ipcSource = PROFILES.length > 0 ? PROFILES : DATA;
+  charts.ipcTrend = new Chart(ipcCtx, {
+    type: 'line',
+    data: {
+      labels: ipcSource.map(function(r) { return (r.profile_id || r.run_id || '').substring(0, 10); }),
+      datasets: [{
+        label: 'IPC',
+        data: ipcSource.map(function(r) {
+          if (r.cpu && r.cpu.derived) return r.cpu.derived.IPC || null;
+          return (r.profile && r.profile.metrics && r.profile.metrics.IPC) || null;
+        }),
+        borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)',
+        fill: true, tension: 0.3, pointRadius: 6, pointBackgroundColor: '#8b5cf6',
+        pointBorderColor: '#1a2332', pointBorderWidth: 2, spanGaps: true
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8 } },
+      scales: {
+        x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
+        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
+      }
+    }
+  });
+
+  if (charts.stallTrend) charts.stallTrend.destroy();
+  var stallTrendCtx = document.getElementById('stallTrendChart').getContext('2d');
+  if (PROFILES.length > 0) {
+    charts.stallTrend = new Chart(stallTrendCtx, {
+      type: 'line',
+      data: {
+        labels: PROFILES.map(function(p) { return (p.profile_id || '').substring(0, 10); }),
+        datasets: [
+          { label: 'Frontend Stalls %%', data: PROFILES.map(function(p) { return (p.cpu && p.cpu.derived) ? p.cpu.derived['frontend-stall-rate'] : null; }),
+            borderColor: '#ef4444', fill: false, tension: 0.3, pointRadius: 5, spanGaps: true },
+          { label: 'Backend Stalls %%', data: PROFILES.map(function(p) { return (p.cpu && p.cpu.derived) ? p.cpu.derived['backend-stall-rate'] : null; }),
+            borderColor: '#f97316', fill: false, tension: 0.3, pointRadius: 5, spanGaps: true }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8' } } },
+        scales: {
+          x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
+          y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true, max: 100 }
+        }
+      }
+    });
+  }
+}
+
+function renderBasicProfile(run) {
+  var m = (run.profile && run.profile.metrics) || {};
+  document.getElementById('profilingCmdsCard').style.display = 'none';
+
+  var grid1 = document.getElementById('profileGrid');
+  grid1.innerHTML = [
+    renderProfileMetric(m.IPC || 'N/A', 'IPC', '#3b82f6'),
+    renderProfileMetric(m['cache-miss-rate'] ? m['cache-miss-rate'] + '%%' : 'N/A', 'Cache Miss Rate', '#eab308'),
+    renderProfileMetric(m['L1-dcache-miss-rate'] ? m['L1-dcache-miss-rate'] + '%%' : 'N/A', 'L1 D-Cache Miss', '#f97316'),
+    renderProfileMetric(m['branch-miss-rate'] ? m['branch-miss-rate'] + '%%' : 'N/A', 'Branch Mispredict', '#22c55e'),
+    renderProfileMetric(m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A', 'Instructions', '#8b5cf6'),
+  ].join('');
+
+  document.getElementById('profileGrid2').innerHTML = '<div class="no-data-msg" style="grid-column:1/-1;">Run <code>./start.sh deepprofile</code> for extended CPU/GPU analysis.</div>';
+  document.getElementById('hotspotContainer').innerHTML = '<div class="no-data-msg">No hotspot data. Run deep profiling for function-level CPU analysis.</div>';
+  document.getElementById('profileGpuGrid').innerHTML = '';
+  document.getElementById('gpuTraceContainer').innerHTML = '';
 
   if (!m.cycles) return;
 
@@ -666,7 +920,7 @@ function renderEnvironment(run) {
 }
 
 // ============ Init ============
-loadData();''' % (data_json, generated_time)
+loadData();''' % (data_json, profiles_json, generated_time)
 
 
 def main():

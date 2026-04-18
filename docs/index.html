@@ -126,6 +126,27 @@ body {
 }
 .profile-metric .val { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
 .profile-metric .lbl { font-size: 0.7rem; color: var(--text3); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+/* ---- Deep Profiling ---- */
+.section-label { font-size: 0.75rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; margin: 24px 0 12px; padding-left: 2px; }
+.cmd-list { padding: 16px; }
+.cmd-item { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.cmd-item:last-child { border-bottom: none; }
+.cmd-item .cmd-label { font-size: 0.75rem; font-weight: 600; color: var(--text3); min-width: 120px; text-transform: uppercase; }
+.cmd-item code { font-size: 0.8rem; color: var(--text2); flex: 1; word-break: break-all; font-family: 'SF Mono', 'Fira Code', monospace; }
+.cmd-item .btn-sm { flex-shrink: 0; }
+.hotspot-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.hotspot-row:last-child { border-bottom: none; }
+.hotspot-pct { font-size: 1rem; font-weight: 700; min-width: 55px; text-align: right; }
+.hotspot-bar { height: 8px; border-radius: 4px; transition: width 0.5s; }
+.hotspot-bar-wrap { width: 120px; background: var(--surface); border-radius: 4px; overflow: hidden; }
+.hotspot-func { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; color: var(--text2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hotspot-module { font-size: 0.7rem; color: var(--text3); min-width: 80px; text-align: right; }
+.gpu-trace-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.gpu-trace-table th { text-align: left; padding: 10px 12px; color: var(--text3); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 2px solid var(--border); }
+.gpu-trace-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text2); }
+.gpu-trace-table tr:hover td { background: rgba(59,130,246,0.04); }
+.profile-grid-gpu { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+.no-data-msg { color: var(--text3); font-size: 0.85rem; padding: 20px; text-align: center; font-style: italic; }
 /* ---- GPU Panel ---- */
 .gpu-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
 .gpu-stat {
@@ -442,24 +463,67 @@ body {
     <div class="page" id="page-profiling">
       <div class="page-header">
         <div>
-          <h1>CPU Profiling</h1>
-          <div class="subtitle">Hardware performance counters and hotspot analysis</div>
+          <h1>Deep Profiling</h1>
+          <div class="subtitle">CPU &amp; GPU hardware/software analysis — AMD EPYC 7A53 + MI250X</div>
         </div>
         <div class="run-selector">
-          <select id="profRunSelector" onchange="switchRun(this.value)"></select>
+          <select id="profRunSelector" onchange="switchProfile(this.value)"></select>
         </div>
       </div>
+
+      <!-- Profiling Commands -->
+      <div class="card" id="profilingCmdsCard">
+        <div class="card-header">
+          <h2>Profiling Commands</h2>
+          <button class="btn-sm" onclick="toggleCmds()">Show/Hide</button>
+        </div>
+        <div class="cmd-list" id="profilingCmds" style="display:none;"></div>
+      </div>
+
+      <!-- CPU Hardware Counters -->
+      <div class="section-label">CPU Hardware Counters</div>
       <div class="profile-grid" id="profileGrid"></div>
+      <div class="profile-grid" id="profileGrid2"></div>
+
       <div class="charts-row">
         <div class="card">
           <div class="card-header"><h2>Hardware Counters</h2></div>
           <div class="chart-wrapper"><canvas id="counterChart"></canvas></div>
         </div>
         <div class="card">
-          <div class="card-header"><h2>IPC Across Runs</h2></div>
-          <div class="chart-wrapper"><canvas id="ipcTrendChart"></canvas></div>
+          <div class="card-header"><h2>Pipeline Stalls</h2></div>
+          <div class="chart-wrapper"><canvas id="stallChart"></canvas></div>
         </div>
       </div>
+
+      <!-- CPU Hotspot Analysis -->
+      <div class="card">
+        <div class="card-header"><h2>CPU Hotspot Analysis</h2></div>
+        <div id="hotspotContainer"></div>
+      </div>
+
+      <!-- GPU Hardware -->
+      <div class="section-label">GPU Hardware</div>
+      <div class="profile-grid-gpu" id="profileGpuGrid"></div>
+
+      <!-- GPU Kernel Trace -->
+      <div class="card">
+        <div class="card-header"><h2>GPU Kernel &amp; HIP Trace</h2></div>
+        <div id="gpuTraceContainer"></div>
+      </div>
+
+      <!-- Trends -->
+      <div class="charts-row">
+        <div class="card">
+          <div class="card-header"><h2>IPC Across Sessions</h2></div>
+          <div class="chart-wrapper"><canvas id="ipcTrendChart"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>Stall Rate Trend</h2></div>
+          <div class="chart-wrapper"><canvas id="stallTrendChart"></canvas></div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header"><h2>Flamegraph</h2></div>
         <div class="flamegraph-container" id="flamegraphContainer">
@@ -521,7 +585,9 @@ body {
 <script>
 // ============ State ============
 var DATA = [{"run_id": "2026-04-18_201515", "slurm_id": "41683322", "timing": [{"command": "iqtree3 -s turtle.fa -B 1000 -T 1 -seed 73073", "time_s": 2.978511796, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -p turtle.nex -B 1000 -T 1 -seed 73073", "time_s": 3.244102211, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -p turtle.nex -B 1000 -T 1 -m MFP+MERGE -rcluster 10 --pref", "time_s": 3.057640839, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -p turtle.merge.best_scheme.nex -z turtle.trees -zb 10000 -", "time_s": 1.080289985, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -m GTR+F+I+R3+T -te turtle.trees -T 1 --prefix turtle.mix -", "time_s": 2.216210096, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -p turtle.nex.best_scheme.nex -z turtle.trees -n 0 -wpl --p", "time_s": 0.090208564, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -S turtle.nex --prefix turtle.loci -T 1 -seed 73073", "time_s": 3.334403145, "memory_kb": 0.0}, {"command": "iqtree3 -t turtle.nex.treefile --gcf turtle.loci.treefile -s turtle.fa --scf 100", "time_s": 0.025626156, "memory_kb": 0.0}, {"command": "iqtree3 -t turtle.fa.treefile --gcf turtle.loci.treefile -s turtle.fa --scf 100 ", "time_s": 0.024491268, "memory_kb": 0.0}, {"command": "iqtree3 -s turtle.fa -B 1000 -T 4 -seed 73073 --prefix turtle.fa.4t", "time_s": 1.661022123, "memory_kb": 0.0}], "verify": [{"status": "pass", "file": "turtle.fa.iqtree", "expected": -5370.3729, "reported": -5370.373, "diff": 0.0001}, {"status": "pass", "file": "turtle.loci.iqtree", "expected": -5263.0947, "reported": -5263.0947, "diff": 0.0}, {"status": "pass", "file": "turtle.merge.iqtree", "expected": -5370.3728, "reported": -5370.3728, "diff": 0.0}, {"status": "pass", "file": "turtle.mix.iqtree", "expected": -5342.1012, "reported": -5342.1013, "diff": 0.0001}, {"status": "pass", "file": "turtle.nex.iqtree", "expected": -5360.0759, "reported": -5360.0759, "diff": 0.0}, {"status": "pass", "file": "turtle.test.iqtree", "expected": -5372.1363, "reported": -5372.1362, "diff": 0.0001}, {"status": "pass", "file": "turtle.wpl.iqtree", "expected": -5361.6271, "reported": -5361.6272, "diff": 0.0001}], "env": {"hostname": "nid003000", "date": "2026-04-18T20:15:15+08:00", "run_id": "41683322", "gcc": "gcc (SUSE Linux) 14.3.0", "cmake": "cmake version 3.28.3", "rocm": "HIP version: 6.3.42131-fa1d09cbd", "gpu": "N/A", "cpu": "AMD EPYC 7A53 64-Core Processor", "cores": "8"}, "gpu_info": "=== rocm-smi ===\n\n\n========================================= ROCm System Management Interface =========================================\n=================================================== Concise Info ===================================================\nDevice  Node  IDs              Temp    Power  Partitions          SCLK    MCLK     Fan  Perf  PwrCap  VRAM%  GPU%  \n\u001b[3m              (DID,     GUID)  (Edge)  (Avg)  (Mem, Compute, ID)                                                   \u001b[0m\n====================================================================================================================\n0       8     0x7408,   13395  31.0\u00b0C  96.0W  N/A, N/A, 0         800Mhz  1600Mhz  0%   auto  560.0W  0%     0%    \n====================================================================================================================\n=============================================== End of ROCm SMI Log ================================================\n\n=== rocminfo (GPU agents) ===\n", "profile": {"run_id": "41683322", "dataset": "test_scripts/test_data/turtle.fa", "threads": 1, "metrics": {"cycles": 4161234725, "instructions": 12255303298, "cache-references": 527090527, "cache-misses": 16722424, "branch-instructions": 1222864685, "branch-misses": 3618719, "L1-dcache-loads": 5315940103, "L1-dcache-load-misses": 398895395, "IPC": 2.945, "cache-miss-rate": 3.17, "branch-miss-rate": 0.2959, "L1-dcache-miss-rate": 7.5}}, "summary": {"pass": 7, "fail": 0, "total_time": 17.71, "all_pass": true}}];
+var PROFILES = [{"profile_id": "2026-04-18_223223", "date": "2026-04-18T22:32:23+08:00", "dataset": "test_scripts/test_data/turtle.fa", "threads": 1, "model": "GTR+G4", "cpu": {"counters": {"cycles": 5217266714, "instructions": 12176445021, "cache-references": 624885458, "cache-misses": 17844625, "branch-instructions": 1242451082, "branch-misses": 4061928, "L1-dcache-loads": 5459471512, "L1-dcache-load-misses": 485401643, "L1-icache-load-misses": 1629067, "dTLB-loads": 10831110, "dTLB-load-misses": 56444, "iTLB-loads": 703581, "iTLB-load-misses": 401892, "stalled-cycles-frontend": 162782116, "task-clock": 1623.53, "context-switches": 0, "cpu-migrations": 0, "page-faults": 1609}, "derived": {"IPC": 2.334, "cache-miss-rate": 2.8557, "branch-miss-rate": 0.3269, "L1-dcache-miss-rate": 8.891, "dTLB-miss-rate": 0.5211, "iTLB-miss-rate": 57.1209, "frontend-stall-rate": 3.1201, "backend-stall-rate": 0.0}, "hotspots": [{"percent": 39.12, "samples": 48, "command": "iqtree3", "module": "iqtree3", "function": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*) [c"}]}, "gpu": {"hardware": {"temperature_c": 38.0, "power_w": null, "utilization_pct": 0.0}, "kernels": [], "hip_calls": [], "memory_copies": []}, "system": {"hostname": "nid002996", "date": "2026-04-18T22:32:23+08:00", "run_id": "41686812", "cpu": "AMD EPYC 7A53 64-Core Processor", "cores": "16", "threads_per_core": "2", "sockets": "1", "numa_nodes": "4", "l1d_cache": "2 MiB (64 instances)", "l1i_cache": "2 MiB (64 instances)", "l2_cache": "32 MiB (64 instances)", "l3_cache": "256 MiB (8 instances)", "mem_total_gb": "250", "gcc": "gcc (SUSE Linux) 14.3.0", "rocm": "HIP version: 6.3.42131-fa1d09cbd", "gpu": "N/A"}, "commands": {"modules": "module load rocm/6.3.0 eigen/3.4.0 boost/1.86.0-c++14-python", "perf_stat": "perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-load-misses,LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,task-clock,context-switches,cpu-migrations,page-faults ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "perf_record": "perf record -g -F 99 ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocprofv3_kernel": "rocprofv3 --kernel-trace --stats --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocprofv3_hip": "rocprofv3 --hip-trace --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocprofv3_memory": "rocprofv3 --memory-copy-trace --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocm_smi": "rocm-smi --showtemp --showpower --showuse --showmemuse --showclkfrq --json"}, "slurm_id": "41686812"}];
 var currentRunIdx = DATA.length - 1;
+var currentProfileIdx = PROFILES.length - 1;
 var charts = {};
 var timingChartType = 'bar';
 var expandedRunId = null;
@@ -587,7 +653,7 @@ function loadData() {
   renderRunsList();
   document.getElementById('serverDot').style.background = 'var(--green)';
   document.getElementById('serverStatus').textContent = 'Static (GitHub Pages)';
-  document.getElementById('lastUpdate').textContent = 'Generated: 2026-04-18 21:54:08';
+  document.getElementById('lastUpdate').textContent = 'Generated: 2026-04-18 22:36:19';
 }
 
 function populateAllSelectors() {
@@ -990,19 +1056,261 @@ function filterTests(status, btn) {
 }
 
 // ============ Profiling ============
+function switchProfile(idx) {
+  currentProfileIdx = parseInt(idx);
+  renderProfiling(DATA[currentRunIdx]);
+}
+
+function toggleCmds() {
+  var el = document.getElementById('profilingCmds');
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function getActiveProfile() {
+  if (PROFILES.length > 0 && currentProfileIdx >= 0 && currentProfileIdx < PROFILES.length)
+    return PROFILES[currentProfileIdx];
+  return null;
+}
+
+function renderProfileMetric(val, lbl, color) {
+  return '<div class="profile-metric"><div class="val" style="color:' + color + '">' + val + '</div><div class="lbl">' + lbl + '</div></div>';
+}
+
 function renderProfiling(run) {
-  var m = (run.profile && run.profile.metrics) || {};
-  var grid = document.getElementById('profileGrid');
-  var items = [
-    { val: m.IPC || 'N/A', lbl: 'IPC', color: '#3b82f6' },
-    { val: m['cache-miss-rate'] ? m['cache-miss-rate'] + '%' : 'N/A', lbl: 'Cache Miss Rate', color: '#eab308' },
-    { val: m['L1-dcache-miss-rate'] ? m['L1-dcache-miss-rate'] + '%' : 'N/A', lbl: 'L1 D-Cache Miss', color: '#f97316' },
-    { val: m['branch-miss-rate'] ? m['branch-miss-rate'] + '%' : 'N/A', lbl: 'Branch Mispredict', color: '#22c55e' },
-    { val: m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A', lbl: 'Instructions', color: '#8b5cf6' }
+  var prof = getActiveProfile();
+  var sel = document.getElementById('profRunSelector');
+
+  if (PROFILES.length > 0) {
+    sel.innerHTML = PROFILES.map(function(p, i) {
+      return '<option value="' + i + '"' + (i === currentProfileIdx ? ' selected' : '') + '>' + p.profile_id + ' (' + p.dataset + ', T' + p.threads + ')</option>';
+    }).join('');
+    sel.onchange = function() { switchProfile(this.value); };
+  } else {
+    sel.innerHTML = DATA.map(function(r, i) {
+      return '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>Run ' + r.run_id + '</option>';
+    }).join('');
+    sel.onchange = function() { switchRun(this.value); };
+  }
+
+  if (prof) {
+    renderDeepProfile(prof);
+  } else {
+    renderBasicProfile(run);
+  }
+}
+
+function renderDeepProfile(prof) {
+  var cpu = prof.cpu || {};
+  var c = cpu.counters || {};
+  var d = cpu.derived || {};
+  var hotspots = cpu.hotspots || [];
+  var gpu = prof.gpu || {};
+  var hw = gpu.hardware || {};
+  var cmds = prof.commands || {};
+
+  var cmdEl = document.getElementById('profilingCmds');
+  var cmdItems = [
+    { label: 'Modules', cmd: cmds.modules || '' },
+    { label: 'perf stat', cmd: cmds.perf_stat || '' },
+    { label: 'perf record', cmd: cmds.perf_record || '' },
+    { label: 'rocprofv3 kernel', cmd: cmds.rocprofv3_kernel || '' },
+    { label: 'rocprofv3 HIP', cmd: cmds.rocprofv3_hip || '' },
+    { label: 'rocprofv3 memory', cmd: cmds.rocprofv3_memory || '' },
+    { label: 'rocm-smi', cmd: cmds.rocm_smi || '' },
   ];
-  grid.innerHTML = items.map(function(it) {
-    return '<div class="profile-metric"><div class="val" style="color:' + it.color + '">' + it.val + '</div><div class="lbl">' + it.lbl + '</div></div>';
+  cmdEl.innerHTML = cmdItems.filter(function(it) { return it.cmd; }).map(function(it) {
+    return '<div class="cmd-item"><span class="cmd-label">' + it.label + '</span><code>' + escHtml(it.cmd) + '</code>' +
+      '<button class="btn-sm" onclick="copySingleCmd(\'' + escAttr(it.cmd) + '\', this)">Copy</button></div>';
   }).join('');
+  document.getElementById('profilingCmdsCard').style.display = '';
+
+  var grid1 = document.getElementById('profileGrid');
+  grid1.innerHTML = [
+    renderProfileMetric(d.IPC || 'N/A', 'IPC', '#3b82f6'),
+    renderProfileMetric(d['frontend-stall-rate'] != null ? d['frontend-stall-rate'] + '%' : 'N/A', 'Frontend Stalls', '#ef4444'),
+    renderProfileMetric(d['backend-stall-rate'] != null ? d['backend-stall-rate'] + '%' : 'N/A', 'Backend Stalls', '#f97316'),
+    renderProfileMetric(c.instructions ? (c.instructions / 1e9).toFixed(1) + 'B' : 'N/A', 'Instructions', '#8b5cf6'),
+    renderProfileMetric(c.cycles ? (c.cycles / 1e9).toFixed(1) + 'B' : 'N/A', 'Cycles', '#06b6d4'),
+  ].join('');
+
+  var grid2 = document.getElementById('profileGrid2');
+  grid2.innerHTML = [
+    renderProfileMetric(d['cache-miss-rate'] != null ? d['cache-miss-rate'] + '%' : 'N/A', 'Cache Miss Rate', '#eab308'),
+    renderProfileMetric(d['L1-dcache-miss-rate'] != null ? d['L1-dcache-miss-rate'] + '%' : 'N/A', 'L1 D-Cache Miss', '#f97316'),
+    renderProfileMetric(d['LLC-miss-rate'] != null ? d['LLC-miss-rate'] + '%' : 'N/A', 'LLC Miss Rate', '#ec4899'),
+    renderProfileMetric(d['dTLB-miss-rate'] != null ? d['dTLB-miss-rate'] + '%' : 'N/A', 'dTLB Miss Rate', '#14b8a6'),
+    renderProfileMetric(d['branch-miss-rate'] != null ? d['branch-miss-rate'] + '%' : 'N/A', 'Branch Mispredict', '#22c55e'),
+  ].join('');
+
+  if (charts.counter) charts.counter.destroy();
+  var counterCtx = document.getElementById('counterChart').getContext('2d');
+  var counterKeys = ['cycles','instructions','cache-references','cache-misses','branch-instructions','branch-misses',
+    'L1-dcache-loads','L1-dcache-load-misses','LLC-loads','LLC-load-misses','dTLB-loads','dTLB-load-misses'];
+  charts.counter = new Chart(counterCtx, {
+    type: 'bar',
+    data: {
+      labels: counterKeys.map(function(k) { return k.replace('L1-dcache-','L1-').replace('-instructions','-instr').replace('-references','-refs').replace('-load-misses','-miss').replace('-loads',''); }),
+      datasets: [{ data: counterKeys.map(function(k) { return c[k] || 0; }), backgroundColor: '#3b82f688', borderColor: '#3b82f6', borderWidth: 1, borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45, font: { size: 9 } } },
+        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, type: 'logarithmic' }
+      }
+    }
+  });
+
+  if (charts.stall) charts.stall.destroy();
+  var stallCtx = document.getElementById('stallChart').getContext('2d');
+  var feStall = d['frontend-stall-rate'] || 0;
+  var beStall = d['backend-stall-rate'] || 0;
+  var retiring = Math.max(0, 100 - feStall - beStall);
+  charts.stall = new Chart(stallCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Frontend Stalls', 'Backend Stalls', 'Retiring/Useful'],
+      datasets: [{ data: [feStall, beStall, retiring],
+        backgroundColor: ['#ef4444', '#f97316', '#22c55e'],
+        borderColor: '#0f1923', borderWidth: 2 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '55%',
+      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12 } } }
+    }
+  });
+
+  var hsEl = document.getElementById('hotspotContainer');
+  if (hotspots.length > 0) {
+    hsEl.innerHTML = hotspots.map(function(h) {
+      var barColor = h.percent > 30 ? '#ef4444' : h.percent > 10 ? '#f97316' : '#3b82f6';
+      return '<div class="hotspot-row">' +
+        '<div class="hotspot-pct" style="color:' + barColor + '">' + h.percent.toFixed(1) + '%</div>' +
+        '<div class="hotspot-bar-wrap"><div class="hotspot-bar" style="width:' + Math.min(h.percent * 2, 100) + '%;background:' + barColor + '"></div></div>' +
+        '<div class="hotspot-func" title="' + escHtml(h['function']) + '">' + escHtml(h['function']) + '</div>' +
+        '<div class="hotspot-module">' + escHtml(h.module || '') + '</div></div>';
+    }).join('');
+  } else {
+    hsEl.innerHTML = '<div class="no-data-msg">No hotspot data. Run deep profiling with perf record.</div>';
+  }
+
+  var gpuGrid = document.getElementById('profileGpuGrid');
+  if (Object.keys(hw).length > 0) {
+    gpuGrid.innerHTML = [
+      renderProfileMetric(hw.temperature_c != null ? hw.temperature_c + '\u00b0C' : 'N/A', 'Temperature', '#22c55e'),
+      renderProfileMetric(hw.power_w != null ? hw.power_w + 'W' : 'N/A', 'Power', '#eab308'),
+      renderProfileMetric(hw.utilization_pct != null ? hw.utilization_pct + '%' : 'N/A', 'GPU Util', '#3b82f6'),
+      renderProfileMetric(hw.vram_used_mb != null ? (hw.vram_used_mb / 1024).toFixed(1) + 'GB' : 'N/A', 'VRAM Used', '#8b5cf6'),
+      renderProfileMetric(hw.clock_mhz != null ? hw.clock_mhz + 'MHz' : 'N/A', 'GPU Clock', '#06b6d4'),
+    ].join('');
+  } else {
+    gpuGrid.innerHTML = '<div class="no-data-msg" style="grid-column:1/-1;">No GPU hardware metrics. Run deep profiling on a GPU node.</div>';
+  }
+
+  var traceEl = document.getElementById('gpuTraceContainer');
+  var kernels = gpu.kernels || [];
+  var hipCalls = gpu.hip_calls || [];
+  var memCopies = gpu.memory_copies || [];
+
+  if (kernels.length > 0) {
+    traceEl.innerHTML = '<h3 style="margin:12px 16px 8px;font-size:0.85rem;color:var(--text3);">GPU Kernel Dispatches</h3>' +
+      '<table class="gpu-trace-table"><thead><tr><th>Kernel</th><th>Duration</th><th>Grid Size</th><th>Block Size</th></tr></thead><tbody>' +
+      kernels.map(function(k) {
+        return '<tr><td style="font-family:monospace;font-size:0.75rem;">' + escHtml(k.kernel_name) + '</td>' +
+          '<td>' + (k.duration_ns / 1e6).toFixed(3) + ' ms</td><td>' + k.grid_size + '</td><td>' + k.block_size + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } else if (hipCalls.length > 0) {
+    traceEl.innerHTML = '<h3 style="margin:12px 16px 8px;font-size:0.85rem;color:var(--text3);">HIP API Calls</h3>' +
+      '<table class="gpu-trace-table"><thead><tr><th>Function</th><th>Duration</th><th>Correlation ID</th></tr></thead><tbody>' +
+      hipCalls.slice(0, 50).map(function(h) {
+        return '<tr><td style="font-family:monospace;font-size:0.75rem;">' + escHtml(h['function']) + '</td>' +
+          '<td>' + (h.duration_ns / 1e6).toFixed(3) + ' ms</td><td>' + h.correlation_id + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } else {
+    traceEl.innerHTML = '<div class="no-data-msg">No GPU kernel dispatches detected. GPU traces will appear after HIP kernels are integrated.</div>';
+  }
+
+  if (memCopies.length > 0) {
+    traceEl.innerHTML += '<h3 style="margin:20px 16px 8px;font-size:0.85rem;color:var(--text3);">Memory Copies</h3>' +
+      '<table class="gpu-trace-table"><thead><tr><th>Direction</th><th>Size</th><th>Duration</th></tr></thead><tbody>' +
+      memCopies.map(function(mc) {
+        var sizeStr = mc.size_bytes > 1e6 ? (mc.size_bytes / 1e6).toFixed(1) + ' MB' : (mc.size_bytes / 1e3).toFixed(1) + ' KB';
+        return '<tr><td>' + mc.direction + '</td><td>' + sizeStr + '</td><td>' + (mc.duration_ns / 1e6).toFixed(3) + ' ms</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  if (charts.ipcTrend) charts.ipcTrend.destroy();
+  var ipcCtx = document.getElementById('ipcTrendChart').getContext('2d');
+  var ipcSource = PROFILES.length > 0 ? PROFILES : DATA;
+  charts.ipcTrend = new Chart(ipcCtx, {
+    type: 'line',
+    data: {
+      labels: ipcSource.map(function(r) { return (r.profile_id || r.run_id || '').substring(0, 10); }),
+      datasets: [{
+        label: 'IPC',
+        data: ipcSource.map(function(r) {
+          if (r.cpu && r.cpu.derived) return r.cpu.derived.IPC || null;
+          return (r.profile && r.profile.metrics && r.profile.metrics.IPC) || null;
+        }),
+        borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)',
+        fill: true, tension: 0.3, pointRadius: 6, pointBackgroundColor: '#8b5cf6',
+        pointBorderColor: '#1a2332', pointBorderWidth: 2, spanGaps: true
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8 } },
+      scales: {
+        x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
+        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
+      }
+    }
+  });
+
+  if (charts.stallTrend) charts.stallTrend.destroy();
+  var stallTrendCtx = document.getElementById('stallTrendChart').getContext('2d');
+  if (PROFILES.length > 0) {
+    charts.stallTrend = new Chart(stallTrendCtx, {
+      type: 'line',
+      data: {
+        labels: PROFILES.map(function(p) { return (p.profile_id || '').substring(0, 10); }),
+        datasets: [
+          { label: 'Frontend Stalls %', data: PROFILES.map(function(p) { return (p.cpu && p.cpu.derived) ? p.cpu.derived['frontend-stall-rate'] : null; }),
+            borderColor: '#ef4444', fill: false, tension: 0.3, pointRadius: 5, spanGaps: true },
+          { label: 'Backend Stalls %', data: PROFILES.map(function(p) { return (p.cpu && p.cpu.derived) ? p.cpu.derived['backend-stall-rate'] : null; }),
+            borderColor: '#f97316', fill: false, tension: 0.3, pointRadius: 5, spanGaps: true }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8' } } },
+        scales: {
+          x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
+          y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true, max: 100 }
+        }
+      }
+    });
+  }
+}
+
+function renderBasicProfile(run) {
+  var m = (run.profile && run.profile.metrics) || {};
+  document.getElementById('profilingCmdsCard').style.display = 'none';
+
+  var grid1 = document.getElementById('profileGrid');
+  grid1.innerHTML = [
+    renderProfileMetric(m.IPC || 'N/A', 'IPC', '#3b82f6'),
+    renderProfileMetric(m['cache-miss-rate'] ? m['cache-miss-rate'] + '%' : 'N/A', 'Cache Miss Rate', '#eab308'),
+    renderProfileMetric(m['L1-dcache-miss-rate'] ? m['L1-dcache-miss-rate'] + '%' : 'N/A', 'L1 D-Cache Miss', '#f97316'),
+    renderProfileMetric(m['branch-miss-rate'] ? m['branch-miss-rate'] + '%' : 'N/A', 'Branch Mispredict', '#22c55e'),
+    renderProfileMetric(m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A', 'Instructions', '#8b5cf6'),
+  ].join('');
+
+  document.getElementById('profileGrid2').innerHTML = '<div class="no-data-msg" style="grid-column:1/-1;">Run <code>./start.sh deepprofile</code> for extended CPU/GPU analysis.</div>';
+  document.getElementById('hotspotContainer').innerHTML = '<div class="no-data-msg">No hotspot data. Run deep profiling for function-level CPU analysis.</div>';
+  document.getElementById('profileGpuGrid').innerHTML = '';
+  document.getElementById('gpuTraceContainer').innerHTML = '';
 
   if (!m.cycles) return;
 

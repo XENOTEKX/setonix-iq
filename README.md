@@ -100,6 +100,9 @@ All commands are run via `start.sh`:
 # Run profiling on a dataset, generate, push
 ./start.sh profile
 
+# Run deep CPU+GPU profiling (submits GPU SLURM job)
+./start.sh deepprofile
+
 # Check SLURM jobs and allocation balance
 ./start.sh status
 
@@ -163,9 +166,11 @@ setonix-iq/
 │   └── assets/             ← Flamegraph SVG symlink (gitignored)
 │
 ├── logs/
-│   └── runs/               ← One JSON file per run (COMMITTED to git)
-│       ├── 2026-04-18_201515.json
-│       ├── 2026-04-19_143022.json
+│   ├── runs/               ← One JSON file per run (COMMITTED to git)
+│   │   ├── 2026-04-18_201515.json
+│   │   └── ...
+│   └── profiles/           ← Deep profile JSON files (COMMITTED to git)
+│       ├── deep_profile_41686771.json
 │       └── ...
 │
 ├── docs/
@@ -202,6 +207,34 @@ logs/runs/*.json  ──loaded by data.py──►  same structured JSON
          │
          └──► embedded in HTML (dashboard.html)
 ```
+
+---
+
+## Deep Profiling
+
+`./start.sh deepprofile` submits a GPU SLURM job (`run_deep_profile.sh`) that runs 5 profiling stages:
+
+| Stage | Tool | Output |
+|-------|------|--------|
+| 1. CPU counters | `perf stat` | 21 hardware counters (IPC, cache, TLB, branch, stalls) |
+| 2. CPU hotspots | `perf record` + `perf report` | Function-level CPU time breakdown |
+| 3. GPU metrics | `rocm-smi --json` | Temperature, power, VRAM, utilization, clocks |
+| 4. GPU traces | `rocprofv3` | Kernel dispatches, HIP API calls, memory copies |
+| 5. System info | `uname`, `lscpu`, `rocm-smi` | CPU/GPU hardware identification |
+
+All output is consolidated into a single JSON file: `deep_profiles/deep_profile_<SLURM_ID>.json`
+
+**Modules used:** `rocm/6.3.0`, `rocprofiler-compute/3.0.0`, `rocprofiler-systems/6.3.0`
+
+The dashboard's **Profiling** page automatically renders deep profile data when available, including:
+- CPU performance metrics (IPC, stall rates, cache/TLB/branch miss rates)
+- Hardware counter bar chart (log scale)
+- Pipeline stall breakdown (doughnut chart)
+- Function hotspot table from `perf report`
+- GPU hardware metrics grid
+- GPU kernel dispatch and memory copy tables
+- IPC and stall trend charts across profiling runs
+- Collapsible section showing exact profiling commands used
 
 ---
 

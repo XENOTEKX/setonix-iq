@@ -15,6 +15,7 @@ AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IQTREE_DIR="/scratch/pawsey1351/asamuel/iqtree3"
 PIPELINE="$IQTREE_DIR/setonix-ci/run_pipeline.sh"
 PROFILER="$IQTREE_DIR/setonix-ci/run_profiling.sh"
+DEEP_PROFILER="$IQTREE_DIR/setonix-ci/run_deep_profile.sh"
 REPO_URL="https://github.com/XENOTEKX/setonix-iq.git"
 
 # Colors
@@ -42,6 +43,10 @@ check_links() {
   if [[ ! -L "$AGENT_DIR/website/assets/flamegraph.svg" ]]; then
     mkdir -p "$AGENT_DIR/website/assets"
     ln -sf "$IQTREE_DIR/setonix-ci/dashboard/flamegraph.svg" "$AGENT_DIR/website/assets/flamegraph.svg" 2>/dev/null || true
+  fi
+  if [[ ! -L "$AGENT_DIR/website/deep_profiles" ]] || [[ ! -d "$AGENT_DIR/website/deep_profiles" ]]; then
+    echo -e "${YELLOW}Setting up deep_profiles symlink...${NC}"
+    ln -sf "$IQTREE_DIR/setonix-ci/deep_profiles" "$AGENT_DIR/website/deep_profiles"
   fi
 }
 
@@ -89,6 +94,21 @@ cmd_profile() {
   sync_to_github
 }
 
+cmd_deepprofile() {
+  banner
+  local dataset="${3:-test_scripts/test_data/turtle.fa}"
+  local threads="${4:-1}"
+  local model="${5:-GTR+G4}"
+  echo -e "${BLUE}Running deep profiling (CPU + GPU hardware/software)...${NC}"
+  echo -e "${CYAN}Dataset: ${dataset} | Threads: ${threads} | Model: ${model}${NC}"
+  bash "$DEEP_PROFILER" "$dataset" "$threads" "$model"
+  echo ""
+  check_links
+  echo -e "${GREEN}Deep profiling done. Generating dashboard...${NC}"
+  python3 "$AGENT_DIR/serve.py"
+  sync_to_github
+}
+
 cmd_generate() {
   check_links
   python3 "$AGENT_DIR/serve.py"
@@ -114,15 +134,16 @@ case "${1:-start}" in
   start|"")       cmd_start ;;
   pipeline)       cmd_pipeline ;;
   profile)        cmd_profile "$@" ;;
+  deepprofile)    cmd_deepprofile "$@" ;;
   generate)       cmd_generate ;;
   status)         cmd_status ;;
   sync)           sync_to_github ;;
   -h|--help)
-    echo "Usage: $0 [start|pipeline|profile|generate|status|sync]"
+    echo "Usage: $0 [start|pipeline|profile|deepprofile|generate|status|sync]"
     ;;
   *)
     echo "Unknown command: $1"
-    echo "Usage: $0 [start|pipeline|profile|generate|status]"
+    echo "Usage: $0 [start|pipeline|profile|deepprofile|generate|status|sync]"
     exit 1
     ;;
 esac

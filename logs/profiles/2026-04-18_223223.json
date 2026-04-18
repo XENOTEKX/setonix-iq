@@ -1,0 +1,86 @@
+{
+  "profile_id": "2026-04-18_223223",
+  "date": "2026-04-18T22:32:23+08:00",
+  "dataset": "test_scripts/test_data/turtle.fa",
+  "threads": 1,
+  "model": "GTR+G4",
+  "cpu": {
+    "counters": {
+      "cycles": 5217266714,
+      "instructions": 12176445021,
+      "cache-references": 624885458,
+      "cache-misses": 17844625,
+      "branch-instructions": 1242451082,
+      "branch-misses": 4061928,
+      "L1-dcache-loads": 5459471512,
+      "L1-dcache-load-misses": 485401643,
+      "L1-icache-load-misses": 1629067,
+      "dTLB-loads": 10831110,
+      "dTLB-load-misses": 56444,
+      "iTLB-loads": 703581,
+      "iTLB-load-misses": 401892,
+      "stalled-cycles-frontend": 162782116,
+      "task-clock": 1623.53,
+      "context-switches": 0,
+      "cpu-migrations": 0,
+      "page-faults": 1609
+    },
+    "derived": {
+      "IPC": 2.334,
+      "cache-miss-rate": 2.8557,
+      "branch-miss-rate": 0.3269,
+      "L1-dcache-miss-rate": 8.891,
+      "dTLB-miss-rate": 0.5211,
+      "iTLB-miss-rate": 57.1209,
+      "frontend-stall-rate": 3.1201,
+      "backend-stall-rate": 0.0
+    },
+    "hotspots": [
+      {
+        "percent": 39.12,
+        "samples": 48,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*) [c"
+      }
+    ]
+  },
+  "gpu": {
+    "hardware": {
+      "temperature_c": 38.0,
+      "power_w": null,
+      "utilization_pct": 0.0
+    },
+    "kernels": [],
+    "hip_calls": [],
+    "memory_copies": []
+  },
+  "system": {
+    "hostname": "nid002996",
+    "date": "2026-04-18T22:32:23+08:00",
+    "run_id": "41686812",
+    "cpu": "AMD EPYC 7A53 64-Core Processor",
+    "cores": "16",
+    "threads_per_core": "2",
+    "sockets": "1",
+    "numa_nodes": "4",
+    "l1d_cache": "2 MiB (64 instances)",
+    "l1i_cache": "2 MiB (64 instances)",
+    "l2_cache": "32 MiB (64 instances)",
+    "l3_cache": "256 MiB (8 instances)",
+    "mem_total_gb": "250",
+    "gcc": "gcc (SUSE Linux) 14.3.0",
+    "rocm": "HIP version: 6.3.42131-fa1d09cbd",
+    "gpu": "N/A"
+  },
+  "commands": {
+    "modules": "module load rocm/6.3.0 eigen/3.4.0 boost/1.86.0-c++14-python",
+    "perf_stat": "perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-load-misses,LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,task-clock,context-switches,cpu-migrations,page-faults ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1",
+    "perf_record": "perf record -g -F 99 ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1",
+    "rocprofv3_kernel": "rocprofv3 --kernel-trace --stats --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1",
+    "rocprofv3_hip": "rocprofv3 --hip-trace --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1",
+    "rocprofv3_memory": "rocprofv3 --memory-copy-trace --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1",
+    "rocm_smi": "rocm-smi --showtemp --showpower --showuse --showmemuse --showclkfrq --json"
+  },
+  "slurm_id": "41686812"
+}
