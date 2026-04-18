@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# Setonix Agent - Quick Start Script
+#
+# Usage:
+#   ./start.sh                 # Start dashboard server on port 8080
+#   ./start.sh --port 9000     # Custom port
+#   ./start.sh pipeline        # Run CI/CD pipeline then start server
+#   ./start.sh profile [FILE]  # Run profiling then start server
+#   ./start.sh generate        # Just regenerate API data (no server)
+#   ./start.sh status          # Show allocation + job status
+#
+set -euo pipefail
+
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IQTREE_DIR="/scratch/pawsey1351/asamuel/iqtree3"
+PIPELINE="$IQTREE_DIR/setonix-ci/run_pipeline.sh"
+PROFILER="$IQTREE_DIR/setonix-ci/run_profiling.sh"
+PORT="${2:-8080}"
+
+# Colors
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
+CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
+
+banner() {
+  echo -e "${CYAN}"
+  echo "  ╔═══════════════════════════════════════════╗"
+  echo "  ║       Setonix Agent - IQ-TREE Dashboard   ║"
+  echo "  ╚═══════════════════════════════════════════╝"
+  echo -e "${NC}"
+}
+
+check_links() {
+  local ok=true
+  if [[ ! -L "$AGENT_DIR/website/results" ]] || [[ ! -d "$AGENT_DIR/website/results" ]]; then
+    echo -e "${YELLOW}Setting up results symlink...${NC}"
+    ln -sf "$IQTREE_DIR/setonix-ci/results" "$AGENT_DIR/website/results"
+  fi
+  if [[ ! -L "$AGENT_DIR/website/profiles" ]] || [[ ! -d "$AGENT_DIR/website/profiles" ]]; then
+    echo -e "${YELLOW}Setting up profiles symlink...${NC}"
+    ln -sf "$IQTREE_DIR/setonix-ci/profiles" "$AGENT_DIR/website/profiles"
+  fi
+  if [[ ! -L "$AGENT_DIR/website/assets/flamegraph.svg" ]]; then
+    mkdir -p "$AGENT_DIR/website/assets"
+    ln -sf "$IQTREE_DIR/setonix-ci/dashboard/flamegraph.svg" "$AGENT_DIR/website/assets/flamegraph.svg" 2>/dev/null || true
+  fi
+}
+
+cmd_start() {
+  banner
+  check_links
+  echo -e "${GREEN}Generating dashboard...${NC}"
+  python3 "$AGENT_DIR/serve.py"
+  echo ""
+  echo -e "${CYAN}To view the dashboard:${NC}"
+  echo -e "  1. In VS Code Explorer, right-click ${BLUE}dashboard.html${NC} → ${GREEN}Download${NC}"
+  echo -e "  2. Open the downloaded file in Safari"
+  echo -e ""
+  echo -e "  Or view directly in VS Code Simple Browser:"
+  echo -e "  ${BLUE}Cmd+Shift+P → Simple Browser: Show → file path${NC}"
+}
+
+cmd_pipeline() {
+  banner
+  echo -e "${BLUE}Running CI/CD pipeline...${NC}"
+  bash "$PIPELINE"
+  echo ""
+  check_links
+  echo -e "${GREEN}Pipeline done. Generating dashboard...${NC}"
+  python3 "$AGENT_DIR/serve.py"
+}
+
+cmd_profile() {
+  banner
+  local dataset="${3:-$IQTREE_DIR/test_scripts/test_data/turtle.fa}"
+  local threads="${4:-1}"
+  echo -e "${BLUE}Running profiling on ${dataset} with ${threads} thread(s)...${NC}"
+  bash "$PROFILER" "$dataset" "$threads"
+  echo ""
+  check_links
+  echo -e "${GREEN}Profiling done. Generating dashboard...${NC}"
+  python3 "$AGENT_DIR/serve.py"
+}
+
+cmd_generate() {
+  check_links
+  python3 "$AGENT_DIR/serve.py"
+}
+
+cmd_status() {
+  banner
+  echo -e "${BLUE}=== Job Status ===${NC}"
+  squeue -u "$USER" --format="%i %j %T %M %l %N" 2>/dev/null || echo "No SLURM access"
+  echo ""
+  echo -e "${BLUE}=== Allocation Balance ===${NC}"
+  pawseyAccountBalance -p pawsey1351 2>/dev/null || echo "N/A"
+  echo ""
+  pawseyAccountBalance -p pawsey1351-gpu 2>/dev/null || echo "N/A"
+  echo ""
+  echo -e "${BLUE}=== Disk Quota ===${NC}"
+  quota -s 2>/dev/null | head -6 || echo "N/A"
+}
+
+# ---- Main ----
+case "${1:-start}" in
+  start|"")       cmd_start ;;
+  pipeline)       cmd_pipeline ;;
+  profile)        cmd_profile "$@" ;;
+  generate)       cmd_generate ;;
+  status)         cmd_status ;;
+  --port)         PORT="$2"; cmd_start ;;
+  -h|--help)
+    echo "Usage: $0 [start|pipeline|profile|generate|status] [--port PORT]"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Usage: $0 [start|pipeline|profile|generate|status]"
+    exit 1
+    ;;
+esac
