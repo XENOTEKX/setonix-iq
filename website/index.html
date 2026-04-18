@@ -63,7 +63,7 @@ body {
 .main { flex: 1; padding: 32px; overflow-x: hidden; }
 .page-header {
   display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 28px;
+  margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
 }
 .page-header h1 { font-size: 1.75rem; font-weight: 700; }
 .page-header .subtitle { color: var(--text2); font-size: 0.875rem; margin-top: 4px; }
@@ -91,10 +91,10 @@ body {
   padding: 24px; margin-bottom: 20px;
 }
 .card-header {
-  display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;
 }
 .card-header h2 { font-size: 1rem; font-weight: 600; }
-.card-header .actions { display: flex; gap: 8px; }
+.card-header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn {
   padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.8rem;
   font-weight: 500; border: 1px solid var(--border); background: var(--surface);
@@ -136,21 +136,8 @@ body {
 .gpu-stat .lbl { font-size: 0.7rem; color: var(--text3); margin-top: 4px; }
 /* ---- Flamegraph ---- */
 .flamegraph-container { overflow-x: auto; padding: 10px 0; }
-/* ---- Tab system ---- */
-.tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
-.tab {
-  padding: 10px 18px; font-size: 0.85rem; font-weight: 500; color: var(--text3);
-  cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s;
-  background: none; border-top: none; border-left: none; border-right: none;
-}
-.tab:hover { color: var(--text); }
-.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.tab-content { display: none; }
-.tab-content.active { display: block; }
 /* ---- Run Selector ---- */
-.run-selector {
-  display: flex; align-items: center; gap: 12px;
-}
+.run-selector { display: flex; align-items: center; gap: 12px; }
 .run-selector select {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
   color: var(--text); padding: 6px 12px; font-size: 0.85rem; font-family: inherit;
@@ -160,39 +147,129 @@ body {
   height: 8px; background: var(--surface); border-radius: 4px; overflow: hidden; margin: 8px 0;
 }
 .alloc-bar .fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+/* ---- Search/Filter ---- */
+.filter-bar {
+  display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;
+}
+.filter-bar input[type="text"] {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 8px 14px; font-size: 0.85rem; font-family: inherit;
+  min-width: 240px; outline: none; transition: border-color 0.2s;
+}
+.filter-bar input[type="text"]:focus { border-color: var(--accent); }
+.filter-bar input[type="text"]::placeholder { color: var(--text3); }
+.filter-bar select {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 8px 12px; font-size: 0.85rem; font-family: inherit;
+}
+.filter-bar .count { color: var(--text3); font-size: 0.8rem; margin-left: auto; }
+/* ---- Run List (leaderboard style) ---- */
+.run-row {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 8px; transition: border-color 0.2s, box-shadow 0.2s; cursor: pointer;
+}
+.run-row:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+.run-row.active { border-color: var(--accent); }
+.run-row-summary {
+  display: grid; grid-template-columns: 40px 1fr 120px 100px 100px 80px 80px;
+  align-items: center; padding: 14px 18px; gap: 12px;
+}
+.run-row-summary .rank { font-size: 0.85rem; font-weight: 700; color: var(--text3); text-align: center; }
+.run-row-summary .rank.gold { color: #fbbf24; }
+.run-row-summary .rank.silver { color: #cbd5e1; }
+.run-row-summary .rank.bronze { color: #d97706; }
+.run-row-summary .run-info { min-width: 0; }
+.run-row-summary .run-id { font-weight: 600; font-size: 0.9rem; }
+.run-row-summary .run-meta { font-size: 0.75rem; color: var(--text3); margin-top: 2px; }
+.run-row-summary .run-time { font-weight: 700; font-size: 1rem; text-align: right; }
+.run-row-summary .run-tests { text-align: center; }
+.run-row-summary .run-ipc { text-align: center; font-weight: 600; color: var(--accent); }
+.run-row-summary .run-cores { text-align: center; color: var(--text2); }
+.run-row-summary .run-detail-btn {
+  padding: 4px 12px; border-radius: var(--radius-sm); font-size: 0.75rem;
+  font-weight: 600; border: 1px solid var(--border); background: var(--surface);
+  color: var(--accent); cursor: pointer; transition: all 0.2s; text-align: center;
+}
+.run-row-summary .run-detail-btn:hover { background: var(--accent-glow); border-color: var(--accent); }
+/* ---- Run Detail Expand ---- */
+.run-detail {
+  display: none; border-top: 1px solid var(--border); padding: 20px 18px;
+  animation: fadeIn 0.25s ease;
+}
+.run-detail.open { display: block; }
+.detail-section { margin-bottom: 20px; }
+.detail-section:last-child { margin-bottom: 0; }
+.detail-section h3 {
+  font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text3); margin-bottom: 10px; font-weight: 600;
+}
+/* ---- Command Block ---- */
+.cmd-block {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 12px 14px; margin-bottom: 8px; display: flex; align-items: flex-start; gap: 10px;
+}
+.cmd-block .cmd-num {
+  font-size: 0.7rem; color: var(--text3); font-weight: 700; min-width: 20px;
+  padding-top: 2px; text-align: right;
+}
+.cmd-block .cmd-text {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.8rem; color: var(--text); flex: 1; word-break: break-all;
+  white-space: pre-wrap; line-height: 1.5;
+}
+.cmd-block .cmd-time {
+  font-size: 0.75rem; color: var(--accent); font-weight: 600; white-space: nowrap;
+}
+.cmd-block .cmd-copy {
+  padding: 3px 8px; border-radius: 4px; font-size: 0.7rem;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text3); cursor: pointer; transition: all 0.2s; white-space: nowrap;
+}
+.cmd-block .cmd-copy:hover { border-color: var(--accent); color: var(--accent); }
+.cmd-block .cmd-copy.copied { border-color: var(--green); color: var(--green); }
+/* ---- Detail Grid ---- */
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.detail-kv {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.detail-kv .dk-label { font-size: 0.7rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.04em; }
+.detail-kv .dk-value { font-size: 0.85rem; font-weight: 600; margin-top: 3px; word-break: break-all; }
+/* ---- Verify Mini Table ---- */
+.verify-mini { width: 100%; border-collapse: collapse; }
+.verify-mini th {
+  text-align: left; padding: 6px 10px; font-size: 0.7rem; text-transform: uppercase;
+  color: var(--text3); border-bottom: 1px solid var(--border); font-weight: 600;
+}
+.verify-mini td { padding: 6px 10px; font-size: 0.8rem; border-bottom: 1px solid rgba(42,52,68,0.5); }
+/* ---- Copy All ---- */
+.copy-all-btn {
+  padding: 6px 16px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 500;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+}
+.copy-all-btn:hover { background: var(--accent-glow); }
+.copy-all-btn.copied { border-color: var(--green); color: var(--green); }
 /* ---- Responsive ---- */
 @media (max-width: 1200px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .profile-grid { grid-template-columns: repeat(3, 1fr); }
   .charts-row { grid-template-columns: 1fr; }
   .gpu-grid { grid-template-columns: repeat(2, 1fr); }
+  .run-row-summary { grid-template-columns: 40px 1fr 100px 80px 80px; }
+  .run-row-summary .run-ipc, .run-row-summary .run-cores { display: none; }
 }
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .main { padding: 16px; }
   .stats-grid, .profile-grid { grid-template-columns: 1fr; }
+  .run-row-summary { grid-template-columns: 30px 1fr 80px 70px; }
+  .run-row-summary .run-detail-btn { display: none; }
 }
 /* ---- Page transitions ---- */
 .page { display: none; }
 .page.active { display: block; animation: fadeIn 0.25s ease; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-/* ---- Tooltip ---- */
-.tooltip-custom {
-  position: absolute; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 10px 14px; font-size: 0.8rem;
-  pointer-events: none; z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-}
-/* ---- Auto-refresh indicator ---- */
-.refresh-bar {
-  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); font-size: 0.8rem; color: var(--text3);
-}
-.refresh-bar .spinner {
-  width: 14px; height: 14px; border: 2px solid var(--border);
-  border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -208,6 +285,10 @@ body {
       <a href="#" class="active" data-page="overview">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         Overview
+      </a>
+      <a href="#" data-page="runs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        All Runs
       </a>
       <a href="#" data-page="tests">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
@@ -259,7 +340,7 @@ body {
         <div class="card">
           <div class="card-header">
             <h2>Test Execution Times</h2>
-            <div class="actions"><button class="btn" onclick="toggleChartType('timing')">Toggle View</button></div>
+            <div class="actions"><button class="btn" onclick="toggleChartType()">Toggle View</button></div>
           </div>
           <div class="chart-wrapper"><canvas id="timingChart"></canvas></div>
         </div>
@@ -268,6 +349,48 @@ body {
           <div class="chart-wrapper"><canvas id="trendChart"></canvas></div>
         </div>
       </div>
+      <!-- Quick command reference for current run -->
+      <div class="card" id="quickCmdsCard">
+        <div class="card-header">
+          <h2>Commands (Current Run)</h2>
+          <div class="actions">
+            <button class="copy-all-btn" onclick="copyAllCmds(this)" title="Copy all commands as a script">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy All
+            </button>
+          </div>
+        </div>
+        <div id="quickCmds"></div>
+      </div>
+    </div>
+
+    <!-- ====== All Runs Page ====== -->
+    <div class="page" id="page-runs">
+      <div class="page-header">
+        <div>
+          <h1>All Pipeline Runs</h1>
+          <div class="subtitle">Browse, search, and compare all runs — click any row for full details</div>
+        </div>
+      </div>
+      <div class="filter-bar" id="runsFilterBar">
+        <input type="text" id="runSearch" placeholder="Search by run ID, hostname, date, command..." oninput="filterRuns()">
+        <select id="runStatusFilter" onchange="filterRuns()">
+          <option value="all">All Status</option>
+          <option value="pass">Pass Only</option>
+          <option value="fail">Has Failures</option>
+        </select>
+        <select id="runSortBy" onchange="filterRuns()">
+          <option value="date-desc">Newest First</option>
+          <option value="date-asc">Oldest First</option>
+          <option value="time-asc">Fastest First</option>
+          <option value="time-desc">Slowest First</option>
+          <option value="ipc-desc">Best IPC First</option>
+        </select>
+        <span class="count" id="runCount"></span>
+      </div>
+      <!-- Summary stats for all runs -->
+      <div class="stats-grid" id="allRunsStats" style="grid-template-columns: repeat(5, 1fr);"></div>
+      <div id="runsList"></div>
     </div>
 
     <!-- ====== Tests Page ====== -->
@@ -277,7 +400,12 @@ body {
           <h1>Test Results</h1>
           <div class="subtitle">Log-likelihood verification against reference values</div>
         </div>
-        <span class="badge" id="testsBadge">--</span>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <div class="run-selector">
+            <select id="testRunSelector" onchange="switchRun(this.value)"></select>
+          </div>
+          <span class="badge" id="testsBadge">--</span>
+        </div>
       </div>
       <div class="card">
         <div class="card-header">
@@ -294,9 +422,17 @@ body {
         </table>
       </div>
       <div class="card">
-        <div class="card-header"><h2>Timing Breakdown</h2></div>
+        <div class="card-header">
+          <h2>Timing Breakdown</h2>
+          <div class="actions">
+            <button class="copy-all-btn" onclick="copyAllCmds(this)" title="Copy all commands">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy All Commands
+            </button>
+          </div>
+        </div>
         <table class="data-table" id="timingTable">
-          <thead><tr><th>#</th><th>Command</th><th>Time (s)</th><th>% of Total</th><th>Bar</th></tr></thead>
+          <thead><tr><th>#</th><th>Command</th><th>Time (s)</th><th>% of Total</th><th>Bar</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -309,16 +445,19 @@ body {
           <h1>CPU Profiling</h1>
           <div class="subtitle">Hardware performance counters and hotspot analysis</div>
         </div>
+        <div class="run-selector">
+          <select id="profRunSelector" onchange="switchRun(this.value)"></select>
+        </div>
       </div>
       <div class="profile-grid" id="profileGrid"></div>
       <div class="charts-row">
         <div class="card">
-          <div class="card-header"><h2>CPU Hotspots</h2></div>
-          <div class="chart-wrapper"><canvas id="funcChart"></canvas></div>
-        </div>
-        <div class="card">
           <div class="card-header"><h2>Hardware Counters</h2></div>
           <div class="chart-wrapper"><canvas id="counterChart"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>IPC Across Runs</h2></div>
+          <div class="chart-wrapper"><canvas id="ipcTrendChart"></canvas></div>
         </div>
       </div>
       <div class="card">
@@ -336,10 +475,9 @@ body {
           <h1>GPU Status</h1>
           <div class="subtitle">AMD Instinct MI250X (gfx90a) — ROCm 6.3.0</div>
         </div>
-        <button class="btn" onclick="refreshData()" style="display:flex;align-items:center;gap:6px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-          Refresh
-        </button>
+        <div class="run-selector">
+          <select id="gpuRunSelector" onchange="switchRun(this.value)"></select>
+        </div>
       </div>
       <div class="gpu-grid" id="gpuGrid"></div>
       <div class="card">
@@ -366,6 +504,9 @@ body {
           <h1>Environment</h1>
           <div class="subtitle">Build toolchain and system information</div>
         </div>
+        <div class="run-selector">
+          <select id="envRunSelector" onchange="switchRun(this.value)"></select>
+        </div>
       </div>
       <div class="card">
         <table class="data-table" id="envTable">
@@ -383,6 +524,7 @@ let DATA = [];
 let currentRunIdx = 0;
 let charts = {};
 let timingChartType = 'bar';
+let expandedRunId = null;
 
 // ============ Navigation ============
 document.querySelectorAll('.sidebar nav a').forEach(a => {
@@ -396,6 +538,45 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
   });
 });
 
+// ============ Clipboard Helper ============
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  }).catch(() => {
+    // Fallback for file:// protocol
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); btn.textContent = 'Copied!'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    } catch(e) {}
+    document.body.removeChild(ta);
+  });
+}
+
+function copyAllCmds(btn) {
+  const run = DATA[currentRunIdx];
+  const script = '#!/bin/bash\n# Pipeline commands from Run ' + run.run_id + '\n# ' + (run.env.date || '') + ' on ' + (run.env.hostname || '') + '\n\n' +
+    run.timing.map(t => t.command).join('\n') + '\n';
+  copyText(script, btn);
+}
+
+function copySingleCmd(text, btn) {
+  copyText(text, btn);
+}
+
+// ============ Formatting ============
+function fmtTime(s) {
+  if (s >= 60) return (s / 60).toFixed(1) + 'm';
+  return s.toFixed(2) + 's';
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
+
 // ============ Data Loading ============
 async function loadData() {
   try {
@@ -406,8 +587,9 @@ async function loadData() {
       return;
     }
     currentRunIdx = DATA.length - 1;
-    populateRunSelector();
+    populateAllSelectors();
     renderAll();
+    renderRunsList();
     document.getElementById('serverDot').style.background = 'var(--green)';
     document.getElementById('serverStatus').textContent = 'Connected';
     document.getElementById('lastUpdate').textContent = 'Updated: ' + new Date().toLocaleTimeString();
@@ -418,19 +600,24 @@ async function loadData() {
   }
 }
 
-function populateRunSelector() {
-  const sel = document.getElementById('runSelector');
-  sel.innerHTML = DATA.map((r, i) => `<option value="${i}" ${i === currentRunIdx ? 'selected' : ''}>Run ${r.run_id}</option>`).join('');
+function populateAllSelectors() {
+  const selectors = ['runSelector', 'testRunSelector', 'profRunSelector', 'gpuRunSelector', 'envRunSelector'];
+  selectors.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = DATA.map((r, i) =>
+      '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>Run ' + r.run_id + '</option>'
+    ).join('');
+  });
 }
 
 function switchRun(idx) {
   currentRunIdx = parseInt(idx);
+  populateAllSelectors();
   renderAll();
 }
 
-async function refreshData() {
-  await loadData();
-}
+async function refreshData() { await loadData(); }
 
 // ============ Rendering ============
 function renderAll() {
@@ -441,64 +628,301 @@ function renderAll() {
   renderGPU(run);
   renderAllocation();
   renderEnvironment(run);
+  renderQuickCmds(run);
 }
 
+// ============ Overview ============
 function renderOverview(run) {
   const s = run.summary;
+  const profile = (run.profile && run.profile.metrics) || {};
+
   document.getElementById('overviewSubtitle').textContent =
-    `Run ${run.run_id} | ${run.env.date || 'N/A'} | ${run.env.hostname || 'N/A'}`;
+    'Run ' + run.run_id + ' | ' + (run.env.date || 'N/A') + ' | ' + (run.env.hostname || 'N/A');
 
   const badge = document.getElementById('statusBadge');
-  badge.textContent = s.all_pass ? 'ALL PASS' : `${s.fail} FAILED`;
+  badge.textContent = s.all_pass ? 'ALL PASS' : s.fail + ' FAILED';
   badge.className = 'badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail');
 
-  const profile = run.profile?.metrics || {};
-  document.getElementById('statsGrid').innerHTML = `
-    <div class="stat-card">
-      <div class="label">Tests</div>
-      <div class="value" style="color:${s.all_pass ? 'var(--green)' : 'var(--red)'}">${s.pass}/${s.pass + s.fail}</div>
-      <div class="change">${s.all_pass ? 'All passing' : s.fail + ' failed'}</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Pipeline Time</div>
-      <div class="value">${s.total_time}s</div>
-      <div class="change">${run.timing.length} test commands</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">IPC</div>
-      <div class="value">${profile.IPC || 'N/A'}</div>
-      <div class="change">Instructions per cycle</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">CPU</div>
-      <div class="value">${(run.env.cpu || 'N/A').replace(' 64-Core Processor', '')}</div>
-      <div class="change">${run.env.cores || '?'} cores allocated</div>
-    </div>
-  `;
+  // Compute cross-run stats
+  const bestTime = Math.min.apply(null, DATA.map(function(r) { return r.summary.total_time; }));
+  const avgTime = (DATA.reduce(function(a, r) { return a + r.summary.total_time; }, 0) / DATA.length).toFixed(1);
+  const allPass = DATA.every(function(r) { return r.summary.all_pass; });
+
+  document.getElementById('statsGrid').innerHTML =
+    '<div class="stat-card">' +
+      '<div class="label">Tests</div>' +
+      '<div class="value" style="color:' + (s.all_pass ? 'var(--green)' : 'var(--red)') + '">' + s.pass + '/' + (s.pass + s.fail) + '</div>' +
+      '<div class="change">' + (s.all_pass ? 'All passing' : s.fail + ' failed') + '</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Pipeline Time</div>' +
+      '<div class="value">' + fmtTime(s.total_time) + '</div>' +
+      '<div class="change">' + run.timing.length + ' commands | Best: ' + fmtTime(bestTime) + '</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">IPC</div>' +
+      '<div class="value">' + (profile.IPC || 'N/A') + '</div>' +
+      '<div class="change">Instructions per cycle</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Total Runs</div>' +
+      '<div class="value">' + DATA.length + '</div>' +
+      '<div class="change">' + (allPass ? 'All green' : 'Some failures') + ' | Avg: ' + avgTime + 's</div>' +
+    '</div>';
 
   renderTimingChart(run);
   renderTrendChart();
 }
 
+function renderQuickCmds(run) {
+  var el = document.getElementById('quickCmds');
+  el.innerHTML = run.timing.map(function(t, i) {
+    return '<div class="cmd-block">' +
+      '<span class="cmd-num">' + (i + 1) + '</span>' +
+      '<span class="cmd-text">' + escHtml(t.command) + '</span>' +
+      '<span class="cmd-time">' + t.time_s.toFixed(3) + 's</span>' +
+      '<button class="cmd-copy" onclick="copySingleCmd(\'' + escAttr(t.command) + '\', this)">Copy</button>' +
+    '</div>';
+  }).join('');
+}
+
+// ============ All Runs List ============
+function renderRunsList() {
+  renderAllRunsStats();
+  filterRuns();
+}
+
+function renderAllRunsStats() {
+  var total = DATA.length;
+  var passing = DATA.filter(function(r) { return r.summary.all_pass; }).length;
+  var failing = total - passing;
+  var bestTime = Math.min.apply(null, DATA.map(function(r) { return r.summary.total_time; }));
+  var avgTime = (DATA.reduce(function(a, r) { return a + r.summary.total_time; }, 0) / total).toFixed(1);
+  var ipcs = DATA.map(function(r) { return (r.profile && r.profile.metrics && r.profile.metrics.IPC) || 0; });
+  var bestIPC = Math.max.apply(null, ipcs);
+  var totalCmds = DATA.reduce(function(a, r) { return a + r.timing.length; }, 0);
+
+  document.getElementById('allRunsStats').innerHTML =
+    '<div class="stat-card">' +
+      '<div class="label">Total Runs</div>' +
+      '<div class="value">' + total + '</div>' +
+      '<div class="change">' + totalCmds + ' total commands</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Passing</div>' +
+      '<div class="value" style="color:var(--green)">' + passing + '</div>' +
+      '<div class="change">' + (failing > 0 ? failing + ' with failures' : 'All green') + '</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Best Time</div>' +
+      '<div class="value" style="color:var(--accent)">' + fmtTime(bestTime) + '</div>' +
+      '<div class="change">Avg: ' + avgTime + 's</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Peak IPC</div>' +
+      '<div class="value" style="color:var(--accent2)">' + (bestIPC > 0 ? bestIPC.toFixed(3) : 'N/A') + '</div>' +
+      '<div class="change">Instructions per cycle</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Hosts</div>' +
+      '<div class="value">' + uniqueHosts().length + '</div>' +
+      '<div class="change">' + (uniqueHosts().join(', ') || 'N/A') + '</div>' +
+    '</div>';
+}
+
+function uniqueHosts() {
+  var seen = {};
+  var result = [];
+  DATA.forEach(function(r) {
+    var h = r.env.hostname;
+    if (h && !seen[h]) { seen[h] = true; result.push(h); }
+  });
+  return result;
+}
+
+function filterRuns() {
+  var query = (document.getElementById('runSearch') ? document.getElementById('runSearch').value : '').toLowerCase();
+  var status = document.getElementById('runStatusFilter') ? document.getElementById('runStatusFilter').value : 'all';
+  var sort = document.getElementById('runSortBy') ? document.getElementById('runSortBy').value : 'date-desc';
+
+  var runs = DATA.map(function(r, i) { return { run: r, idx: i }; });
+
+  // Filter by search
+  if (query) {
+    runs = runs.filter(function(item) {
+      var r = item.run;
+      var haystack = [
+        r.run_id, r.env.hostname || '', r.env.date || '', r.env.cpu || '', r.env.gcc || '', r.env.rocm || ''
+      ].concat(r.timing.map(function(t) { return t.command; })).join(' ').toLowerCase();
+      return haystack.indexOf(query) !== -1;
+    });
+  }
+
+  // Filter by status
+  if (status === 'pass') runs = runs.filter(function(item) { return item.run.summary.all_pass; });
+  if (status === 'fail') runs = runs.filter(function(item) { return !item.run.summary.all_pass; });
+
+  // Sort
+  runs.sort(function(a, b) {
+    switch(sort) {
+      case 'date-asc': return (a.run.env.date || '').localeCompare(b.run.env.date || '');
+      case 'time-asc': return a.run.summary.total_time - b.run.summary.total_time;
+      case 'time-desc': return b.run.summary.total_time - a.run.summary.total_time;
+      case 'ipc-desc':
+        var aIPC = (a.run.profile && a.run.profile.metrics && a.run.profile.metrics.IPC) || 0;
+        var bIPC = (b.run.profile && b.run.profile.metrics && b.run.profile.metrics.IPC) || 0;
+        return bIPC - aIPC;
+      default: return (b.run.env.date || '').localeCompare(a.run.env.date || '');
+    }
+  });
+
+  document.getElementById('runCount').textContent = 'Showing ' + runs.length + ' of ' + DATA.length + ' runs';
+
+  var listEl = document.getElementById('runsList');
+  listEl.innerHTML = runs.map(function(item, rank) {
+    var r = item.run;
+    var s = r.summary;
+    var m = (r.profile && r.profile.metrics) || {};
+    var rankClass = rank === 0 ? 'gold' : rank === 1 ? 'silver' : rank === 2 ? 'bronze' : '';
+    var isExpanded = expandedRunId === r.run_id;
+    var cpuShort = (r.env.cpu || '').replace(' 64-Core Processor', '');
+
+    return '<div class="run-row ' + (isExpanded ? 'active' : '') + '" id="run-' + r.run_id + '">' +
+      '<div class="run-row-summary" onclick="toggleRunDetail(\'' + r.run_id + '\', ' + item.idx + ')">' +
+        '<div class="rank ' + rankClass + '">#' + (rank + 1) + '</div>' +
+        '<div class="run-info">' +
+          '<div class="run-id">' + r.run_id + '</div>' +
+          '<div class="run-meta">' + (r.env.date || 'N/A') + ' &middot; ' + (r.env.hostname || 'N/A') + ' &middot; ' + (r.env.cores || '?') + ' cores &middot; ' + cpuShort + '</div>' +
+        '</div>' +
+        '<div class="run-time">' + fmtTime(s.total_time) + '</div>' +
+        '<div class="run-tests"><span class="badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail') + '">' + s.pass + '/' + (s.pass + s.fail) + '</span></div>' +
+        '<div class="run-ipc">' + (m.IPC || '—') + '</div>' +
+        '<div class="run-cores">' + (r.env.cores || '?') + 'C</div>' +
+        '<button class="run-detail-btn" onclick="event.stopPropagation(); toggleRunDetail(\'' + r.run_id + '\', ' + item.idx + ')">' + (isExpanded ? 'Hide' : 'Details') + '</button>' +
+      '</div>' +
+      '<div class="run-detail ' + (isExpanded ? 'open' : '') + '" id="detail-' + r.run_id + '">' +
+        (isExpanded ? buildRunDetail(r) : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function toggleRunDetail(runId, runIdx) {
+  if (expandedRunId === runId) {
+    expandedRunId = null;
+  } else {
+    expandedRunId = runId;
+  }
+  filterRuns();
+}
+
+function buildRunDetail(run) {
+  var s = run.summary;
+  var m = (run.profile && run.profile.metrics) || {};
+  var env = run.env || {};
+
+  // Commands section
+  var cmdsHtml = run.timing.map(function(t, i) {
+    return '<div class="cmd-block">' +
+      '<span class="cmd-num">' + (i + 1) + '</span>' +
+      '<span class="cmd-text">' + escHtml(t.command) + '</span>' +
+      '<span class="cmd-time">' + t.time_s.toFixed(3) + 's</span>' +
+      '<button class="cmd-copy" onclick="event.stopPropagation(); copySingleCmd(\'' + escAttr(t.command) + '\', this)">Copy</button>' +
+    '</div>';
+  }).join('');
+
+  // Verification section
+  var verifyHtml;
+  if (run.verify.length > 0) {
+    verifyHtml = '<table class="verify-mini">' +
+      '<thead><tr><th>Status</th><th>File</th><th>Expected</th><th>Reported</th><th>Diff</th></tr></thead>' +
+      '<tbody>' + run.verify.map(function(v) {
+        return '<tr>' +
+          '<td>' + (v.status === 'pass' ? '\u2705' : '\u274c') + '</td>' +
+          '<td style="font-family:monospace;font-size:0.8rem">' + v.file + '</td>' +
+          '<td>' + v.expected + '</td>' +
+          '<td>' + v.reported + '</td>' +
+          '<td style="color:' + (v.diff < 0.01 ? 'var(--green)' : 'var(--yellow)') + '">' + v.diff + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>';
+  } else {
+    verifyHtml = '<p style="color:var(--text3)">No verification data</p>';
+  }
+
+  // Environment grid
+  var envKeys = Object.keys(env);
+  var envHtml = envKeys.map(function(k) {
+    return '<div class="detail-kv">' +
+      '<div class="dk-label">' + k + '</div>' +
+      '<div class="dk-value">' + env[k] + '</div>' +
+    '</div>';
+  }).join('');
+
+  // Profile metrics
+  var profileHtml;
+  if (m.IPC) {
+    profileHtml = '<div class="detail-grid">' +
+      '<div class="detail-kv"><div class="dk-label">IPC</div><div class="dk-value" style="color:var(--accent)">' + m.IPC + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Cache Miss Rate</div><div class="dk-value" style="color:var(--yellow)">' + (m['cache-miss-rate'] || 'N/A') + '%</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">L1 D-Cache Miss</div><div class="dk-value" style="color:#f97316">' + (m['L1-dcache-miss-rate'] || 'N/A') + '%</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Branch Mispredict</div><div class="dk-value" style="color:var(--green)">' + (m['branch-miss-rate'] || 'N/A') + '%</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Instructions</div><div class="dk-value" style="color:var(--accent2)">' + (m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Cycles</div><div class="dk-value">' + (m.cycles ? (m.cycles / 1e9).toFixed(2) + 'B' : 'N/A') + '</div></div>' +
+    '</div>';
+  } else {
+    profileHtml = '<p style="color:var(--text3)">No profiling data</p>';
+  }
+
+  return '<div class="detail-section">' +
+      '<h3>Commands (' + run.timing.length + ')</h3>' +
+      '<div style="margin-bottom:8px">' +
+        '<button class="copy-all-btn" onclick="event.stopPropagation(); copyRunCmds(\'' + run.run_id + '\', this)">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+          'Copy All as Script' +
+        '</button>' +
+      '</div>' +
+      cmdsHtml +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<h3>Verification (' + s.pass + ' pass, ' + s.fail + ' fail)</h3>' +
+      verifyHtml +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<h3>Performance Counters</h3>' +
+      profileHtml +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<h3>Environment</h3>' +
+      '<div class="detail-grid">' + envHtml + '</div>' +
+    '</div>';
+}
+
+function copyRunCmds(runId, btn) {
+  var run = null;
+  for (var i = 0; i < DATA.length; i++) {
+    if (DATA[i].run_id === runId) { run = DATA[i]; break; }
+  }
+  if (!run) return;
+  var script = '#!/bin/bash\n# Pipeline commands from Run ' + run.run_id + '\n# ' + (run.env.date || '') + ' on ' + (run.env.hostname || '') + '\n\n' +
+    run.timing.map(function(t) { return t.command; }).join('\n') + '\n';
+  copyText(script, btn);
+}
+
+// ============ Charts ============
 function renderTimingChart(run) {
   if (charts.timing) charts.timing.destroy();
-  const ctx = document.getElementById('timingChart').getContext('2d');
+  var ctx = document.getElementById('timingChart').getContext('2d');
+  var colors = ['#3b82f6','#8b5cf6','#06b6d4','#22c55e','#eab308','#f97316','#ef4444','#ec4899','#6366f1','#14b8a6'];
   charts.timing = new Chart(ctx, {
     type: timingChartType,
     data: {
-      labels: run.timing.map(t => t.command.substring(0, 45)),
+      labels: run.timing.map(function(t) { return t.command.substring(0, 50); }),
       datasets: [{
         label: 'Time (s)',
-        data: run.timing.map(t => t.time_s),
-        backgroundColor: run.timing.map((_, i) => {
-          const colors = ['#3b82f6','#8b5cf6','#06b6d4','#22c55e','#eab308','#f97316','#ef4444','#ec4899','#6366f1','#14b8a6'];
-          return colors[i % colors.length] + '99';
-        }),
-        borderColor: run.timing.map((_, i) => {
-          const colors = ['#3b82f6','#8b5cf6','#06b6d4','#22c55e','#eab308','#f97316','#ef4444','#ec4899','#6366f1','#14b8a6'];
-          return colors[i % colors.length];
-        }),
-        borderWidth: 1, borderRadius: 4,
+        data: run.timing.map(function(t) { return t.time_s; }),
+        backgroundColor: run.timing.map(function(_, i) { return colors[i % colors.length] + '99'; }),
+        borderColor: run.timing.map(function(_, i) { return colors[i % colors.length]; }),
+        borderWidth: 1, borderRadius: 4
       }]
     },
     options: {
@@ -506,10 +930,7 @@ function renderTimingChart(run) {
       indexAxis: timingChartType === 'bar' ? 'y' : undefined,
       plugins: {
         legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1,
-          titleColor: '#e2e8f0', bodyColor: '#94a3b8', cornerRadius: 8, padding: 12,
-        }
+        tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#94a3b8', cornerRadius: 8, padding: 12 }
       },
       scales: {
         x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
@@ -521,25 +942,22 @@ function renderTimingChart(run) {
 
 function renderTrendChart() {
   if (charts.trend) charts.trend.destroy();
-  const ctx = document.getElementById('trendChart').getContext('2d');
+  var ctx = document.getElementById('trendChart').getContext('2d');
   charts.trend = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: DATA.map(r => r.run_id.substring(0, 10)),
+      labels: DATA.map(function(r) { return r.run_id.substring(0, 10); }),
       datasets: [{
         label: 'Total Time (s)',
-        data: DATA.map(r => r.summary.total_time),
+        data: DATA.map(function(r) { return r.summary.total_time; }),
         borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)',
         fill: true, tension: 0.3, pointRadius: 6, pointBackgroundColor: '#22c55e',
-        pointBorderColor: '#1a2332', pointBorderWidth: 2,
+        pointBorderColor: '#1a2332', pointBorderWidth: 2
       }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8 }
-      },
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8 } },
       scales: {
         x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
         y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
@@ -548,84 +966,72 @@ function renderTrendChart() {
   });
 }
 
-function toggleChartType(name) {
+function toggleChartType() {
   timingChartType = timingChartType === 'bar' ? 'doughnut' : 'bar';
   renderTimingChart(DATA[currentRunIdx]);
 }
 
+// ============ Tests ============
 function renderTests(run) {
-  const s = run.summary;
-  const badge = document.getElementById('testsBadge');
-  badge.textContent = `${s.pass}/${s.pass + s.fail} passing`;
+  var s = run.summary;
+  var badge = document.getElementById('testsBadge');
+  badge.textContent = s.pass + '/' + (s.pass + s.fail) + ' passing';
   badge.className = 'badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail');
 
-  const tbody = document.querySelector('#testsTable tbody');
-  tbody.innerHTML = run.verify.map(v => `
-    <tr data-status="${v.status}">
-      <td class="status-icon">${v.status === 'pass' ? '✅' : '❌'}</td>
-      <td style="font-family:monospace;font-size:0.8rem">${v.file}</td>
-      <td>${v.expected}</td>
-      <td>${v.reported}</td>
-      <td style="color:${v.diff < 0.01 ? 'var(--green)' : 'var(--yellow)'}">${v.diff}</td>
-    </tr>
-  `).join('');
+  var tbody = document.querySelector('#testsTable tbody');
+  tbody.innerHTML = run.verify.map(function(v) {
+    return '<tr data-status="' + v.status + '">' +
+      '<td class="status-icon">' + (v.status === 'pass' ? '\u2705' : '\u274c') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.8rem">' + v.file + '</td>' +
+      '<td>' + v.expected + '</td><td>' + v.reported + '</td>' +
+      '<td style="color:' + (v.diff < 0.01 ? 'var(--green)' : 'var(--yellow)') + '">' + v.diff + '</td></tr>';
+  }).join('');
 
-  const totalTime = run.timing.reduce((a, t) => a + t.time_s, 0);
-  const ttbody = document.querySelector('#timingTable tbody');
-  ttbody.innerHTML = run.timing.map((t, i) => {
-    const pct = ((t.time_s / totalTime) * 100).toFixed(1);
-    return `<tr>
-      <td>${i + 1}</td>
-      <td style="font-family:monospace;font-size:0.8rem">${t.command}</td>
-      <td>${t.time_s.toFixed(3)}</td>
-      <td>${pct}%</td>
-      <td><div style="width:${pct}%;height:6px;background:var(--accent);border-radius:3px;min-width:2px"></div></td>
-    </tr>`;
+  var totalTime = run.timing.reduce(function(a, t) { return a + t.time_s; }, 0);
+  var ttbody = document.querySelector('#timingTable tbody');
+  ttbody.innerHTML = run.timing.map(function(t, i) {
+    var pct = ((t.time_s / totalTime) * 100).toFixed(1);
+    return '<tr><td>' + (i+1) + '</td>' +
+      '<td style="font-family:monospace;font-size:0.8rem">' + escHtml(t.command) + '</td>' +
+      '<td>' + t.time_s.toFixed(3) + '</td><td>' + pct + '%</td>' +
+      '<td><div style="width:' + pct + '%;height:6px;background:var(--accent);border-radius:3px;min-width:2px"></div></td>' +
+      '<td><button class="cmd-copy" onclick="copySingleCmd(\'' + escAttr(t.command) + '\', this)">Copy</button></td></tr>';
   }).join('');
 }
 
 function filterTests(status, btn) {
-  document.querySelectorAll('#page-tests .actions .btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#page-tests .actions .btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
-  document.querySelectorAll('#testsTable tbody tr').forEach(tr => {
+  document.querySelectorAll('#testsTable tbody tr').forEach(function(tr) {
     tr.style.display = (status === 'all' || tr.dataset.status === status) ? '' : 'none';
   });
 }
 
+// ============ Profiling ============
 function renderProfiling(run) {
-  const m = run.profile?.metrics || {};
-  const grid = document.getElementById('profileGrid');
-  const items = [
+  var m = (run.profile && run.profile.metrics) || {};
+  var grid = document.getElementById('profileGrid');
+  var items = [
     { val: m.IPC || 'N/A', lbl: 'IPC', color: '#3b82f6' },
     { val: m['cache-miss-rate'] ? m['cache-miss-rate'] + '%' : 'N/A', lbl: 'Cache Miss Rate', color: '#eab308' },
     { val: m['L1-dcache-miss-rate'] ? m['L1-dcache-miss-rate'] + '%' : 'N/A', lbl: 'L1 D-Cache Miss', color: '#f97316' },
     { val: m['branch-miss-rate'] ? m['branch-miss-rate'] + '%' : 'N/A', lbl: 'Branch Mispredict', color: '#22c55e' },
-    { val: m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A', lbl: 'Instructions', color: '#8b5cf6' },
+    { val: m.instructions ? (m.instructions / 1e9).toFixed(1) + 'B' : 'N/A', lbl: 'Instructions', color: '#8b5cf6' }
   ];
-  grid.innerHTML = items.map(i => `
-    <div class="profile-metric">
-      <div class="val" style="color:${i.color}">${i.val}</div>
-      <div class="lbl">${i.lbl}</div>
-    </div>
-  `).join('');
+  grid.innerHTML = items.map(function(it) {
+    return '<div class="profile-metric"><div class="val" style="color:' + it.color + '">' + it.val + '</div><div class="lbl">' + it.lbl + '</div></div>';
+  }).join('');
 
-  // Hotspot and counter charts rendered from profile data are placeholders if no profile
   if (!m.cycles) return;
 
-  if (charts.func) charts.func.destroy();
   if (charts.counter) charts.counter.destroy();
-
-  const counterCtx = document.getElementById('counterChart').getContext('2d');
-  const counterKeys = ['cycles','instructions','cache-references','cache-misses','branch-instructions','branch-misses','L1-dcache-loads','L1-dcache-load-misses'];
-  const counterVals = counterKeys.map(k => m[k] || 0);
+  var counterCtx = document.getElementById('counterChart').getContext('2d');
+  var counterKeys = ['cycles','instructions','cache-references','cache-misses','branch-instructions','branch-misses','L1-dcache-loads','L1-dcache-load-misses'];
   charts.counter = new Chart(counterCtx, {
     type: 'bar',
     data: {
-      labels: counterKeys.map(k => k.replace('L1-dcache-','L1-').replace('-instructions','-instr').replace('-references','-refs')),
-      datasets: [{
-        data: counterVals,
-        backgroundColor: '#3b82f688', borderColor: '#3b82f6', borderWidth: 1, borderRadius: 4,
-      }]
+      labels: counterKeys.map(function(k) { return k.replace('L1-dcache-','L1-').replace('-instructions','-instr').replace('-references','-refs'); }),
+      datasets: [{ data: counterKeys.map(function(k) { return m[k] || 0; }), backgroundColor: '#3b82f688', borderColor: '#3b82f6', borderWidth: 1, borderRadius: 4 }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -636,76 +1042,77 @@ function renderProfiling(run) {
       }
     }
   });
+
+  // IPC trend across runs
+  if (charts.ipcTrend) charts.ipcTrend.destroy();
+  var ipcCtx = document.getElementById('ipcTrendChart').getContext('2d');
+  charts.ipcTrend = new Chart(ipcCtx, {
+    type: 'line',
+    data: {
+      labels: DATA.map(function(r) { return r.run_id.substring(0, 10); }),
+      datasets: [{
+        label: 'IPC',
+        data: DATA.map(function(r) { return (r.profile && r.profile.metrics && r.profile.metrics.IPC) || null; }),
+        borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)',
+        fill: true, tension: 0.3, pointRadius: 6, pointBackgroundColor: '#8b5cf6',
+        pointBorderColor: '#1a2332', pointBorderWidth: 2, spanGaps: true
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8 } },
+      scales: {
+        x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
+        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
+      }
+    }
+  });
 }
 
+// ============ GPU ============
 function renderGPU(run) {
-  const gpu = run.gpu_info || '';
+  var gpu = run.gpu_info || '';
   document.getElementById('gpuRaw').textContent = gpu || 'No GPU data available';
 
-  // Parse some GPU stats from the raw text
-  const parseGpu = (text, label) => {
-    const m = text.match(new RegExp(label + '.*?:\\s*([\\d.]+)'));
-    return m ? m[1] : 'N/A';
-  };
-  const temp = parseGpu(gpu, 'Temperature \\(Sensor edge\\)');
-  const power = parseGpu(gpu, 'Average Graphics Package Power');
-  const usage = parseGpu(gpu, 'GPU use \\(%\\)');
-  const vram = parseGpu(gpu, 'GPU Memory Allocated \\(VRAM%\\)');
-
-  document.getElementById('gpuGrid').innerHTML = `
-    <div class="gpu-stat">
-      <div class="val" style="color:${parseFloat(temp) > 70 ? 'var(--red)' : parseFloat(temp) > 50 ? 'var(--yellow)' : 'var(--green)'}">${temp}°C</div>
-      <div class="lbl">Temperature</div>
-    </div>
-    <div class="gpu-stat">
-      <div class="val" style="color:var(--accent)">${power}W</div>
-      <div class="lbl">Power (Avg)</div>
-    </div>
-    <div class="gpu-stat">
-      <div class="val" style="color:${usage === '0' ? 'var(--text3)' : 'var(--green)'}">${usage}%</div>
-      <div class="lbl">GPU Utilization</div>
-    </div>
-    <div class="gpu-stat">
-      <div class="val" style="color:var(--accent2)">${vram}%</div>
-      <div class="lbl">VRAM Used</div>
-    </div>
-  `;
+  var lines = gpu.split('\n');
+  var temp = 'N/A', power = 'N/A', vram = 'N/A', usage = 'N/A';
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^0\s+/.test(line)) {
+      var parts = line.trim().split(/\s+/);
+      if (parts.length >= 14) {
+        temp = parts[4]; power = parts[5]; vram = parts[13]; usage = parts[14] || '0';
+      }
+    }
+  }
+  document.getElementById('gpuGrid').innerHTML =
+    '<div class="gpu-stat"><div class="val" style="color:var(--green)">' + temp + '</div><div class="lbl">Temperature</div></div>' +
+    '<div class="gpu-stat"><div class="val" style="color:var(--accent)">' + power + '</div><div class="lbl">Power (Avg)</div></div>' +
+    '<div class="gpu-stat"><div class="val" style="color:var(--text3)">' + usage + '</div><div class="lbl">GPU Utilization</div></div>' +
+    '<div class="gpu-stat"><div class="val" style="color:var(--accent2)">' + vram + '</div><div class="lbl">VRAM Used</div></div>';
 }
 
+// ============ Allocation ============
 function renderAllocation() {
-  // This data is static for now — filled by the server script
-  document.getElementById('allocGrid').innerHTML = `
-    <div class="card">
-      <div class="card-header"><h2>CPU Allocation (pawsey1351)</h2></div>
-      <div style="display:flex;justify-content:space-between;margin-top:8px;">
-        <span>0 kSU used</span><span style="color:var(--text3)">30,000 kSU total</span>
-      </div>
-      <div class="alloc-bar"><div class="fill" style="width:0.0%;background:var(--green)"></div></div>
-      <div style="color:var(--green);font-size:0.85rem;margin-top:4px;">30,000 kSU remaining (100%)</div>
-      <div style="color:var(--text3);font-size:0.75rem;margin-top:8px;">
-        ≈ 30,000,000 CPU core-hours at 1 core-hour = 1 SU
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-header"><h2>GPU Allocation (pawsey1351-gpu)</h2></div>
-      <div style="display:flex;justify-content:space-between;margin-top:8px;">
-        <span>21 kSU used</span><span style="color:var(--text3)">30,000 kSU total</span>
-      </div>
-      <div class="alloc-bar"><div class="fill" style="width:0.07%;background:var(--accent);min-width:2px;"></div></div>
-      <div style="color:var(--green);font-size:0.85rem;margin-top:4px;">29,979 kSU remaining (99.9%)</div>
-      <div style="color:var(--text3);font-size:0.75rem;margin-top:8px;">
-        ≈ 468 GPU-hours at 1 GPU-hour ≈ 64 SU (MI250X + 8 cores)
-      </div>
-    </div>
-  `;
+  document.getElementById('allocGrid').innerHTML =
+    '<div class="card"><div class="card-header"><h2>CPU Allocation (pawsey1351)</h2></div>' +
+    '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>0 kSU used</span><span style="color:var(--text3)">30,000 kSU total</span></div>' +
+    '<div class="alloc-bar"><div class="fill" style="width:0%;background:var(--green)"></div></div>' +
+    '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">30,000 kSU remaining (100%)</div></div>' +
+    '<div class="card"><div class="card-header"><h2>GPU Allocation (pawsey1351-gpu)</h2></div>' +
+    '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>21 kSU used</span><span style="color:var(--text3)">30,000 kSU total</span></div>' +
+    '<div class="alloc-bar"><div class="fill" style="width:0.07%;background:var(--accent);min-width:2px;"></div></div>' +
+    '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">29,979 kSU remaining (99.9%)</div></div>';
 }
 
+// ============ Environment ============
 function renderEnvironment(run) {
-  const tbody = document.querySelector('#envTable tbody');
-  const env = run.env || {};
-  tbody.innerHTML = Object.entries(env).map(([k, v]) => `
-    <tr><td style="font-weight:600;width:200px;">${k}</td><td style="font-family:monospace;font-size:0.85rem;">${v}</td></tr>
-  `).join('');
+  var tbody = document.querySelector('#envTable tbody');
+  var env = run.env || {};
+  var keys = Object.keys(env);
+  tbody.innerHTML = keys.map(function(k) {
+    return '<tr><td style="font-weight:600;width:200px;">' + k + '</td><td style="font-family:monospace;font-size:0.85rem;">' + env[k] + '</td></tr>';
+  }).join('');
 }
 
 // ============ Auto-refresh every 30s ============

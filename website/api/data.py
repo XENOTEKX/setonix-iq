@@ -11,6 +11,7 @@ from pathlib import Path
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'results')
 PROFILES_DIR = os.path.join(os.path.dirname(__file__), '..', 'profiles')
+LOGS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'logs')
 
 
 def parse_time_log(filepath):
@@ -70,7 +71,21 @@ def parse_env_info(filepath):
 
 
 def get_all_runs():
-    """Return structured data for all pipeline runs."""
+    """Return structured data for all pipeline runs.
+
+    Reads raw log files from website/results and website/profiles (Setonix
+    symlinks).  When those directories are unavailable (local dev), falls
+    back to the cached logs/runs.json that was exported on the last Setonix
+    run.
+    """
+    # If raw results dir doesn't exist, fall back to cached logs
+    if not os.path.isdir(RESULTS_DIR):
+        logs_json = os.path.join(LOGS_DIR, 'runs.json')
+        if os.path.exists(logs_json):
+            with open(logs_json) as f:
+                return json.load(f)
+        return []
+
     runs = []
     for tlog in sorted(glob.glob(os.path.join(RESULTS_DIR, 'time_log_*.tsv'))):
         rid = Path(tlog).stem.replace('time_log_', '')

@@ -48,7 +48,7 @@ check_links() {
 sync_to_github() {
   cd "$AGENT_DIR"
   if [[ -d .git ]]; then
-    echo -e "${BLUE}Pushing to GitHub...${NC}"
+    echo -e "${BLUE}Pushing to GitHub (including logs/)...${NC}"
     git add -A
     git commit -m "Update dashboard $(date '+%Y-%m-%d %H:%M')" 2>/dev/null || echo "No changes to commit"
     git push origin main 2>&1 && echo -e "${GREEN}Pushed! On Mac run: cd setonix-iq && git pull && open dashboard.html${NC}" || echo -e "${RED}Push failed — check auth${NC}"
