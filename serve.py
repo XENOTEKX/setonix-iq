@@ -99,20 +99,24 @@ var PROFILES = %s;
 var currentRunIdx = DATA.length - 1;
 var currentProfileIdx = PROFILES.length - 1;
 var charts = {};
-var timingChartType = 'bar';
 var expandedRunId = null;
 
 // ============ Navigation ============
 document.querySelectorAll('.sidebar nav a').forEach(function(a) {
   a.addEventListener('click', function(e) {
     e.preventDefault();
-    var page = a.dataset.page;
-    document.querySelectorAll('.sidebar nav a').forEach(function(x) { x.classList.remove('active'); });
-    a.classList.add('active');
-    document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-    document.getElementById('page-' + page).classList.add('active');
+    showPage(a.dataset.page);
   });
 });
+
+function showPage(page) {
+  document.querySelectorAll('.sidebar nav a').forEach(function(x) { x.classList.remove('active'); });
+  var link = document.querySelector('.sidebar nav a[data-page="' + page + '"]');
+  if (link) link.classList.add('active');
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  var pageEl = document.getElementById('page-' + page);
+  if (pageEl) pageEl.classList.add('active');
+}
 
 // ============ Clipboard Helper ============
 function copyText(text, btn) {
@@ -161,13 +165,14 @@ function loadData() {
   populateAllSelectors();
   renderAll();
   renderRunsList();
+  renderProfilesList();
   document.getElementById('serverDot').style.background = 'var(--green)';
   document.getElementById('serverStatus').textContent = 'Static (GitHub Pages)';
   document.getElementById('lastUpdate').textContent = 'Generated: %s';
 }
 
 function populateAllSelectors() {
-  var selectors = ['runSelector', 'testRunSelector', 'profRunSelector', 'gpuRunSelector', 'envRunSelector'];
+  var selectors = ['testRunSelector', 'profRunSelector', 'gpuRunSelector', 'envRunSelector'];
   selectors.forEach(function(id) {
     var sel = document.getElementById(id);
     if (!sel) return;
@@ -175,6 +180,11 @@ function populateAllSelectors() {
       return '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>Run ' + r.run_id + '</option>';
     }).join('');
   });
+  // Update tab counts
+  var runsCount = document.getElementById('runsTabCount');
+  var profsCount = document.getElementById('profilesTabCount');
+  if (runsCount) runsCount.textContent = DATA.length;
+  if (profsCount) profsCount.textContent = PROFILES.length;
 }
 
 function switchRun(idx) {
@@ -188,6 +198,7 @@ function refreshData() { loadData(); }
 // ============ Rendering ============
 function renderAll() {
   var run = DATA[currentRunIdx];
+  renderRunPills();
   renderOverview(run);
   renderTests(run);
   renderProfiling(run);
@@ -198,6 +209,22 @@ function renderAll() {
 }
 
 // ============ Overview ============
+function renderRunPills() {
+  var pills = document.getElementById('runPills');
+  if (!pills) return;
+  pills.innerHTML = DATA.map(function(r, i) {
+    var isActive = i === currentRunIdx;
+    var dotColor = r.summary.all_pass ? 'var(--green)' : 'var(--red)';
+    var dateShort = (r.env.date || '').substring(0, 10);
+    var timeShort = fmtTime(r.summary.total_time);
+    return '<div class="run-pill' + (isActive ? ' active' : '') + '" onclick="switchRun(' + i + ')" title="' + r.run_id + '">' +
+      '<span class="pill-dot" style="background:' + dotColor + '"></span>' +
+      '<span>' + r.run_id.substring(0, 16) + '</span>' +
+      '<span class="pill-time">' + timeShort + '</span>' +
+    '</div>';
+  }).join('');
+}
+
 function renderOverview(run) {
   var s = run.summary;
   var profile = (run.profile && run.profile.metrics) || {};
@@ -214,9 +241,6 @@ function renderOverview(run) {
   badge.className = 'badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail');
 
   var bestTime = Math.min.apply(null, DATA.map(function(r) { return r.summary.total_time; }));
-  var avgTime = (DATA.reduce(function(a, r) { return a + r.summary.total_time; }, 0) / DATA.length).toFixed(1);
-
-  // Use deep profile IPC if available, fall back to basic
   var ipcVal = lpDerived.IPC || profile.IPC || 'N/A';
   var feStall = lpDerived['frontend-stall-rate'];
   var cacheMiss = lpDerived['cache-miss-rate'];
@@ -274,8 +298,359 @@ function renderOverview(run) {
     profCard.style.display = 'none';
   }
 
-  renderTimingChart(run);
-  renderTrendChart();
+  renderLeaderboard(run);
+  renderHotspotChart();
+  renderMicroarchChart();
+  renderScalingChart();
+}
+
+// ============ IQ-TREE Performance Metrics ============
+
+// Known dataset sizes — extended as more benchmarks are added
+var DATASET_INFO = {
+  'turtle.fa': { taxa: 16, sites: 1998 },
+  'medium_dna.fa': { taxa: 50, sites: 5000 },
+  'medium_dna.phy': { taxa: 50, sites: 5000 },
+  'large_dna.phy': { taxa: 100, sites: 10000 },
+  'stress_dna.phy': { taxa: 200, sites: 20000 }
+};
+
+// Model block sizes: nstates x ncat
+var MODEL_BLOCKS = {
+  'JC': 4, 'HKY': 4, 'GTR': 4, 'GTR+G4': 16, 'GTR+G8': 32,
+  'HKY+G4': 16, 'JC+G4': 16, 'GTR+I+G4': 16, 'GTR+F+I+G4': 16,
+  'WAG': 20, 'LG': 20, 'WAG+G4': 80, 'LG+G4': 80,
+  'default': 16
+};
+
+function parseCmd(cmd) {
+  var ds = 'unknown'; var threads = 1; var model = 'AUTO'; var gpu = false;
+  var sMatch = cmd.match(/-s\\s+(\\S+)/);
+  if (sMatch) ds = sMatch[1].replace(/.*\\//, '');
+  var tMatch = cmd.match(/-T\\s+(\\d+)/);
+  if (tMatch) threads = parseInt(tMatch[1]);
+  var mMatch = cmd.match(/-m\\s+(\\S+)/);
+  if (mMatch) model = mMatch[1];
+  if (cmd.indexOf('--gpu') !== -1 || cmd.indexOf('-gpu') !== -1) gpu = true;
+  var info = DATASET_INFO[ds] || { taxa: '?', sites: '?' };
+  var blockKey = model.replace(/\\+F/g, '').replace(/\\+I/g, '');
+  var block = MODEL_BLOCKS[blockKey] || MODEL_BLOCKS['default'];
+  return { dataset: ds, taxa: info.taxa, sites: info.sites, threads: threads, model: model, block: block, gpu: gpu };
+}
+
+var leaderboardSort = 'time';
+
+function sortLeaderboard(by) {
+  leaderboardSort = by;
+  document.getElementById('lbSortTime').className = 'btn' + (by === 'time' ? ' active' : '');
+  document.getElementById('lbSortSpeedup').className = 'btn' + (by === 'speedup' ? ' active' : '');
+  renderLeaderboard(DATA[currentRunIdx]);
+}
+
+function renderLeaderboard(run) {
+  // Build entries from all commands across all runs + profiles
+  var entries = [];
+
+  // From run timing data
+  DATA.forEach(function(r) {
+    r.timing.forEach(function(t) {
+      var p = parseCmd(t.command);
+      // Find matching verify entry for log-likelihood
+      var loglik = '\\u2014';
+      r.verify.forEach(function(v) {
+        if (t.command.indexOf(v.file.replace('.iqtree', '')) !== -1) loglik = v.reported;
+      });
+      // Calc speedup: find 1T baseline for same dataset+model
+      entries.push({
+        dataset: p.dataset, taxa: p.taxa, sites: p.sites, model: p.model,
+        block: p.block, threads: p.threads, gpu: p.gpu ? 'Yes' : '\\u2014',
+        time: t.time_s, loglik: loglik, runId: r.run_id, cmd: t.command
+      });
+    });
+  });
+
+  // Calculate speedups — find 1T baseline for each dataset
+  var baselines = {};
+  entries.forEach(function(e) {
+    if (e.threads === 1) {
+      var key = e.dataset + '|' + e.model;
+      if (!baselines[key] || e.time < baselines[key]) baselines[key] = e.time;
+    }
+  });
+  entries.forEach(function(e) {
+    var key = e.dataset + '|' + e.model;
+    var base = baselines[key];
+    if (base && e.threads > 1) {
+      e.speedup = (base / e.time).toFixed(2);
+      e.efficiency = ((base / e.time / e.threads) * 100).toFixed(0);
+    } else if (e.threads === 1) {
+      e.speedup = '1.00';
+      e.efficiency = '100';
+    } else {
+      e.speedup = '\\u2014';
+      e.efficiency = '\\u2014';
+    }
+  });
+
+  // Sort
+  if (leaderboardSort === 'speedup') {
+    entries.sort(function(a, b) { return parseFloat(b.speedup || 0) - parseFloat(a.speedup || 0); });
+  } else {
+    entries.sort(function(a, b) { return a.time - b.time; });
+  }
+
+  var tbody = document.querySelector('#leaderboardTable tbody');
+  tbody.innerHTML = entries.map(function(e, i) {
+    var rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+    var spClass = parseFloat(e.speedup) >= 3 ? 'speedup-good' : parseFloat(e.speedup) >= 1.5 ? 'speedup-warn' : 'speedup-bad';
+    var effPct = parseInt(e.efficiency) || 0;
+    var effColor = effPct >= 80 ? 'var(--green)' : effPct >= 50 ? 'var(--yellow)' : 'var(--red)';
+    return '<tr title="' + escAttr(e.cmd) + '">' +
+      '<td class="lb-rank ' + rankClass + '">' + (i + 1) + '</td>' +
+      '<td class="lb-dataset">' + escHtml(e.dataset) + '</td>' +
+      '<td>' + e.taxa + '</td>' +
+      '<td>' + e.sites + '</td>' +
+      '<td class="lb-model">' + escHtml(e.model) + '</td>' +
+      '<td>' + e.block + '</td>' +
+      '<td>' + e.threads + '</td>' +
+      '<td>' + e.gpu + '</td>' +
+      '<td style="font-weight:700;">' + e.time.toFixed(3) + '</td>' +
+      '<td><span class="speedup-badge ' + spClass + '">' + e.speedup + '\\u00d7</span></td>' +
+      '<td>' + (effPct > 0 ? '<div class="eff-bar"><div class="fill" style="width:' + effPct + '%%;background:' + effColor + '"></div></div> ' + e.efficiency + '%%' : '\\u2014') + '</td>' +
+      '<td>' + e.loglik + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function renderHotspotChart() {
+  if (charts.hotspot) charts.hotspot.destroy();
+  var ctx = document.getElementById('hotspotChart');
+  if (!ctx) return;
+
+  // Gather hotspot data across profiles
+  var labels = [];
+  var kernelNames = ['DervSIMD', 'PartialLH', 'BufferSIMD', 'FromBuffer', 'libgomp', 'parsimony', 'Other'];
+  var kernelColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#6b7280', '#06b6d4', '#3b82f6'];
+  var datasets = kernelNames.map(function(name, idx) {
+    return { label: name, backgroundColor: kernelColors[idx], data: [] };
+  });
+
+  var sources = PROFILES.length > 0 ? PROFILES : [];
+  // Also add run profile if available
+  DATA.forEach(function(r) {
+    if (r.profile && r.profile.metrics && r.profile.metrics.IPC) {
+      // No hotspot detail in basic profiles, skip
+    }
+  });
+
+  if (sources.length === 0) {
+    ctx.parentElement.innerHTML = '<div class="no-data-msg">No hotspot data. Run deep profiling on Setonix.</div>';
+    return;
+  }
+
+  sources.forEach(function(p) {
+    var hs = (p.cpu || {}).hotspots || [];
+    var dsName = (p.dataset || '?').split('/').pop().replace('.fa', '').replace('.phy', '') + ' T' + (p.threads || 1);
+    labels.push(dsName);
+    var buckets = { DervSIMD: 0, PartialLH: 0, BufferSIMD: 0, FromBuffer: 0, libgomp: 0, parsimony: 0, Other: 0 };
+    hs.forEach(function(h) {
+      var fn = h['function'] || '';
+      if (fn.indexOf('DervSIMD') !== -1) buckets.DervSIMD += h.percent;
+      else if (fn.indexOf('PartialLikelihood') !== -1 || fn.indexOf('PartialLH') !== -1) buckets.PartialLH += h.percent;
+      else if (fn.indexOf('BufferSIMD') !== -1 && fn.indexOf('FromBuffer') === -1) buckets.BufferSIMD += h.percent;
+      else if (fn.indexOf('FromBuffer') !== -1) buckets.FromBuffer += h.percent;
+      else if (fn.indexOf('libgomp') !== -1 || h.module === 'libgomp.so.1.0.0') buckets.libgomp += h.percent;
+      else if (fn.indexOf('arsimony') !== -1) buckets.parsimony += h.percent;
+      else buckets.Other += h.percent;
+    });
+    // Fill remaining as Other
+    var total = 0; for (var k in buckets) total += buckets[k];
+    if (total < 100) buckets.Other += (100 - total);
+    datasets[0].data.push(buckets.DervSIMD);
+    datasets[1].data.push(buckets.PartialLH);
+    datasets[2].data.push(buckets.BufferSIMD);
+    datasets[3].data.push(buckets.FromBuffer);
+    datasets[4].data.push(buckets.libgomp);
+    datasets[5].data.push(buckets.parsimony);
+    datasets[6].data.push(buckets.Other);
+  });
+
+  charts.hotspot = new Chart(ctx.getContext('2d'), {
+    type: 'bar',
+    data: { labels: labels, datasets: datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 12, padding: 10, font: { size: 10 } } },
+        tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8,
+          callbacks: { label: function(c) { return c.dataset.label + ': ' + c.raw.toFixed(1) + '%%'; } }
+        }
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 11 } } },
+        y: { stacked: true, max: 100, grid: { color: '#1e293b' }, ticks: { color: '#64748b', callback: function(v) { return v + '%%'; } },
+          title: { display: true, text: '%% of CPU Time', color: '#64748b' } }
+      }
+    }
+  });
+}
+
+function renderMicroarchChart() {
+  if (charts.microarch) charts.microarch.destroy();
+  var ctx = document.getElementById('microarchChart');
+  if (!ctx) return;
+
+  var radarLabels = ['IPC', 'Cache Hit %%', 'Branch Acc %%', 'FE Efficiency %%', 'L1D Hit %%', 'dTLB Hit %%'];
+  var radarDatasets = [];
+  var colors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f97316', '#ef4444'];
+
+  // Gather from profiles
+  var sources = PROFILES.length > 0 ? PROFILES : [];
+  if (sources.length === 0 && profile && profile.IPC) {
+    // No radar possible from basic metrics only
+    ctx.parentElement.innerHTML = '<div class="no-data-msg">Run deep profiling for microarchitecture analysis.</div>';
+    return;
+  }
+  if (sources.length === 0) {
+    ctx.parentElement.innerHTML = '<div class="no-data-msg">No profile data. Run deep profiling on Setonix.</div>';
+    return;
+  }
+
+  sources.forEach(function(p, i) {
+    var d = (p.cpu || {}).derived || {};
+    var dsName = (p.dataset || '?').split('/').pop().replace('.fa', '').replace('.phy', '') + ' T' + (p.threads || 1);
+    // Normalize to 0-100 for radar: IPC scaled to max 4.0 theoretical
+    var ipcNorm = Math.min((d.IPC || 0) / 4.0 * 100, 100);
+    var cacheHit = 100 - (d['cache-miss-rate'] || 0);
+    var branchAcc = 100 - (d['branch-miss-rate'] || 0);
+    var feEff = 100 - (d['frontend-stall-rate'] || 0);
+    var l1dHit = 100 - (d['L1-dcache-miss-rate'] || 0);
+    var dtlbHit = 100 - (d['dTLB-miss-rate'] || 0);
+    radarDatasets.push({
+      label: dsName,
+      data: [ipcNorm, cacheHit, branchAcc, feEff, l1dHit, dtlbHit],
+      borderColor: colors[i %% colors.length],
+      backgroundColor: colors[i %% colors.length] + '22',
+      pointBackgroundColor: colors[i %% colors.length],
+      pointRadius: 4, borderWidth: 2
+    });
+  });
+
+  charts.microarch = new Chart(ctx.getContext('2d'), {
+    type: 'radar',
+    data: { labels: radarLabels, datasets: radarDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 12 } } },
+      scales: {
+        r: {
+          min: 0, max: 100,
+          grid: { color: '#1e293b' }, angleLines: { color: '#1e293b' },
+          pointLabels: { color: '#94a3b8', font: { size: 10 } },
+          ticks: { color: '#64748b', backdropColor: 'transparent', stepSize: 25,
+            callback: function(v) { return v + '%%'; } }
+        }
+      }
+    }
+  });
+}
+
+function renderScalingChart() {
+  if (charts.scaling) charts.scaling.destroy();
+  var ctx = document.getElementById('scalingChart');
+  if (!ctx) return;
+
+  // Build thread-scaling data from commands across runs
+  // Group by dataset: find same dataset at different thread counts
+  var byDataset = {};
+  DATA.forEach(function(r) {
+    r.timing.forEach(function(t) {
+      var p = parseCmd(t.command);
+      if (p.taxa === '?') return;
+      var key = p.dataset;
+      if (!byDataset[key]) byDataset[key] = {};
+      var tKey = p.threads;
+      if (!byDataset[key][tKey] || t.time_s < byDataset[key][tKey]) {
+        byDataset[key][tKey] = t.time_s;
+      }
+    });
+  });
+
+  // Also use profile data
+  PROFILES.forEach(function(pr) {
+    var ds = (pr.dataset || '').split('/').pop();
+    var threads = pr.threads || 1;
+    var taskClock = ((pr.cpu || {}).counters || {})['task-clock'];
+    if (ds && taskClock) {
+      var wallEst = taskClock / 1000 / threads;
+      if (!byDataset[ds]) byDataset[ds] = {};
+      if (!byDataset[ds][threads] || wallEst < byDataset[ds][threads]) {
+        byDataset[ds][threads] = wallEst;
+      }
+    }
+  });
+
+  var dsKeys = Object.keys(byDataset);
+  if (dsKeys.length === 0) {
+    ctx.parentElement.innerHTML = '<div class="no-data-msg">Need multi-thread runs of the same dataset for scaling analysis.</div>';
+    return;
+  }
+
+  var colors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f97316', '#ef4444'];
+  var allThreads = [];
+  dsKeys.forEach(function(k) {
+    Object.keys(byDataset[k]).forEach(function(t) {
+      t = parseInt(t);
+      if (allThreads.indexOf(t) === -1) allThreads.push(t);
+    });
+  });
+  allThreads.sort(function(a, b) { return a - b; });
+
+  var datasets = [];
+  dsKeys.forEach(function(ds, i) {
+    var base = byDataset[ds][1] || byDataset[ds][allThreads[0]];
+    var data = allThreads.map(function(t) {
+      if (!byDataset[ds][t] || !base) return null;
+      return parseFloat((base / byDataset[ds][t]).toFixed(2));
+    });
+    datasets.push({
+      label: ds.replace('.fa', '').replace('.phy', ''),
+      data: data, borderColor: colors[i %% colors.length],
+      backgroundColor: colors[i %% colors.length] + '22',
+      fill: false, tension: 0.2, pointRadius: 5,
+      pointBackgroundColor: colors[i %% colors.length],
+      pointBorderColor: '#1a2332', pointBorderWidth: 2
+    });
+  });
+
+  // Add ideal line
+  var maxT = allThreads[allThreads.length - 1];
+  datasets.push({
+    label: 'Ideal',
+    data: allThreads.map(function(t) { return t; }),
+    borderColor: '#374151', borderDash: [5, 5],
+    fill: false, pointRadius: 0, borderWidth: 1
+  });
+
+  charts.scaling = new Chart(ctx.getContext('2d'), {
+    type: 'line',
+    data: { labels: allThreads.map(function(t) { return t + 'T'; }), datasets: datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 12 } },
+        tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8,
+          callbacks: { label: function(c) { return c.dataset.label + ': ' + c.raw + '\\u00d7 speedup'; } }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' },
+          title: { display: true, text: 'Threads', color: '#64748b' } },
+        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true,
+          title: { display: true, text: 'Speedup (\\u00d7)', color: '#64748b' } }
+      }
+    }
+  });
 }
 
 function renderQuickCmds(run) {
@@ -408,6 +783,80 @@ function filterRuns() {
   }).join('');
 }
 
+function switchRunsTab(tab, btn) {
+  document.querySelectorAll('#runsTabBar .tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.getElementById('runsTabContent').style.display = tab === 'runs' ? '' : 'none';
+  document.getElementById('profilesTabContent').style.display = tab === 'profiles' ? '' : 'none';
+}
+
+function renderProfilesList() {
+  var statsEl = document.getElementById('profilesStats');
+  var listEl = document.getElementById('profilesList');
+  if (!statsEl || !listEl) return;
+
+  if (PROFILES.length === 0) {
+    statsEl.innerHTML = '';
+    listEl.innerHTML = '<div class="no-data-msg">No deep profiling sessions yet. Run <code>./start.sh deepprofile</code> on Setonix.</div>';
+    return;
+  }
+
+  var bestIPC = 0;
+  var totalHotspots = 0;
+  var avgFEStall = 0;
+  var gpuProfiles = 0;
+
+  PROFILES.forEach(function(p) {
+    var d = (p.cpu || {}).derived || {};
+    var ipc = d.IPC || 0;
+    if (ipc > bestIPC) bestIPC = ipc;
+    totalHotspots += ((p.cpu || {}).hotspots || []).length;
+    avgFEStall += d['frontend-stall-rate'] || 0;
+    var hw = (p.gpu || {}).hardware || {};
+    if (hw.temperature_c != null) gpuProfiles++;
+  });
+  avgFEStall = PROFILES.length > 0 ? (avgFEStall / PROFILES.length).toFixed(2) : 0;
+
+  statsEl.innerHTML =
+    '<div class="stat-card"><div class="label">Total Profiles</div><div class="value">' + PROFILES.length + '</div><div class="change">' + gpuProfiles + ' with GPU data</div></div>' +
+    '<div class="stat-card"><div class="label">Best IPC</div><div class="value" style="color:var(--accent2)">' + (bestIPC > 0 ? bestIPC.toFixed(3) : 'N/A') + '</div><div class="change">Instructions per cycle</div></div>' +
+    '<div class="stat-card"><div class="label">Avg FE Stalls</div><div class="value" style="color:' + (avgFEStall > 10 ? 'var(--red)' : 'var(--green)') + '">' + avgFEStall + '%%</div><div class="change">Frontend stall rate</div></div>' +
+    '<div class="stat-card"><div class="label">Hotspot Funcs</div><div class="value">' + totalHotspots + '</div><div class="change">Across all profiles</div></div>' +
+    '<div class="stat-card"><div class="label">Datasets</div><div class="value">' + uniqueDatasets().length + '</div><div class="change">' + (uniqueDatasets().join(', ').substring(0, 40) || 'N/A') + '</div></div>';
+
+  listEl.innerHTML = PROFILES.map(function(p, i) {
+    var d = (p.cpu || {}).derived || {};
+    var hotspots = (p.cpu || {}).hotspots || [];
+    var topFunc = hotspots.length > 0 ? hotspots[0] : null;
+    var hw = (p.gpu || {}).hardware || {};
+    var gpuInfo = hw.temperature_c != null ? hw.temperature_c + '\\u00b0C' : 'No GPU';
+    var dateShort = (p.date || '').substring(0, 16).replace('T', ' ');
+    var sys = p.system || {};
+
+    return '<div class="profile-row" onclick="showPage(\\'profiling\\'); switchProfile(' + i + ');">' +
+      '<div class="rank">#' + (i + 1) + '</div>' +
+      '<div class="prof-info">' +
+        '<div class="prof-id">' + p.profile_id + '</div>' +
+        '<div class="prof-meta">' + dateShort + ' \\u00b7 ' + escHtml(sys.hostname || 'N/A') + ' \\u00b7 T' + (p.threads || '?') + ' \\u00b7 ' + escHtml(p.model || 'AUTO') + '</div>' +
+      '</div>' +
+      '<div class="prof-dataset">' + escHtml((p.dataset || 'N/A').split('/').pop()) + '</div>' +
+      '<div class="prof-ipc">' + (d.IPC || '\\u2014') + '</div>' +
+      '<div class="prof-hotspot" title="' + (topFunc ? escHtml(topFunc['function']) : '') + '">' + (topFunc ? topFunc.percent.toFixed(1) + '%% ' + escHtml(topFunc['function'].substring(0, 35)) : '\\u2014') + '</div>' +
+      '<div class="prof-gpu">' + gpuInfo + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function uniqueDatasets() {
+  var seen = {};
+  var result = [];
+  PROFILES.forEach(function(p) {
+    var d = (p.dataset || '').split('/').pop();
+    if (d && !seen[d]) { seen[d] = true; result.push(d); }
+  });
+  return result;
+}
+
 function toggleRunDetail(runId, runIdx) {
   if (expandedRunId === runId) {
     expandedRunId = null;
@@ -503,69 +952,6 @@ function copyRunCmds(runId, btn) {
   var script = '#!/bin/bash\\n# Pipeline commands from Run ' + run.run_id + '\\n# ' + (run.env.date || '') + ' on ' + (run.env.hostname || '') + '\\n\\n' +
     run.timing.map(function(t) { return t.command; }).join('\\n') + '\\n';
   copyText(script, btn);
-}
-
-// ============ Charts ============
-function renderTimingChart(run) {
-  if (charts.timing) charts.timing.destroy();
-  var ctx = document.getElementById('timingChart').getContext('2d');
-  var colors = ['#3b82f6','#8b5cf6','#06b6d4','#22c55e','#eab308','#f97316','#ef4444','#ec4899','#6366f1','#14b8a6'];
-  charts.timing = new Chart(ctx, {
-    type: timingChartType,
-    data: {
-      labels: run.timing.map(function(t) { return t.command.substring(0, 50); }),
-      datasets: [{
-        label: 'Time (s)',
-        data: run.timing.map(function(t) { return t.time_s; }),
-        backgroundColor: run.timing.map(function(_, i) { return colors[i %% colors.length] + '99'; }),
-        borderColor: run.timing.map(function(_, i) { return colors[i %% colors.length]; }),
-        borderWidth: 1, borderRadius: 4
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      indexAxis: timingChartType === 'bar' ? 'y' : undefined,
-      plugins: {
-        legend: { display: false },
-        tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#94a3b8', cornerRadius: 8, padding: 12 }
-      },
-      scales: {
-        x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
-        y: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 10 } } }
-      }
-    }
-  });
-}
-
-function renderTrendChart() {
-  if (charts.trend) charts.trend.destroy();
-  var ctx = document.getElementById('trendChart').getContext('2d');
-  charts.trend = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: DATA.map(function(r) { return r.run_id.substring(0, 10); }),
-      datasets: [{
-        label: 'Total Time (s)',
-        data: DATA.map(function(r) { return r.summary.total_time; }),
-        borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)',
-        fill: true, tension: 0.3, pointRadius: 6, pointBackgroundColor: '#22c55e',
-        pointBorderColor: '#1a2332', pointBorderWidth: 2
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2332', borderColor: '#2a3444', borderWidth: 1, cornerRadius: 8 } },
-      scales: {
-        x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
-        y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
-      }
-    }
-  });
-}
-
-function toggleChartType() {
-  timingChartType = timingChartType === 'bar' ? 'doughnut' : 'bar';
-  renderTimingChart(DATA[currentRunIdx]);
 }
 
 // ============ Tests ============

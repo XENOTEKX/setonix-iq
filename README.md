@@ -47,6 +47,43 @@ Self-contained dashboard for monitoring IQ-TREE pipeline runs on the [Setonix su
 └────────────────────────────────────────────────────┘
 ```
 
+## Requirements
+
+### HPC node (Setonix / Pawsey)
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **OS** | RHEL 8 / CentOS Stream 8 | Any Linux with perf support will work |
+| **Python** | ≥ 3.8 | Used by `serve.py` and `data.py` |
+| **Git** | ≥ 2.x | For committing + pushing dashboard |
+| **CMake** | ≥ 3.16 | Required to build IQ-TREE |
+| **GCC** | ≥ 10 (recommended 12) | C++17 support; load via `module load gcc/12.2.0` |
+| **Make** | any | Standard GNU Make |
+| **perf** | Linux kernel perf tools | For CPU profiling (`perf stat`, `perf record`) |
+| **ROCm** | ≥ 6.3.0 | AMD GPU support; load via `module load rocm` |
+| **rocprofiler-compute** | 3.0.0 | GPU kernel profiling; `module load rocprofiler-compute/3.0.0` |
+| **rocprofiler-systems** | 6.3.0 | GPU trace collection; `module load rocprofiler-systems/6.3.0` |
+| **SLURM** | any | Job scheduler — required for GPU node access |
+
+> **Build flag:** Always build IQ-TREE with `-fno-omit-frame-pointer` for profiling so `perf -g` can unwind call stacks:
+> ```bash
+> make build-profiling   # sets -fno-omit-frame-pointer automatically
+> ```
+> Without this flag, ~72% of profiling samples will appear as `[unknown]` in the flamegraph.
+
+### Local machine (macOS / Linux — dashboard only)
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **Python** | ≥ 3.8 | Runs `serve.py` to regenerate HTML |
+| **Git** | ≥ 2.x | `git pull` to sync logs from HPC |
+| **Web browser** | any modern | Open `dashboard.html` — no server needed |
+| **Node.js** | ≥ 16 *(optional)* | Only needed for JS syntax checking during dev |
+
+No Python packages beyond the standard library are required — `serve.py` and `data.py` use only `json`, `os`, `re`, `datetime`, and `pathlib`.
+
+---
+
 ## Why static HTML?
 
 Setonix disables SSH TCP forwarding on shared login nodes for security. Port forwarding doesn't work, so a live server is not viable. Instead, `serve.py` bakes all run data directly into a self-contained HTML file with no external dependencies (Chart.js is loaded from CDN).

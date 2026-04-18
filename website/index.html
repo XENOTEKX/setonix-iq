@@ -309,6 +309,74 @@ body {
   .run-row-summary { grid-template-columns: 30px 1fr 80px 70px; }
   .run-row-summary .run-detail-btn { display: none; }
 }
+/* ---- Run Pills ---- */
+.run-pills {
+  display: flex; gap: 8px; margin-bottom: 20px; overflow-x: auto;
+  padding: 4px 0; flex-wrap: wrap;
+}
+.run-pill {
+  padding: 8px 16px; border-radius: 20px; font-size: 0.8rem;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text2); cursor: pointer; transition: all 0.2s;
+  white-space: nowrap; display: flex; align-items: center; gap: 8px;
+}
+.run-pill:hover { border-color: var(--accent); color: var(--text); }
+.run-pill.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+.run-pill .pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.run-pill .pill-time { font-size: 0.7rem; color: var(--text3); }
+/* ---- Leaderboard Table ---- */
+#leaderboardTable th { cursor: pointer; user-select: none; }
+#leaderboardTable th:hover { color: var(--accent); }
+#leaderboardTable td { font-size: 0.8rem; }
+#leaderboardTable .lb-dataset { font-family: 'SF Mono', 'Fira Code', monospace; color: var(--text); font-weight: 600; }
+#leaderboardTable .lb-model { font-family: 'SF Mono', 'Fira Code', monospace; color: var(--accent2); font-size: 0.75rem; }
+#leaderboardTable .lb-rank { font-weight: 700; text-align: center; }
+#leaderboardTable .lb-rank.gold { color: #fbbf24; }
+#leaderboardTable .lb-rank.silver { color: #cbd5e1; }
+#leaderboardTable .lb-rank.bronze { color: #d97706; }
+.speedup-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.75rem; font-weight: 600;
+}
+.speedup-good { background: rgba(34,197,94,0.1); color: #22c55e; }
+.speedup-warn { background: rgba(234,179,8,0.1); color: #eab308; }
+.speedup-bad { background: rgba(239,68,68,0.1); color: #ef4444; }
+.eff-bar { width: 60px; height: 6px; background: var(--surface); border-radius: 3px; display: inline-block; vertical-align: middle; overflow: hidden; }
+.eff-bar .fill { height: 100%; border-radius: 3px; }
+.no-data-msg { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 40px 20px; }
+/* ---- Tab Bar ---- */
+.tab-bar {
+  display: flex; gap: 4px; margin-bottom: 20px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; width: fit-content;
+}
+.tab-btn {
+  padding: 8px 20px; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 500;
+  border: none; background: transparent; color: var(--text3); cursor: pointer; transition: all 0.2s;
+}
+.tab-btn.active { background: var(--accent-glow); color: var(--accent); }
+.tab-btn:hover:not(.active) { color: var(--text); }
+.tab-btn .tab-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; border-radius: 9px; font-size: 0.7rem;
+  background: var(--border); color: var(--text3); margin-left: 6px; padding: 0 6px;
+}
+.tab-btn.active .tab-count { background: rgba(59,130,246,0.2); color: var(--accent); }
+/* ---- Profile Row (All Runs) ---- */
+.profile-row {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 8px; padding: 16px 20px; transition: border-color 0.2s; cursor: pointer;
+  display: grid; grid-template-columns: 40px 1fr 120px 100px 100px 100px;
+  align-items: center; gap: 12px;
+}
+.profile-row:hover { border-color: var(--accent2); box-shadow: 0 0 0 1px rgba(139,92,246,0.15); }
+.profile-row .rank { font-size: 0.85rem; font-weight: 700; color: var(--text3); text-align: center; }
+.profile-row .prof-info { min-width: 0; }
+.profile-row .prof-id { font-weight: 600; font-size: 0.9rem; }
+.profile-row .prof-meta { font-size: 0.75rem; color: var(--text3); margin-top: 2px; }
+.profile-row .prof-dataset { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; color: var(--text2); }
+.profile-row .prof-ipc { text-align: center; font-weight: 600; color: var(--accent2); }
+.profile-row .prof-hotspot { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-row .prof-gpu { text-align: center; color: var(--text2); font-size: 0.85rem; }
 /* ---- Page transitions ---- */
 .page { display: none; }
 .page.active { display: block; animation: fadeIn 0.25s ease; }
@@ -371,33 +439,49 @@ body {
           <h1>Pipeline Overview</h1>
           <div class="subtitle" id="overviewSubtitle">Loading run data...</div>
         </div>
-        <div style="display:flex;gap:10px;align-items:center;">
-          <div class="run-selector">
-            <select id="runSelector" onchange="switchRun(this.value)"></select>
-          </div>
-          <span class="badge" id="statusBadge">--</span>
-        </div>
+        <span class="badge" id="statusBadge">--</span>
       </div>
+      <div class="run-pills" id="runPills"></div>
       <div class="stats-grid" id="statsGrid" style="grid-template-columns: repeat(5, 1fr);"></div>
-      <!-- Latest Profile Summary -->
-      <div class="card" id="latestProfileCard" style="display:none;">
+      <!-- Performance Leaderboard -->
+      <div class="card">
         <div class="card-header">
-          <h2>Latest Deep Profile</h2>
-          <div class="actions"><button class="btn" onclick="showPage('profiling')">View Full Profile &rarr;</button></div>
+          <h2>Performance Leaderboard</h2>
+          <div class="actions">
+            <button class="btn" onclick="sortLeaderboard('time')" id="lbSortTime">Wall Time</button>
+            <button class="btn" onclick="sortLeaderboard('speedup')" id="lbSortSpeedup">Speedup</button>
+          </div>
         </div>
-        <div id="latestProfileContent"></div>
+        <table class="data-table" id="leaderboardTable">
+          <thead><tr><th>#</th><th>Dataset</th><th>Taxa</th><th>Sites</th><th>Model</th><th>Block</th><th>T</th><th>GPU</th><th>Wall(s)</th><th>Speedup</th><th>Eff.</th><th>LogLik</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
       <div class="charts-row">
+        <!-- Hotspot Breakdown -->
         <div class="card">
-          <div class="card-header">
-            <h2>Test Execution Times</h2>
-            <div class="actions"><button class="btn" onclick="toggleChartType()">Toggle View</button></div>
-          </div>
-          <div class="chart-wrapper"><canvas id="timingChart"></canvas></div>
+          <div class="card-header"><h2>Hotspot Breakdown</h2></div>
+          <div class="chart-wrapper"><canvas id="hotspotChart"></canvas></div>
         </div>
+        <!-- Microarchitecture Radar -->
         <div class="card">
-          <div class="card-header"><h2>Pipeline Trend</h2></div>
-          <div class="chart-wrapper"><canvas id="trendChart"></canvas></div>
+          <div class="card-header"><h2>Microarchitecture Profile</h2></div>
+          <div class="chart-wrapper"><canvas id="microarchChart"></canvas></div>
+        </div>
+      </div>
+      <div class="charts-row">
+        <!-- Thread Scaling -->
+        <div class="card">
+          <div class="card-header"><h2>Thread Scaling</h2></div>
+          <div class="chart-wrapper"><canvas id="scalingChart"></canvas></div>
+        </div>
+        <!-- Latest Profile Summary -->
+        <div class="card" id="latestProfileCard" style="display:none;">
+          <div class="card-header">
+            <h2>Latest Deep Profile</h2>
+            <div class="actions"><button class="btn" onclick="showPage('profiling')">View Full Profile &rarr;</button></div>
+          </div>
+          <div id="latestProfileContent"></div>
         </div>
       </div>
       <!-- Quick command reference for current run -->
@@ -419,29 +503,40 @@ body {
     <div class="page" id="page-runs">
       <div class="page-header">
         <div>
-          <h1>All Pipeline Runs</h1>
-          <div class="subtitle">Browse, search, and compare all runs — click any row for full details</div>
+          <h1>All Runs &amp; Profiles</h1>
+          <div class="subtitle">Browse pipeline runs and deep profiling sessions — click any row for details</div>
         </div>
       </div>
-      <div class="filter-bar" id="runsFilterBar">
-        <input type="text" id="runSearch" placeholder="Search by run ID, hostname, date, command..." oninput="filterRuns()">
-        <select id="runStatusFilter" onchange="filterRuns()">
-          <option value="all">All Status</option>
-          <option value="pass">Pass Only</option>
-          <option value="fail">Has Failures</option>
-        </select>
-        <select id="runSortBy" onchange="filterRuns()">
-          <option value="date-desc">Newest First</option>
-          <option value="date-asc">Oldest First</option>
-          <option value="time-asc">Fastest First</option>
-          <option value="time-desc">Slowest First</option>
-          <option value="ipc-desc">Best IPC First</option>
-        </select>
-        <span class="count" id="runCount"></span>
+      <div class="tab-bar" id="runsTabBar">
+        <button class="tab-btn active" onclick="switchRunsTab('runs', this)">Pipeline Runs <span class="tab-count" id="runsTabCount">0</span></button>
+        <button class="tab-btn" onclick="switchRunsTab('profiles', this)">Deep Profiles <span class="tab-count" id="profilesTabCount">0</span></button>
       </div>
-      <!-- Summary stats for all runs -->
-      <div class="stats-grid" id="allRunsStats" style="grid-template-columns: repeat(5, 1fr);"></div>
-      <div id="runsList"></div>
+      <!-- Runs Tab -->
+      <div id="runsTabContent">
+        <div class="filter-bar" id="runsFilterBar">
+          <input type="text" id="runSearch" placeholder="Search by run ID, hostname, date, command..." oninput="filterRuns()">
+          <select id="runStatusFilter" onchange="filterRuns()">
+            <option value="all">All Status</option>
+            <option value="pass">Pass Only</option>
+            <option value="fail">Has Failures</option>
+          </select>
+          <select id="runSortBy" onchange="filterRuns()">
+            <option value="date-desc">Newest First</option>
+            <option value="date-asc">Oldest First</option>
+            <option value="time-asc">Fastest First</option>
+            <option value="time-desc">Slowest First</option>
+            <option value="ipc-desc">Best IPC First</option>
+          </select>
+          <span class="count" id="runCount"></span>
+        </div>
+        <div class="stats-grid" id="allRunsStats" style="grid-template-columns: repeat(5, 1fr);"></div>
+        <div id="runsList"></div>
+      </div>
+      <!-- Profiles Tab -->
+      <div id="profilesTabContent" style="display:none;">
+        <div class="stats-grid" id="profilesStats" style="grid-template-columns: repeat(5, 1fr);"></div>
+        <div id="profilesList"></div>
+      </div>
     </div>
 
     <!-- ====== Tests Page ====== -->
