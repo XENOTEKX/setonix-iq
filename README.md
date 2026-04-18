@@ -163,7 +163,10 @@ setonix-iq/
 │   └── assets/             ← Flamegraph SVG symlink (gitignored)
 │
 ├── logs/
-│   └── runs.json           ← Cached parsed data (COMMITTED to git)
+│   └── runs/               ← One JSON file per run (COMMITTED to git)
+│       ├── 2026-04-18_201515.json
+│       ├── 2026-04-19_143022.json
+│       └── ...
 │
 ├── docs/
 │   └── index.html          ← Generated dashboard (GitHub Pages source)
@@ -187,15 +190,15 @@ website/profiles/ ─symlink──► perf_stat_*.json
          ▼
 data.py  ──parses──►  structured JSON (list of run objects)
          │
-         ├──► logs/runs.json        (cached for offline, committed to git)
-         ├──► website/api/runs.json (reference copy, gitignored)
-         └──► embedded in HTML      (docs/index.html, dashboard.html)
+         ├──► logs/runs/<date-time>.json  (one file per run, committed to git)
+         ├──► website/api/runs.json       (reference copy, gitignored)
+         └──► embedded in HTML            (docs/index.html, dashboard.html)
 ```
 
 ### On local machine (no Setonix)
 
 ```
-logs/runs.json  ──loaded by data.py──►  same structured JSON
+logs/runs/*.json  ──loaded by data.py──►  same structured JSON
          │
          └──► embedded in HTML (dashboard.html)
 ```
@@ -288,20 +291,46 @@ Raw `rocm-smi` output (parsed for temperature, power, VRAM, utilization).
 
 ---
 
-## Adding a New Run
+## Run Naming Convention
 
-Runs are auto-detected by filename pattern. To add data manually:
+Runs are identified by **date-time** strings derived from the pipeline's start timestamp:
 
-1. Place files in `website/results/` (or the scratch directory on Setonix):
-   - `time_log_<YOUR_RUN_ID>.tsv`
-   - `verify_<YOUR_RUN_ID>.txt`
-   - `env_<YOUR_RUN_ID>.txt`
-   - Optionally: `gpu_info_<YOUR_RUN_ID>.txt`
+```
+2026-04-18_201515   →   April 18 2026, 20:15:15
+```
+
+Format: `YYYY-MM-DD_HHMMSS` — sortable, filesystem-safe, human-readable.
+
+The SLURM job ID is preserved inside each run's JSON as `slurm_id` for cross-referencing
+with raw log files on scratch (which still use SLURM IDs: `time_log_41683322.tsv`).
+
+### Log storage
+
+Each run is stored as an individual JSON file:
+
+```
+logs/runs/
+├── 2026-04-18_201515.json   ← one complete run
+├── 2026-04-19_143022.json
+└── ...
+```
+
+Benefits over a monolithic `runs.json` array:
+- **Clean git diffs** — new run = new file, no rewrite of existing data
+- **No merge conflicts** — independent files don't collide
+- **Easy archival** — delete old runs by removing individual files
+- **Small commits** — ~5KB per run instead of rewriting the full history
+
+### Adding a run manually
+
+1. Place raw files in `website/results/` (or scratch on Setonix):
+   - `time_log_<SLURM_ID>.tsv`
+   - `verify_<SLURM_ID>.txt`
+   - `env_<SLURM_ID>.txt` (must contain `date:` line for naming)
+   - Optionally: `gpu_info_<SLURM_ID>.txt`
 2. Place profiling in `website/profiles/`:
-   - `perf_stat_<YOUR_RUN_ID>.json`
-3. Run `python3 serve.py` to regenerate
-
-The `<RUN_ID>` must be consistent across all files for a run — `data.py` uses `time_log_*.tsv` filenames as the primary index.
+   - `perf_stat_<SLURM_ID>.json`
+3. Run `python3 serve.py` — this parses, creates `logs/runs/<date-time>.json`, and regenerates the dashboard
 
 ---
 
@@ -309,7 +338,7 @@ The `<RUN_ID>` must be consistent across all files for a run — `data.py` uses 
 
 | Problem | Fix |
 |---------|-----|
-| Dashboard shows "No pipeline runs" locally | Run `git pull` to get latest `logs/runs.json` |
+| Dashboard shows "No pipeline runs" locally | Run `git pull` to get latest `logs/runs/*.json` files |
 | Symlink errors on Setonix | Verify `/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/results` exists |
 | `git push` fails on Setonix | Check remote URL has valid token: `git remote -v` |
 | Dashboard doesn't update on GitHub Pages | Check `docs/index.html` was committed; Pages serves from `docs/` on `main` |

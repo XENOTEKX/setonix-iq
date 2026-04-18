@@ -37,11 +37,13 @@ def generate():
     with open(json_path, 'w') as f:
         json.dump(runs, f, indent=2)
 
-    # Export to logs/ so offline/local renders still have data
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    logs_json = os.path.join(LOGS_DIR, 'runs.json')
-    with open(logs_json, 'w') as f:
-        json.dump(runs, f, indent=2)
+    # Export individual per-run JSON files to logs/runs/
+    runs_log_dir = os.path.join(LOGS_DIR, 'runs')
+    os.makedirs(runs_log_dir, exist_ok=True)
+    for run in runs:
+        run_path = os.path.join(runs_log_dir, '%s.json' % run['run_id'])
+        with open(run_path, 'w') as f:
+            json.dump(run, f, indent=2)
 
     # Read the template
     template_path = os.path.join(WEBSITE_DIR, 'index.html')

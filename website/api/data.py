@@ -14,6 +14,19 @@ PROFILES_DIR = os.path.join(os.path.dirname(__file__), '..', 'profiles')
 LOGS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'logs')
 
 
+def slurm_id_to_datetime(slurm_id, env_info):
+    """Convert a SLURM job ID to a date-time string using the env date field.
+    Returns format: 2026-04-18_201515 (sortable, filesystem-safe)."""
+    date_str = env_info.get('date', '')
+    if date_str:
+        # Parse ISO format: 2026-04-18T20:15:15+08:00
+        m = re.match(r'(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})', date_str)
+        if m:
+            return '%s_%s%s%s' % (m.group(1), m.group(2), m.group(3), m.group(4))
+    # Fallback: use slurm_id prefixed with "run_"
+    return 'run_%s' % slurm_id
+
+
 def parse_time_log(filepath):
     rows = []
     with open(filepath) as f:
@@ -75,35 +88,37 @@ def get_all_runs():
 
     Reads raw log files from website/results and website/profiles (Setonix
     symlinks).  When those directories are unavailable (local dev), falls
-    back to the cached logs/runs.json that was exported on the last Setonix
-    run.
+    back to individual per-run JSON files in logs/runs/<run_id>.json.
     """
-    # If raw results dir doesn't exist, fall back to cached logs
+    # If raw results dir doesn't exist, fall back to cached per-run logs
     if not os.path.isdir(RESULTS_DIR):
-        logs_json = os.path.join(LOGS_DIR, 'runs.json')
-        if os.path.exists(logs_json):
-            with open(logs_json) as f:
-                return json.load(f)
+        runs_dir = os.path.join(LOGS_DIR, 'runs')
+        if os.path.isdir(runs_dir):
+            runs = []
+            for f in sorted(glob.glob(os.path.join(runs_dir, '*.json'))):
+                with open(f) as fh:
+                    runs.append(json.load(fh))
+            return runs
         return []
 
     runs = []
     for tlog in sorted(glob.glob(os.path.join(RESULTS_DIR, 'time_log_*.tsv'))):
-        rid = Path(tlog).stem.replace('time_log_', '')
+        slurm_id = Path(tlog).stem.replace('time_log_', '')
         timing = parse_time_log(tlog)
 
-        verify_file = os.path.join(RESULTS_DIR, f'verify_{rid}.txt')
+        verify_file = os.path.join(RESULTS_DIR, f'verify_{slurm_id}.txt')
         verify = parse_verify_log(verify_file) if os.path.exists(verify_file) else []
 
-        env_file = os.path.join(RESULTS_DIR, f'env_{rid}.txt')
+        env_file = os.path.join(RESULTS_DIR, f'env_{slurm_id}.txt')
         env_info = parse_env_info(env_file) if os.path.exists(env_file) else {}
 
-        gpu_file = os.path.join(RESULTS_DIR, f'gpu_info_{rid}.txt')
+        gpu_file = os.path.join(RESULTS_DIR, f'gpu_info_{slurm_id}.txt')
         gpu_info = ''
         if os.path.exists(gpu_file):
             with open(gpu_file) as f:
                 gpu_info = f.read()
 
-        profile_file = os.path.join(PROFILES_DIR, f'perf_stat_{rid}.json')
+        profile_file = os.path.join(PROFILES_DIR, f'perf_stat_{slurm_id}.json')
         profile = {}
         if os.path.exists(profile_file):
             with open(profile_file) as f:
@@ -113,8 +128,11 @@ def get_all_runs():
         fail_count = sum(1 for v in verify if v['status'] == 'fail')
         total_time = sum(r['time_s'] for r in timing)
 
+        run_id = slurm_id_to_datetime(slurm_id, env_info)
+
         runs.append({
-            'run_id': rid,
+            'run_id': run_id,
+            'slurm_id': slurm_id,
             'timing': timing,
             'verify': verify,
             'env': env_info,

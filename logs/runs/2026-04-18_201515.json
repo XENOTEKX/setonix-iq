@@ -1,0 +1,144 @@
+{
+  "run_id": "2026-04-18_201515",
+  "slurm_id": "41683322",
+  "timing": [
+    {
+      "command": "iqtree3 -s turtle.fa -B 1000 -T 1 -seed 73073",
+      "time_s": 2.978511796,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -p turtle.nex -B 1000 -T 1 -seed 73073",
+      "time_s": 3.244102211,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -p turtle.nex -B 1000 -T 1 -m MFP+MERGE -rcluster 10 --pref",
+      "time_s": 3.057640839,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -p turtle.merge.best_scheme.nex -z turtle.trees -zb 10000 -",
+      "time_s": 1.080289985,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -m GTR+F+I+R3+T -te turtle.trees -T 1 --prefix turtle.mix -",
+      "time_s": 2.216210096,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -p turtle.nex.best_scheme.nex -z turtle.trees -n 0 -wpl --p",
+      "time_s": 0.090208564,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -S turtle.nex --prefix turtle.loci -T 1 -seed 73073",
+      "time_s": 3.334403145,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -t turtle.nex.treefile --gcf turtle.loci.treefile -s turtle.fa --scf 100",
+      "time_s": 0.025626156,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -t turtle.fa.treefile --gcf turtle.loci.treefile -s turtle.fa --scf 100 ",
+      "time_s": 0.024491268,
+      "memory_kb": 0.0
+    },
+    {
+      "command": "iqtree3 -s turtle.fa -B 1000 -T 4 -seed 73073 --prefix turtle.fa.4t",
+      "time_s": 1.661022123,
+      "memory_kb": 0.0
+    }
+  ],
+  "verify": [
+    {
+      "status": "pass",
+      "file": "turtle.fa.iqtree",
+      "expected": -5370.3729,
+      "reported": -5370.373,
+      "diff": 0.0001
+    },
+    {
+      "status": "pass",
+      "file": "turtle.loci.iqtree",
+      "expected": -5263.0947,
+      "reported": -5263.0947,
+      "diff": 0.0
+    },
+    {
+      "status": "pass",
+      "file": "turtle.merge.iqtree",
+      "expected": -5370.3728,
+      "reported": -5370.3728,
+      "diff": 0.0
+    },
+    {
+      "status": "pass",
+      "file": "turtle.mix.iqtree",
+      "expected": -5342.1012,
+      "reported": -5342.1013,
+      "diff": 0.0001
+    },
+    {
+      "status": "pass",
+      "file": "turtle.nex.iqtree",
+      "expected": -5360.0759,
+      "reported": -5360.0759,
+      "diff": 0.0
+    },
+    {
+      "status": "pass",
+      "file": "turtle.test.iqtree",
+      "expected": -5372.1363,
+      "reported": -5372.1362,
+      "diff": 0.0001
+    },
+    {
+      "status": "pass",
+      "file": "turtle.wpl.iqtree",
+      "expected": -5361.6271,
+      "reported": -5361.6272,
+      "diff": 0.0001
+    }
+  ],
+  "env": {
+    "hostname": "nid003000",
+    "date": "2026-04-18T20:15:15+08:00",
+    "run_id": "41683322",
+    "gcc": "gcc (SUSE Linux) 14.3.0",
+    "cmake": "cmake version 3.28.3",
+    "rocm": "HIP version: 6.3.42131-fa1d09cbd",
+    "gpu": "N/A",
+    "cpu": "AMD EPYC 7A53 64-Core Processor",
+    "cores": "8"
+  },
+  "gpu_info": "=== rocm-smi ===\n\n\n========================================= ROCm System Management Interface =========================================\n=================================================== Concise Info ===================================================\nDevice  Node  IDs              Temp    Power  Partitions          SCLK    MCLK     Fan  Perf  PwrCap  VRAM%  GPU%  \n\u001b[3m              (DID,     GUID)  (Edge)  (Avg)  (Mem, Compute, ID)                                                   \u001b[0m\n====================================================================================================================\n0       8     0x7408,   13395  31.0\u00b0C  96.0W  N/A, N/A, 0         800Mhz  1600Mhz  0%   auto  560.0W  0%     0%    \n====================================================================================================================\n=============================================== End of ROCm SMI Log ================================================\n\n=== rocminfo (GPU agents) ===\n",
+  "profile": {
+    "run_id": "41683322",
+    "dataset": "test_scripts/test_data/turtle.fa",
+    "threads": 1,
+    "metrics": {
+      "cycles": 4161234725,
+      "instructions": 12255303298,
+      "cache-references": 527090527,
+      "cache-misses": 16722424,
+      "branch-instructions": 1222864685,
+      "branch-misses": 3618719,
+      "L1-dcache-loads": 5315940103,
+      "L1-dcache-load-misses": 398895395,
+      "IPC": 2.945,
+      "cache-miss-rate": 3.17,
+      "branch-miss-rate": 0.2959,
+      "L1-dcache-miss-rate": 7.5
+    }
+  },
+  "summary": {
+    "pass": 7,
+    "fail": 0,
+    "total_time": 17.71,
+    "all_pass": true
+  }
+}
