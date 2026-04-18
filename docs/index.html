@@ -356,7 +356,15 @@ body {
           <span class="badge" id="statusBadge">--</span>
         </div>
       </div>
-      <div class="stats-grid" id="statsGrid"></div>
+      <div class="stats-grid" id="statsGrid" style="grid-template-columns: repeat(5, 1fr);"></div>
+      <!-- Latest Profile Summary -->
+      <div class="card" id="latestProfileCard" style="display:none;">
+        <div class="card-header">
+          <h2>Latest Deep Profile</h2>
+          <div class="actions"><button class="btn" onclick="showPage('profiling')">View Full Profile &rarr;</button></div>
+        </div>
+        <div id="latestProfileContent"></div>
+      </div>
       <div class="charts-row">
         <div class="card">
           <div class="card-header">
@@ -471,6 +479,20 @@ body {
         </div>
       </div>
 
+      <!-- IQ-TREE Run Configuration -->
+      <div class="card" id="profConfigCard">
+        <div class="card-header">
+          <h2>IQ-TREE Configuration</h2>
+          <div class="actions">
+            <button class="copy-all-btn" id="copyConfigBtn" onclick="copyProfileConfig(this)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy Config
+            </button>
+          </div>
+        </div>
+        <div id="profConfigContent"></div>
+      </div>
+
       <!-- Profiling Commands -->
       <div class="card" id="profilingCmdsCard">
         <div class="card-header">
@@ -555,10 +577,18 @@ body {
       <div class="page-header">
         <div>
           <h1>Allocation Balance</h1>
-          <div class="subtitle">Pawsey project service unit (kSU) usage</div>
+          <div class="subtitle">Pawsey project service unit (kSU) usage — auto-tracked from profiling runs</div>
         </div>
       </div>
+      <div class="stats-grid" id="allocStats" style="grid-template-columns: repeat(4,1fr);"></div>
       <div class="stats-grid" id="allocGrid" style="grid-template-columns: repeat(2,1fr);"></div>
+      <div class="card" id="allocHistoryCard">
+        <div class="card-header"><h2>Usage History</h2></div>
+        <table class="data-table" id="allocHistoryTable">
+          <thead><tr><th>Profile ID</th><th>Date</th><th>Dataset</th><th>Threads</th><th>Partition</th><th>Est. SU</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- ====== Environment Page ====== -->
@@ -653,7 +683,7 @@ function loadData() {
   renderRunsList();
   document.getElementById('serverDot').style.background = 'var(--green)';
   document.getElementById('serverStatus').textContent = 'Static (GitHub Pages)';
-  document.getElementById('lastUpdate').textContent = 'Generated: 2026-04-18 22:52:55';
+  document.getElementById('lastUpdate').textContent = 'Generated: 2026-04-18 23:12:58';
 }
 
 function populateAllSelectors() {
@@ -691,6 +721,10 @@ function renderAll() {
 function renderOverview(run) {
   var s = run.summary;
   var profile = (run.profile && run.profile.metrics) || {};
+  var latestProf = PROFILES.length > 0 ? PROFILES[PROFILES.length - 1] : null;
+  var lpCpu = latestProf ? (latestProf.cpu || {}) : {};
+  var lpDerived = lpCpu.derived || {};
+  var lpHotspots = lpCpu.hotspots || [];
 
   document.getElementById('overviewSubtitle').textContent =
     'Run ' + run.run_id + ' | ' + (run.env.date || 'N/A') + ' | ' + (run.env.hostname || 'N/A');
@@ -701,7 +735,11 @@ function renderOverview(run) {
 
   var bestTime = Math.min.apply(null, DATA.map(function(r) { return r.summary.total_time; }));
   var avgTime = (DATA.reduce(function(a, r) { return a + r.summary.total_time; }, 0) / DATA.length).toFixed(1);
-  var allPass = DATA.every(function(r) { return r.summary.all_pass; });
+
+  // Use deep profile IPC if available, fall back to basic
+  var ipcVal = lpDerived.IPC || profile.IPC || 'N/A';
+  var feStall = lpDerived['frontend-stall-rate'];
+  var cacheMiss = lpDerived['cache-miss-rate'];
 
   document.getElementById('statsGrid').innerHTML =
     '<div class="stat-card">' +
@@ -716,14 +754,41 @@ function renderOverview(run) {
     '</div>' +
     '<div class="stat-card">' +
       '<div class="label">IPC</div>' +
-      '<div class="value">' + (profile.IPC || 'N/A') + '</div>' +
-      '<div class="change">Instructions per cycle</div>' +
+      '<div class="value" style="color:var(--accent2)">' + ipcVal + '</div>' +
+      '<div class="change">' + (feStall != null ? 'Frontend stalls: ' + feStall + '%' : 'Instructions per cycle') + '</div>' +
     '</div>' +
     '<div class="stat-card">' +
-      '<div class="label">Total Runs</div>' +
-      '<div class="value">' + DATA.length + '</div>' +
-      '<div class="change">' + (allPass ? 'All green' : 'Some failures') + ' | Avg: ' + avgTime + 's</div>' +
+      '<div class="label">Cache Miss</div>' +
+      '<div class="value" style="color:' + (cacheMiss != null && cacheMiss > 5 ? 'var(--yellow)' : 'var(--green)') + '">' + (cacheMiss != null ? cacheMiss + '%' : 'N/A') + '</div>' +
+      '<div class="change">' + (lpDerived['L1-dcache-miss-rate'] != null ? 'L1-D: ' + lpDerived['L1-dcache-miss-rate'] + '%' : 'Run deep profile for data') + '</div>' +
+    '</div>' +
+    '<div class="stat-card">' +
+      '<div class="label">Profiles</div>' +
+      '<div class="value">' + PROFILES.length + '</div>' +
+      '<div class="change">' + DATA.length + ' pipeline run' + (DATA.length > 1 ? 's' : '') + '</div>' +
     '</div>';
+
+  // Latest profile summary card
+  var profCard = document.getElementById('latestProfileCard');
+  if (latestProf && profCard) {
+    profCard.style.display = '';
+    var topFunc = lpHotspots.length > 0 ? lpHotspots[0] : null;
+    var gpuHw = (latestProf.gpu || {}).hardware || {};
+    document.getElementById('latestProfileContent').innerHTML =
+      '<div class="detail-grid" style="grid-template-columns:repeat(3,1fr);">' +
+        '<div class="detail-kv"><div class="dk-label">Dataset</div><div class="dk-value">' + escHtml(latestProf.dataset || 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Model</div><div class="dk-value">' + escHtml(latestProf.model || 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Threads</div><div class="dk-value">' + (latestProf.threads || 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">IPC</div><div class="dk-value" style="color:var(--accent2)">' + (lpDerived.IPC || 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Frontend Stalls</div><div class="dk-value" style="color:' + (feStall > 10 ? 'var(--red)' : 'var(--green)') + '">' + (feStall != null ? feStall + '%' : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Top Hotspot</div><div class="dk-value" style="font-family:monospace;font-size:0.75rem;">' + (topFunc ? topFunc.percent.toFixed(1) + '%  ' + escHtml(topFunc['function'].substring(0, 40)) : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">GPU Temp</div><div class="dk-value">' + (gpuHw.temperature_c != null ? gpuHw.temperature_c + '\u00b0C' : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">GPU Util</div><div class="dk-value">' + (gpuHw.utilization_pct != null ? gpuHw.utilization_pct + '%' : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Profile ID</div><div class="dk-value">' + latestProf.profile_id + '</div></div>' +
+      '</div>';
+  } else if (profCard) {
+    profCard.style.display = 'none';
+  }
 
   renderTimingChart(run);
   renderTrendChart();
@@ -1093,10 +1158,80 @@ function renderProfiling(run) {
   }
 
   if (prof) {
+    renderProfileConfig(prof);
     renderDeepProfile(prof);
   } else {
+    renderProfileConfig(null);
     renderBasicProfile(run);
   }
+}
+
+function renderProfileConfig(prof) {
+  var card = document.getElementById('profConfigCard');
+  var content = document.getElementById('profConfigContent');
+  if (!prof) { if (card) card.style.display = 'none'; return; }
+  if (card) card.style.display = '';
+  var sys = prof.system || {};
+  var cmds = prof.commands || {};
+  var iqtreeCmd = 'iqtree3 -s ' + escHtml(prof.dataset || '?') +
+    (prof.model ? ' -m ' + escHtml(prof.model) : '') +
+    ' -T ' + (prof.threads || 1) +
+    ' --prefix output';
+
+  content.innerHTML =
+    '<div class="detail-grid" style="grid-template-columns:repeat(3,1fr);">' +
+      '<div class="detail-kv"><div class="dk-label">Dataset</div><div class="dk-value">' + escHtml(prof.dataset || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Model</div><div class="dk-value">' + escHtml(prof.model || 'AUTO') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Threads</div><div class="dk-value">' + (prof.threads || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">CPU</div><div class="dk-value">' + escHtml(sys.cpu || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Cores</div><div class="dk-value">' + (sys.cores || 'N/A') + (sys.threads_per_core ? ' (' + sys.threads_per_core + 'T/core)' : '') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Sockets</div><div class="dk-value">' + (sys.sockets || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Memory</div><div class="dk-value">' + (sys.mem_total_gb ? sys.mem_total_gb + ' GB' : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">L3 Cache</div><div class="dk-value">' + escHtml(sys.l3_cache || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">NUMA Nodes</div><div class="dk-value">' + (sys.numa_nodes || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">GPU</div><div class="dk-value">' + escHtml(sys.gpu || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">ROCm</div><div class="dk-value">' + escHtml(sys.rocm || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">GCC</div><div class="dk-value">' + escHtml(sys.gcc || 'N/A') + '</div></div>' +
+    '</div>' +
+    '<div style="margin-top:12px;padding:10px;background:var(--bg-tertiary);border-radius:6px;font-family:monospace;font-size:0.8rem;color:var(--text-secondary);">' +
+      '<span style="color:var(--text-muted);margin-right:8px;">$</span>' + escHtml(iqtreeCmd) +
+    '</div>';
+  content.setAttribute('data-config', JSON.stringify({
+    dataset: prof.dataset, model: prof.model, threads: prof.threads,
+    system: sys, iqtree_cmd: iqtreeCmd, profile_id: prof.profile_id,
+    date: prof.date
+  }));
+}
+
+function copyProfileConfig(btn) {
+  var el = document.getElementById('profConfigContent');
+  var data = JSON.parse(el.getAttribute('data-config') || '{}');
+  var lines = [
+    '=== IQ-TREE Run Configuration ===',
+    'Profile ID: ' + (data.profile_id || 'N/A'),
+    'Date: ' + (data.date || 'N/A'),
+    'Dataset: ' + (data.dataset || 'N/A'),
+    'Model: ' + (data.model || 'AUTO'),
+    'Threads: ' + (data.threads || 'N/A'),
+    '',
+    '--- System ---',
+    'CPU: ' + ((data.system || {}).cpu || 'N/A'),
+    'Cores: ' + ((data.system || {}).cores || 'N/A'),
+    'Sockets: ' + ((data.system || {}).sockets || 'N/A'),
+    'Memory: ' + ((data.system || {}).mem_total_gb ? (data.system || {}).mem_total_gb + ' GB' : 'N/A'),
+    'L3 Cache: ' + ((data.system || {}).l3_cache || 'N/A'),
+    'GPU: ' + ((data.system || {}).gpu || 'N/A'),
+    'ROCm: ' + ((data.system || {}).rocm || 'N/A'),
+    'GCC: ' + ((data.system || {}).gcc || 'N/A'),
+    '',
+    '--- Command ---',
+    data.iqtree_cmd || ''
+  ];
+  navigator.clipboard.writeText(lines.join('\n'));
+  btn.textContent = 'Copied!';
+  setTimeout(function() {
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Config';
+  }, 1500);
 }
 
 function renderDeepProfile(prof) {
@@ -1382,15 +1517,69 @@ function renderGPU(run) {
 
 // ============ Allocation ============
 function renderAllocation() {
+  var cpuTotal = 30000;
+  var gpuTotal = 30000;
+  var cpuUsed = 0;
+  var gpuUsed = 0;
+  var history = [];
+
+  // Estimate SU usage from deep profiles
+  // GPU partition: each node-hour = 1 SU (MI250X), task-clock gives CPU-ms
+  // Rough: task-clock(ms) * threads / 3600000 for node-hours, then scale
+  PROFILES.forEach(function(p) {
+    var cpu = (p.cpu || {}).counters || {};
+    var taskClock = parseFloat(cpu['task-clock'] || '0');
+    var threads = parseInt(p.threads) || 1;
+    // task-clock is in ms of CPU time, convert to node-hours
+    // Setonix GPU nodes have 64 cores, 1 GPU SU = 1 node-hour
+    var wallSec = taskClock / 1000;  // Wall time approx (single-thread equivalent)
+    var nodeHours = wallSec / 3600;
+    // GPU profiles use gpu-dev partition
+    var estSU = Math.max(nodeHours, 0.001);
+    gpuUsed += estSU;
+    history.push({
+      id: p.profile_id, date: p.date || 'N/A', dataset: p.dataset || 'N/A',
+      threads: threads, partition: 'gpu-dev', su: estSU
+    });
+  });
+
+  // Also count pipeline runs (CPU partition, lighter)
+  DATA.forEach(function(r) {
+    var wallSec = r.summary.total_time || 0;
+    var nodeHours = wallSec / 3600;
+    cpuUsed += Math.max(nodeHours, 0.001);
+  });
+
+  var gpuUsedKSU = gpuUsed;
+  var cpuUsedKSU = cpuUsed;
+  var gpuPct = (gpuUsedKSU / gpuTotal * 100);
+  var cpuPct = (cpuUsedKSU / cpuTotal * 100);
+
+  document.getElementById('allocStats').innerHTML =
+    '<div class="stat-card"><div class="label">CPU Runs</div><div class="value">' + DATA.length + '</div><div class="change">Pipeline executions</div></div>' +
+    '<div class="stat-card"><div class="label">GPU Profiles</div><div class="value">' + PROFILES.length + '</div><div class="change">Deep profiling sessions</div></div>' +
+    '<div class="stat-card"><div class="label">CPU Used</div><div class="value" style="color:var(--green)">' + cpuUsedKSU.toFixed(3) + ' kSU</div><div class="change">of ' + cpuTotal.toLocaleString() + ' kSU</div></div>' +
+    '<div class="stat-card"><div class="label">GPU Used</div><div class="value" style="color:var(--accent)">' + gpuUsedKSU.toFixed(3) + ' kSU</div><div class="change">of ' + gpuTotal.toLocaleString() + ' kSU</div></div>';
+
   document.getElementById('allocGrid').innerHTML =
     '<div class="card"><div class="card-header"><h2>CPU Allocation (pawsey1351)</h2></div>' +
-    '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>0 kSU used</span><span style="color:var(--text3)">30,000 kSU total</span></div>' +
-    '<div class="alloc-bar"><div class="fill" style="width:0%;background:var(--green)"></div></div>' +
-    '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">30,000 kSU remaining (100%)</div></div>' +
+    '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>' + cpuUsedKSU.toFixed(3) + ' kSU used</span><span style="color:var(--text3)">' + cpuTotal.toLocaleString() + ' kSU total</span></div>' +
+    '<div class="alloc-bar"><div class="fill" style="width:' + Math.max(cpuPct, 0.05) + '%;background:var(--green);min-width:2px;"></div></div>' +
+    '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">' + (cpuTotal - cpuUsedKSU).toFixed(1) + ' kSU remaining (' + (100 - cpuPct).toFixed(2) + '%)</div></div>' +
     '<div class="card"><div class="card-header"><h2>GPU Allocation (pawsey1351-gpu)</h2></div>' +
-    '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>21 kSU used</span><span style="color:var(--text3)">30,000 kSU total</span></div>' +
-    '<div class="alloc-bar"><div class="fill" style="width:0.07%;background:var(--accent);min-width:2px;"></div></div>' +
-    '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">29,979 kSU remaining (99.9%)</div></div>';
+    '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>' + gpuUsedKSU.toFixed(3) + ' kSU used</span><span style="color:var(--text3)">' + gpuTotal.toLocaleString() + ' kSU total</span></div>' +
+    '<div class="alloc-bar"><div class="fill" style="width:' + Math.max(gpuPct, 0.05) + '%;background:var(--accent);min-width:2px;"></div></div>' +
+    '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">' + (gpuTotal - gpuUsedKSU).toFixed(1) + ' kSU remaining (' + (100 - gpuPct).toFixed(2) + '%)</div></div>';
+
+  // Usage history table
+  var tbody = document.querySelector('#allocHistoryTable tbody');
+  if (history.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="no-data-msg">No profiling runs yet — usage will be tracked automatically</td></tr>';
+  } else {
+    tbody.innerHTML = history.map(function(h) {
+      return '<tr><td>' + h.id + '</td><td>' + h.date + '</td><td>' + h.dataset + '</td><td>' + h.threads + '</td><td>' + h.partition + '</td><td>' + h.su.toFixed(4) + '</td></tr>';
+    }).join('');
+  }
 }
 
 // ============ Environment ============

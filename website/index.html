@@ -356,7 +356,15 @@ body {
           <span class="badge" id="statusBadge">--</span>
         </div>
       </div>
-      <div class="stats-grid" id="statsGrid"></div>
+      <div class="stats-grid" id="statsGrid" style="grid-template-columns: repeat(5, 1fr);"></div>
+      <!-- Latest Profile Summary -->
+      <div class="card" id="latestProfileCard" style="display:none;">
+        <div class="card-header">
+          <h2>Latest Deep Profile</h2>
+          <div class="actions"><button class="btn" onclick="showPage('profiling')">View Full Profile &rarr;</button></div>
+        </div>
+        <div id="latestProfileContent"></div>
+      </div>
       <div class="charts-row">
         <div class="card">
           <div class="card-header">
@@ -471,6 +479,20 @@ body {
         </div>
       </div>
 
+      <!-- IQ-TREE Run Configuration -->
+      <div class="card" id="profConfigCard">
+        <div class="card-header">
+          <h2>IQ-TREE Configuration</h2>
+          <div class="actions">
+            <button class="copy-all-btn" id="copyConfigBtn" onclick="copyProfileConfig(this)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy Config
+            </button>
+          </div>
+        </div>
+        <div id="profConfigContent"></div>
+      </div>
+
       <!-- Profiling Commands -->
       <div class="card" id="profilingCmdsCard">
         <div class="card-header">
@@ -555,10 +577,18 @@ body {
       <div class="page-header">
         <div>
           <h1>Allocation Balance</h1>
-          <div class="subtitle">Pawsey project service unit (kSU) usage</div>
+          <div class="subtitle">Pawsey project service unit (kSU) usage — auto-tracked from profiling runs</div>
         </div>
       </div>
+      <div class="stats-grid" id="allocStats" style="grid-template-columns: repeat(4,1fr);"></div>
       <div class="stats-grid" id="allocGrid" style="grid-template-columns: repeat(2,1fr);"></div>
+      <div class="card" id="allocHistoryCard">
+        <div class="card-header"><h2>Usage History</h2></div>
+        <table class="data-table" id="allocHistoryTable">
+          <thead><tr><th>Profile ID</th><th>Date</th><th>Dataset</th><th>Threads</th><th>Partition</th><th>Est. SU</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- ====== Environment Page ====== -->
