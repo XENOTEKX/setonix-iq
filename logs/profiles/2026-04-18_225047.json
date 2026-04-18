@@ -1,0 +1,135 @@
+{
+  "profile_id": "2026-04-18_225047",
+  "date": "2026-04-18T22:50:47+08:00",
+  "dataset": "benchmarks/medium_dna.fa",
+  "threads": 4,
+  "model": "GTR+G4",
+  "cpu": {
+    "counters": {
+      "cycles": 356509358883,
+      "instructions": 819737884542,
+      "cache-references": 55359380056,
+      "cache-misses": 4247463821,
+      "branch-instructions": 70699214278,
+      "branch-misses": 102794462,
+      "L1-dcache-loads": 373410984758,
+      "L1-dcache-load-misses": 30770443563,
+      "L1-icache-load-misses": 17865198,
+      "dTLB-loads": 500964363,
+      "dTLB-load-misses": 3907823,
+      "iTLB-loads": 4790529,
+      "iTLB-load-misses": 6588259,
+      "stalled-cycles-frontend": 7949661525,
+      "task-clock": 103435.14,
+      "context-switches": 0,
+      "cpu-migrations": 0,
+      "page-faults": 75866
+    },
+    "derived": {
+      "IPC": 2.299,
+      "cache-miss-rate": 7.6725,
+      "branch-miss-rate": 0.1454,
+      "L1-dcache-miss-rate": 8.2404,
+      "dTLB-miss-rate": 0.7801,
+      "iTLB-miss-rate": 137.5268,
+      "frontend-stall-rate": 2.2299,
+      "backend-stall-rate": 0.0
+    },
+    "hotspots": [
+      {
+        "percent": 39.04,
+        "samples": 3773,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*) [c"
+      },
+      {
+        "percent": 32.5,
+        "samples": 3138,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long,"
+      },
+      {
+        "percent": 10.24,
+        "samples": 998,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, uns"
+      },
+      {
+        "percent": 6.56,
+        "samples": 1382,
+        "command": "iqtree3",
+        "module": "libgomp.so.1.0.0",
+        "function": "0x0000000000025766"
+      },
+      {
+        "percent": 1.58,
+        "samples": 302,
+        "command": "iqtree3",
+        "module": "libgomp.so.1.0.0",
+        "function": "0x0000000000025762"
+      },
+      {
+        "percent": 1.53,
+        "samples": 163,
+        "command": "iqtree3",
+        "module": "libgomp.so.1.0.0",
+        "function": "0x0000000000025946"
+      },
+      {
+        "percent": 0.86,
+        "samples": 51,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "newviewParsimonyIterativeFast"
+      },
+      {
+        "percent": 0.82,
+        "samples": 80,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "double PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>() [clone ._omp_fn.0]"
+      }
+    ]
+  },
+  "gpu": {
+    "hardware": {
+      "temperature_c": 33.0,
+      "power_w": 89.0,
+      "utilization_pct": 0.0
+    },
+    "kernels": [],
+    "hip_calls": [],
+    "memory_copies": []
+  },
+  "system": {
+    "hostname": "nid002996",
+    "date": "2026-04-18T22:50:47+08:00",
+    "run_id": "41686954",
+    "cpu": "AMD EPYC 7A53 64-Core Processor",
+    "cores": "16",
+    "threads_per_core": "2",
+    "sockets": "1",
+    "numa_nodes": "4",
+    "l1d_cache": "2 MiB (64 instances)",
+    "l1i_cache": "2 MiB (64 instances)",
+    "l2_cache": "32 MiB (64 instances)",
+    "l3_cache": "256 MiB (8 instances)",
+    "mem_total_gb": "250",
+    "gcc": "gcc (SUSE Linux) 14.3.0",
+    "rocm": "HIP version: 6.3.42131-fa1d09cbd",
+    "gpu": "N/A"
+  },
+  "commands": {
+    "modules": "module load rocm/6.3.0 eigen/3.4.0 boost/1.86.0-c++14-python",
+    "perf_stat": "perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-load-misses,LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,task-clock,context-switches,cpu-migrations,page-faults ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4",
+    "perf_record": "perf record -g -F 99 ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4",
+    "rocprofv3_kernel": "rocprofv3 --kernel-trace --stats --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4",
+    "rocprofv3_hip": "rocprofv3 --hip-trace --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4",
+    "rocprofv3_memory": "rocprofv3 --memory-copy-trace --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4",
+    "rocm_smi": "rocm-smi --showtemp --showpower --showuse --showmemuse --showclkfrq --json"
+  },
+  "slurm_id": "41686954"
+}
