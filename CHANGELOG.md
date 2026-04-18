@@ -49,6 +49,16 @@ No GPU measurements yet. Expected based on workload characteristics:
 
 ## Changelog
 
+### 18 April 2026: Fix dashboard.html rendering — JS was broken by serve.py generator
+
+**Root cause:** `serve.py` used `template.index('loadData();')` which matched the first occurrence of the substring — inside `await loadData();` within the `refreshData()` function body — instead of the standalone `loadData();` call at the end of the script. This caused the replacement to leave a stray `}` (closing brace of `refreshData()`) followed by all the original template's ES6 render functions duplicated after the generated ES5 code. The stray `}` was an immediate syntax error that prevented any JS from executing.
+
+**Fixes applied:**
+- `dashboard.html` / `docs/index.html`: Removed ~280 lines of duplicate ES6 template code (stray `}` + all duplicate render functions + duplicate `loadData();` + `setInterval`) that were appended after the generated script
+- `serve.py`: Changed `template.index(old_script_end)` → `template.rindex(old_script_end)` to match the LAST occurrence of `loadData();` in the template, preventing this bug on future regenerations
+
+**Verified:** `node --check` passes on extracted JS. Dashboard opens and renders data, charts, and all 6 pages correctly.
+
 ### 18 April 2026: Project initialization
 
 **What was done:**

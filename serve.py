@@ -50,7 +50,7 @@ def generate():
     old_script_end = 'loadData();'
 
     start_idx = template.index(old_script_start)
-    end_idx = template.index(old_script_end) + len(old_script_end)
+    end_idx = template.rindex(old_script_end) + len(old_script_end)
 
     new_script = build_script(data_json, now)
 
