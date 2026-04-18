@@ -75,12 +75,6 @@ def generate():
 
     output_html = template[:start_idx] + new_script + template[end_idx:]
 
-    # Remove flamegraph img that references local file
-    output_html = output_html.replace(
-        '<img src="assets/flamegraph.svg" alt="CPU Flamegraph" style="width:100%;min-width:800px;" onerror="this.parentElement.innerHTML=\'<p style=color:var(--text3)>No flamegraph available yet. Run profiling first.</p>\'">',
-        '<p style="color:var(--text3)">Flamegraph not available in static view. Run profiling on Setonix to generate.</p>'
-    )
-
     os.makedirs(DOCS_DIR, exist_ok=True)
     output_path = os.path.join(DOCS_DIR, 'index.html')
     with open(output_path, 'w') as f:
@@ -260,17 +254,21 @@ function renderOverview(run) {
     profCard.style.display = '';
     var topFunc = lpHotspots.length > 0 ? lpHotspots[0] : null;
     var gpuHw = (latestProf.gpu || {}).hardware || {};
+    var aln = latestProf.alignment || {};
     document.getElementById('latestProfileContent').innerHTML =
-      '<div class="detail-grid" style="grid-template-columns:repeat(3,1fr);">' +
+      '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);">' +
         '<div class="detail-kv"><div class="dk-label">Dataset</div><div class="dk-value">' + escHtml(latestProf.dataset || 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Model</div><div class="dk-value">' + escHtml(latestProf.model || 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Taxa \\u00d7 Sites</div><div class="dk-value" style="color:var(--accent2);font-weight:600;">' + (aln.taxa || '?') + ' \\u00d7 ' + (aln.sites ? aln.sites.toLocaleString() : '?') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Model</div><div class="dk-value">' + escHtml(aln.substitution_model || latestProf.model || 'N/A') + '</div></div>' +
         '<div class="detail-kv"><div class="dk-label">Threads</div><div class="dk-value">' + (latestProf.threads || 'N/A') + '</div></div>' +
         '<div class="detail-kv"><div class="dk-label">IPC</div><div class="dk-value" style="color:var(--accent2)">' + (lpDerived.IPC || 'N/A') + '</div></div>' +
         '<div class="detail-kv"><div class="dk-label">Frontend Stalls</div><div class="dk-value" style="color:' + (feStall > 10 ? 'var(--red)' : 'var(--green)') + '">' + (feStall != null ? feStall + '%%' : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Top Hotspot</div><div class="dk-value" style="font-family:monospace;font-size:0.75rem;">' + (topFunc ? topFunc.percent.toFixed(1) + '%%  ' + escHtml(topFunc['function'].substring(0, 40)) : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Log-Likelihood</div><div class="dk-value" style="font-family:monospace;font-size:0.8rem;color:var(--green);">' + (aln.log_likelihood != null ? aln.log_likelihood.toLocaleString() : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Wall Time</div><div class="dk-value">' + (aln.wall_time_sec != null ? aln.wall_time_sec.toFixed(1) + 's' : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Top Hotspot</div><div class="dk-value" style="font-family:monospace;font-size:0.7rem;">' + (topFunc ? topFunc.percent.toFixed(1) + '%%  ' + escHtml(topFunc['function'].substring(0, 35)) : 'N/A') + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Site Patterns</div><div class="dk-value">' + (aln.site_patterns ? aln.site_patterns.toLocaleString() : 'N/A') + '</div></div>' +
         '<div class="detail-kv"><div class="dk-label">GPU Temp</div><div class="dk-value">' + (gpuHw.temperature_c != null ? gpuHw.temperature_c + '\\u00b0C' : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">GPU Util</div><div class="dk-value">' + (gpuHw.utilization_pct != null ? gpuHw.utilization_pct + '%%' : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Profile ID</div><div class="dk-value">' + latestProf.profile_id + '</div></div>' +
+        '<div class="detail-kv"><div class="dk-label">Profile ID</div><div class="dk-value" style="font-size:0.75rem;">' + latestProf.profile_id + '</div></div>' +
       '</div>';
   } else if (profCard) {
     profCard.style.display = 'none';
@@ -658,54 +656,107 @@ function renderProfileConfig(prof) {
   if (!prof) { if (card) card.style.display = 'none'; return; }
   if (card) card.style.display = '';
   var sys = prof.system || {};
-  var cmds = prof.commands || {};
+  var aln = prof.alignment || {};
   var iqtreeCmd = 'iqtree3 -s ' + escHtml(prof.dataset || '?') +
     (prof.model ? ' -m ' + escHtml(prof.model) : '') +
     ' -T ' + (prof.threads || 1) +
     ' --prefix output';
 
-  content.innerHTML =
-    '<div class="detail-grid" style="grid-template-columns:repeat(3,1fr);">' +
-      '<div class="detail-kv"><div class="dk-label">Dataset</div><div class="dk-value">' + escHtml(prof.dataset || 'N/A') + '</div></div>' +
-      '<div class="detail-kv"><div class="dk-label">Model</div><div class="dk-value">' + escHtml(prof.model || 'AUTO') + '</div></div>' +
+  function fmtFileSize(bytes) {
+    if (!bytes) return 'N/A';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  var html =
+    '<div class="section-label" style="margin-top:0;">Alignment</div>' +
+    '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);">' +
+      '<div class="detail-kv"><div class="dk-label">Taxa (Sequences)</div><div class="dk-value" style="color:var(--accent2);font-size:1.2rem;">' + (aln.taxa || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Sites (Columns)</div><div class="dk-value" style="color:var(--accent2);font-size:1.2rem;">' + (aln.sites ? aln.sites.toLocaleString() : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Data Type</div><div class="dk-value">' + escHtml(aln.data_type || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">File Size</div><div class="dk-value">' + fmtFileSize(aln.file_size_bytes) + '</div></div>' +
+    '</div>' +
+    '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);margin-top:8px;">' +
+      '<div class="detail-kv"><div class="dk-label">Site Patterns</div><div class="dk-value">' + (aln.site_patterns ? aln.site_patterns.toLocaleString() : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Informative Sites</div><div class="dk-value">' + (aln.informative_sites ? aln.informative_sites.toLocaleString() : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Constant Sites</div><div class="dk-value">' + (aln.constant_sites != null ? aln.constant_sites + ' (' + (aln.constant_sites_pct || 0) + '%%)' : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Free Parameters</div><div class="dk-value">' + (aln.free_parameters || 'N/A') + '</div></div>' +
+    '</div>' +
+
+    '<div class="section-label">Model &amp; Results</div>' +
+    '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);">' +
+      '<div class="detail-kv"><div class="dk-label">Substitution Model</div><div class="dk-value" style="color:var(--accent);font-weight:600;">' + escHtml(aln.substitution_model || prof.model || 'AUTO') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Rate Heterogeneity</div><div class="dk-value">' + escHtml(aln.rate_model || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Gamma Shape \\u03b1</div><div class="dk-value">' + (aln.gamma_alpha || 'N/A') + '</div></div>' +
       '<div class="detail-kv"><div class="dk-label">Threads</div><div class="dk-value">' + (prof.threads || 'N/A') + '</div></div>' +
+    '</div>' +
+    '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);margin-top:8px;">' +
+      '<div class="detail-kv"><div class="dk-label">Log-Likelihood</div><div class="dk-value" style="color:var(--green);font-family:monospace;">' + (aln.log_likelihood != null ? aln.log_likelihood.toLocaleString() : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">BIC Score</div><div class="dk-value" style="font-family:monospace;">' + (aln.bic != null ? aln.bic.toLocaleString() : 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Tree Length</div><div class="dk-value">' + (aln.tree_length || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">Wall Time</div><div class="dk-value">' + (aln.wall_time_sec != null ? aln.wall_time_sec.toFixed(1) + 's' : 'N/A') + '</div></div>' +
+    '</div>' +
+
+    '<div class="section-label">System</div>' +
+    '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);">' +
       '<div class="detail-kv"><div class="dk-label">CPU</div><div class="dk-value">' + escHtml(sys.cpu || 'N/A') + '</div></div>' +
       '<div class="detail-kv"><div class="dk-label">Cores</div><div class="dk-value">' + (sys.cores || 'N/A') + (sys.threads_per_core ? ' (' + sys.threads_per_core + 'T/core)' : '') + '</div></div>' +
-      '<div class="detail-kv"><div class="dk-label">Sockets</div><div class="dk-value">' + (sys.sockets || 'N/A') + '</div></div>' +
       '<div class="detail-kv"><div class="dk-label">Memory</div><div class="dk-value">' + (sys.mem_total_gb ? sys.mem_total_gb + ' GB' : 'N/A') + '</div></div>' +
       '<div class="detail-kv"><div class="dk-label">L3 Cache</div><div class="dk-value">' + escHtml(sys.l3_cache || 'N/A') + '</div></div>' +
-      '<div class="detail-kv"><div class="dk-label">NUMA Nodes</div><div class="dk-value">' + (sys.numa_nodes || 'N/A') + '</div></div>' +
+    '</div>' +
+    '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);margin-top:8px;">' +
       '<div class="detail-kv"><div class="dk-label">GPU</div><div class="dk-value">' + escHtml(sys.gpu || 'N/A') + '</div></div>' +
       '<div class="detail-kv"><div class="dk-label">ROCm</div><div class="dk-value">' + escHtml(sys.rocm || 'N/A') + '</div></div>' +
       '<div class="detail-kv"><div class="dk-label">GCC</div><div class="dk-value">' + escHtml(sys.gcc || 'N/A') + '</div></div>' +
+      '<div class="detail-kv"><div class="dk-label">NUMA Nodes</div><div class="dk-value">' + (sys.numa_nodes || 'N/A') + '</div></div>' +
     '</div>' +
-    '<div style="margin-top:12px;padding:10px;background:var(--bg-tertiary);border-radius:6px;font-family:monospace;font-size:0.8rem;color:var(--text-secondary);">' +
-      '<span style="color:var(--text-muted);margin-right:8px;">$</span>' + escHtml(iqtreeCmd) +
+
+    '<div style="margin-top:12px;padding:10px;background:var(--bg-tertiary);border-radius:6px;font-family:monospace;font-size:0.8rem;color:var(--text-secondary);display:flex;align-items:center;justify-content:space-between;">' +
+      '<div><span style="color:var(--text-muted);margin-right:8px;">$</span>' + escHtml(iqtreeCmd) + '</div>' +
+      '<button class="btn-sm" onclick="navigator.clipboard.writeText(\\'' + iqtreeCmd.replace(/'/g, "\\\\'") + '\\');this.textContent=\\'Copied!\\';var b=this;setTimeout(function(){b.textContent=\\'Copy Cmd\\';},1200)">Copy Cmd</button>' +
     '</div>';
+
+  content.innerHTML = html;
   content.setAttribute('data-config', JSON.stringify({
     dataset: prof.dataset, model: prof.model, threads: prof.threads,
-    system: sys, iqtree_cmd: iqtreeCmd, profile_id: prof.profile_id,
-    date: prof.date
+    alignment: aln, system: sys, iqtree_cmd: iqtreeCmd,
+    profile_id: prof.profile_id, date: prof.date
   }));
 }
 
 function copyProfileConfig(btn) {
   var el = document.getElementById('profConfigContent');
   var data = JSON.parse(el.getAttribute('data-config') || '{}');
+  var aln = data.alignment || {};
   var lines = [
     '=== IQ-TREE Run Configuration ===',
     'Profile ID: ' + (data.profile_id || 'N/A'),
     'Date: ' + (data.date || 'N/A'),
+    '',
+    '--- Alignment ---',
     'Dataset: ' + (data.dataset || 'N/A'),
-    'Model: ' + (data.model || 'AUTO'),
+    'Taxa: ' + (aln.taxa || 'N/A'),
+    'Sites: ' + (aln.sites || 'N/A'),
+    'Data Type: ' + (aln.data_type || 'N/A'),
+    'Site Patterns: ' + (aln.site_patterns || 'N/A'),
+    'Informative Sites: ' + (aln.informative_sites || 'N/A'),
+    'Constant Sites: ' + (aln.constant_sites != null ? aln.constant_sites + ' (' + (aln.constant_sites_pct || 0) + '%%)' : 'N/A'),
+    '',
+    '--- Model & Results ---',
+    'Model: ' + (aln.substitution_model || data.model || 'AUTO'),
+    'Rate Heterogeneity: ' + (aln.rate_model || 'N/A'),
+    'Gamma Alpha: ' + (aln.gamma_alpha || 'N/A'),
     'Threads: ' + (data.threads || 'N/A'),
+    'Log-Likelihood: ' + (aln.log_likelihood || 'N/A'),
+    'BIC Score: ' + (aln.bic || 'N/A'),
+    'Tree Length: ' + (aln.tree_length || 'N/A'),
+    'Wall Time: ' + (aln.wall_time_sec != null ? aln.wall_time_sec + 's' : 'N/A'),
     '',
     '--- System ---',
     'CPU: ' + ((data.system || {}).cpu || 'N/A'),
     'Cores: ' + ((data.system || {}).cores || 'N/A'),
-    'Sockets: ' + ((data.system || {}).sockets || 'N/A'),
     'Memory: ' + ((data.system || {}).mem_total_gb ? (data.system || {}).mem_total_gb + ' GB' : 'N/A'),
-    'L3 Cache: ' + ((data.system || {}).l3_cache || 'N/A'),
     'GPU: ' + ((data.system || {}).gpu || 'N/A'),
     'ROCm: ' + ((data.system || {}).rocm || 'N/A'),
     'GCC: ' + ((data.system || {}).gcc || 'N/A'),
@@ -912,6 +963,213 @@ function renderDeepProfile(prof) {
         }
       }
     });
+  }
+
+  // Render flamegraph and call stack from folded stacks
+  renderFlamegraph(cpu.folded_stacks || []);
+  renderCallStack(cpu.folded_stacks || []);
+}
+
+// ============ Flamegraph ============
+var flameData = null;
+var flameZoomStack = [];
+
+function buildFlameTree(stacks) {
+  var root = {name: 'all', value: 0, children: {}};
+  stacks.forEach(function(s) {
+    var frames = s.stack.split(';');
+    var node = root;
+    root.value += s.count;
+    frames.forEach(function(frame) {
+      if (!node.children[frame]) {
+        node.children[frame] = {name: frame, value: 0, children: {}};
+      }
+      node.children[frame].value += s.count;
+      node = node.children[frame];
+    });
+  });
+  function toArray(node) {
+    var arr = [];
+    for (var k in node.children) {
+      var child = node.children[k];
+      child.childArr = toArray(child);
+      arr.push(child);
+    }
+    arr.sort(function(a, b) { return b.value - a.value; });
+    return arr;
+  }
+  root.childArr = toArray(root);
+  return root;
+}
+
+function flameColor(name) {
+  // Color by function type
+  if (name === '[unknown]') return '#4a5568';
+  if (name.indexOf('GOMP') >= 0 || name.indexOf('pthread') >= 0 || name.indexOf('start_thread') >= 0) return '#3b82f6';
+  if (name.indexOf('Phylo') >= 0 || name.indexOf('Tree') >= 0) return '#f97316';
+  if (name.indexOf('Likelihood') >= 0 || name.indexOf('LH') >= 0 || name.indexOf('SIMD') >= 0) return '#ef4444';
+  if (name.indexOf('Parsimony') >= 0 || name.indexOf('parsimony') >= 0) return '#a855f7';
+  if (name.indexOf('alloc') >= 0 || name.indexOf('malloc') >= 0 || name.indexOf('free') >= 0) return '#eab308';
+  if (name.indexOf('void') >= 0) return '#6366f1';
+  if (name.indexOf('double') >= 0) return '#ec4899';
+  // Hash-based color
+  var h = 0;
+  for (var i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  var hue = 20 + (Math.abs(h) %% 40);
+  var sat = 50 + (Math.abs(h >> 8) %% 30);
+  var lit = 45 + (Math.abs(h >> 16) %% 15);
+  return 'hsl(' + hue + ',' + sat + '%%,' + lit + '%%)';
+}
+
+function renderFlamegraph(stacks) {
+  var container = document.getElementById('flamegraphContainer');
+  var resetBtn = document.getElementById('flamegraphZoomReset');
+  if (!stacks || stacks.length === 0) {
+    container.innerHTML = '<p class="no-data-msg">No call stack data available. Run deep profiling with perf record to generate.</p>';
+    if (resetBtn) resetBtn.style.display = 'none';
+    return;
+  }
+  flameData = buildFlameTree(stacks);
+  flameZoomStack = [];
+  if (resetBtn) resetBtn.style.display = 'none';
+  drawFlame(flameData);
+}
+
+function drawFlame(root) {
+  var container = document.getElementById('flamegraphContainer');
+  var totalSamples = root.value;
+  container.innerHTML = '';
+
+  function renderLevel(nodes, total) {
+    if (nodes.length === 0) return;
+    var row = document.createElement('div');
+    row.className = 'flame-row';
+    var rendered = 0;
+    nodes.forEach(function(node) {
+      var pct = (node.value / total * 100);
+      if (pct < 0.3) return; // Skip tiny frames
+      var el = document.createElement('div');
+      el.className = 'flame-frame';
+      el.style.width = pct + '%%';
+      el.style.background = flameColor(node.name);
+      el.textContent = pct > 3 ? node.name.substring(0, 50) : '';
+      el.title = '';
+      el.setAttribute('data-name', node.name);
+      el.setAttribute('data-count', node.value);
+      el.setAttribute('data-pct', pct.toFixed(2));
+      el.addEventListener('mouseenter', function(e) { showFlameTooltip(e, node.name, node.value, totalSamples); });
+      el.addEventListener('mouseleave', hideFlameTooltip);
+      if (node.childArr && node.childArr.length > 0) {
+        el.addEventListener('click', function() { zoomFlame(node); });
+      }
+      row.appendChild(el);
+      rendered++;
+    });
+    if (rendered > 0) container.insertBefore(row, container.firstChild);
+    // Recurse into children of all nodes at this level
+    var nextLevel = [];
+    nodes.forEach(function(node) {
+      if (node.childArr) {
+        node.childArr.forEach(function(c) { nextLevel.push({node: c, parentTotal: total}); });
+      }
+    });
+    if (nextLevel.length > 0) {
+      var childNodes = nextLevel.map(function(x) { return x.node; });
+      renderLevel(childNodes, total);
+    }
+  }
+
+  renderLevel(root.childArr || [], root.value);
+
+  // Add root bar at bottom
+  var rootRow = document.createElement('div');
+  rootRow.className = 'flame-row';
+  var rootEl = document.createElement('div');
+  rootEl.className = 'flame-frame';
+  rootEl.style.width = '100%%';
+  rootEl.style.background = '#475569';
+  rootEl.textContent = root.name + ' (' + totalSamples + ' samples)';
+  rootRow.appendChild(rootEl);
+  container.appendChild(rootRow);
+}
+
+function zoomFlame(node) {
+  flameZoomStack.push(flameData);
+  drawFlame(node);
+  document.getElementById('flamegraphZoomReset').style.display = '';
+}
+
+function resetFlameZoom() {
+  if (flameData) drawFlame(flameData);
+  flameZoomStack = [];
+  document.getElementById('flamegraphZoomReset').style.display = 'none';
+}
+
+var flameTooltipEl = null;
+function showFlameTooltip(e, name, count, total) {
+  if (!flameTooltipEl) {
+    flameTooltipEl = document.createElement('div');
+    flameTooltipEl.className = 'flame-tooltip';
+    document.body.appendChild(flameTooltipEl);
+  }
+  var pct = (count / total * 100).toFixed(2);
+  flameTooltipEl.innerHTML = '<div style="font-weight:600;margin-bottom:4px;word-break:break-all;">' + escHtml(name) + '</div>' +
+    '<div>' + count + ' samples (' + pct + '%%)</div>';
+  flameTooltipEl.style.display = '';
+  flameTooltipEl.style.left = Math.min(e.clientX + 10, window.innerWidth - 420) + 'px';
+  flameTooltipEl.style.top = (e.clientY - 60) + 'px';
+}
+function hideFlameTooltip() {
+  if (flameTooltipEl) flameTooltipEl.style.display = 'none';
+}
+
+// ============ Call Stack ============
+var callStackSortByCount = true;
+
+function renderCallStack(stacks) {
+  var container = document.getElementById('callStackContainer');
+  if (!stacks || stacks.length === 0) {
+    container.innerHTML = '<p class="no-data-msg">No call stack data available. Run deep profiling with perf record to generate.</p>';
+    return;
+  }
+  // Store for re-sorting
+  container.setAttribute('data-stacks', JSON.stringify(stacks));
+  drawCallStack(stacks, true);
+}
+
+function drawCallStack(stacks, byCount) {
+  var container = document.getElementById('callStackContainer');
+  var sorted = stacks.slice().sort(function(a, b) {
+    return byCount ? b.count - a.count : a.stack.localeCompare(b.stack);
+  });
+  var maxCount = sorted.length > 0 ? sorted[0].count : 1;
+  var top = sorted.slice(0, 40); // Show top 40
+
+  var html = top.map(function(s) {
+    var frames = s.stack.split(';');
+    var pct = (s.count / maxCount * 100);
+    var lastFrame = frames[frames.length - 1];
+    var formattedFrames = frames.map(function(f, i) {
+      if (i === frames.length - 1) return '<span style="color:var(--accent2);font-weight:600;">' + escHtml(f) + '</span>';
+      return escHtml(f);
+    }).join(' <span style="color:var(--text-muted);">\\u2192</span> ');
+
+    return '<div class="callstack-row">' +
+      '<div class="callstack-count">' + s.count + '</div>' +
+      '<div style="flex:0 0 100px;"><div class="callstack-bar" style="width:' + pct + '%%;background:' + flameColor(lastFrame) + ';"></div></div>' +
+      '<div class="callstack-frames">' + formattedFrames + '</div>' +
+    '</div>';
+  }).join('');
+
+  container.innerHTML = html || '<p class="no-data-msg">No call stacks to display.</p>';
+}
+
+function toggleCallStackSort() {
+  callStackSortByCount = !callStackSortByCount;
+  var container = document.getElementById('callStackContainer');
+  var raw = container.getAttribute('data-stacks');
+  if (raw) {
+    drawCallStack(JSON.parse(raw), callStackSortByCount);
   }
 }
 
