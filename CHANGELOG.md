@@ -16,6 +16,13 @@ Profiling complete (VTune + perf, April 2026). Five hot functions identified in 
 | GTR+G4 (fixed model, skip ModelFinder) | 166.8s | 68.2s | — |
 | small_dna GTR+G4 | 10.5s | — | — |
 
+### CPU wall-clock times (Setonix, AMD EPYC 7A53 Trento)
+
+| Config | Wall | CPU | IPC | Frontend stalls |
+|--------|------|-----|-----|-----------------|
+| turtle.fa 1T GTR+G4 (12 taxa, 434 patterns) | 1.62s | 1.49s | 2.334 | 3.12% |
+| medium_dna.fa 4T GTR+G4 (50 taxa, 4,559 patterns) | 26.9s | 102.5s | 2.299 | 2.23% |
+
 ### CPU profiling breakdown (VTune, medium_dna.phy)
 
 | Function | GTR 1T | Default 1T | Default 8T |
@@ -48,6 +55,24 @@ No GPU measurements yet. Expected based on workload characteristics:
 ---
 
 ## Changelog
+
+### 19 April 2026: Comprehensive profiling report + Setonix cross-platform comparison
+
+**What was done:**
+- Created `PROFILING_REPORT.html` — a comprehensive, downloadable HTML profiling report combining hpc-01 (Intel Sandy Bridge) and Setonix (AMD EPYC Trento) profiling data
+- 16 sections with table of contents, page breaks for printing, explanations for non-technical readers, jargon glossary, colour-coded findings, ASCII bar charts, and a download button
+- Cross-platform comparison: Setonix 4T is **2.54× faster** than hpc-01 4T on medium_dna GTR+G4 (26.9s vs 68.2s), with **2.15× better IPC** (2.30 vs 1.07) and **~30× reduction in frontend stalls** (2.23% vs 65.71%)
+- Function hotspot ranking is identical across both platforms (DervSIMD ~39%, PartialLikelihood ~33%, Buffer ~10%), confirming GPU offload targets are architecture-independent
+- Added `PROFILING_REPORT.html` to `.gitignore` (generated report, not tracked in repo)
+- Fixed `dashboard.html` and `serve.py` rendering bug (stray JS from template replacement — see entry below)
+
+**Setonix baselines added:**
+| Config | Wall time | CPU time | IPC | Frontend stalls |
+|--------|-----------|----------|-----|-----------------|
+| turtle.fa 1T GTR+G4 | 1.62s | 1.49s | 2.334 | 3.12% |
+| medium_dna 4T GTR+G4 | 26.9s | 102.5s | 2.299 | 2.23% |
+
+**Next:** Run larger datasets on Setonix (Default pipeline without `-m` to test ModelFinder path), then begin Phase 1 CUDA→HIP port.
 
 ### 18 April 2026: Fix dashboard.html rendering — JS was broken by serve.py generator
 

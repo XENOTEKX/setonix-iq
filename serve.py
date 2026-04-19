@@ -1351,26 +1351,169 @@ function renderDeepProfile(prof) {
     });
   }
 
-  // Render flamegraph and call stack from folded stacks
-  renderFlamegraph(cpu.folded_stacks || []);
-  renderCallStack(cpu.folded_stacks || []);
+  // Render flamegraph and call stack
+  var rawStacks = cpu.folded_stacks || [];
+  var hotspots = cpu.hotspots || [];
+  var cleanedStacks = cleanFoldedStacks(rawStacks);
+  var unknownRate = computeUnknownRate(cleanedStacks);
+  renderFlamegraph(cleanedStacks, hotspots, unknownRate);
+  renderCallStack(cleanedStacks, hotspots, unknownRate);
+}
+
+// ============ Stack Cleaning ============
+// perf on stripped C++ binaries produces artifacts:
+// - "void", "double", "non-virtual", "virtual" are demangled return types, not functions
+// - consecutive [unknown] frames are unresolved addresses that should be collapsed
+// - truncated C++ signatures like "std::__cxx11::basic_string<char," need cleanup
+
+var CPP_RETURN_TYPES = {'void':1, 'double':1, 'int':1, 'float':1, 'bool':1, 'char':1, 'unsigned':1, 'long':1, 'short':1, 'virtual':1, 'non-virtual':1};
+
+function cleanFrameName(name) {
+  // Truncated C++ templates: add closing bracket
+  if (name.indexOf('<') >= 0 && name.indexOf('>') < 0) {
+    name = name.replace(/,\\s*$/, '') + '...>';
+  }
+  // Truncated C++ parameter lists
+  if (name.indexOf('(') >= 0 && name.indexOf(')') < 0) {
+    name = name.replace(/,\\s*$/, '') + '...';
+  }
+  // Shorten std:: prefixes
+  name = name.replace(/std::__cxx11::basic_string<char,?[^>]*>?/g, 'std::string');
+  name = name.replace(/std::basic_ifstream<char,?[^>]*>?/g, 'std::ifstream');
+  name = name.replace(/std::basic_streambuf<char,?[^>]*>?/g, 'std::streambuf');
+  name = name.replace(/std::basic_ostream<char,?[^>]*>?/g, 'std::ostream');
+  // Strip long param lists — keep just class::method(...)
+  var m = name.match(/^([A-Za-z_]\\w*(?:::[A-Za-z_~]\\w*)*)\\((.{40,})\\)/);
+  if (m) name = m[1] + '(...)';
+  // Strip @GLIBC version tags
+  name = name.replace(/@+[A-Z_]+[0-9_.]+/g, '');
+  return name;
+}
+
+function cleanFoldedStacks(stacks) {
+  if (!stacks || stacks.length === 0) return stacks;
+  var merged = {};
+  stacks.forEach(function(s) {
+    var frames = s.stack.split(';');
+    var cleaned = [];
+    var prevFrame = '';
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i].trim();
+      // Skip bare C++ return types (perf demangling artifacts)
+      if (CPP_RETURN_TYPES[f]) {
+        // Try to merge with next frame: "void" + "PhyloTree::foo" -> "void PhyloTree::foo"
+        if (i + 1 < frames.length && !CPP_RETURN_TYPES[frames[i+1].trim()] && frames[i+1].trim() !== '[unknown]') {
+          frames[i+1] = f + ' ' + frames[i+1].trim();
+        }
+        continue;
+      }
+      // Collapse consecutive [unknown] into one
+      if (f === '[unknown]') {
+        if (prevFrame === '[unknown]') continue;
+        cleaned.push(f);
+        prevFrame = f;
+        continue;
+      }
+      // Clean C++ name
+      f = cleanFrameName(f);
+      cleaned.push(f);
+      prevFrame = f;
+    }
+    // Remove trailing [unknown]
+    while (cleaned.length > 1 && cleaned[cleaned.length - 1] === '[unknown]') cleaned.pop();
+    // Remove leading [unknown] if followed by a known function
+    while (cleaned.length > 1 && cleaned[0] === '[unknown]') cleaned.shift();
+    if (cleaned.length === 0) cleaned.push('[unknown]');
+    var key = cleaned.join(';');
+    merged[key] = (merged[key] || 0) + s.count;
+  });
+  var result = [];
+  for (var k in merged) {
+    result.push({stack: k, count: merged[k]});
+  }
+  return result;
+}
+
+function computeUnknownRate(stacks) {
+  if (!stacks || stacks.length === 0) return 0;
+  var total = 0, unknown = 0;
+  stacks.forEach(function(s) {
+    total += s.count;
+    if (s.stack === '[unknown]') unknown += s.count;
+  });
+  return total > 0 ? unknown / total : 0;
+}
+
+// Build synthetic flamegraph tree from hotspot data (IP-based sampling — no unwinding needed)
+// Groups by: module → function name. Much more reliable than folded stacks on stripped binaries.
+function buildHotspotTree(hotspots) {
+  var totalSamples = hotspots.reduce(function(s, h) { return s + h.samples; }, 0);
+  var root = {name: 'all', value: totalSamples, self: 0, childArr: []};
+
+  // Group by module
+  var modules = {};
+  hotspots.forEach(function(h) {
+    var mod = h.module || 'unknown';
+    // Normalize module name
+    if (mod.indexOf('libgomp') >= 0) mod = 'libgomp (OpenMP)';
+    else if (mod.indexOf('libc') >= 0 || mod.indexOf('glibc') >= 0) mod = 'libc';
+    else if (mod.indexOf('iqtree') >= 0) mod = 'iqtree3';
+    if (!modules[mod]) modules[mod] = {name: mod, value: 0, self: 0, childArr: []};
+    modules[mod].value += h.samples;
+
+    // Clean function name
+    var fname = h['function'] || '[unknown]';
+    // Remove return type prefix (void/double/etc.)
+    fname = fname.replace(/^(void|double|int|float|bool)\\s+/, '');
+    // Shorten template params
+    fname = fname.replace(/PhyloTree::compute(Likelihood|Partial)(\\w+)SIMD<[^>]+>/g, function(m, a, b) {
+      return 'PhyloTree::compute' + a + b + 'SIMD<...>';
+    });
+    // Replace hex addresses (stripped symbols from libgomp etc.)
+    if (/^0x[0-9a-f]+$/.test(fname.trim())) {
+      fname = mod.replace(' (OpenMP)', '') + ' internal';
+    }
+    // Truncate long names
+    if (fname.length > 70) fname = fname.substring(0, 67) + '...';
+
+    var fnode = {name: fname, value: h.samples, self: h.samples, childArr: [], pct: h.percent};
+    modules[mod].childArr.push(fnode);
+  });
+
+  // Sort modules by value desc
+  var modArr = [];
+  for (var m in modules) modArr.push(modules[m]);
+  modArr.sort(function(a, b) { return b.value - a.value; });
+
+  // Sort functions within each module by value desc
+  modArr.forEach(function(mod) {
+    mod.childArr.sort(function(a, b) { return b.value - a.value; });
+  });
+
+  root.childArr = modArr;
+  return root;
 }
 
 // ============ Flamegraph ============
 var flameData = null;
+var flameHotspotData = null;
 var flameZoomStack = [];
+var flameSearchTerm = '';
+var flameTotalSamples = 0;
+var flameMode = 'hotspot'; // 'hotspot' | 'callchain'
 
 function buildFlameTree(stacks) {
-  var root = {name: 'all', value: 0, children: {}};
+  var root = {name: 'all', value: 0, self: 0, children: {}, depth: 0};
   stacks.forEach(function(s) {
     var frames = s.stack.split(';');
     var node = root;
     root.value += s.count;
-    frames.forEach(function(frame) {
+    frames.forEach(function(frame, idx) {
       if (!node.children[frame]) {
-        node.children[frame] = {name: frame, value: 0, children: {}};
+        node.children[frame] = {name: frame, value: 0, self: 0, children: {}, depth: idx + 1};
       }
       node.children[frame].value += s.count;
+      if (idx === frames.length - 1) node.children[frame].self += s.count;
       node = node.children[frame];
     });
   });
@@ -1381,7 +1524,8 @@ function buildFlameTree(stacks) {
       child.childArr = toArray(child);
       arr.push(child);
     }
-    arr.sort(function(a, b) { return b.value - a.value; });
+    // Sort alphabetically per Brendan Gregg convention (merges towers)
+    arr.sort(function(a, b) { return a.name.localeCompare(b.name); });
     return arr;
   }
   root.childArr = toArray(root);
@@ -1389,121 +1533,364 @@ function buildFlameTree(stacks) {
 }
 
 function flameColor(name) {
-  // Color by function type
+  if (name === 'all') return '#334155';
   if (name === '[unknown]') return '#4a5568';
-  if (name.indexOf('GOMP') >= 0 || name.indexOf('pthread') >= 0 || name.indexOf('start_thread') >= 0) return '#3b82f6';
-  if (name.indexOf('Phylo') >= 0 || name.indexOf('Tree') >= 0) return '#f97316';
-  if (name.indexOf('Likelihood') >= 0 || name.indexOf('LH') >= 0 || name.indexOf('SIMD') >= 0) return '#ef4444';
+  if (name.indexOf('GOMP') >= 0 || name.indexOf('pthread') >= 0 || name.indexOf('omp') >= 0 || name.indexOf('start_thread') >= 0 || name.indexOf('libgomp') >= 0) return '#3b82f6';
+  if (name.indexOf('Likelihood') >= 0 || name.indexOf('LH') >= 0 || name.indexOf('SIMD') >= 0 || name.indexOf('Derv') >= 0 || name.indexOf('Buffer') >= 0) return '#ef4444';
+  if (name.indexOf('Phylo') >= 0 || name.indexOf('Tree') >= 0 || name.indexOf('Alignment') >= 0 || name.indexOf('Node') >= 0) return '#f97316';
   if (name.indexOf('Parsimony') >= 0 || name.indexOf('parsimony') >= 0) return '#a855f7';
-  if (name.indexOf('alloc') >= 0 || name.indexOf('malloc') >= 0 || name.indexOf('free') >= 0) return '#eab308';
-  if (name.indexOf('void') >= 0) return '#6366f1';
-  if (name.indexOf('double') >= 0) return '#ec4899';
-  // Hash-based color
+  if (name.indexOf('alloc') >= 0 || name.indexOf('malloc') >= 0 || name.indexOf('free') >= 0 || name.indexOf('mmap') >= 0) return '#eab308';
+  // Warm random color per Brendan Gregg's convention
   var h = 0;
   for (var i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
-  var hue = 20 + (Math.abs(h) %% 40);
-  var sat = 50 + (Math.abs(h >> 8) %% 30);
-  var lit = 45 + (Math.abs(h >> 16) %% 15);
+  var hue = 20 + (Math.abs(h) %% 35);
+  var sat = 60 + (Math.abs(h >> 8) %% 30);
+  var lit = 48 + (Math.abs(h >> 16) %% 12);
   return 'hsl(' + hue + ',' + sat + '%%,' + lit + '%%)';
 }
 
-function renderFlamegraph(stacks) {
-  var container = document.getElementById('flamegraphContainer');
-  var resetBtn = document.getElementById('flamegraphZoomReset');
-  if (!stacks || stacks.length === 0) {
-    container.innerHTML = '<p class="no-data-msg">No call stack data available. Run deep profiling with perf record to generate.</p>';
-    if (resetBtn) resetBtn.style.display = 'none';
-    return;
-  }
-  flameData = buildFlameTree(stacks);
-  flameZoomStack = [];
-  if (resetBtn) resetBtn.style.display = 'none';
-  drawFlame(flameData);
+function flameCategoryLabel(name) {
+  if (name === '[unknown]') return 'unknown';
+  if (name.indexOf('GOMP') >= 0 || name.indexOf('pthread') >= 0 || name.indexOf('omp') >= 0 || name.indexOf('libgomp') >= 0) return 'openmp';
+  if (name.indexOf('Likelihood') >= 0 || name.indexOf('LH') >= 0 || name.indexOf('SIMD') >= 0 || name.indexOf('Derv') >= 0 || name.indexOf('Buffer') >= 0) return 'likelihood';
+  if (name.indexOf('Phylo') >= 0 || name.indexOf('Tree') >= 0) return 'phylo';
+  if (name.indexOf('Parsimony') >= 0 || name.indexOf('parsimony') >= 0) return 'parsimony';
+  if (name.indexOf('alloc') >= 0 || name.indexOf('malloc') >= 0 || name.indexOf('free') >= 0) return 'memory';
+  return '';
 }
 
-function drawFlame(root) {
+function renderFlamegraph(stacks, hotspots, unknownRate) {
   var container = document.getElementById('flamegraphContainer');
-  var totalSamples = root.value;
-  container.innerHTML = '';
+  var resetBtn = document.getElementById('flamegraphZoomReset');
+  var banner = document.getElementById('flameBanner');
+  var toggleBtn = document.getElementById('flameToggleMode');
 
-  function renderLevel(nodes, total) {
-    if (nodes.length === 0) return;
-    var row = document.createElement('div');
-    row.className = 'flame-row';
-    var rendered = 0;
-    nodes.forEach(function(node) {
-      var pct = (node.value / total * 100);
-      if (pct < 0.3) return; // Skip tiny frames
-      var el = document.createElement('div');
-      el.className = 'flame-frame';
-      el.style.width = pct + '%%';
-      el.style.background = flameColor(node.name);
-      el.textContent = pct > 3 ? node.name.substring(0, 50) : '';
-      el.title = '';
-      el.setAttribute('data-name', node.name);
-      el.setAttribute('data-count', node.value);
-      el.setAttribute('data-pct', pct.toFixed(2));
-      el.addEventListener('mouseenter', function(e) { showFlameTooltip(e, node.name, node.value, totalSamples); });
-      el.addEventListener('mouseleave', hideFlameTooltip);
-      if (node.childArr && node.childArr.length > 0) {
-        el.addEventListener('click', function() { zoomFlame(node); });
-      }
-      row.appendChild(el);
-      rendered++;
-    });
-    if (rendered > 0) container.insertBefore(row, container.firstChild);
-    // Recurse into children of all nodes at this level
-    var nextLevel = [];
-    nodes.forEach(function(node) {
-      if (node.childArr) {
-        node.childArr.forEach(function(c) { nextLevel.push({node: c, parentTotal: total}); });
-      }
-    });
-    if (nextLevel.length > 0) {
-      var childNodes = nextLevel.map(function(x) { return x.node; });
-      renderLevel(childNodes, total);
+  flameHotspotData = (hotspots && hotspots.length > 0) ? buildHotspotTree(hotspots) : null;
+  flameZoomStack = [];
+  flameSearchTerm = '';
+  document.getElementById('flameSearch').value = '';
+  if (resetBtn) resetBtn.style.display = 'none';
+
+  // Show warning banner if unknown rate is high
+  if (banner) {
+    var unkPct = (unknownRate * 100).toFixed(0);
+    if (unknownRate > 0.3) {
+      banner.style.display = '';
+      banner.innerHTML =
+        '<span class="fbanner-icon">&#9888;</span>' +
+        '<span><strong>' + unkPct + '%% of call-chain samples are unresolved.</strong> ' +
+        'The binary was compiled without <code>-fno-omit-frame-pointer</code> so perf cannot unwind the stack. ' +
+        'Showing <strong>IP-sampled hotspot view</strong> (accurate). ' +
+        '<a href="#" onclick="switchFlameMode(&#39;callchain&#39;);return false;" style="color:var(--accent);">Switch to raw call chains</a>.' +
+        '</span>' +
+        '<div class="fbanner-fix"><strong>Fix:</strong> Rebuild IQ-TREE with ' +
+        '<code>cmake .. -DCMAKE_CXX_FLAGS="-fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fno-omit-frame-pointer"</code>' +
+        '</div>';
+      // Default to hotspot view when unknown rate is high
+      flameMode = 'hotspot';
+    } else {
+      banner.style.display = 'none';
+      flameMode = 'callchain';
     }
   }
 
-  renderLevel(root.childArr || [], root.value);
+  if (toggleBtn) {
+    toggleBtn.style.display = (flameHotspotData && stacks && stacks.length > 0) ? '' : 'none';
+    toggleBtn.textContent = flameMode === 'hotspot' ? 'Switch to Call Chains' : 'Switch to Hotspot View';
+  }
 
-  // Add root bar at bottom
+  if (!stacks || stacks.length === 0) {
+    if (flameHotspotData) {
+      drawHotspotFlame(flameHotspotData);
+    } else {
+      container.innerHTML = '<p class="no-data-msg">No profiling data available.</p>';
+    }
+    updateBreadcrumb();
+    return;
+  }
+
+  flameData = buildFlameTree(stacks);
+  flameTotalSamples = flameMode === 'hotspot' && flameHotspotData ? flameHotspotData.value : flameData.value;
+
+  if (flameMode === 'hotspot' && flameHotspotData) {
+    drawHotspotFlame(flameHotspotData);
+  } else {
+    drawFlame(flameData);
+  }
+  updateBreadcrumb();
+}
+
+function switchFlameMode(mode) {
+  flameMode = mode;
+  var toggleBtn = document.getElementById('flameToggleMode');
+  if (toggleBtn) toggleBtn.textContent = mode === 'hotspot' ? 'Switch to Call Chains' : 'Switch to Hotspot View';
+  flameZoomStack = [];
+  if (mode === 'hotspot' && flameHotspotData) {
+    flameTotalSamples = flameHotspotData.value;
+    drawHotspotFlame(flameHotspotData);
+  } else if (flameData) {
+    flameTotalSamples = flameData.value;
+    drawFlame(flameData);
+  }
+  document.getElementById('flamegraphZoomReset').style.display = 'none';
+  updateBreadcrumb();
+}
+
+// Draw hotspot-based icicle: root → module → function
+function drawHotspotFlame(root) {
+  var container = document.getElementById('flamegraphContainer');
+  container.innerHTML = '';
+  flameTotalSamples = root.value;
+
+  // Row 0: root
   var rootRow = document.createElement('div');
   rootRow.className = 'flame-row';
   var rootEl = document.createElement('div');
   rootEl.className = 'flame-frame';
   rootEl.style.width = '100%%';
-  rootEl.style.background = '#475569';
-  rootEl.textContent = root.name + ' (' + totalSamples + ' samples)';
+  rootEl.style.background = '#334155';
+  rootEl.textContent = 'all  (' + root.value + ' IP samples)';
   rootRow.appendChild(rootEl);
   container.appendChild(rootRow);
+
+  // Row 1: modules
+  var modRow = document.createElement('div');
+  modRow.className = 'flame-row';
+  root.childArr.forEach(function(mod) {
+    var pct = mod.value / root.value * 100;
+    if (pct < 0.2) return;
+    var el = document.createElement('div');
+    el.className = 'flame-frame';
+    el.style.width = pct + '%%';
+    el.style.background = flameColor(mod.name);
+    if (pct > 5) el.textContent = mod.name;
+    el.addEventListener('mouseenter', function(e) { showFlameTooltip(e, mod); });
+    el.addEventListener('mouseleave', hideFlameTooltip);
+    modRow.appendChild(el);
+  });
+  container.appendChild(modRow);
+
+  // Row 2: functions (all laid out inline by module proportion)
+  var fnRow = document.createElement('div');
+  fnRow.className = 'flame-row';
+  root.childArr.forEach(function(mod) {
+    mod.childArr.forEach(function(fn) {
+      var pct = fn.value / root.value * 100;
+      if (pct < 0.2) return;
+      var el = document.createElement('div');
+      el.className = 'flame-frame';
+      el.style.width = pct + '%%';
+      el.style.background = flameColor(fn.name);
+      // Show label if wide enough
+      if (pct > 12) {
+        el.textContent = fn.name.length > 55 ? fn.name.substring(0, 52) + '...' : fn.name;
+      } else if (pct > 5) {
+        var short = fn.name.replace(/.*::/, '').replace(/\\(.*/, '');
+        el.textContent = short.substring(0, 22);
+      }
+      el.addEventListener('mouseenter', function(e) { showFlameTooltip(e, fn); });
+      el.addEventListener('mouseleave', hideFlameTooltip);
+      fnRow.appendChild(el);
+    });
+  });
+  container.appendChild(fnRow);
+
+  // Row 3: GPU offload opportunity indicator
+  var gpuRow = document.createElement('div');
+  gpuRow.className = 'flame-row';
+  var gpuTotal = 0;
+  root.childArr.forEach(function(mod) {
+    if (mod.name === 'iqtree3') {
+      mod.childArr.forEach(function(fn) {
+        if (fn.name.indexOf('LikelihoodDerv') >= 0 || fn.name.indexOf('LikelihoodPartial') >= 0 ||
+            fn.name.indexOf('LikelihoodBuffer') >= 0 || fn.name.indexOf('LikelihoodBranch') >= 0 ||
+            fn.name.indexOf('LikelihoodFrom') >= 0 || fn.name.indexOf('PartialLikelihood') >= 0) {
+          gpuTotal += fn.value;
+        }
+      });
+    }
+  });
+  if (gpuTotal > 0) {
+    var gpuPct = gpuTotal / root.value * 100;
+    var gpuEl = document.createElement('div');
+    gpuEl.className = 'flame-frame';
+    gpuEl.style.width = gpuPct + '%%';
+    gpuEl.style.background = 'repeating-linear-gradient(45deg, #1d4ed8, #1d4ed8 4px, #2563eb 4px, #2563eb 8px)';
+    gpuEl.style.opacity = '0.85';
+    gpuEl.style.fontSize = '0.55rem';
+    gpuEl.textContent = gpuPct > 5 ? 'GPU offload target: ' + gpuPct.toFixed(1) + '%%' : '';
+    gpuEl.title = 'GPU offload opportunity: ' + gpuPct.toFixed(1) + '%% of CPU time';
+    gpuRow.appendChild(gpuEl);
+    container.appendChild(gpuRow);
+  }
+}
+
+function drawFlame(root) {
+  var container = document.getElementById('flamegraphContainer');
+  container.innerHTML = '';
+  var viewTotal = root.value;
+
+  // Icicle layout: root at top, children below (Brendan Gregg style inverted)
+  // Build rows top-down
+  var rows = [];
+  function collectRows(nodes, total, depth) {
+    if (nodes.length === 0) return;
+    if (!rows[depth]) rows[depth] = [];
+    nodes.forEach(function(node) {
+      var pct = (node.value / total * 100);
+      if (pct < 0.3) return;
+      rows[depth].push({node: node, pct: pct, total: total});
+    });
+    // Recurse children
+    nodes.forEach(function(node) {
+      if (node.childArr && node.childArr.length > 0) {
+        collectRows(node.childArr, total, depth + 1);
+      }
+    });
+  }
+
+  // Root row
+  rows[0] = [{node: root, pct: 100, total: viewTotal}];
+  collectRows(root.childArr || [], viewTotal, 1);
+
+  rows.forEach(function(rowItems, depth) {
+    if (!rowItems || rowItems.length === 0) return;
+    var row = document.createElement('div');
+    row.className = 'flame-row';
+    rowItems.forEach(function(item) {
+      var node = item.node;
+      var pct = item.pct;
+      var el = document.createElement('div');
+      el.className = 'flame-frame';
+      if (flameSearchTerm && node.name.toLowerCase().indexOf(flameSearchTerm) === -1 && node.name !== 'all') {
+        el.classList.add('dim');
+      }
+      if (flameSearchTerm && node.name.toLowerCase().indexOf(flameSearchTerm) >= 0) {
+        el.classList.add('highlight');
+      }
+      el.style.width = pct + '%%';
+      el.style.background = flameColor(node.name);
+      // Smarter label: show name if wide enough, abbreviate if medium
+      var globalPct = (node.value / flameTotalSamples * 100).toFixed(1);
+      if (pct > 8) {
+        el.textContent = node.name.length > 60 ? node.name.substring(0, 57) + '...' : node.name;
+      } else if (pct > 3) {
+        // Show abbreviated
+        var shortName = node.name.replace(/.*::/, '').replace(/\\(.*/, '');
+        el.textContent = shortName.substring(0, 20);
+      } else {
+        el.textContent = '';
+      }
+      el.setAttribute('data-name', node.name);
+      el.setAttribute('data-count', node.value);
+      el.setAttribute('data-self', node.self || 0);
+      el.addEventListener('mouseenter', function(e) { showFlameTooltip(e, node); });
+      el.addEventListener('mouseleave', hideFlameTooltip);
+      if (node.childArr && node.childArr.length > 0) {
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', function() { zoomFlame(node); });
+      }
+      row.appendChild(el);
+    });
+    container.appendChild(row);
+  });
 }
 
 function zoomFlame(node) {
-  flameZoomStack.push(flameData);
+  flameZoomStack.push(node.name);
   drawFlame(node);
   document.getElementById('flamegraphZoomReset').style.display = '';
+  updateBreadcrumb();
 }
 
 function resetFlameZoom() {
   if (flameData) drawFlame(flameData);
   flameZoomStack = [];
   document.getElementById('flamegraphZoomReset').style.display = 'none';
+  updateBreadcrumb();
+}
+
+function zoomToBreadcrumb(idx) {
+  // Navigate to a specific level in the breadcrumb
+  if (idx < 0) { resetFlameZoom(); return; }
+  var node = flameData;
+  for (var i = 0; i <= idx; i++) {
+    var targetName = flameZoomStack[i];
+    if (node.childArr) {
+      for (var j = 0; j < node.childArr.length; j++) {
+        if (node.childArr[j].name === targetName) { node = node.childArr[j]; break; }
+      }
+    }
+  }
+  flameZoomStack = flameZoomStack.slice(0, idx + 1);
+  drawFlame(node);
+  updateBreadcrumb();
+}
+
+function updateBreadcrumb() {
+  var bc = document.getElementById('flameBreadcrumb');
+  var parts = ['<span onclick="resetFlameZoom()">all</span>'];
+  flameZoomStack.forEach(function(name, i) {
+    parts.push('<span style="color:var(--text3);">\\u203a</span>');
+    var isLast = i === flameZoomStack.length - 1;
+    var shortName = name.length > 30 ? name.substring(0, 27) + '...' : name;
+    if (isLast) {
+      parts.push('<span class="current">' + escHtml(shortName) + '</span>');
+    } else {
+      parts.push('<span onclick="zoomToBreadcrumb(' + i + ')">' + escHtml(shortName) + '</span>');
+    }
+  });
+  bc.innerHTML = parts.join('');
+}
+
+function filterFlame(term) {
+  flameSearchTerm = term.toLowerCase().trim();
+  // Count matching samples
+  var matchCount = 0;
+  if (flameSearchTerm && flameData) {
+    function countMatches(node) {
+      if (node.name.toLowerCase().indexOf(flameSearchTerm) >= 0) matchCount += node.self || 0;
+      if (node.childArr) node.childArr.forEach(countMatches);
+    }
+    countMatches(flameData);
+  }
+  // Redraw with current zoom
+  var currentRoot = flameData;
+  if (flameZoomStack.length > 0) {
+    for (var i = 0; i < flameZoomStack.length; i++) {
+      var targetName = flameZoomStack[i];
+      if (currentRoot.childArr) {
+        for (var j = 0; j < currentRoot.childArr.length; j++) {
+          if (currentRoot.childArr[j].name === targetName) { currentRoot = currentRoot.childArr[j]; break; }
+        }
+      }
+    }
+  }
+  drawFlame(currentRoot);
 }
 
 var flameTooltipEl = null;
-function showFlameTooltip(e, name, count, total) {
+function showFlameTooltip(e, node) {
   if (!flameTooltipEl) {
     flameTooltipEl = document.createElement('div');
     flameTooltipEl.className = 'flame-tooltip';
     document.body.appendChild(flameTooltipEl);
   }
-  var pct = (count / total * 100).toFixed(2);
-  flameTooltipEl.innerHTML = '<div style="font-weight:600;margin-bottom:4px;word-break:break-all;">' + escHtml(name) + '</div>' +
-    '<div>' + count + ' samples (' + pct + '%%)</div>';
+  var pct = (node.value / flameTotalSamples * 100).toFixed(2);
+  var selfPct = ((node.self || 0) / flameTotalSamples * 100).toFixed(2);
+  var barColor = flameColor(node.name);
+  flameTooltipEl.innerHTML =
+    '<div class="ft-name">' + escHtml(node.name) + '</div>' +
+    '<div class="ft-row"><span>Total</span><span class="ft-val">' + node.value.toLocaleString() + ' samples (' + pct + '%%)</span></div>' +
+    '<div class="ft-row"><span>Self</span><span class="ft-val">' + (node.self || 0).toLocaleString() + ' samples (' + selfPct + '%%)</span></div>' +
+    '<div class="ft-row"><span>Children</span><span>' + (node.childArr ? node.childArr.length : 0) + '</span></div>' +
+    '<div class="ft-bar"><div class="ft-bar-fill" style="width:' + pct + '%%;background:' + barColor + ';"></div></div>';
   flameTooltipEl.style.display = '';
-  flameTooltipEl.style.left = Math.min(e.clientX + 10, window.innerWidth - 420) + 'px';
-  flameTooltipEl.style.top = (e.clientY - 60) + 'px';
+  var x = Math.min(e.clientX + 12, window.innerWidth - 440);
+  var y = e.clientY + 20;
+  if (y + 120 > window.innerHeight) y = e.clientY - 120;
+  flameTooltipEl.style.left = x + 'px';
+  flameTooltipEl.style.top = y + 'px';
 }
 function hideFlameTooltip() {
   if (flameTooltipEl) flameTooltipEl.style.display = 'none';
@@ -1511,16 +1898,47 @@ function hideFlameTooltip() {
 
 // ============ Call Stack ============
 var callStackSortByCount = true;
+var callStackShowAll = false;
 
-function renderCallStack(stacks) {
+function renderCallStack(stacks, hotspots, unknownRate) {
   var container = document.getElementById('callStackContainer');
+  var summary = document.getElementById('callStackSummary');
   if (!stacks || stacks.length === 0) {
     container.innerHTML = '<p class="no-data-msg">No call stack data available. Run deep profiling with perf record to generate.</p>';
+    if (summary) summary.textContent = '';
     return;
   }
-  // Store for re-sorting
-  container.setAttribute('data-stacks', JSON.stringify(stacks));
-  drawCallStack(stacks, true);
+  // Filter out pure-unknown stacks — they carry no useful call chain information
+  var usefulStacks = stacks.filter(function(s) { return s.stack !== '[unknown]'; });
+  var hiddenCount = stacks.reduce(function(acc, s) { return acc + (s.stack === '[unknown]' ? s.count : 0); }, 0);
+  container.setAttribute('data-stacks', JSON.stringify(usefulStacks));
+  callStackShowAll = false;
+
+  // Add a note about filtered stacks when unknown rate is significant
+  var noteEl = document.getElementById('callStackNote');
+  if (!noteEl) {
+    noteEl = document.createElement('div');
+    noteEl.id = 'callStackNote';
+    noteEl.style.cssText = 'font-size:0.72rem;color:#64748b;padding:4px 10px 2px;';
+    container.parentNode.insertBefore(noteEl, container);
+  }
+  if (hiddenCount > 0 && unknownRate > 0.1) {
+    noteEl.innerHTML =
+      '<span style="color:#f59e0b;">&#9888;</span> ' +
+      hiddenCount + ' samples (' + (unknownRate * 100).toFixed(0) + '%%) hidden — unresolvable without <code>-fno-omit-frame-pointer</code>. ' +
+      'Showing ' + usefulStacks.length + ' call chains with known functions.';
+  } else {
+    noteEl.textContent = '';
+  }
+  drawCallStack(usefulStacks, true);
+}
+
+function csFrameClass(name) {
+  if (name === '[unknown]') return 'cs-unk';
+  if (name.indexOf('GOMP') >= 0 || name.indexOf('pthread') >= 0 || name.indexOf('omp') >= 0 || name.indexOf('libgomp') >= 0) return 'cs-omp';
+  if (name.indexOf('Likelihood') >= 0 || name.indexOf('LH') >= 0 || name.indexOf('SIMD') >= 0 || name.indexOf('Derv') >= 0 || name.indexOf('Buffer') >= 0) return 'cs-lh';
+  if (name.indexOf('Phylo') >= 0 || name.indexOf('Tree') >= 0) return 'cs-phylo';
+  return '';
 }
 
 function drawCallStack(stacks, byCount) {
@@ -1528,35 +1946,58 @@ function drawCallStack(stacks, byCount) {
   var sorted = stacks.slice().sort(function(a, b) {
     return byCount ? b.count - a.count : a.stack.localeCompare(b.stack);
   });
+  var totalSamples = sorted.reduce(function(s, x) { return s + x.count; }, 0);
   var maxCount = sorted.length > 0 ? sorted[0].count : 1;
-  var top = sorted.slice(0, 40); // Show top 40
+  var showCount = callStackShowAll ? sorted.length : Math.min(25, sorted.length);
+  var visible = sorted.slice(0, showCount);
 
-  var html = top.map(function(s) {
+  // Summary
+  var summaryEl = document.getElementById('callStackSummary');
+  if (summaryEl) {
+    summaryEl.textContent = sorted.length + ' unique paths | ' + totalSamples.toLocaleString() + ' total samples | showing ' + showCount;
+  }
+
+  var html = visible.map(function(s) {
     var frames = s.stack.split(';');
-    var pct = (s.count / maxCount * 100);
+    var pct = (s.count / totalSamples * 100);
+    var barPct = (s.count / maxCount * 100);
     var lastFrame = frames[frames.length - 1];
+    var barColor = flameColor(lastFrame);
+
     var formattedFrames = frames.map(function(f, i) {
-      if (i === frames.length - 1) return '<span style="color:var(--accent2);font-weight:600;">' + escHtml(f) + '</span>';
-      return escHtml(f);
-    }).join(' <span style="color:var(--text-muted);">\\u2192</span> ');
+      var cls = (i === frames.length - 1) ? 'cs-leaf' : csFrameClass(f);
+      return '<span class="' + cls + '">' + escHtml(f) + '</span>';
+    }).join('<span class="cs-sep">\\u203a</span>');
+
+    var catLabel = flameCategoryLabel(lastFrame);
+    var catHtml = catLabel ? '<span class="callstack-category" style="background:' + flameColor(lastFrame) + '22;color:' + flameColor(lastFrame) + ';">' + catLabel + '</span>' : '';
 
     return '<div class="callstack-row">' +
-      '<div class="callstack-count">' + s.count + '</div>' +
-      '<div style="flex:0 0 100px;"><div class="callstack-bar" style="width:' + pct + '%%;background:' + flameColor(lastFrame) + ';"></div></div>' +
-      '<div class="callstack-frames">' + formattedFrames + '</div>' +
+      '<div class="callstack-count">' + s.count.toLocaleString() + '</div>' +
+      '<div class="callstack-bar-wrap"><div class="callstack-bar-fill" style="width:' + barPct + '%%;background:' + barColor + ';"></div><span class="callstack-pct-label">' + pct.toFixed(1) + '%%</span></div>' +
+      '<div class="callstack-frames">' + formattedFrames + catHtml + '</div>' +
     '</div>';
   }).join('');
 
+  if (sorted.length > showCount) {
+    html += '<div class="callstack-show-more"><button onclick="showAllCallStacks()">Show all ' + sorted.length + ' paths</button></div>';
+  }
+
   container.innerHTML = html || '<p class="no-data-msg">No call stacks to display.</p>';
+}
+
+function showAllCallStacks() {
+  callStackShowAll = true;
+  var container = document.getElementById('callStackContainer');
+  var raw = container.getAttribute('data-stacks');
+  if (raw) drawCallStack(JSON.parse(raw), callStackSortByCount);
 }
 
 function toggleCallStackSort() {
   callStackSortByCount = !callStackSortByCount;
   var container = document.getElementById('callStackContainer');
   var raw = container.getAttribute('data-stacks');
-  if (raw) {
-    drawCallStack(JSON.parse(raw), callStackSortByCount);
-  }
+  if (raw) drawCallStack(JSON.parse(raw), callStackSortByCount);
 }
 
 function renderBasicProfile(run) {
