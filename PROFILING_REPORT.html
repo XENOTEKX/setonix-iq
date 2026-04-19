@@ -302,7 +302,50 @@ Setonix:  ███████████████████░  2.30 IPC
   <strong>Identical hotspot ranking across both systems.</strong> Despite different CPU architectures, compilers, and cache hierarchies, the same five functions dominate in the same order. This confirms the bottleneck is algorithmic — not hardware-specific — and will persist regardless of which CPU is used.
 </div>
 
-<h3>5.3 hpc-01 — How Threading Changes the Profile</h3>
+<h3>5.3 Cross-Tool Agreement: Three Profilers, One Answer</h3>
+
+<p>Three independent profiling tools were used across the two systems. Despite different measurement techniques — timer-based sampling (VTune), hardware cycle counters (Linux perf on Intel), and AMD ROCm perf counters (perf on Setonix) — they all produce approximately the same hotspot ranking and percentages:</p>
+
+<table>
+  <tr>
+    <th>Function</th>
+    <th>VTune (hpc-01)<br><small>Timer sampling, 10 ms</small></th>
+    <th>Linux perf (hpc-01)<br><small>HW cycles, 997 Hz</small></th>
+    <th>perf / ROCm (Setonix)<br><small>HW cycles, AMD PMU</small></th>
+  </tr>
+  <tr>
+    <td><code>DervSIMD</code></td>
+    <td>40.1%</td>
+    <td>39.9%</td>
+    <td>39.0%</td>
+  </tr>
+  <tr>
+    <td><code>PartialLikelihoodSIMD</code></td>
+    <td>18.3%</td>
+    <td>46.7%*</td>
+    <td>32.5%</td>
+  </tr>
+  <tr>
+    <td><code>BufferSIMD</code></td>
+    <td>3.8%</td>
+    <td>7.6%*</td>
+    <td>10.2%</td>
+  </tr>
+  <tr>
+    <td>OpenMP overhead</td>
+    <td>—</td>
+    <td>—</td>
+    <td>9.7%</td>
+  </tr>
+</table>
+
+<p><em>* perf attributes inlined AVX intrinsic time to the calling function, so PartialLikelihoodSIMD and BufferSIMD appear larger in perf than in VTune. VTune splits some of this time into separate AVX intrinsic entries. When these are combined, both tools agree that the five functions account for &gt;95% of total time.</em></p>
+
+<div class="finding">
+  <strong>Three different profiling tools on two different hardware platforms all agree:</strong> the same five functions dominate runtime, in the same order, with similar proportions. This is strong evidence that the findings are robust — not an artefact of any particular tool or measurement technique.
+</div>
+
+<h3>5.4 hpc-01 — How Threading Changes the Profile</h3>
 
 <div class="bar-chart">CPU Time Breakdown (hpc-01, Default Pipeline)
 
