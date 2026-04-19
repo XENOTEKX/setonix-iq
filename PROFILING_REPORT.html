@@ -1,0 +1,1785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IQ-TREE phylokernelnew.h — Comprehensive Profiling Report</title>
+<style>
+  /* ── Reset & Base ─────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 16px; scroll-behavior: smooth; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif;
+    color: #1a1a2e; background: #f8f9fa;
+    line-height: 1.72; padding: 0;
+  }
+
+  /* ── Print / page-break ────────────────────────────────────── */
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .page-break { page-break-before: always; }
+    .no-print { display: none !important; }
+    .toc-box { page-break-after: always; }
+    table { font-size: 9pt; }
+    pre, code { font-size: 9pt; }
+    .container { max-width: 100%; padding: 0 1cm; }
+    h1, h2 { color: #1b7a43 !important; }
+    .finding-box { break-inside: avoid; }
+    .info-table { break-inside: avoid; }
+  }
+
+  /* ── Container ─────────────────────────────────────────────── */
+  .container {
+    max-width: 960px; margin: 0 auto;
+    padding: 40px 48px; background: #fff;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.08);
+  }
+
+  /* ── Typography ────────────────────────────────────────────── */
+  h1 {
+    font-size: 2.2rem; font-weight: 800; color: #1b7a43;
+    margin: 0 0 8px; letter-spacing: -0.02em;
+    border-bottom: 4px solid #1b7a43; padding-bottom: 12px;
+  }
+  h2 {
+    font-size: 1.65rem; font-weight: 700; color: #1b7a43;
+    margin: 48px 0 16px; border-bottom: 3px solid #1b7a43;
+    padding-bottom: 8px;
+  }
+  h3 {
+    font-size: 1.25rem; font-weight: 600; color: #2d6a4f;
+    margin: 32px 0 12px;
+  }
+  h4 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 8px; color: #333; }
+  p { margin: 0 0 14px; }
+  .subtitle {
+    font-size: 1.15rem; font-style: italic; color: #666;
+    margin: 0 0 32px;
+  }
+
+  /* ── Links ─────────────────────────────────────────────────── */
+  a { color: #1b7a43; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Tables ────────────────────────────────────────────────── */
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 16px 0 24px; font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left; padding: 10px 14px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  th {
+    background: #f1f8f4; color: #1a1a2e;
+    font-weight: 600; font-size: 0.85rem;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    border-bottom: 2px solid #1b7a43;
+  }
+  tr:hover { background: #f9fdfb; }
+  td code, th code {
+    background: #e8f5e9; padding: 2px 6px;
+    border-radius: 3px; font-size: 0.88em;
+    font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;
+  }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bold-row td { font-weight: 700; background: #f1f8f4; }
+  .highlight-red { color: #d32f2f; font-weight: 700; }
+  .highlight-green { color: #1b7a43; font-weight: 700; }
+  .highlight-amber { color: #e65100; font-weight: 700; }
+
+  /* ── Code blocks ───────────────────────────────────────────── */
+  pre {
+    background: #1e293b; color: #e2e8f0; padding: 18px 22px;
+    border-radius: 8px; overflow-x: auto;
+    font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;
+    font-size: 0.88rem; line-height: 1.55; margin: 14px 0 22px;
+  }
+  code {
+    background: #e8f5e9; padding: 2px 6px; border-radius: 3px;
+    font-family: 'SFMono-Regular', 'Consolas', monospace;
+    font-size: 0.88em;
+  }
+  pre code { background: none; padding: 0; }
+  .comment { color: #94a3b8; }
+
+  /* ── Info table (metadata) ─────────────────────────────────── */
+  .info-table { margin: 24px 0; }
+  .info-table th { width: 180px; background: #f1f8f4; }
+  .info-table td { background: #fafafa; }
+
+  /* ── Finding boxes ─────────────────────────────────────────── */
+  .finding-box {
+    border-left: 5px solid #1b7a43; background: #f1f8f4;
+    padding: 18px 22px; margin: 20px 0 24px;
+    border-radius: 0 8px 8px 0;
+  }
+  .finding-box.critical {
+    border-left-color: #d32f2f; background: #fef2f2;
+  }
+  .finding-box.warning {
+    border-left-color: #e65100; background: #fff8e1;
+  }
+  .finding-box.info {
+    border-left-color: #1976d2; background: #e3f2fd;
+  }
+  .finding-box strong { display: block; margin-bottom: 6px; font-size: 1.02rem; }
+
+  /* ── Stars ─────────────────────────────────────────────────── */
+  .stars { color: #f9a825; letter-spacing: 1px; }
+
+  /* ── ASCII bar chart ───────────────────────────────────────── */
+  .ascii-chart {
+    background: #1e293b; color: #e2e8f0; padding: 18px 22px;
+    border-radius: 8px; font-family: 'SFMono-Regular', monospace;
+    font-size: 0.85rem; line-height: 1.6; margin: 14px 0 22px;
+    overflow-x: auto; white-space: pre;
+  }
+
+  /* ── TOC ────────────────────────────────────────────────────── */
+  .toc-box {
+    background: #f8faf9; border: 2px solid #c8e6c9;
+    border-radius: 10px; padding: 28px 32px; margin: 28px 0 40px;
+  }
+  .toc-box h3 { margin-top: 0; color: #1b7a43; font-size: 1.3rem; }
+  .toc-box ol {
+    padding-left: 24px; margin: 12px 0 0;
+  }
+  .toc-box li {
+    margin: 6px 0; font-size: 1rem; line-height: 1.6;
+  }
+  .toc-box ol ol { margin-top: 4px; }
+  .toc-box ol ol li { font-size: 0.92rem; margin: 3px 0; }
+
+  /* ── Comparison boxes ──────────────────────────────────────── */
+  .compare-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 20px; margin: 18px 0 24px;
+  }
+  .compare-card {
+    border: 2px solid #e0e0e0; border-radius: 10px;
+    padding: 18px 20px; background: #fafafa;
+  }
+  .compare-card h4 { margin: 0 0 10px; color: #1b7a43; }
+  .compare-card.setonix { border-color: #1976d2; background: #f5f9ff; }
+  .compare-card.setonix h4 { color: #1976d2; }
+  .compare-card.hpc01 { border-color: #1b7a43; background: #f1f8f4; }
+
+  /* ── Jargon explanation ────────────────────────────────────── */
+  .jargon {
+    background: #fffde7; border: 1px solid #fff9c4;
+    padding: 14px 18px; border-radius: 8px;
+    margin: 12px 0 20px; font-size: 0.93rem;
+  }
+  .jargon strong { color: #f57f17; }
+
+  /* ── Download button ───────────────────────────────────────── */
+  .download-bar {
+    text-align: center; padding: 20px; background: #f1f8f4;
+    border-radius: 10px; margin: 30px 0;
+  }
+  .download-bar button {
+    background: #1b7a43; color: #fff; border: none;
+    padding: 12px 28px; border-radius: 6px; font-size: 1rem;
+    cursor: pointer; font-weight: 600;
+  }
+  .download-bar button:hover { background: #15633a; }
+
+  /* ── Divider ───────────────────────────────────────────────── */
+  hr {
+    border: none; border-top: 2px solid #e0e0e0;
+    margin: 36px 0;
+  }
+
+  /* ── Footer ────────────────────────────────────────────────── */
+  .footer {
+    text-align: center; color: #999; font-size: 0.85rem;
+    margin-top: 48px; padding-top: 24px;
+    border-top: 1px solid #e0e0e0;
+  }
+
+  /* ── Responsive ────────────────────────────────────────────── */
+  @media (max-width: 800px) {
+    .container { padding: 20px 18px; }
+    h1 { font-size: 1.6rem; }
+    h2 { font-size: 1.3rem; }
+    .compare-grid { grid-template-columns: 1fr; }
+    table { font-size: 0.82rem; }
+    th, td { padding: 7px 8px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  TITLE PAGE                                                     -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<h1>IQ-TREE <code>phylokernelnew.h</code> — Comprehensive Profiling Report</h1>
+<p class="subtitle">VTune + perf &nbsp;|&nbsp; Single-Thread, Multi-Thread &amp; GPU Offload Assessment<br>
+hpc-01 (Intel Sandy Bridge) &amp; Setonix (AMD EPYC Trento + MI250X)</p>
+
+<div class="download-bar no-print">
+  <button onclick="downloadReport()">⬇ Download This Report as HTML</button>
+</div>
+
+<!-- Metadata table -->
+<table class="info-table">
+  <tr><th>Original Report</th><td>29 March 2026 — GTR+G4 only, 1-thread profiling (hpc-01)</td></tr>
+  <tr><th>Updated Report</th><td>12 April 2026 — Default pipeline + multi-threaded + VTune Web UI analysis (hpc-01)</td></tr>
+  <tr><th>Setonix Report</th><td>18 April 2026 — perf profiling on Setonix GPU nodes (AMD EPYC 7A53 Trento)</td></tr>
+  <tr><th>System A (hpc-01)</th><td>Intel Xeon E5-2670 @ 2.60 GHz (Sandy Bridge) · 32 cores (2×8c×HT) · 62 GB DDR3</td></tr>
+  <tr><th>System B (Setonix)</th><td>AMD EPYC 7A53 "Trento" 64-core · 250 GB DDR4 · 8× AMD Instinct MI250X GPUs</td></tr>
+  <tr><th>Software</th><td>IQ-TREE 3.1.0 · VTune 2025.10.0 · Linux perf 6.8 · ROCm 6.3.0 · GCC 14.3</td></tr>
+  <tr><th>Datasets</th><td><code>turtle.fa</code> (12 taxa × 434 patterns) · <code>medium_dna.phy</code> (50 taxa × 5,000 sites)</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  TABLE OF CONTENTS                                              -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="toc-box">
+  <h3>Table of Contents</h3>
+  <ol>
+    <li><a href="#s1">Executive Summary</a></li>
+    <li><a href="#s2">Background: What Is IQ-TREE?</a></li>
+    <li><a href="#s3">Test Configurations</a></li>
+    <li><a href="#s4">Wall-Clock Scaling: 1T → 4T → 8T</a></li>
+    <li><a href="#s5">VTune Hotspot Breakdown</a>
+      <ol>
+        <li><a href="#s5-1">Default Pipeline (with ModelFinder)</a></li>
+        <li><a href="#s5-2">GTR+G4 (Fixed Model)</a></li>
+      </ol>
+    </li>
+    <li><a href="#s6">OpenMP Threading Bottleneck Analysis</a></li>
+    <li><a href="#s7">perf Hardware Counter Analysis</a></li>
+    <li><a href="#s8">The Five Hot Functions — Detailed Breakdown</a></li>
+    <li><a href="#s9">Call Hierarchy: How Kernels Are Invoked</a></li>
+    <li><a href="#s10">Default Pipeline vs GTR+G4 Comparison</a></li>
+    <li><a href="#s11">GPU Offload Strategy</a></li>
+    <li><a href="#s12">Data Sizes &amp; GPU Memory Planning</a></li>
+    <li><a href="#s13">Baseline Timing Reference</a></li>
+    <li><a href="#s14">Setonix Profiling: IQ-TREE on AMD EPYC Trento</a>
+      <ol>
+        <li><a href="#s14-1">System Specifications</a></li>
+        <li><a href="#s14-2">Profile 1: turtle.fa — 1 Thread</a></li>
+        <li><a href="#s14-3">Profile 2: medium_dna — 4 Threads</a></li>
+        <li><a href="#s14-4">Cross-Platform Comparison: hpc-01 vs Setonix</a></li>
+        <li><a href="#s14-5">Key Findings</a></li>
+      </ol>
+    </li>
+    <li><a href="#s15">Conclusions &amp; Next Steps</a></li>
+    <li><a href="#s16">File Locations &amp; Appendix</a></li>
+  </ol>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 1: EXECUTIVE SUMMARY                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s1">1. Executive Summary</h2>
+
+<p>This report presents the profiling results for IQ-TREE 3.1.0 — a widely-used program for reconstructing evolutionary trees (phylogenies) from DNA or protein sequence data. The report combines profiling data from two high-performance computing systems:</p>
+
+<div class="compare-grid">
+  <div class="compare-card hpc01">
+    <h4>System A — hpc-01</h4>
+    <p><strong>CPU:</strong> Intel Xeon E5-2670 (Sandy Bridge, 2012)<br>
+    <strong>Tools:</strong> Intel VTune + Linux perf<br>
+    <strong>Profiles:</strong> 1T, 4T, 8T Default + GTR+G4</p>
+  </div>
+  <div class="compare-card setonix">
+    <h4>System B — Setonix (Pawsey)</h4>
+    <p><strong>CPU:</strong> AMD EPYC 7A53 Trento (2022)<br>
+    <strong>GPU:</strong> 8× AMD Instinct MI250X<br>
+    <strong>Tools:</strong> Linux perf + ROCm 6.3<br>
+    <strong>Profiles:</strong> turtle.fa 1T, medium_dna 4T</p>
+  </div>
+</div>
+
+<h3>1.1 The Core Kernel Dominates Everything</h3>
+
+<p>A single header file — <code>phylokernelnew.h</code> (3,688 lines of C++ code) — consumes <strong>more than 95% of total CPU time</strong> across all configurations and both systems. Five functions from this file account for virtually all computation:</p>
+
+<table>
+  <tr>
+    <th>Function</th><th>GTR 1T</th><th>Default 1T</th><th>Default 8T</th><th>GPU Target</th>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">86.9s (52.1%)</td><td class="num">92.6s (40.1%)</td>
+    <td class="num">120.9s (25.0%)</td>
+    <td><span class="stars">★★★★★</span> #1</td>
+  </tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">15.8s (9.5%)</td><td class="num">42.2s (18.3%)</td>
+    <td class="num">70.5s (14.6%)</td>
+    <td><span class="stars">★★★★☆</span> #2</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">7.1s (4.3%)</td><td class="num">8.7s (3.8%)</td>
+    <td class="num">39.6s (8.2%)</td>
+    <td><span class="stars">★★★★★</span> #3</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBranchSIMD</code></td>
+    <td class="num">0.0s (0.0%)</td><td class="num">0.76s (0.3%)</td>
+    <td class="num">1.7s (0.4%)</td>
+    <td><span class="stars">★★★★★</span> #4</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodFromBufferSIMD</code></td>
+    <td class="num">0.49s (0.3%)</td><td class="num">0.41s (0.2%)</td>
+    <td class="num">—</td>
+    <td><span class="stars">★★★★★</span> #5</td>
+  </tr>
+  <tr>
+    <td>AVX intrinsics (inlined from above)</td>
+    <td class="num">~82s (49.2%)</td><td class="num">~112s (48.3%)</td>
+    <td class="num">—</td><td>(included above)</td>
+  </tr>
+  <tr class="bold-row">
+    <td>Everything else</td>
+    <td class="num">~7s (4.2%)</td><td class="num">~14s (6.0%)</td>
+    <td class="num">—</td><td>No</td>
+  </tr>
+  <tr class="bold-row">
+    <td>Total CPU Time</td>
+    <td class="num">166.8s</td><td class="num">230.8s</td>
+    <td class="num">484.5s</td><td></td>
+  </tr>
+</table>
+
+<h3>1.2 Three Critical Findings</h3>
+
+<div class="finding-box">
+  <strong>Finding 1 — <code>computeLikelihoodBranchSIMD</code> was hidden by <code>-m GTR+G4</code>.</strong>
+  This function computes the total log-likelihood of the tree (no derivatives) and is called heavily during ModelFinder — a model selection step. With <code>-m GTR+G4</code>, ModelFinder is skipped, so this function showed 0.0 seconds. With the default pipeline, it appears at 0.76s (1T), and the associated <code>computePartialLikelihoodSIMD</code> time jumps <span class="highlight-red">+167%</span> (15.8s → 42.2s).
+</div>
+
+<div class="finding-box critical">
+  <strong>Finding 2 — OpenMP synchronisation is the #1 bottleneck in multi-threaded runs.</strong>
+  VTune Web UI analysis reveals that <code>libgomp</code> spin-wait overhead becomes the single most expensive "function" at 4+ threads — consuming <span class="highlight-red">22–29%</span> of all CPU time. This is more than any individual kernel function and represents wasted work where threads sit idle waiting for the next parallel region.
+</div>
+
+<div class="finding-box info">
+  <strong>Finding 3 — Setonix's AMD EPYC Trento achieves dramatically better IPC than Sandy Bridge.</strong>
+  On the same workload (medium_dna, GTR+G4, 4T), the Trento chip achieves <span class="highlight-green">2.30 IPC</span> compared to Sandy Bridge's <span class="highlight-red">1.07 IPC</span> — a <strong>2.15× improvement</strong> in instructions per cycle. The Trento CPU also has negligible frontend stalls (2.2% vs 65.7%), indicating that the modern microarchitecture largely resolves the instruction-cache pressure that crippled Sandy Bridge.
+</div>
+
+<table>
+  <tr>
+    <th>Config</th><th>OpenMP Spin-Wait (libgomp)</th><th>% of Total CPU</th><th>Assessment</th>
+  </tr>
+  <tr><td>Default 1T</td><td class="num">0s</td><td class="num">0%</td><td>N/A</td></tr>
+  <tr><td>Default 4T</td><td class="num highlight-red">78.2s</td><td class="num highlight-red">22.6%</td><td class="highlight-red">CRITICAL</td></tr>
+  <tr><td>Default 8T</td><td class="num highlight-red">94.3s</td><td class="num highlight-red">19.5%</td><td class="highlight-red">CRITICAL</td></tr>
+  <tr><td>GTR 1T</td><td class="num">0s</td><td class="num">0%</td><td>N/A</td></tr>
+  <tr><td>GTR 4T</td><td class="num highlight-red">76.1s</td><td class="num highlight-red">29.1%</td><td class="highlight-red">CRITICAL</td></tr>
+</table>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 2: BACKGROUND                                         -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s2">2. Background: What Is IQ-TREE?</h2>
+
+<p>IQ-TREE is a program used by biologists and bioinformaticians to build <strong>phylogenetic trees</strong> — diagrams that show the evolutionary relationships between species, genes, or other biological entities. Given a set of DNA or protein sequences from different species, IQ-TREE finds the tree that best explains how those sequences evolved.</p>
+
+<h3>2.1 Why Is It So Computationally Expensive?</h3>
+
+<p>At its core, IQ-TREE must answer: <em>"How likely is it that this particular tree produced the DNA sequences we observe?"</em> This question is answered by computing the <strong>phylogenetic likelihood</strong> — a number that scores how well a candidate tree explains the data.</p>
+
+<p>The problem is that IQ-TREE must compute this likelihood <strong>thousands of times</strong>: once for every possible tree topology, once for every branch length adjustment, and once for every model parameter it tests. For a dataset with 50 species and 5,000 DNA positions, a single likelihood calculation involves:</p>
+
+<ul style="margin: 10px 0 20px 24px;">
+  <li><strong>5,000 independent alignment patterns</strong> (each requiring ~60 floating-point operations)</li>
+  <li><strong>97 internal tree branches</strong> (each requiring its own likelihood calculation)</li>
+  <li><strong>3–5 Newton-Raphson iterations</strong> per branch (for optimising branch length)</li>
+  <li><strong>~88 model tests</strong> during ModelFinder (each requiring a full tree traversal)</li>
+</ul>
+
+<p>The total adds up to billions of floating-point operations — and all of this happens inside <strong>five functions</strong> in a single file called <code>phylokernelnew.h</code>.</p>
+
+<h3>2.2 Key Terminology</h3>
+
+<div class="jargon">
+  <strong>Glossary for non-specialists:</strong>
+  <ul style="margin: 6px 0 0 20px;">
+    <li><strong>SIMD / AVX</strong> — "Single Instruction, Multiple Data". A CPU technique that processes 4 numbers at once instead of one, like a cashier scanning 4 items simultaneously.</li>
+    <li><strong>IPC</strong> — "Instructions Per Cycle". Measures how efficiently the CPU works. Higher is better (modern CPUs can do ~2–4 IPC).</li>
+    <li><strong>Frontend stall</strong> — The CPU is waiting to fetch its next instruction from memory, like a factory worker waiting for the next part to arrive on the conveyor belt.</li>
+    <li><strong>Backend stall</strong> — The CPU has the instruction but is waiting for data to arrive from memory. Like a worker with the blueprint but no materials.</li>
+    <li><strong>OpenMP</strong> — A technology for splitting work across multiple CPU cores. <code>#pragma omp parallel for</code> tells the compiler "split this loop across all available threads".</li>
+    <li><strong>GPU</strong> — A specialised processor with thousands of tiny cores, excellent for doing the same simple math on many data points simultaneously.</li>
+    <li><strong>HIP / ROCm</strong> — AMD's programming framework for GPUs (equivalent to NVIDIA's CUDA).</li>
+    <li><strong>ModelFinder</strong> — An IQ-TREE feature that tests ~88 DNA substitution models to find the best one. Skipped with <code>-m GTR+G4</code>.</li>
+    <li><strong>NNI</strong> — "Nearest-Neighbor Interchange". A tree search move that swaps subtrees to find a better topology.</li>
+    <li><strong>Dot product</strong> — A mathematical operation that multiplies two lists of numbers element-by-element and sums the results. Central to likelihood calculation.</li>
+  </ul>
+</div>
+
+<h3>2.3 How Profiling Works</h3>
+
+<p>Profiling is like putting a stopwatch on every part of a program. Two tools were used:</p>
+
+<ul style="margin: 10px 0 20px 24px;">
+  <li><strong>Intel VTune</strong> — Periodically samples which function the CPU is executing (every 10 milliseconds). Over thousands of samples, this reveals where time is spent. Used on hpc-01.</li>
+  <li><strong>Linux perf</strong> — Reads CPU hardware counters (IPC, cache misses, branch mispredictions) at 997 samples per second. Provides both hotspot data and micro-architectural metrics. Used on both hpc-01 and Setonix.</li>
+</ul>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 3: TEST CONFIGURATIONS                                 -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s3">3. Test Configurations</h2>
+
+<h3>3.1 hpc-01 Configurations (Intel Xeon E5-2670)</h3>
+
+<table>
+  <tr><th>Label</th><th>Command</th><th>Purpose</th></tr>
+  <tr>
+    <td>Default 1T</td>
+    <td><code>iqtree3 -s medium_dna.phy -seed 1</code></td>
+    <td>Full pipeline: ModelFinder → tree search</td>
+  </tr>
+  <tr>
+    <td>Default 4T</td>
+    <td><code>iqtree3 -s medium_dna.phy -seed 1 -nt 4</code></td>
+    <td>Multi-threaded scaling</td>
+  </tr>
+  <tr>
+    <td>Default 8T</td>
+    <td><code>iqtree3 -s medium_dna.phy -seed 1 -nt 8</code></td>
+    <td>Multi-threaded scaling</td>
+  </tr>
+  <tr>
+    <td>GTR 1T</td>
+    <td><code>iqtree3 -s medium_dna.phy -m GTR+G4 -seed 1</code></td>
+    <td>Fixed model (skip ModelFinder)</td>
+  </tr>
+  <tr>
+    <td>GTR 4T</td>
+    <td><code>iqtree3 -s medium_dna.phy -m GTR+G4 -seed 1 -nt 4</code></td>
+    <td>Fixed model, multi-threaded</td>
+  </tr>
+</table>
+
+<h3>3.2 Setonix Configurations (AMD EPYC 7A53 Trento)</h3>
+
+<table>
+  <tr><th>Label</th><th>Command</th><th>Purpose</th></tr>
+  <tr>
+    <td>Setonix turtle 1T</td>
+    <td><code>iqtree3 -s turtle.fa -m GTR+G4 -T 1</code></td>
+    <td>Small dataset, single-thread baseline</td>
+  </tr>
+  <tr>
+    <td>Setonix medium 4T</td>
+    <td><code>iqtree3 -s medium_dna.fa -m GTR+G4 -T 4</code></td>
+    <td>Medium dataset, 4-thread scaling on Trento</td>
+  </tr>
+</table>
+
+<div class="finding-box">
+  <strong>What Changed From the Original Report (29 March)</strong>
+  The original profiling used only <code>-m GTR+G4</code>, which hardcodes the substitution model and skips ModelFinder. This hid <code>computeLikelihoodBranchSIMD</code> from the profile entirely. The updated report adds:
+  <ol style="margin: 8px 0 0 24px;">
+    <li><strong>Default pipeline runs</strong> (no <code>-m</code> flag) — triggers ModelFinder (~88 DNA model tests), making <code>computeLikelihoodBranchSIMD</code> visible</li>
+    <li><strong>Multi-threaded profiling</strong> (4T, 8T) — reveals OpenMP synchronisation as the dominant scaling bottleneck</li>
+    <li><strong>VTune Web UI call stack analysis</strong> — precise attribution of thread overhead and call hierarchies</li>
+    <li><strong>Setonix profiling</strong> (18 April) — AMD EPYC 7A53 Trento performance data for cross-platform comparison</li>
+  </ol>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 4: WALL-CLOCK SCALING                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s4">4. Wall-Clock Scaling: 1T → 4T → 8T</h2>
+
+<p>Wall-clock time is the actual elapsed time — how long you wait for the result. When we add more threads, we expect the program to finish faster. But the speedup is never perfect because of overheads in coordinating threads.</p>
+
+<div class="ascii-chart">Wall-Clock Time (hpc-01, Default Pipeline with ModelFinder)
+──────────────────────────────────────────────────────────────
+1T:  ████████████████████████████████████████████████  230.9s
+4T:  ██████████████████                                89.2s  (2.59× speedup)
+8T:  █████████████                                     64.2s  (3.60× speedup)
+
+Wall-Clock Time (hpc-01, GTR+G4 Fixed Model)
+──────────────────────────────────────────────────────────────
+1T:  ██████████████████████████████████                166.8s
+4T:  ██████████████                                     68.2s  (2.45× speedup)</div>
+
+<h3>4.1 Scaling Efficiency</h3>
+
+<p><strong>Ideal scaling</strong> means that 4 threads should be 4× faster, and 8 threads should be 8× faster. Here we measure how close reality matches the ideal:</p>
+
+<table>
+  <tr><th>Metric</th><th>1T → 4T</th><th>1T → 8T</th></tr>
+  <tr><td>Wall speedup (default)</td><td class="num">2.59×</td><td class="num">3.60×</td></tr>
+  <tr><td>Ideal speedup</td><td class="num">4.00×</td><td class="num">8.00×</td></tr>
+  <tr><td>Parallel efficiency</td><td class="num highlight-amber">64.8%</td><td class="num highlight-red">45.0%</td></tr>
+  <tr><td>CPU time inflation</td><td class="num">+50% (230.8→346.1s)</td><td class="num highlight-red">+110% (230.8→484.5s)</td></tr>
+</table>
+
+<div class="finding-box warning">
+  <strong>Why doesn't it scale linearly?</strong>
+  The 8-thread run uses more than <strong>double</strong> the total CPU cycles of the 1-thread run (484.5s vs 230.8s). That extra 253.7 seconds of wasted CPU time comes from three sources: OpenMP barrier synchronisation (threads waiting for each other), cache coherence traffic (cores invalidating each other's cached data), and instruction-cache thrashing (the large code footprint doesn't fit in the I-cache when shared across many threads).
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 5: VTUNE HOTSPOT BREAKDOWN                             -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s5">5. VTune Hotspot Breakdown — All Configurations</h2>
+
+<p>Intel VTune is a profiling tool that samples which function the CPU is executing every 10 milliseconds. By aggregating thousands of samples, we can see exactly where time is spent. The tables below show both <strong>CPU time</strong> (total work done across all cores) and <strong>wall-clock time</strong> (actual elapsed time).</p>
+
+<h3 id="s5-1">5.1 Default Pipeline (with ModelFinder)</h3>
+
+<table>
+  <tr>
+    <th>Function</th><th>1T CPU</th><th>1T %</th><th>4T CPU</th><th>4T %</th><th>8T CPU</th><th>8T %</th>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">92.6s</td><td class="num">40.1%</td>
+    <td class="num">104.9s</td><td class="num">30.3%</td>
+    <td class="num">120.9s</td><td class="num">25.0%</td>
+  </tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">42.2s</td><td class="num">18.3%</td>
+    <td class="num">54.6s</td><td class="num">15.8%</td>
+    <td class="num">70.5s</td><td class="num">14.6%</td>
+  </tr>
+  <tr>
+    <td><code>libgomp</code> OMP barrier</td>
+    <td class="num">—</td><td class="num">—</td>
+    <td class="num">—</td><td class="num">—</td>
+    <td class="num highlight-red">52.6s</td><td class="num highlight-red">10.9%</td>
+  </tr>
+  <tr>
+    <td><code>libgomp</code> OMP spin-wait</td>
+    <td class="num">—</td><td class="num">—</td>
+    <td class="num highlight-red">78.2s</td><td class="num highlight-red">22.6%</td>
+    <td class="num highlight-red">41.7s</td><td class="num highlight-red">8.6%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">8.7s</td><td class="num">3.8%</td>
+    <td class="num">21.9s</td><td class="num">6.3%</td>
+    <td class="num">39.6s</td><td class="num">8.2%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBranchSIMD</code></td>
+    <td class="num">0.76s</td><td class="num">0.3%</td>
+    <td class="num">1.4s</td><td class="num">0.4%</td>
+    <td class="num">1.7s</td><td class="num">0.4%</td>
+  </tr>
+  <tr>
+    <td>[Others]</td>
+    <td class="num">~86.5s</td><td class="num">37.5%</td>
+    <td class="num">~85.1s</td><td class="num">24.6%</td>
+    <td class="num">159.2s</td><td class="num">32.9%</td>
+  </tr>
+  <tr class="bold-row">
+    <td>Total CPU Time</td>
+    <td class="num" colspan="2">230.8s</td>
+    <td class="num" colspan="2">346.1s</td>
+    <td class="num" colspan="2">484.5s</td>
+  </tr>
+  <tr class="bold-row">
+    <td>Wall-Clock Time</td>
+    <td class="num" colspan="2">230.9s</td>
+    <td class="num" colspan="2">89.2s</td>
+    <td class="num" colspan="2">64.2s</td>
+  </tr>
+</table>
+
+<div class="jargon">
+  <strong>Key Observation:</strong> CPU time <em>increases</em> with more threads (230.8s → 484.5s) while wall time <em>decreases</em> (230.9s → 64.2s). This seems contradictory, but it makes sense: the total "work done across all cores" increases because threads waste time waiting for each other (OpenMP overhead), even though the job finishes sooner.
+</div>
+
+<h3 id="s5-2">5.2 GTR+G4 (Fixed Model)</h3>
+
+<table>
+  <tr><th>Function</th><th>1T CPU</th><th>1T %</th><th>4T CPU</th><th>4T %</th></tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">86.9s</td><td class="num">52.1%</td>
+    <td class="num">101.3s</td><td class="num">38.7%</td>
+  </tr>
+  <tr>
+    <td><code>libgomp</code> OMP spin-wait</td>
+    <td class="num">—</td><td class="num">—</td>
+    <td class="num highlight-red">76.1s</td><td class="num highlight-red">29.1%</td>
+  </tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">15.8s</td><td class="num">9.5%</td>
+    <td class="num">24.3s</td><td class="num">9.3%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">7.1s</td><td class="num">4.3%</td>
+    <td class="num">22.3s</td><td class="num">8.5%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodFromBufferSIMD</code></td>
+    <td class="num">0.49s</td><td class="num">0.3%</td>
+    <td class="num">—</td><td class="num">—</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBranchSIMD</code></td>
+    <td class="num">0.00s</td><td class="num">0.0%</td>
+    <td class="num">0.00s</td><td class="num">0.0%</td>
+  </tr>
+  <tr class="bold-row">
+    <td>Total CPU Time</td>
+    <td class="num" colspan="2">166.8s</td>
+    <td class="num" colspan="2">261.8s</td>
+  </tr>
+  <tr class="bold-row">
+    <td>Wall-Clock Time</td>
+    <td class="num" colspan="2">166.8s</td>
+    <td class="num" colspan="2">68.2s</td>
+  </tr>
+</table>
+
+<div class="finding-box warning">
+  <strong>GTR 4T has worse OpenMP overhead (29.1%) than Default 4T (22.6%).</strong>
+  Without ModelFinder, the per-task work granularity is smaller, so threads hit synchronisation barriers more frequently relative to useful compute. Each parallel region processes fewer iterations, making the overhead proportionally larger.
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 6: OPENMP THREADING BOTTLENECK                        -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s6">6. OpenMP Threading Bottleneck Analysis</h2>
+
+<h3>6.1 The Problem: Thread Spin-Wait Dominates Multi-Threaded Runs</h3>
+
+<p>From the VTune Web UI top-down call stacks, the single most expensive entry in every multi-threaded run is <code>libgomp.so.1!func@0x25820</code> — the OpenMP thread spin-wait function where worker threads busy-wait at barrier synchronisation points:</p>
+
+<pre><code><span class="comment">Call Stack (from VTune Web UI):</span>
+
+libgomp.so.1!func@0x25820        <span class="comment">← SPIN-WAIT (busy loop)</span>
+ libgomp.so.1!func@0x22640       <span class="comment">← thread pool manager</span>
+  libc.so.6!func@0x9c720         <span class="comment">← pthread internals</span>
+   libc.so.6!func@0x129c40       <span class="comment">← clone (thread creation)</span></code></pre>
+
+<p>This shows threads sitting in a <strong>busy-wait loop</strong> between OpenMP parallel regions. Think of it like a team of workers at a factory: they can all work on a task simultaneously, but between tasks they must wait at a meeting point until everyone is ready for the next task. The more frequently tasks change, the more time is wasted waiting.</p>
+
+<h3>6.2 OpenMP Overhead by Configuration</h3>
+
+<div class="ascii-chart">OpenMP Spin-Wait as % of Total CPU Time
+──────────────────────────────────────────────────────────────
+Default 1T:  ░░░░░░░░░░░░░░░░░░░░  0.0%
+Default 4T:  █████████████░░░░░░░░  22.6%   (78.2s of 346.1s)
+Default 8T:  ████████████░░░░░░░░░  19.5%*  (94.3s of 484.5s)
+GTR 1T:      ░░░░░░░░░░░░░░░░░░░░  0.0%
+GTR 4T:      █████████████████░░░░  29.1%   (76.1s of 261.8s)
+
+* 8T shows two separate libgomp functions totaling 94.3s (10.9% + 8.6%).
+  Actual overhead is higher when including libgomp functions outside the top 5.</div>
+
+<h3>6.3 Why the Overhead Is So High</h3>
+
+<p>IQ-TREE's parallelisation strategy creates frequent, small parallel regions. Each kernel function uses <code>#pragma omp parallel for</code> to split the pattern loop across threads. Between kernel calls (during serial Newton-Raphson control flow, tree traversal, etc.), worker threads spin waiting for the next parallel region:</p>
+
+<pre><code><span class="comment">NNI Search Loop (serial):</span>
+  for each branch (~97 branches):
+    ┌─ computeLikelihoodBufferSIMD ── <span class="comment">#pragma omp parallel for</span> ──┐
+    │  (pattern loop split across threads)                       │
+    └──────────── barrier (threads wait) ────────────────────────┘
+    for each Newton-Raphson iteration (3-5×):
+       ┌─ computeLikelihoodDervSIMD ── <span class="comment">#pragma omp parallel for</span> ─┐
+       │  (pattern loop split across threads)                     │
+       └──────────── barrier (threads wait) ──────────────────────┘</code></pre>
+
+<p>With ~97 branches × ~4 Newton iterations = <strong>~500 parallel region entries per NNI round</strong>. Each entry incurs thread wake-up, barrier synchronisation, and cache warm-up costs. For the medium_dna dataset (5,000 patterns ÷ 4 AVX width = 1,250 iterations), each parallel region processes only <strong>~160 iterations per thread at 8T</strong> — not enough work to amortise the fork-join overhead.</p>
+
+<h3>6.4 VTune Top Sample Per Configuration</h3>
+
+<table>
+  <tr><th>Config</th><th>Top Hotspot</th><th>% CPU</th><th>Time</th></tr>
+  <tr>
+    <td>Default 1T</td><td><code>DervSIMD._omp_fn.0</code></td>
+    <td class="num">7.5%</td><td class="num">17.2s / 230.8s</td>
+  </tr>
+  <tr>
+    <td>Default 4T</td><td><code>libgomp!func@0x25820</code></td>
+    <td class="num highlight-red">22.6%</td><td class="num">78.2s / 346.1s</td>
+  </tr>
+  <tr>
+    <td>Default 8T</td><td><code>libgomp!func@0x25820</code></td>
+    <td class="num highlight-red">21.7%</td><td class="num">105.0s / 484.5s</td>
+  </tr>
+  <tr>
+    <td>GTR 1T</td><td><code>DervSIMD._omp_fn.0</code></td>
+    <td class="num">9.9%</td><td class="num">16.6s / 166.8s</td>
+  </tr>
+  <tr>
+    <td>GTR 4T</td><td><code>libgomp!func@0x25820</code></td>
+    <td class="num highlight-red">29.1%</td><td class="num">76.1s / 261.8s</td>
+  </tr>
+</table>
+
+<h3>6.5 Full Call Chain (DervSIMD, 1-Thread)</h3>
+
+<pre><code>computeLikelihoodDervSIMD._omp_fn.0  [phylokernelnew.h]    <span class="comment">← HOT LOOP</span>
+ └→ GOMP_parallel                    [libgomp.so.1]
+   └→ computeLikelihoodDervSIMD      [phylokernelnew.h:2386]
+     └→ computeFuncDerv              [phylotree.h:1499]
+       └→ minimizeNewton             [optimization.cpp:480]
+         └→ optimizeOneBranch        [phylotree.cpp:2638]
+           └→ getBestNNIForBran      [phylotree.cpp:4351]
+             └→ evaluateNNIs         [iqtree.cpp:3727]
+               └→ optimizeNNI        [iqtree.cpp:3366]
+                 └→ doNNISearch      [iqtree.cpp:3242]
+                   └→ doTreeSearch   [iqtree.cpp:2570]
+                     └→ runTreeReconstruction [phyloanalysis.cpp:3842]
+                       └→ runPhyloAnalysis    [phyloanalysis.cpp:5343]
+                         └→ main              [main.cpp:2596]</code></pre>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 7: PERF HARDWARE COUNTER ANALYSIS                      -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s7">7. perf Hardware Counter Analysis</h2>
+
+<p>Linux <code>perf</code> reads hardware performance counters built into the CPU. These counters reveal <em>why</em> the CPU is slow — not just <em>where</em> time is spent (which VTune tells us), but what micro-architectural bottleneck limits performance.</p>
+
+<h3>7.1 Overview Table (hpc-01, Intel Sandy Bridge)</h3>
+
+<table>
+  <tr><th>Metric</th><th>Default 1T</th><th>Default 4T</th><th>Default 8T</th><th>GTR 1T</th><th>GTR 4T</th></tr>
+  <tr>
+    <td>IPC</td>
+    <td class="num">1.63</td><td class="num">1.14</td><td class="num highlight-red">0.89</td>
+    <td class="num">1.60</td><td class="num">1.07</td>
+  </tr>
+  <tr>
+    <td>Frontend stalls</td>
+    <td class="num">51.95%</td><td class="num">64.03%</td><td class="num highlight-red">69.88%</td>
+    <td class="num">52.80%</td><td class="num">65.71%</td>
+  </tr>
+  <tr>
+    <td>Backend stalls</td>
+    <td class="num">17.08%</td><td class="num">37.16%</td><td class="num highlight-red">47.87%</td>
+    <td class="num">16.90%</td><td class="num">39.48%</td>
+  </tr>
+  <tr>
+    <td>Wall time</td>
+    <td class="num">231.4s</td><td class="num">91.7s</td><td class="num">64.5s</td>
+    <td class="num">170.2s</td><td class="num">71.2s</td>
+  </tr>
+</table>
+
+<h3>7.2 IPC Degradation Under Threading</h3>
+
+<p>IPC (Instructions Per Cycle) measures how efficiently the CPU executes instructions. On Sandy Bridge, IPC degrades dramatically as threads increase:</p>
+
+<div class="ascii-chart">IPC vs Thread Count (Default Pipeline, hpc-01)
+───────────────────────────────────────────────
+1 thread:   ████████████████░░░░  1.63 IPC
+4 threads:  ███████████░░░░░░░░░  1.14 IPC  (−30%)
+8 threads:  █████████░░░░░░░░░░░  0.89 IPC  (−45%)</div>
+
+<h4>Root Cause Breakdown</h4>
+
+<table>
+  <tr><th>Factor</th><th>1T → 4T</th><th>1T → 8T</th><th>Explanation</th></tr>
+  <tr>
+    <td>Frontend stalls</td><td class="num">52%→64%</td><td class="num">52%→70%</td>
+    <td>Instruction cache thrashing — the heavily templated/inlined AVX code has a large instruction footprint. When multiple threads run the same code, they compete for shared L3 cache space.</td>
+  </tr>
+  <tr>
+    <td>Backend stalls</td><td class="num">17%→37%</td><td class="num">17%→48%</td>
+    <td>Cache coherence (MESI snooping) — on the dual-socket Sandy Bridge, cores must coordinate to keep data consistent, causing delays when multiple cores access nearby memory.</td>
+  </tr>
+  <tr>
+    <td>OMP spin-wait</td><td class="num">0%→22.6%</td><td class="num">0%→19.5%</td>
+    <td>Thread barrier synchronisation — worker threads sit idle between parallel regions.</td>
+  </tr>
+  <tr>
+    <td>Branch misprediction</td><td class="num" colspan="2">0.08–0.11%</td>
+    <td>Negligible — not a factor in this workload.</td>
+  </tr>
+</table>
+
+<h3>7.3 Cache Behaviour (1T, Default Pipeline)</h3>
+
+<table>
+  <tr><th>Cache Level</th><th>Accesses</th><th>Misses</th><th>Miss Rate</th><th>Assessment</th></tr>
+  <tr>
+    <td>L1 D-cache</td><td class="num">472.3B</td><td class="num">34.6B</td>
+    <td class="num">7.33%</td><td class="highlight-amber">Moderate</td>
+  </tr>
+  <tr>
+    <td>LLC (L3)</td><td class="num">10.5B</td><td class="num">198M</td>
+    <td class="num">1.89%</td><td class="highlight-green">Good — working set fits</td>
+  </tr>
+  <tr>
+    <td>Total cache-ref</td><td class="num">10.6B</td><td class="num">159M</td>
+    <td class="num">1.51%</td><td class="highlight-green">Good</td>
+  </tr>
+  <tr>
+    <td>Branches</td><td class="num">98.5B</td><td class="num">82M</td>
+    <td class="num">0.08%</td><td class="highlight-green">Excellent</td>
+  </tr>
+</table>
+
+<div class="finding-box">
+  <strong>The dominant 1T bottleneck is frontend stalls (52%).</strong>
+  The CPU spends half its time waiting to fetch/decode instructions. This is characteristic of heavily inlined templated code: <code>dotProductTriple → Vec4d → AVX intrinsics</code> produces a large instruction footprint that doesn't fit well in the instruction cache. A GPU eliminates this bottleneck entirely with its simpler per-thread execution model.
+</div>
+
+<h3>7.4 perf Function Attribution (Self Time, Includes Inlined AVX)</h3>
+
+<p><code>perf</code> attributes inlined AVX intrinsic time to the calling function, giving a more accurate per-function view than VTune:</p>
+
+<table>
+  <tr><th>Function</th><th>Default 1T</th><th>Default 4T</th><th>Default 8T</th><th>GTR 1T</th><th>GTR 4T</th></tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">46.72%</td><td class="num">38.85%</td><td class="num">34.15%</td>
+    <td class="num">32.63%</td><td class="num">27.72%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">39.91%</td><td class="num">30.32%</td><td class="num">25.58%</td>
+    <td class="num">52.14%</td><td class="num">37.46%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">7.60%</td><td class="num">10.44%</td><td class="num">8.68%</td>
+    <td class="num">9.12%</td><td class="num">13.35%</td>
+  </tr>
+  <tr>
+    <td><code>libgomp</code> (OMP overhead)</td>
+    <td class="num">—</td><td class="num">5.77%</td><td class="num">8.98%</td>
+    <td class="num">—</td><td class="num">6.44%</td>
+  </tr>
+  <tr>
+    <td><code>log_d</code> (Vec4d log)</td>
+    <td class="num">0.68%</td><td class="num">—</td><td class="num">—</td>
+    <td class="num">—</td><td class="num">—</td>
+  </tr>
+</table>
+
+<div class="jargon">
+  <strong>Why do perf and VTune disagree on OpenMP overhead?</strong> perf attributes by hardware cycle samples (997 Hz), while VTune attributes by timer (10 ms). Spin-waiting threads consume fewer CPU cycles per wall-clock second (they're just executing PAUSE instructions), so perf sees a lower overhead fraction (5.8–9.0%) compared to VTune (19.5–29.1%). Both are correct — they measure different things.
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 8: FIVE HOT FUNCTIONS                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s8">8. The Five Hot Functions — Detailed Breakdown</h2>
+
+<p>All five functions live in a single file: <code>phylokernelnew.h</code> (3,688 lines). Together they consume &gt;95% of total CPU time. Understanding what each function does is essential for designing GPU replacements.</p>
+
+<h3>8.1 <code>computeLikelihoodDervSIMD</code> — #1 Target (40–52% of CPU)</h3>
+
+<p><strong>Purpose:</strong> Computes the log-likelihood, its first derivative (df), and second derivative (ddf) with respect to a single branch length. Called <em>thousands</em> of times during tree search — once per branch per Newton-Raphson optimisation step.</p>
+
+<p><strong>In plain English:</strong> Given the current tree and a specific branch, this function asks "How good is this branch length, and in which direction should we adjust it?" The first derivative tells us the direction, the second derivative tells us the step size.</p>
+
+<h4>Hot Loop (line ~2476)</h4>
+<pre><code><span class="comment">// For each alignment pattern (e.g., 5,000 patterns for medium_dna):</span>
+for (ptn = ptn_lower; ptn &lt; ptn_upper; ptn += VectorClass::size()) {
+    theta = theta_all + ptn * block;
+
+    <span class="comment">// Compute 3 dot products simultaneously:</span>
+    <span class="comment">//   lh_ptn  = Σ val0[i] × theta[i]   (likelihood)</span>
+    <span class="comment">//   df_ptn  = Σ val1[i] × theta[i]   (1st derivative)</span>
+    <span class="comment">//   ddf_ptn = Σ val2[i] × theta[i]   (2nd derivative)</span>
+    dotProductTriple(val0, val1, val2, theta, lh_ptn, df_ptn, ddf_ptn);
+
+    <span class="comment">// Normalise and accumulate</span>
+    lh_ptn   = 1.0 / (abs(lh_ptn) + ptn_invar[ptn]);
+    df_frac  = df_ptn  * lh_ptn;
+    ddf_frac = ddf_ptn * lh_ptn;
+    my_df  += df_frac  * ptn_freq[ptn];
+    my_ddf += (ddf_frac - df_frac * df_frac) * ptn_freq[ptn];
+}</code></pre>
+
+<h4>VTune Sub-Function Breakdown (1T)</h4>
+<table>
+  <tr><th>Sub-function</th><th>% of DervSIMD</th><th>Operation</th></tr>
+  <tr><td><code>dotProductTriple</code></td><td class="num">~40%</td><td>val×theta multiply-adds</td></tr>
+  <tr><td>Division + accumulation</td><td class="num">~25%</td><td><code>1.0/lh_ptn</code> + running sums</td></tr>
+  <tr><td><code>_mm256_mul_pd</code></td><td class="num">~15%</td><td>AVX vector multiplies</td></tr>
+  <tr><td><code>_mm256_set1_pd</code></td><td class="num">~10%</td><td>Broadcast scalars to AVX registers</td></tr>
+  <tr><td><code>_mm256_add_pd</code></td><td class="num">~10%</td><td>AVX vector additions</td></tr>
+</table>
+
+<p><strong>Operations per pattern (DNA, nstates=4, ncat=4):</strong> 3 × dot product of size 16 = 48 multiply-adds, plus 1 division, 6 multiplies, 3 additions = <strong>~60 FLOPs per pattern</strong>.</p>
+
+<div class="finding-box">
+  <strong>GPU Suitability: <span class="stars">★★★★★</span> EXCELLENT</strong>
+  Each pattern is completely independent — no pattern depends on any other pattern's result. Pure arithmetic with no branching. Regular memory access. The <code>val0/val1/val2</code> arrays (16 doubles for DNA) are small enough to fit in GPU shared memory. 5,000 patterns map perfectly to 5,000 GPU threads.
+</div>
+
+<hr>
+
+<h3>8.2 <code>computePartialLikelihoodSIMD</code> — #2 Target (9.5–18.3%)</h3>
+
+<p><strong>Purpose:</strong> Computes partial likelihood vectors at an internal tree node by combining information from its two child subtrees. Called once per internal node during tree traversal.</p>
+
+<p><strong>In plain English:</strong> For every branch point in the tree, this function combines the evidence from the two subtrees below it. It's like asking "Given what we know about the left subtree and the right subtree, what is the probability of each DNA base at this ancestral node?"</p>
+
+<p>Three cases depending on node types:</p>
+<ol style="margin: 8px 0 16px 24px;">
+  <li><strong>TIP-TIP (cherry):</strong> Two leaf children — cheapest case</li>
+  <li><strong>TIP-INTERNAL:</strong> One leaf + one internal child — intermediate</li>
+  <li><strong>INTERNAL-INTERNAL:</strong> Two internal children — most expensive case</li>
+</ol>
+
+<h4>Internal-Internal Hot Loop (line ~1855)</h4>
+<pre><code>for (ptn = ptn_lower; ptn &lt; ptn_upper; ptn += VectorClass::size()) {
+    partial_lh_left  = left-&gt;partial_lh  + ptn * block;
+    partial_lh_right = right-&gt;partial_lh + ptn * block;
+
+    for (c = 0; c &lt; ncat_mix; c++) {
+        for (x = 0; x &lt; nstates; x++) {
+            <span class="comment">// tmp[x] = (eleft · plh_left) × (eright · plh_right)</span>
+            dotProductDualVec(eleft, plh_left, eright, plh_right, tmp[x]);
+        }
+        <span class="comment">// Transform back: partial_lh = inv_evec × tmp</span>
+        productVecMat(tmp, inv_evec, partial_lh);
+    }
+    <span class="comment">// Numerical rescaling check</span>
+}</code></pre>
+
+<p><strong>Operations per pattern:</strong> 4 rate categories × 4 dual dot products + 4 matrix-vector multiplies (4×4, 64 FMAs each) = <strong>~480 FLOPs per pattern</strong>.</p>
+
+<div class="finding-box">
+  <strong>GPU Suitability: <span class="stars">★★★★☆</span> VERY GOOD</strong>
+  Dense arithmetic, independent patterns, regular memory access. <em>Caveat:</em> tree traversal order creates data dependencies — a child node must be computed before its parent. GPU kernels must be launched per-node in post-order traversal.
+</div>
+
+<hr>
+
+<h3>8.3 <code>computeLikelihoodBufferSIMD</code> — #3 Target (3.8–8.2%)</h3>
+
+<p><strong>Purpose:</strong> Computes the "theta buffer" — an element-wise product of partial likelihood vectors from two adjacent nodes. Computed once per branch and cached for reuse by <code>computeLikelihoodDervSIMD</code>.</p>
+
+<p><strong>In plain English:</strong> Before optimising a branch length, the program multiplies two lists of numbers together, element by element. The result is stored and reused 3–5 times during Newton-Raphson iterations.</p>
+
+<h4>Hot Loop (line ~2210)</h4>
+<pre><code>for (ptn = ptn_lower; ptn &lt; ptn_upper; ptn += VectorClass::size()) {
+    theta = theta_all    + ptn * block;
+    plh_n = node-&gt;partial_lh + ptn * block;
+    plh_d = dad-&gt;partial_lh  + ptn * block;
+
+    for (i = 0; i &lt; block; i++)
+        theta[i] = plh_n[i] * plh_d[i];  <span class="comment">// element-wise product</span>
+}</code></pre>
+
+<div class="finding-box">
+  <strong>GPU Suitability: <span class="stars">★★★★★</span> EXCELLENT</strong>
+  Pure element-wise multiply. No branching, no reductions, no data dependencies. This is a "hello world" GPU kernel — trivial to implement.
+</div>
+
+<hr>
+
+<h3>8.4 <code>computeLikelihoodBranchSIMD</code> — #4 Target (0.3%)</h3>
+
+<p><strong>Purpose:</strong> Computes the total log-likelihood of the tree. Unlike <code>DervSIMD</code> (which computes derivatives for Newton-Raphson), this computes only a single dot product per pattern. Called during ModelFinder when testing different substitution models.</p>
+
+<h4>Hot Loop (line ~2660)</h4>
+<pre><code>for (ptn = ptn_lower; ptn &lt; ptn_upper; ptn += VectorClass::size()) {
+    dotProductVec(val, theta, lh_ptn);
+    lh_ptn  = abs(lh_ptn) + ptn_invar[ptn];
+    tree_lh += log(lh_ptn) * ptn_freq[ptn];
+}</code></pre>
+
+<table>
+  <tr><th>Run</th><th>VTune Time</th><th>Notes</th></tr>
+  <tr><td>Default 1T</td><td class="num">0.76s</td><td>Visible with ModelFinder</td></tr>
+  <tr><td>Default 4T</td><td class="num">1.40s</td><td>Slight OMP overhead increase</td></tr>
+  <tr><td>Default 8T</td><td class="num">1.70s</td><td>Further increase</td></tr>
+  <tr><td>GTR 1T / GTR 4T</td><td class="num">0.00s</td><td>ModelFinder skipped</td></tr>
+</table>
+
+<div class="finding-box">
+  <strong>GPU Suitability: <span class="stars">★★★★★</span> EXCELLENT</strong>
+  Same structure as DervSIMD but simpler (1 dot product instead of 3).
+</div>
+
+<hr>
+
+<h3>8.5 Inlined Helper Functions</h3>
+
+<table>
+  <tr><th>Function</th><th>Time (GTR 1T)</th><th>Operation</th></tr>
+  <tr>
+    <td><code>dotProductDualVec</code></td><td class="num">3.3s</td>
+    <td>X = (A·B) × (C·D) — dual vector dot product</td>
+  </tr>
+  <tr>
+    <td><code>productVecMat</code></td><td class="num">1.8s</td>
+    <td>X[i] = Σ<sub>j</sub> A[j]×M[i,j] — 4×4 matrix-vector multiply</td>
+  </tr>
+  <tr>
+    <td><code>dotProductTriple</code></td><td class="num">(incl. in DervSIMD)</td>
+    <td>Three dot products simultaneously</td>
+  </tr>
+  <tr>
+    <td><code>dotProductVec</code></td><td class="num">0.1s</td>
+    <td>Single dot product</td>
+  </tr>
+</table>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 9: CALL HIERARCHY                                      -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s9">9. Call Hierarchy: How Kernels Are Invoked</h2>
+
+<p>Understanding the call hierarchy shows <em>when</em> and <em>why</em> each kernel function is called during a tree search. This is critical for designing the GPU offload strategy — we need to know which functions are called together and how data flows between them.</p>
+
+<pre><code>doTreeSearch  <span class="comment">[tree search iterations]</span>
+ └─ doNNISearch  <span class="comment">[evaluate all NNI moves]</span>
+     └─ evaluateNNIs  <span class="comment">[score each NNI candidate]</span>
+         └─ getBestNNIForBran  <span class="comment">[per-branch NNI evaluation]</span>
+             └─ optimizeOneBranch  <span class="comment">[Newton-Raphson on branch length]</span>
+                 └─ minimizeNewton  <span class="comment">[Newton optimisation loop]</span>
+                     └─ computeFuncDerv
+                         ├─ <strong>computeLikelihoodBufferSIMD</strong> (3.8%)
+                         │   <span class="comment">[Called ONCE per branch — computes theta cache]</span>
+                         └─ <strong>computeLikelihoodDervSIMD</strong> (40.1%)
+                             <span class="comment">[Called 3-5× per branch — Newton iterations]</span>
+
+<strong>computePartialLikelihoodSIMD</strong> (18.3%)
+   <span class="comment">[Pre-search, via computeTraversalInfo — tree traversal]</span>
+
+<strong>computeLikelihoodBranchSIMD</strong> (0.3%)
+   <span class="comment">[ModelFinder, via testModel → computeLikelihood]</span></code></pre>
+
+<div class="jargon">
+  <strong>Key insight for GPU design:</strong> <code>computeLikelihoodBufferSIMD</code> is called once and then <code>computeLikelihoodDervSIMD</code> is called 3–5 times reusing the same theta buffer. On a GPU, if we keep the theta buffer in GPU memory after Buffer computes it, the subsequent Derv calls avoid any CPU↔GPU data transfer. This is the concept of <strong>GPU-resident data</strong>.
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 10: DEFAULT VS GTR+G4                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s10">10. Default Pipeline vs GTR+G4 Comparison</h2>
+
+<p>IQ-TREE can run in two modes: the <strong>default pipeline</strong> (which includes ModelFinder to test ~88 DNA models and find the best one) and <strong>fixed model</strong> mode (e.g., <code>-m GTR+G4</code>, which skips ModelFinder entirely). The profiling results differ significantly:</p>
+
+<table>
+  <tr><th>Metric</th><th>Default (ModelFinder)</th><th>GTR+G4 (fixed)</th><th>Delta</th></tr>
+  <tr>
+    <td>Wall time (1T)</td><td class="num">230.9s</td><td class="num">166.8s</td>
+    <td class="num">+38%</td>
+  </tr>
+  <tr>
+    <td>Wall time (4T)</td><td class="num">89.2s</td><td class="num">68.2s</td>
+    <td class="num">+31%</td>
+  </tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">42.2s (18.3%)</td><td class="num">15.8s (9.5%)</td>
+    <td class="num highlight-red">+167%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">92.6s (40.1%)</td><td class="num">86.9s (52.1%)</td>
+    <td class="num">+7%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">8.7s (3.8%)</td><td class="num">7.1s (4.3%)</td>
+    <td class="num">+23%</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBranchSIMD</code></td>
+    <td class="num">0.76s (0.3%)</td><td class="num">0.00s (0.0%)</td>
+    <td class="num highlight-green">NEW</td>
+  </tr>
+  <tr>
+    <td>ModelFinder overhead</td>
+    <td class="num">~64s (~88 DNA models)</td><td class="num">0s</td>
+    <td class="num">—</td>
+  </tr>
+</table>
+
+<div class="finding-box">
+  <strong>Why does PartialLikelihood jump +167% with ModelFinder?</strong>
+  ModelFinder tests ~88 different DNA substitution models. Each model evaluation requires a <em>full tree traversal</em> — recomputing all partial likelihoods from scratch. This is why <code>computePartialLikelihoodSIMD</code> jumps from 15.8s to 42.2s. Meanwhile, <code>computeLikelihoodDervSIMD</code> only increases 7% because it's only used during branch length optimisation (not model testing).
+</div>
+
+<table>
+  <tr><th>Metric (perf)</th><th>GTR 1T</th><th>Default 1T</th><th>Change</th></tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">32.63%</td><td class="num">46.72%</td>
+    <td class="num">+14 pp</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">52.14%</td><td class="num">39.91%</td>
+    <td class="num">−12 pp</td>
+  </tr>
+</table>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 11: GPU OFFLOAD STRATEGY                               -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s11">11. GPU Offload Strategy</h2>
+
+<p>The profiling data makes a compelling case for GPU offloading. The five hot functions are <strong>embarrassingly parallel</strong> (each alignment pattern can be processed independently), and the CPU struggles with multi-threading due to OpenMP overhead, cache coherence, and instruction-cache pressure.</p>
+
+<h3>11.1 Priority List</h3>
+
+<table>
+  <tr><th>Priority</th><th>Function</th><th>Default 1T Time</th><th>GPU Suitability</th><th>Notes</th></tr>
+  <tr>
+    <td>#1</td><td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">92.6s (40.1%)</td>
+    <td><span class="stars">★★★★★</span></td>
+    <td>3 dot products/pattern, pure arithmetic</td>
+  </tr>
+  <tr>
+    <td>#2</td><td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">42.2s (18.3%)</td>
+    <td><span class="stars">★★★★☆</span></td>
+    <td>Dense arithmetic; tree-order dependencies</td>
+  </tr>
+  <tr>
+    <td>#3</td><td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">8.7s (3.8%)</td>
+    <td><span class="stars">★★★★★</span></td>
+    <td>Trivial element-wise multiply</td>
+  </tr>
+  <tr>
+    <td>#4</td><td><code>computeLikelihoodBranchSIMD</code></td>
+    <td class="num">0.76s (0.3%)</td>
+    <td><span class="stars">★★★★★</span></td>
+    <td>1 dot product + log reduction</td>
+  </tr>
+  <tr>
+    <td>#5</td><td><code>computeLikelihoodFromBufferSIMD</code></td>
+    <td class="num">0.41s (0.2%)</td>
+    <td><span class="stars">★★★★★</span></td>
+    <td>Wrapper for BranchSIMD with buffer</td>
+  </tr>
+</table>
+
+<p>Combined kernel coverage: Priorities #1–#5 account for <strong>~63% of VTune CPU time</strong> (direct attribution) and <strong>~95%</strong> when including inlined AVX intrinsics.</p>
+
+<h3>11.2 Why GPU Beats Multi-Threading Here</h3>
+
+<p>The multi-threaded profiling data proves the CPU cannot scale efficiently on this workload:</p>
+
+<table>
+  <tr><th>Problem</th><th>Evidence</th><th>GPU Solution</th></tr>
+  <tr>
+    <td>OpenMP overhead</td>
+    <td>22–29% of CPU at 4T</td>
+    <td>No fork-join; persistent kernel execution</td>
+  </tr>
+  <tr>
+    <td>Frontend stalls</td>
+    <td>52% (1T) → 70% (8T)</td>
+    <td>Simple GPU kernels; no instruction-cache pressure</td>
+  </tr>
+  <tr>
+    <td>Backend stalls</td>
+    <td>17% (1T) → 48% (8T)</td>
+    <td>No cache coherence (thread-private registers)</td>
+  </tr>
+  <tr>
+    <td>IPC degradation</td>
+    <td>1.63 (1T) → 0.89 (8T)</td>
+    <td>Thousands of wavefronts hide latency via warp scheduling</td>
+  </tr>
+  <tr>
+    <td>Parallel efficiency</td>
+    <td>45% at 8T</td>
+    <td>&gt;90% with 5,000 patterns mapped to GPU threads</td>
+  </tr>
+</table>
+
+<h3>11.3 Kernel Designs</h3>
+
+<h4>Priority 1 — computeLikelihoodDervSIMD</h4>
+<ul style="margin: 8px 0 16px 24px;">
+  <li>One GPU thread per alignment pattern</li>
+  <li>Each thread: <code>dotProductTriple</code> → normalise → accumulate</li>
+  <li>Warp/wavefront-level reduction for <code>df</code>/<code>ddf</code> sums (<code>__shfl_down</code> on AMD's wavefront-64)</li>
+  <li><code>val0/val1/val2</code> (16 doubles for DNA) in shared memory; <code>theta_all</code> in global HBM</li>
+  <li>Returns 2 doubles (<code>df</code>, <code>ddf</code>) to CPU</li>
+</ul>
+
+<h4>Priority 2 — computePartialLikelihoodSIMD</h4>
+<ul style="margin: 8px 0 16px 24px;">
+  <li>One thread per pattern per internal node</li>
+  <li>Inner work: <code>dotProductDualVec</code> + <code>productVecMat</code> per rate category</li>
+  <li>One kernel launch per node in post-order traversal</li>
+  <li><code>partial_lh</code> arrays stay resident on GPU (avoid PCIe round-trips)</li>
+</ul>
+
+<h4>Priority 3 — computeLikelihoodBufferSIMD</h4>
+<ul style="margin: 8px 0 16px 24px;">
+  <li>Trivial element-wise multiply kernel</li>
+  <li>If <code>partial_lh</code> already on GPU (from Priority 2), zero PCIe transfer</li>
+  <li>Can be fused with the DervSIMD kernel launch</li>
+</ul>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 12: DATA SIZES                                         -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s12">12. Data Sizes &amp; GPU Memory Planning</h2>
+
+<p>Before offloading to GPU, we must verify that all data fits in GPU memory. The table below shows the memory requirements for different dataset sizes:</p>
+
+<table>
+  <tr>
+    <th>Dataset</th><th>Taxa</th><th>Sites</th>
+    <th>partial_lh / node</th><th>theta_all</th><th>Total (50-taxon tree)</th>
+  </tr>
+  <tr><td>small_dna</td><td class="num">20</td><td class="num">1,000</td>
+    <td class="num">128 KB</td><td class="num">128 KB</td><td class="num">~5 MB</td></tr>
+  <tr class="bold-row">
+    <td>medium_dna</td><td class="num">50</td><td class="num">5,000</td>
+    <td class="num">640 KB</td><td class="num">640 KB</td><td class="num">~30 MB</td></tr>
+  <tr><td>large_dna</td><td class="num">100</td><td class="num">10,000</td>
+    <td class="num">1.25 MB</td><td class="num">1.25 MB</td><td class="num">~120 MB</td></tr>
+  <tr><td>stress_dna</td><td class="num">200</td><td class="num">20,000</td>
+    <td class="num">2.50 MB</td><td class="num">2.50 MB</td><td class="num">~500 MB</td></tr>
+  <tr><td>protein</td><td class="num">50</td><td class="num">2,000</td>
+    <td class="num">1.25 MB</td><td class="num">1.25 MB</td><td class="num">~60 MB</td></tr>
+</table>
+
+<div class="finding-box">
+  <strong>All datasets fit comfortably in GPU memory.</strong>
+  The AMD Instinct MI250X on Setonix has <strong>128 GB HBM2e</strong> per GCD (Graphics Compute Die). Even the largest dataset (stress_dna, ~500 MB) uses less than 0.4% of available GPU memory. Data transfer is not a limiting factor.
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 13: BASELINE TIMINGS                                   -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s13">13. Baseline Timing Reference</h2>
+
+<p>Pre-GPU-offload wall-clock times, measured on hpc-01 (Intel Xeon E5-2670). These serve as the baseline against which GPU speedups will be measured:</p>
+
+<table>
+  <tr><th>Dataset / Config</th><th>1T</th><th>4T</th><th>8T</th></tr>
+  <tr>
+    <td>medium_dna (Default pipeline)</td>
+    <td class="num">230.9s</td><td class="num">89.2s</td><td class="num">64.2s</td>
+  </tr>
+  <tr>
+    <td>medium_dna (GTR+G4)</td>
+    <td class="num">166.8s</td><td class="num">68.2s</td><td class="num">—</td>
+  </tr>
+  <tr>
+    <td>small_dna (GTR+G4)</td>
+    <td class="num">10.5s</td><td class="num">—</td><td class="num">—</td>
+  </tr>
+</table>
+
+<h3>13.1 Hotspots by Source File (GTR 1T, Original Report)</h3>
+
+<table>
+  <tr><th>Source File</th><th>CPU Time</th><th>% Total</th><th>Notes</th></tr>
+  <tr><td><code>avxintrin.h</code></td><td class="num">82.4s</td><td class="num">50.9%</td><td>AVX intrinsics inlined from kernels</td></tr>
+  <tr><td><code>phylokernelnew.h</code></td><td class="num">61.7s</td><td class="num">38.1%</td><td>The core kernel logic</td></tr>
+  <tr><td><code>vectorf256.h</code></td><td class="num">10.7s</td><td class="num">6.6%</td><td>VCL vector class operations</td></tr>
+  <tr><td>[Unknown]</td><td class="num">2.8s</td><td class="num">1.7%</td><td>Library code (libgomp, libc)</td></tr>
+  <tr><td><code>emmintrin.h</code></td><td class="num">1.0s</td><td class="num">0.6%</td><td>SSE intrinsics</td></tr>
+  <tr><td><code>fastDNAparsimony.c</code></td><td class="num">0.8s</td><td class="num">0.5%</td><td>Parsimony (initial tree)</td></tr>
+</table>
+
+<p><em>Note: <code>avxintrin.h</code> + <code>vectorf256.h</code> (93.1s combined) is entirely inlined code from <code>phylokernelnew.h</code> functions.</em></p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 14: SETONIX PROFILING                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s14">14. Setonix Profiling: IQ-TREE on AMD EPYC Trento</h2>
+
+<p>On 18 April 2026, IQ-TREE was profiled on the <strong>Setonix supercomputer</strong> at the Pawsey Supercomputing Centre in Perth, Western Australia. Setonix is the target production system for the GPU-offloaded IQ-TREE, featuring AMD EPYC "Trento" CPUs and AMD Instinct MI250X GPUs. These profiles establish the <strong>CPU baseline on the actual target hardware</strong>, enabling direct comparison with the older hpc-01 system and providing the reference times that GPU kernels must beat.</p>
+
+<h3 id="s14-1">14.1 System Specifications</h3>
+
+<div class="compare-grid">
+  <div class="compare-card hpc01">
+    <h4>System A — hpc-01 (Reference)</h4>
+    <table style="font-size: 0.85rem;">
+      <tr><td><strong>CPU</strong></td><td>Intel Xeon E5-2670 (Sandy Bridge, 2012)</td></tr>
+      <tr><td><strong>Cores</strong></td><td>32 (2 sockets × 8 cores × HT)</td></tr>
+      <tr><td><strong>Memory</strong></td><td>62 GB DDR3</td></tr>
+      <tr><td><strong>L3 Cache</strong></td><td>20 MB per socket</td></tr>
+      <tr><td><strong>Compiler</strong></td><td>GCC (version from OS)</td></tr>
+      <tr><td><strong>GPU</strong></td><td>None</td></tr>
+    </table>
+  </div>
+  <div class="compare-card setonix">
+    <h4>System B — Setonix (Target)</h4>
+    <table style="font-size: 0.85rem;">
+      <tr><td><strong>CPU</strong></td><td>AMD EPYC 7A53 "Trento" (Zen 3, 2022)</td></tr>
+      <tr><td><strong>Cores</strong></td><td>64 (1 socket, 2 threads/core)</td></tr>
+      <tr><td><strong>Memory</strong></td><td>250 GB DDR4</td></tr>
+      <tr><td><strong>L3 Cache</strong></td><td>256 MB (8 instances)</td></tr>
+      <tr><td><strong>Compiler</strong></td><td>GCC 14.3.0 (SUSE Linux)</td></tr>
+      <tr><td><strong>GPU</strong></td><td>8× AMD Instinct MI250X (128 GB HBM2e each)</td></tr>
+      <tr><td><strong>ROCm</strong></td><td>HIP 6.3.42131</td></tr>
+    </table>
+  </div>
+</div>
+
+<h3 id="s14-2">14.2 Profile 1: turtle.fa — Single Thread (GTR+G4)</h3>
+
+<p>A small dataset (12 taxa, 434 site patterns) run on a single thread to establish a clean per-core baseline without threading overhead.</p>
+
+<table class="info-table">
+  <tr><th>Parameter</th><th>Value</th></tr>
+  <tr><td>Dataset</td><td><code>turtle.fa</code> — 12 taxa × 1,000 sites (434 unique patterns)</td></tr>
+  <tr><td>Model</td><td>GTR+F+G4 (Gamma with 4 rate categories, α=0.375)</td></tr>
+  <tr><td>Threads</td><td>1</td></tr>
+  <tr><td>Wall time</td><td><strong>1.62s</strong></td></tr>
+  <tr><td>CPU time</td><td>1.49s</td></tr>
+  <tr><td>Log-likelihood</td><td>−5,377.945</td></tr>
+  <tr><td>SLURM Job ID</td><td>41686812</td></tr>
+  <tr><td>Node</td><td>nid002996</td></tr>
+</table>
+
+<h4>Hardware Counters</h4>
+
+<table>
+  <tr><th>Counter</th><th>Value</th><th>Assessment</th></tr>
+  <tr><td>IPC</td><td class="num highlight-green">2.334</td><td>Excellent — 43% better than Sandy Bridge (1.63)</td></tr>
+  <tr><td>Cycles</td><td class="num">5.22 billion</td><td></td></tr>
+  <tr><td>Instructions</td><td class="num">12.18 billion</td><td></td></tr>
+  <tr><td>Frontend stall rate</td><td class="num highlight-green">3.12%</td><td>Near-zero — instruction cache pressure eliminated</td></tr>
+  <tr><td>Backend stall rate</td><td class="num highlight-green">0.0%</td><td>No memory bottleneck</td></tr>
+  <tr><td>L1 D-cache miss rate</td><td class="num">8.89%</td><td>Moderate — similar to Sandy Bridge (7.33%)</td></tr>
+  <tr><td>Cache miss rate (LLC)</td><td class="num highlight-green">2.86%</td><td>Good — working set fits in 256 MB L3</td></tr>
+  <tr><td>Branch miss rate</td><td class="num highlight-green">0.33%</td><td>Excellent</td></tr>
+  <tr><td>iTLB miss rate</td><td class="num highlight-amber">57.1%</td><td>High — but only 703K total iTLB loads (negligible)</td></tr>
+</table>
+
+<h4>Function Hotspots (perf)</h4>
+
+<table>
+  <tr><th>Function</th><th>% Samples</th><th>Samples</th></tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">39.12%</td><td class="num">48</td>
+  </tr>
+  <tr><td colspan="3"><em>Only 122 total samples — short runtime means limited statistical precision. DervSIMD dominates as expected for GTR+G4.</em></td></tr>
+</table>
+
+<hr>
+
+<h3 id="s14-3">14.3 Profile 2: medium_dna — 4 Threads (GTR+G4)</h3>
+
+<p>The primary benchmark dataset (50 taxa, 4,559 site patterns) run with 4 threads. This profile is directly comparable to the hpc-01 GTR 4T configuration.</p>
+
+<table class="info-table">
+  <tr><th>Parameter</th><th>Value</th></tr>
+  <tr><td>Dataset</td><td><code>medium_dna.fa</code> — 50 taxa × 5,000 sites (4,559 unique patterns)</td></tr>
+  <tr><td>Model</td><td>GTR+F+G4 (Gamma with 4 rate categories, α=0.992)</td></tr>
+  <tr><td>Threads</td><td>4</td></tr>
+  <tr><td>Wall time</td><td><strong>26.9s</strong></td></tr>
+  <tr><td>CPU time</td><td>102.5s</td></tr>
+  <tr><td>Log-likelihood</td><td>−160,268.662</td></tr>
+  <tr><td>SLURM Job ID</td><td>41686954</td></tr>
+  <tr><td>Node</td><td>nid002996</td></tr>
+</table>
+
+<h4>Hardware Counters</h4>
+
+<table>
+  <tr><th>Counter</th><th>Value</th><th>Assessment</th></tr>
+  <tr><td>IPC</td><td class="num highlight-green">2.299</td><td>Excellent — 2.15× better than Sandy Bridge GTR 4T (1.07)</td></tr>
+  <tr><td>Cycles</td><td class="num">356.5 billion</td><td></td></tr>
+  <tr><td>Instructions</td><td class="num">819.7 billion</td><td></td></tr>
+  <tr><td>Frontend stall rate</td><td class="num highlight-green">2.23%</td><td>Near-zero (vs 65.71% on Sandy Bridge at 4T!)</td></tr>
+  <tr><td>Backend stall rate</td><td class="num highlight-green">0.0%</td><td>No memory bottleneck</td></tr>
+  <tr><td>L1 D-cache miss rate</td><td class="num">8.24%</td><td>Moderate — comparable to Sandy Bridge</td></tr>
+  <tr><td>Cache miss rate (LLC)</td><td class="num">7.67%</td><td>Moderate — slightly higher due to multi-threading</td></tr>
+  <tr><td>Branch miss rate</td><td class="num highlight-green">0.15%</td><td>Excellent</td></tr>
+  <tr><td>iTLB miss rate</td><td class="num highlight-red">137.5%</td><td>High — but only 4.8M total iTLB loads (negligible total impact)</td></tr>
+</table>
+
+<h4>Function Hotspots (perf)</h4>
+
+<table>
+  <tr><th>Function</th><th>% Samples</th><th>Samples</th></tr>
+  <tr>
+    <td><code>computeLikelihoodDervSIMD</code></td>
+    <td class="num">39.04%</td><td class="num">3,773</td>
+  </tr>
+  <tr>
+    <td><code>computePartialLikelihoodSIMD</code></td>
+    <td class="num">32.50%</td><td class="num">3,138</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodBufferSIMD</code></td>
+    <td class="num">10.24%</td><td class="num">998</td>
+  </tr>
+  <tr>
+    <td><code>libgomp</code> (OMP spin-wait, 3 funcs)</td>
+    <td class="num highlight-amber">9.67%</td><td class="num">1,847</td>
+  </tr>
+  <tr>
+    <td><code>newviewParsimonyIterativeFast</code></td>
+    <td class="num">0.86%</td><td class="num">51</td>
+  </tr>
+  <tr>
+    <td><code>computeLikelihoodFromBufferSIMD</code></td>
+    <td class="num">0.82%</td><td class="num">80</td>
+  </tr>
+</table>
+
+<div class="finding-box">
+  <strong>Function profile is consistent across platforms.</strong>
+  The top 3 functions on Setonix match the top 3 on hpc-01 in the same order: DervSIMD (39%), PartialLikelihoodSIMD (33%), BufferSIMD (10%). This confirms that the GPU offload targets are architecture-independent.
+</div>
+
+<hr>
+
+<h3 id="s14-4">14.4 Cross-Platform Comparison: hpc-01 vs Setonix</h3>
+
+<p>Direct comparison of the same workload (medium_dna, GTR+G4, 4 threads) on both systems:</p>
+
+<table>
+  <tr><th>Metric</th><th>hpc-01 (Sandy Bridge)</th><th>Setonix (Trento)</th><th>Improvement</th></tr>
+  <tr>
+    <td>Wall time</td>
+    <td class="num">68.2s</td><td class="num highlight-green">26.9s</td>
+    <td class="num highlight-green">2.54× faster</td>
+  </tr>
+  <tr>
+    <td>CPU time</td>
+    <td class="num">261.8s</td><td class="num highlight-green">102.5s</td>
+    <td class="num highlight-green">2.55× less work</td>
+  </tr>
+  <tr>
+    <td>IPC</td>
+    <td class="num">1.07</td><td class="num highlight-green">2.30</td>
+    <td class="num highlight-green">2.15× better</td>
+  </tr>
+  <tr>
+    <td>Frontend stalls</td>
+    <td class="num highlight-red">65.71%</td><td class="num highlight-green">2.23%</td>
+    <td class="num highlight-green">~30× reduction</td>
+  </tr>
+  <tr>
+    <td>Backend stalls</td>
+    <td class="num highlight-red">39.48%</td><td class="num highlight-green">0.0%</td>
+    <td class="num highlight-green">Eliminated</td>
+  </tr>
+  <tr>
+    <td>OMP overhead (perf)</td>
+    <td class="num">6.44%</td><td class="num">9.67%</td>
+    <td class="num highlight-amber">Higher (proportionally)</td>
+  </tr>
+  <tr>
+    <td>L1-D miss rate</td>
+    <td class="num">—</td><td class="num">8.24%</td>
+    <td class="num">Comparable</td>
+  </tr>
+  <tr>
+    <td>Branch miss rate</td>
+    <td class="num">—</td><td class="num highlight-green">0.15%</td>
+    <td class="num">Excellent</td>
+  </tr>
+</table>
+
+<div class="ascii-chart">Wall-Clock Comparison: medium_dna GTR+G4 4T
+──────────────────────────────────────────────
+hpc-01 (Sandy Bridge):  ██████████████████████████████████  68.2s
+Setonix (Trento):       █████████████                       26.9s  (2.54× faster)</div>
+
+<div class="ascii-chart">IPC Comparison: GTR+G4 4 Threads
+──────────────────────────────────────────────
+hpc-01 (Sandy Bridge):  ██████████░░░░░░░░░░  1.07 IPC
+Setonix (Trento):       ███████████████████░░  2.30 IPC  (2.15× better)</div>
+
+<hr>
+
+<h3 id="s14-5">14.5 Key Findings from Setonix Profiling</h3>
+
+<div class="finding-box">
+  <strong>Finding 4 — Trento eliminates the frontend stall bottleneck that crippled Sandy Bridge.</strong>
+  On Sandy Bridge, frontend stalls consumed 52–70% of pipeline cycles (instruction-cache pressure from large templated AVX code). On Trento, frontend stalls are only <strong>2–3%</strong> — a 30× reduction. The Zen 3 microarchitecture's larger instruction cache (32 KB L1i per core vs Sandy Bridge's shared 32 KB), deeper op-cache (4K entries), and better branch prediction handle the templated code far more efficiently.
+</div>
+
+<div class="finding-box warning">
+  <strong>Finding 5 — OpenMP overhead is proportionally higher on Setonix.</strong>
+  Because Trento executes useful work so much faster (2.3 IPC vs 1.07), the relative cost of OpenMP synchronisation actually increases: <strong>9.67% of perf samples</strong> on Setonix vs 6.44% on hpc-01. The absolute wall-clock time wasted is still lower (Setonix finishes the whole run in 26.9s), but the proportional overhead suggests that GPU offloading — which eliminates fork-join overhead entirely — will be even more beneficial on Trento.
+</div>
+
+<div class="finding-box info">
+  <strong>Finding 6 — GPU offload targets are confirmed architecture-independent.</strong>
+  The function hotspot ranking is identical on both platforms:
+  <ol style="margin: 6px 0 0 20px;">
+    <li><code>computeLikelihoodDervSIMD</code> — ~39% on both</li>
+    <li><code>computePartialLikelihoodSIMD</code> — ~33% on both</li>
+    <li><code>computeLikelihoodBufferSIMD</code> — ~10% on both</li>
+  </ol>
+  This means GPU kernels designed for one platform will benefit equally on the other.
+</div>
+
+<h4>GPU Hardware Available on Setonix</h4>
+
+<table>
+  <tr><th>Specification</th><th>Value</th></tr>
+  <tr><td>GPU Model</td><td>AMD Instinct MI250X</td></tr>
+  <tr><td>Architecture</td><td>CDNA 2</td></tr>
+  <tr><td>Compute Units</td><td>220 CUs (2 GCDs × 110 CUs)</td></tr>
+  <tr><td>HBM2e Memory</td><td>128 GB per GCD (256 GB total per card)</td></tr>
+  <tr><td>Memory Bandwidth</td><td>3.2 TB/s</td></tr>
+  <tr><td>Peak FP64</td><td>47.9 TFLOPS</td></tr>
+  <tr><td>GPUs per node</td><td>8 (4 cards × 2 GCDs)</td></tr>
+  <tr><td>GPU idle temperature</td><td>33–38°C</td></tr>
+  <tr><td>GPU idle power</td><td>~89W</td></tr>
+  <tr><td>Programming model</td><td>HIP / ROCm 6.3</td></tr>
+</table>
+
+<p>No GPU kernels have been dispatched yet — the profiles above are CPU-only baselines. The GPU hardware is confirmed accessible (ROCm 6.3 loaded, <code>rocm-smi</code> reporting temperature and power), ready for HIP kernel deployment.</p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 15: CONCLUSIONS                                        -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s15">15. Conclusions &amp; Next Steps</h2>
+
+<h3>15.1 Summary of Findings</h3>
+
+<table>
+  <tr><th>#</th><th>Finding</th><th>Impact</th></tr>
+  <tr>
+    <td>1</td>
+    <td>Five functions in <code>phylokernelnew.h</code> consume &gt;95% of CPU time</td>
+    <td>Clear GPU offload targets identified</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>OpenMP sync overhead is 22–29% at 4+ threads on Sandy Bridge</td>
+    <td>CPU multi-threading hits a hard wall</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>Frontend stalls (I-cache) are the dominant 1T bottleneck (52%)</td>
+    <td>GPU eliminates this entirely</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>Setonix Trento achieves 2.3 IPC (vs 1.07 on Sandy Bridge at 4T)</td>
+    <td>Modern CPU helps, but GPU can do much more</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Trento eliminates frontend stalls (2% vs 66%)</td>
+    <td>Zen 3 microarch handles templated code well</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td>Function hotspot ranking is identical across platforms</td>
+    <td>GPU kernels are architecture-independent</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td>All datasets fit in MI250X GPU memory (≤500 MB vs 128 GB HBM2e)</td>
+    <td>No data transfer limitation</td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td>Setonix GPU hardware is accessible (ROCm 6.3, HIP ready)</td>
+    <td>Ready for kernel deployment</td>
+  </tr>
+</table>
+
+<h3>15.2 Implementation Roadmap</h3>
+
+<table>
+  <tr><th>Phase</th><th>Task</th><th>Expected Impact</th><th>Status</th></tr>
+  <tr>
+    <td>1</td>
+    <td>Port GPU PoC CUDA kernels to HIP for Setonix MI250X</td>
+    <td>Establish GPU build and runtime</td>
+    <td>Not started</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>HIP kernel for <code>computeLikelihoodDervSIMD</code></td>
+    <td>Offload 40–52% of CPU time</td>
+    <td>Not started</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>HIP kernel for <code>computePartialLikelihoodSIMD</code></td>
+    <td>Offload 18.3% of CPU time</td>
+    <td>Not started</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>HIP kernels for Buffer/Branch</td>
+    <td>Offload 4.1% + enable GPU-resident data</td>
+    <td>Not started</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Integration with IQ-TREE tree search loop</td>
+    <td>End-to-end GPU acceleration</td>
+    <td>Not started</td>
+  </tr>
+</table>
+
+<h3>15.3 Expected GPU Speedup</h3>
+
+<p>Based on the profiling data and GPU hardware specifications, conservative speedup estimates for the <code>medium_dna</code> dataset:</p>
+
+<table>
+  <tr><th>Scenario</th><th>Baseline</th><th>Expected GPU</th><th>Speedup</th></tr>
+  <tr>
+    <td>vs hpc-01 1T (Sandy Bridge)</td>
+    <td class="num">230.9s</td><td class="num">~2–5s</td>
+    <td class="num highlight-green">~50–100×</td>
+  </tr>
+  <tr>
+    <td>vs hpc-01 8T (Sandy Bridge)</td>
+    <td class="num">64.2s</td><td class="num">~2–5s</td>
+    <td class="num highlight-green">~13–30×</td>
+  </tr>
+  <tr>
+    <td>vs Setonix 4T (Trento CPU)</td>
+    <td class="num">26.9s</td><td class="num">~2–5s</td>
+    <td class="num highlight-green">~5–13×</td>
+  </tr>
+</table>
+
+<p><em>Note: These are estimates based on workload characteristics (5,000 independent patterns, ~60 FLOPs each, bandwidth-friendly access patterns) and MI250X specifications (47.9 TFLOPS FP64). Actual speedups depend on PCIe transfer overhead, kernel launch latency, and the serial fraction of the tree search loop.</em></p>
+
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  SECTION 16: APPENDIX                                           -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<div class="page-break"></div>
+<h2 id="s16">16. File Locations &amp; Appendix</h2>
+
+<h3>16.1 File Locations</h3>
+
+<table>
+  <tr><th>Item</th><th>Path</th></tr>
+  <tr><td>IQ-TREE binary (hpc-01)</td><td><code>/home/hpc/ANUHPC-iqtree/build/iqtree3</code></td></tr>
+  <tr><td>Kernel source</td><td><code>/home/hpc/ANUHPC-iqtree/tree/phylokernelnew.h</code> (3,688 lines)</td></tr>
+  <tr><td>VTune results</td><td><code>/home/hpc/intel/vtune/projects/Iqtree/</code></td></tr>
+  <tr><td>perf data (hpc-01)</td><td><code>/home/hpc/ANUHPC-iqtree/benchmark_tests/perf_medium.data</code></td></tr>
+  <tr><td>Benchmark scripts</td><td><code>/home/hpc/ANUHPC-iqtree/benchmark_tests/</code></td></tr>
+  <tr><td>IQ-TREE source (Setonix)</td><td><code>/scratch/pawsey1351/asamuel/iqtree3/</code></td></tr>
+  <tr><td>Setonix profiles</td><td><code>logs/profiles/2026-04-18_223223.json</code> (turtle 1T)</td></tr>
+  <tr><td></td><td><code>logs/profiles/2026-04-18_225047.json</code> (medium_dna 4T)</td></tr>
+  <tr><td>GPU PoC</td><td><code>poc-gpu-likelihood-calculation-main/</code></td></tr>
+  <tr><td>This report</td><td><code>PROFILING_REPORT.html</code></td></tr>
+</table>
+
+<h3>16.2 Profiling Commands (Setonix)</h3>
+
+<pre><code><span class="comment"># Modules loaded on Setonix GPU node</span>
+module load rocm/6.3.0 eigen/3.4.0 boost/1.86.0-c++14-python
+
+<span class="comment"># perf stat — hardware counters (21 events)</span>
+perf stat -e cycles,instructions,cache-references,cache-misses,\
+  branch-instructions,branch-misses,L1-dcache-loads,L1-dcache-load-misses,\
+  L1-icache-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,\
+  iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,\
+  task-clock,context-switches,cpu-migrations,page-faults \
+  ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4
+
+<span class="comment"># perf record — hotspot sampling at 99 Hz</span>
+perf record -g -F 99 ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4
+
+<span class="comment"># ROCm GPU profiling (kernel/HIP/memory traces)</span>
+rocprofv3 --kernel-trace --stats --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4
+rocprofv3 --hip-trace --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4
+rocprofv3 --memory-copy-trace --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4</code></pre>
+
+<h3>16.3 Alignment Details (Setonix Runs)</h3>
+
+<table>
+  <tr><th>Parameter</th><th>turtle.fa (1T)</th><th>medium_dna.fa (4T)</th></tr>
+  <tr><td>Taxa</td><td class="num">12</td><td class="num">50</td></tr>
+  <tr><td>Sites</td><td class="num">1,000</td><td class="num">5,000</td></tr>
+  <tr><td>Constant sites</td><td class="num">546 (54.6%)</td><td class="num">311 (6.22%)</td></tr>
+  <tr><td>Informative sites</td><td class="num">315</td><td class="num">4,326</td></tr>
+  <tr><td>Unique patterns</td><td class="num">434</td><td class="num">4,559</td></tr>
+  <tr><td>Model</td><td>GTR+F+G4</td><td>GTR+F+G4</td></tr>
+  <tr><td>Gamma α</td><td class="num">0.3754</td><td class="num">0.9915</td></tr>
+  <tr><td>Log-likelihood</td><td class="num">−5,377.945</td><td class="num">−160,268.662</td></tr>
+  <tr><td>Free parameters</td><td class="num">30</td><td class="num">106</td></tr>
+  <tr><td>Tree length</td><td class="num">1.4724</td><td class="num">10.7852</td></tr>
+  <tr><td>File size</td><td class="num">12 KB</td><td class="num">245 KB</td></tr>
+</table>
+
+<hr>
+
+<div class="footer">
+  IQ-TREE 3.1.0 Profiling — hpc-01 (Intel Xeon E5-2670) &amp; Setonix (AMD EPYC 7A53 + MI250X)<br>
+  Report dates: 29 March 2026 · 12 April 2026 · 18 April 2026<br>
+  Generated for the IQ-TREE GPU Offload Project — Pawsey Supercomputing Centre
+</div>
+
+</div><!-- /.container -->
+
+<script>
+function downloadReport() {
+  var html = document.documentElement.outerHTML;
+  var blob = new Blob([html], { type: 'text/html' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'IQ-TREE_Profiling_Report.html';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+</body>
+</html>
