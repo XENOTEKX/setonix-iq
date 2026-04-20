@@ -146,6 +146,21 @@ def get_all_runs():
                 'all_pass': fail_count == 0,
             }
         })
+
+    # Also load any additional runs from logs/runs/*.json (e.g. baseline profiles)
+    runs_dir = os.path.join(LOGS_DIR, 'runs')
+    seen_ids = {r['run_id'] for r in runs}
+    if os.path.isdir(runs_dir):
+        for f in sorted(glob.glob(os.path.join(runs_dir, '*.json'))):
+            try:
+                with open(f) as fh:
+                    run = json.load(fh)
+                if run.get('run_id') not in seen_ids:
+                    runs.append(run)
+                    seen_ids.add(run.get('run_id'))
+            except (json.JSONDecodeError, IOError):
+                continue
+
     return runs
 
 

@@ -1,0 +1,57 @@
+{
+  "run_id": "large_mf_32t_baseline",
+  "slurm_id": "41703864",
+  "label": "large_mf_32t",
+  "description": "CPU baseline: large_modelfinder.fa @ 32T, ModelFinder \u2192 F81+F+G4 chosen according to BIC, MF=1622s",
+  "run_type": "cpu_baseline",
+  "timing": [
+    {
+      "command": "iqtree3 -s large_modelfinder.fa -T 32 -seed 1",
+      "time_s": 2701,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [],
+  "env": {
+    "hostname": "nid002599",
+    "date": "2026-04-19T22:09:32+08:00",
+    "run_id": "41703864",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "cores": "32",
+    "gcc": "gcc (SUSE Linux) 14.3.0",
+    "rocm": "N/A (CPU-only baseline)"
+  },
+  "gpu_info": "",
+  "profile": {
+    "run_id": "41703864",
+    "dataset": "large_modelfinder.fa",
+    "threads": 32,
+    "metrics": {
+      "cycles": 266832404671193,
+      "instructions": 118164552725475,
+      "cache-references": 6229052208227,
+      "cache-misses": 523510469850,
+      "branch-instructions": 13507287964531,
+      "branch-misses": 4226180616,
+      "L1-dcache-loads": 51971248128135,
+      "L1-dcache-load-misses": 3793619629326,
+      "stalled-cycles-frontend": 2204188082346,
+      "IPC": 0.443,
+      "cache-miss-rate": 8.4,
+      "branch-miss-rate": 0.0313,
+      "L1-dcache-miss-rate": 7.3,
+      "frontend-stall-rate": 0.83
+    }
+  },
+  "modelfinder": {
+    "model_selected": "F81+F+G4 chosen according to BIC",
+    "wall_time_s": 1622.198
+  },
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "total_time": 2701,
+    "all_pass": true,
+    "wall_time": "0h45m1s"
+  }
+}
