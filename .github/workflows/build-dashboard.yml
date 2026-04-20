@@ -1,0 +1,71 @@
+name: Build & Deploy Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'logs/**'
+      - 'serve.py'
+      - 'website/**'
+      - '.github/workflows/build-dashboard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate dashboard
+        run: python3 serve.py
+
+      - name: Validate output
+        run: |
+          if [ ! -f docs/index.html ]; then
+            echo "::error::docs/index.html was not generated"
+            exit 1
+          fi
+          size=$(stat -c%s docs/index.html)
+          if [ "$size" -lt 1000 ]; then
+            echo "::error::docs/index.html is suspiciously small (${size} bytes)"
+            exit 1
+          fi
+          if ! grep -q 'Setonix Agent' docs/index.html; then
+            echo "::error::docs/index.html missing expected content marker"
+            exit 1
+          fi
+          echo "Dashboard generated successfully (${size} bytes)"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

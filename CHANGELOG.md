@@ -23,6 +23,23 @@ Profiling complete (VTune + perf, April 2026). Five hot functions identified in 
 | turtle.fa 1T GTR+G4 (12 taxa, 434 patterns) | 1.62s | 1.49s | 2.334 | 3.12% |
 | medium_dna.fa 4T GTR+G4 (50 taxa, 4,559 patterns) | 26.9s | 102.5s | 2.299 | 2.23% |
 
+### CPU baseline thread-scaling (Setonix, AMD EPYC 7A53 Trento, ModelFinder+TreeSearch)
+
+| Dataset | 1T | 4T | 8T | 16T | 32T | 64T | 128T |
+|---------|-----|-----|-----|------|------|------|------|
+| large_mf (50 taxa, ~5k sites) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| xlarge_mf (200 taxa, ~10k sites) | ✅ | ✅ | ✅ | ✅ | ✅ (in progress) | — | — |
+| mega (1000 taxa, large) | pending | pending | pending | pending | pending | pending | pending |
+
+### CPU profiling breakdown (perf, Setonix large_mf 1T vs 64T)
+
+| Function | 1T | 64T |
+|----------|-----|------|
+| computePartialLikelihoodSIMD | 84.66% | 52.97% |
+| computeLikelihoodDervSIMD | 9.73% | 9.99% |
+| computeLikelihoodBufferSIMD | 3.31% | 5.71% |
+| computeLikelihoodBranchSIMD | 0.85% | 0.30% |
+
 ### CPU profiling breakdown (VTune, medium_dna.phy)
 
 | Function | GTR 1T | Default 1T | Default 8T |
@@ -56,7 +73,36 @@ No GPU measurements yet. Expected based on workload characteristics:
 
 ## Changelog
 
-### 20 April 2026: Dashboard UI/UX redesign + IQ-TREE Configuration card
+### 20 April 2026 (b): GitHub Actions CI/CD overhaul + Setonix baseline hotspots
+
+**CI/CD overhaul — data-only pushes from Setonix, Action generates website:**
+- Created `.github/workflows/build-dashboard.yml`:
+  - Triggers on push to `main` when `logs/`, `serve.py`, or `website/` change
+  - Runs `python3 serve.py` to generate `docs/index.html` from committed JSON logs
+  - Validates output (file exists, size > 1KB, contains expected marker)
+  - Deploys to GitHub Pages via `actions/deploy-pages@v4`
+  - Uses `actions/configure-pages@v5` + `actions/upload-pages-artifact@v3`
+- Updated `.gitignore` — generated files (`dashboard.html`, `docs/`, `PROFILING_REPORT.html`, `website/api/runs.json`) are not tracked
+- Updated `start.sh`:
+  - `cmd_start`, `cmd_pipeline`, `cmd_profile`, `cmd_deepprofile` no longer call `serve.py` before pushing
+  - These commands now push data only; GitHub Action generates the dashboard
+  - `cmd_generate` preserved for local preview (runs `serve.py` without pushing)
+  - Updated usage comments to reflect new workflow
+- Created `IMPLEMENTATION_PLAN.md` documenting the full architecture
+
+**Hotspot/callstack data from perf record:**
+- Parsed `perf report` output into 3 baseline run JSONs (large_mf_1t, large_mf_64t, xlarge_mf_1t)
+- Each run now includes `hotspots[]` (self%, children%, samples, function, module) and `callstacks{}` (total_samples, top_stacks[50])
+- Key findings:
+  - 1T: computePartialLikelihoodSIMD dominates at 84.66%
+  - 64T: drops to 52.97% as OpenMP overhead and DervSIMD increase proportionally
+  - xlarge_mf shows DervSIMD at 23.56% (vs 9.73% for large_mf) — more patterns shift compute balance
+
+**`data.py` — merge additional run JSONs:**
+- After building runs from `time_log_*.tsv` files, also loads all `*.json` from `logs/runs/`
+- Deduplicates by `run_id` so Setonix pipeline runs and baseline profiles coexist
+
+### 20 April 2026 (a): Dashboard UI/UX redesign + IQ-TREE Configuration card
 
 **Overview page cleanup:**
 - Removed 3 useless stat cards from overview (Best IPC, Cache Miss Rate, Deep Profiles) — these showed static, out-of-context numbers

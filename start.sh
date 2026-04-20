@@ -3,10 +3,10 @@
 # Setonix Agent - Quick Start Script
 #
 # Usage:
-#   ./start.sh                 # Generate dashboard + push to GitHub
-#   ./start.sh pipeline        # Run CI/CD pipeline, generate + push
-#   ./start.sh profile [FILE]  # Run profiling, generate + push
-#   ./start.sh generate        # Just regenerate + push
+#   ./start.sh                 # Push data to GitHub (Action generates dashboard)
+#   ./start.sh pipeline        # Run CI/CD pipeline + push data
+#   ./start.sh profile [FILE]  # Run profiling + push data
+#   ./start.sh generate        # Generate local dashboard preview
 #   ./start.sh status          # Show allocation + job status
 #
 set -euo pipefail
@@ -65,8 +65,7 @@ sync_to_github() {
 cmd_start() {
   banner
   check_links
-  echo -e "${GREEN}Generating dashboard...${NC}"
-  python3 "$AGENT_DIR/serve.py"
+  echo -e "${GREEN}Pushing data to GitHub (Action will generate dashboard)...${NC}"
   sync_to_github
 }
 
@@ -76,8 +75,7 @@ cmd_pipeline() {
   bash "$PIPELINE"
   echo ""
   check_links
-  echo -e "${GREEN}Pipeline done. Generating dashboard...${NC}"
-  python3 "$AGENT_DIR/serve.py"
+  echo -e "${GREEN}Pipeline done. Pushing data...${NC}"
   sync_to_github
 }
 
@@ -89,8 +87,7 @@ cmd_profile() {
   bash "$PROFILER" "$dataset" "$threads"
   echo ""
   check_links
-  echo -e "${GREEN}Profiling done. Generating dashboard...${NC}"
-  python3 "$AGENT_DIR/serve.py"
+  echo -e "${GREEN}Profiling done. Pushing data...${NC}"
   sync_to_github
 }
 
@@ -104,15 +101,15 @@ cmd_deepprofile() {
   bash "$DEEP_PROFILER" "$dataset" "$threads" "$model"
   echo ""
   check_links
-  echo -e "${GREEN}Deep profiling done. Generating dashboard...${NC}"
-  python3 "$AGENT_DIR/serve.py"
+  echo -e "${GREEN}Deep profiling done. Pushing data...${NC}"
   sync_to_github
 }
 
 cmd_generate() {
   check_links
+  echo -e "${GREEN}Generating local dashboard preview...${NC}"
   python3 "$AGENT_DIR/serve.py"
-  sync_to_github
+  echo -e "${GREEN}Done. Open dashboard.html for local preview.${NC}"
 }
 
 cmd_status() {
