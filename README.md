@@ -334,7 +334,7 @@ Raw `rocm-smi` output (parsed for temperature, power, VRAM, utilization).
 
 ## Dashboard Features
 
-- **Overview** — current run status, test pass rate, pipeline time, IPC, cross-run averages
+- **Overview** — current run status, best speedup (multi-thread vs 1T baselines), fastest run time, IQ-TREE configuration card (alignment, model & results, system info with command line), performance leaderboard, hotspot/microarch/scaling charts, latest deep profile summary
 - **All Runs** — leaderboard-style list with search, filter (pass/fail), sort (date/time/IPC), expandable detail panels per run
 - **Per-run details** — commands with copy-to-clipboard, verification table, perf counters, environment info
 - **Copy All as Script** — one-click copy of all commands from a run for re-execution on Setonix

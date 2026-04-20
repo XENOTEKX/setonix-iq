@@ -9,335 +9,388 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #0a0e17; --surface: #111827; --card: #1a2332;
-  --border: #2a3444; --border-hover: #3b4a5e;
-  --text: #e2e8f0; --text2: #94a3b8; --text3: #64748b;
-  --accent: #3b82f6; --accent2: #8b5cf6; --accent-glow: rgba(59,130,246,0.15);
-  --green: #22c55e; --green-bg: rgba(34,197,94,0.1);
-  --red: #ef4444; --red-bg: rgba(239,68,68,0.1);
-  --yellow: #eab308; --yellow-bg: rgba(234,179,8,0.1);
-  --radius: 12px; --radius-sm: 8px;
+  --bg: #060a13; --surface: #0d1321; --card: #131b2e;
+  --border: #1e2a3e; --border-hover: #2d4060;
+  --bg-tertiary: #0a1020;
+  --text: #e8edf5; --text2: #8b97ad; --text3: #5a6880; --text-muted: #3d4a5e;
+  --accent: #4f8fff; --accent2: #a78bfa; --accent-glow: rgba(79,143,255,0.1);
+  --green: #34d399; --green-bg: rgba(52,211,153,0.08);
+  --red: #f87171; --red-bg: rgba(248,113,113,0.08);
+  --yellow: #fbbf24; --yellow-bg: rgba(251,191,36,0.08);
+  --radius: 14px; --radius-sm: 10px;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.02) inset;
+  --shadow-hover: 0 4px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(79,143,255,0.08) inset;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg); color: var(--text);
-  min-height: 100vh;
+  min-height: 100vh; font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 /* ---- Sidebar ---- */
 .layout { display: flex; min-height: 100vh; }
 .sidebar {
-  width: 260px; background: var(--surface); border-right: 1px solid var(--border);
-  padding: 24px 16px; flex-shrink: 0; position: sticky; top: 0; height: 100vh;
+  width: 240px; background: var(--surface); border-right: 1px solid var(--border);
+  padding: 20px 12px; flex-shrink: 0; position: sticky; top: 0; height: 100vh;
   display: flex; flex-direction: column;
 }
 .sidebar .logo {
   display: flex; align-items: center; gap: 10px;
-  font-size: 1.1rem; font-weight: 700; color: var(--accent);
-  margin-bottom: 32px; padding: 0 8px;
+  font-size: 1rem; font-weight: 700; color: var(--accent);
+  margin-bottom: 28px; padding: 0 10px;
+  letter-spacing: -0.02em;
 }
-.sidebar .logo svg { width: 28px; height: 28px; }
+.sidebar .logo svg { width: 26px; height: 26px; }
 .sidebar nav { flex: 1; }
 .sidebar nav a {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: var(--radius-sm);
-  color: var(--text2); text-decoration: none; font-size: 0.875rem;
-  font-weight: 500; transition: all 0.2s; margin-bottom: 2px;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  color: var(--text3); text-decoration: none; font-size: 0.82rem;
+  font-weight: 500; transition: all 0.15s; margin-bottom: 1px;
 }
-.sidebar nav a:hover { background: var(--accent-glow); color: var(--text); }
-.sidebar nav a.active { background: var(--accent-glow); color: var(--accent); }
-.sidebar nav a svg { width: 18px; height: 18px; opacity: 0.7; }
+.sidebar nav a:hover { background: rgba(79,143,255,0.06); color: var(--text2); }
+.sidebar nav a.active { background: rgba(79,143,255,0.1); color: var(--accent); font-weight: 600; }
+.sidebar nav a svg { width: 17px; height: 17px; opacity: 0.6; }
+.sidebar nav a.active svg { opacity: 1; }
 .sidebar .section-label {
-  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--text3); padding: 16px 12px 6px; font-weight: 600;
+  font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text3); padding: 18px 12px 6px; font-weight: 600;
 }
 .sidebar-footer {
   padding: 12px; border-top: 1px solid var(--border); margin-top: auto;
-  font-size: 0.75rem; color: var(--text3);
+  font-size: 0.72rem; color: var(--text3);
 }
 .sidebar-footer .status-dot {
-  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-  background: var(--green); margin-right: 6px;
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green); margin-right: 6px; box-shadow: 0 0 6px var(--green);
 }
 /* ---- Main Content ---- */
-.main { flex: 1; padding: 32px; overflow-x: hidden; }
+.main { flex: 1; padding: 28px 36px; overflow-x: hidden; max-width: 1400px; }
 .page-header {
   display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
 }
-.page-header h1 { font-size: 1.75rem; font-weight: 700; }
-.page-header .subtitle { color: var(--text2); font-size: 0.875rem; margin-top: 4px; }
+.page-header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.03em; }
+.page-header .subtitle { color: var(--text2); font-size: 0.82rem; margin-top: 4px; }
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 14px; border-radius: 20px; font-size: 0.8rem; font-weight: 600;
+  padding: 5px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+  letter-spacing: 0.02em;
 }
-.badge-pass { background: var(--green-bg); color: var(--green); border: 1px solid rgba(34,197,94,0.2); }
-.badge-fail { background: var(--red-bg); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
+.badge-pass { background: var(--green-bg); color: var(--green); border: 1px solid rgba(52,211,153,0.15); }
+.badge-fail { background: var(--red-bg); color: var(--red); border: 1px solid rgba(248,113,113,0.15); }
 /* ---- Stats Grid ---- */
 .stats-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px;
 }
 .stat-card {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 20px; transition: border-color 0.2s;
+  padding: 18px 20px; transition: all 0.2s; position: relative; overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
-.stat-card:hover { border-color: var(--border-hover); }
-.stat-card .label { font-size: 0.75rem; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
-.stat-card .value { font-size: 1.75rem; font-weight: 700; margin: 8px 0 4px; }
-.stat-card .change { font-size: 0.75rem; color: var(--text3); }
+.stat-card:hover { border-color: var(--border-hover); box-shadow: var(--shadow-hover); transform: translateY(-1px); }
+.stat-card .stat-icon {
+  width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center;
+  justify-content: center; font-size: 0.9rem; margin-bottom: 10px;
+}
+.stat-card .label { font-size: 0.7rem; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
+.stat-card .value { font-size: 1.6rem; font-weight: 700; margin: 6px 0 4px; letter-spacing: -0.02em; }
+.stat-card .change { font-size: 0.72rem; color: var(--text3); }
 /* ---- Cards ---- */
 .card {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 24px; margin-bottom: 20px; min-width: 0; overflow: hidden;
+  padding: 22px; margin-bottom: 18px; min-width: 0; overflow: hidden;
+  box-shadow: var(--shadow-card); transition: border-color 0.2s;
 }
+.card:hover { border-color: var(--border-hover); }
 .card-header {
   display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;
 }
-.card-header h2 { font-size: 1rem; font-weight: 600; }
-.card-header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.card-header h2 { font-size: 0.9rem; font-weight: 600; letter-spacing: -0.01em; }
+.card-header .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .btn {
-  padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.8rem;
+  padding: 5px 14px; border-radius: var(--radius-sm); font-size: 0.78rem;
   font-weight: 500; border: 1px solid var(--border); background: var(--surface);
-  color: var(--text2); cursor: pointer; transition: all 0.2s;
+  color: var(--text2); cursor: pointer; transition: all 0.15s;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+.btn-sm {
+  padding: 3px 10px; border-radius: 6px; font-size: 0.72rem; font-weight: 500;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text3);
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.btn-sm:hover { border-color: var(--accent); color: var(--accent); }
 /* ---- Charts ---- */
 .chart-wrapper { position: relative; height: 240px; width: 100%; min-width: 0; }
 .chart-wrapper canvas { max-width: 100%; }
-.charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+/* ---- Chart run selector ---- */
+.cs-panel { padding: 8px 18px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.cs-search-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+.cs-search { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); padding: 5px 10px; font-size: 0.8rem; font-family: inherit; outline: none; transition: border-color 0.15s; }
+.cs-search:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,143,255,0.1); }
+.cs-search::placeholder { color: var(--text3); }
+.cs-btn { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text2); padding: 4px 10px; font-size: 0.75rem; cursor: pointer; font-family: inherit; transition: all 0.12s; }
+.cs-btn:hover { border-color: var(--accent); color: var(--accent); }
+.cs-list { display: flex; flex-wrap: wrap; gap: 5px; max-height: 64px; overflow-y: auto; }
+.cs-item { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; cursor: pointer; font-size: 0.77rem; color: var(--text2); transition: all 0.12s; white-space: nowrap; }
+.cs-item:hover { border-color: var(--accent); color: var(--accent); }
+.cs-item.selected { border-color: var(--accent); color: var(--accent); background: rgba(79,143,255,0.1); }
+.cs-empty { color: var(--text3); font-size: 0.78rem; font-style: italic; padding: 4px 0; }
+.charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
 /* ---- Table ---- */
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th {
-  text-align: left; padding: 10px 14px; font-size: 0.75rem;
-  text-transform: uppercase; letter-spacing: 0.05em;
+  text-align: left; padding: 10px 12px; font-size: 0.7rem;
+  text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text3); border-bottom: 1px solid var(--border); font-weight: 600;
 }
 .data-table td {
-  padding: 12px 14px; font-size: 0.85rem; border-bottom: 1px solid var(--border);
-  transition: background 0.15s;
+  padding: 10px 12px; font-size: 0.82rem; border-bottom: 1px solid rgba(30,42,62,0.5);
+  transition: background 0.12s;
 }
-.data-table tr:hover td { background: rgba(59,130,246,0.04); }
+.data-table tr:hover td { background: rgba(79,143,255,0.03); }
 .data-table .status-icon { font-size: 1rem; }
 /* ---- Profile Metrics ---- */
-.profile-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+.profile-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
 .profile-metric {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 16px; text-align: center;
+  padding: 14px; text-align: center;
 }
-.profile-metric .val { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
-.profile-metric .lbl { font-size: 0.7rem; color: var(--text3); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+.profile-metric .val { font-size: 1.4rem; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
+.profile-metric .lbl { font-size: 0.68rem; color: var(--text3); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
 /* ---- Deep Profiling ---- */
-.section-label { font-size: 0.75rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; margin: 24px 0 12px; padding-left: 2px; }
-.cmd-list { padding: 16px; }
-.cmd-item { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.section-label { font-size: 0.72rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; margin: 20px 0 10px; padding-left: 2px; }
+.cmd-list { padding: 14px; }
+.cmd-item { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgba(30,42,62,0.4); }
 .cmd-item:last-child { border-bottom: none; }
-.cmd-item .cmd-label { font-size: 0.75rem; font-weight: 600; color: var(--text3); min-width: 120px; text-transform: uppercase; }
-.cmd-item code { font-size: 0.8rem; color: var(--text2); flex: 1; word-break: break-all; font-family: 'SF Mono', 'Fira Code', monospace; }
+.cmd-item .cmd-label { font-size: 0.72rem; font-weight: 600; color: var(--text3); min-width: 110px; text-transform: uppercase; }
+.cmd-item code { font-size: 0.78rem; color: var(--text2); flex: 1; word-break: break-all; font-family: 'SF Mono', 'Fira Code', monospace; }
 .cmd-item .btn-sm { flex-shrink: 0; }
-.hotspot-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.hotspot-row { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid rgba(30,42,62,0.4); }
 .hotspot-row:last-child { border-bottom: none; }
-.hotspot-pct { font-size: 1rem; font-weight: 700; min-width: 55px; text-align: right; }
-.hotspot-bar { height: 8px; border-radius: 4px; transition: width 0.5s; }
-.hotspot-bar-wrap { width: 120px; background: var(--surface); border-radius: 4px; overflow: hidden; }
-.hotspot-func { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; color: var(--text2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hotspot-module { font-size: 0.7rem; color: var(--text3); min-width: 80px; text-align: right; }
-.gpu-trace-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-.gpu-trace-table th { text-align: left; padding: 10px 12px; color: var(--text3); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 2px solid var(--border); }
-.gpu-trace-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text2); }
-.gpu-trace-table tr:hover td { background: rgba(59,130,246,0.04); }
-.profile-grid-gpu { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
-.no-data-msg { color: var(--text3); font-size: 0.85rem; padding: 20px; text-align: center; font-style: italic; }
+.hotspot-pct { font-size: 0.95rem; font-weight: 700; min-width: 52px; text-align: right; }
+.hotspot-bar { height: 7px; border-radius: 4px; transition: width 0.5s; }
+.hotspot-bar-wrap { width: 110px; background: var(--surface); border-radius: 4px; overflow: hidden; }
+.hotspot-func { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.78rem; color: var(--text2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hotspot-module { font-size: 0.68rem; color: var(--text3); min-width: 75px; text-align: right; }
+.gpu-trace-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.gpu-trace-table th { text-align: left; padding: 9px 12px; color: var(--text3); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 2px solid var(--border); }
+.gpu-trace-table td { padding: 7px 12px; border-bottom: 1px solid rgba(30,42,62,0.4); color: var(--text2); }
+.gpu-trace-table tr:hover td { background: rgba(79,143,255,0.03); }
+.profile-grid-gpu { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
+.no-data-msg { color: var(--text3); font-size: 0.82rem; padding: 24px; text-align: center; font-style: italic; }
 /* ---- GPU Panel ---- */
-.gpu-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.gpu-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
 .gpu-stat {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 14px; text-align: center;
 }
-.gpu-stat .val { font-size: 1.3rem; font-weight: 700; }
-.gpu-stat .lbl { font-size: 0.7rem; color: var(--text3); margin-top: 4px; }
+.gpu-stat .val { font-size: 1.2rem; font-weight: 700; }
+.gpu-stat .lbl { font-size: 0.68rem; color: var(--text3); margin-top: 4px; }
+/* ---- Config Grid (IQ-TREE Configuration) ---- */
+.config-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.config-section { }
+.config-items { display: flex; flex-direction: column; gap: 0; }
+.config-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 10px; border-bottom: 1px solid rgba(30,42,62,0.3);
+  font-size: 0.82rem; transition: background 0.1s;
+}
+.config-item:last-child { border-bottom: none; }
+.config-item:hover { background: rgba(79,143,255,0.03); }
+.config-item .ci-label { color: var(--text3); font-size: 0.72rem; font-weight: 500; }
+.config-item .ci-value { font-weight: 600; text-align: right; }
+.config-cmd {
+  margin-top: 14px; padding: 10px 14px; background: var(--bg-tertiary); border-radius: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.78rem; color: var(--text2);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border: 1px solid var(--border);
+}
 /* ---- Flamegraph ---- */
-.flame-banner { background: #1e293b; border-left: 3px solid #f59e0b; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 10px 14px; margin-bottom: 10px; font-size: 0.78rem; color: var(--text2); line-height: 1.5; }
+.flame-banner { background: rgba(30,41,59,0.6); border-left: 3px solid #f59e0b; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 10px 14px; margin-bottom: 10px; font-size: 0.75rem; color: var(--text2); line-height: 1.5; }
 .flame-banner .fbanner-icon { font-size: 1rem; margin-right: 8px; color: #f59e0b; }
-.flame-banner .fbanner-fix { margin-top: 6px; font-size: 0.72rem; color: var(--text3); }
-.flame-banner code { background: #0f172a; padding: 1px 5px; border-radius: 3px; font-size: 0.72rem; color: #86efac; }
+.flame-banner .fbanner-fix { margin-top: 6px; font-size: 0.7rem; color: var(--text3); }
+.flame-banner code { background: #0f172a; padding: 1px 5px; border-radius: 3px; font-size: 0.7rem; color: #86efac; }
 .flame-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-.flame-search { padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.8rem; width: 220px; }
+.flame-search { padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.78rem; width: 200px; }
 .flame-search::placeholder { color: var(--text3); }
 .flame-search:focus { outline: none; border-color: var(--accent); }
-.flame-breadcrumb { display: flex; align-items: center; gap: 2px; font-size: 0.75rem; color: var(--text3); flex-wrap: wrap; }
-.flame-breadcrumb span { cursor: pointer; padding: 2px 6px; border-radius: 3px; transition: all 0.15s; }
+.flame-breadcrumb { display: flex; align-items: center; gap: 2px; font-size: 0.72rem; color: var(--text3); flex-wrap: wrap; }
+.flame-breadcrumb span { cursor: pointer; padding: 2px 6px; border-radius: 3px; transition: all 0.12s; }
 .flame-breadcrumb span:hover { background: var(--surface); color: var(--accent); }
 .flame-breadcrumb span.current { color: var(--text); font-weight: 600; cursor: default; }
 .flame-breadcrumb span.current:hover { background: transparent; color: var(--text); }
-.flame-legend { display: flex; gap: 12px; font-size: 0.7rem; color: var(--text3); flex-wrap: wrap; }
+.flame-legend { display: flex; gap: 12px; font-size: 0.68rem; color: var(--text3); flex-wrap: wrap; }
 .flame-legend-item { display: flex; align-items: center; gap: 4px; }
-.flame-legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+.flame-legend-dot { width: 7px; height: 7px; border-radius: 2px; }
 .flamegraph-container { overflow-x: auto; padding: 4px 0; }
 .flame-row { display: flex; width: 100%; }
 .flame-frame {
-  display: inline-block; height: 18px; line-height: 18px; font-size: 0.6rem; font-family: 'SF Mono', 'Fira Code', monospace;
+  display: inline-block; height: 18px; line-height: 18px; font-size: 0.58rem; font-family: 'SF Mono', 'Fira Code', monospace;
   padding: 0 4px; box-sizing: border-box; cursor: pointer; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; border-bottom: 1px solid rgba(0,0,0,0.2); border-right: 1px solid rgba(0,0,0,0.08);
-  color: rgba(255,255,255,0.9); min-width: 1px; transition: all 0.12s;
+  color: rgba(255,255,255,0.9); min-width: 1px; transition: all 0.1s;
 }
-.flame-frame:hover { filter: brightness(1.3); outline: 1px solid rgba(255,255,255,0.5); z-index: 1; }
-.flame-frame.dim { opacity: 0.25; }
+.flame-frame:hover { filter: brightness(1.3); outline: 1px solid rgba(255,255,255,0.4); z-index: 1; }
+.flame-frame.dim { opacity: 0.2; }
 .flame-frame.highlight { outline: 2px solid #fbbf24; z-index: 2; filter: brightness(1.2); }
 .flame-tooltip {
-  position: fixed; background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 14px; font-size: 0.75rem; color: var(--text); z-index: 9999; pointer-events: none;
-  max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); backdrop-filter: blur(8px);
+  position: fixed; background: rgba(13,19,33,0.95); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; font-size: 0.72rem; color: var(--text); z-index: 9999; pointer-events: none;
+  max-width: 400px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); backdrop-filter: blur(12px);
 }
-.flame-tooltip .ft-name { font-weight: 600; font-family: monospace; font-size: 0.8rem; margin-bottom: 6px; word-break: break-all; color: #f8fafc; }
+.flame-tooltip .ft-name { font-weight: 600; font-family: monospace; font-size: 0.78rem; margin-bottom: 6px; word-break: break-all; color: #f8fafc; }
 .flame-tooltip .ft-row { display: flex; justify-content: space-between; gap: 16px; color: var(--text2); }
 .flame-tooltip .ft-val { font-weight: 600; color: var(--accent2); }
 .flame-tooltip .ft-bar { height: 3px; background: var(--surface); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 .flame-tooltip .ft-bar-fill { height: 100%; border-radius: 2px; }
 /* ---- Call Stack ---- */
 .callstack-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.callstack-summary { font-size: 0.75rem; color: var(--text3); }
+.callstack-summary { font-size: 0.72rem; color: var(--text3); }
 .callstack-row {
-  display: grid; grid-template-columns: 55px 60px 1fr; align-items: center; gap: 10px;
-  padding: 7px 10px; border-bottom: 1px solid rgba(42,52,68,0.4);
-  font-size: 0.8rem; transition: background 0.12s; border-radius: 4px;
+  display: grid; grid-template-columns: 50px 60px 1fr; align-items: center; gap: 10px;
+  padding: 6px 10px; border-bottom: 1px solid rgba(30,42,62,0.3);
+  font-size: 0.78rem; transition: background 0.1s; border-radius: 4px;
 }
-.callstack-row:hover { background: rgba(30,41,59,0.5); }
-.callstack-count { font-weight: 700; color: var(--accent2); text-align: right; font-family: 'SF Mono', monospace; font-size: 0.75rem; }
-.callstack-pct { font-size: 0.7rem; color: var(--text3); font-family: monospace; }
-.callstack-bar-wrap { position: relative; height: 14px; background: rgba(30,41,59,0.5); border-radius: 3px; overflow: hidden; }
+.callstack-row:hover { background: rgba(30,41,59,0.4); }
+.callstack-count { font-weight: 700; color: var(--accent2); text-align: right; font-family: 'SF Mono', monospace; font-size: 0.72rem; }
+.callstack-pct { font-size: 0.68rem; color: var(--text3); font-family: monospace; }
+.callstack-bar-wrap { position: relative; height: 13px; background: rgba(30,41,59,0.5); border-radius: 3px; overflow: hidden; }
 .callstack-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; min-width: 2px; }
-.callstack-pct-label { position: absolute; right: 4px; top: 0; line-height: 14px; font-size: 0.6rem; font-weight: 600; color: rgba(255,255,255,0.8); }
-.callstack-frames { font-family: 'SF Mono', monospace; font-size: 0.65rem; color: var(--text2); line-height: 1.6; word-break: break-all; }
+.callstack-pct-label { position: absolute; right: 4px; top: 0; line-height: 13px; font-size: 0.58rem; font-weight: 600; color: rgba(255,255,255,0.8); }
+.callstack-frames { font-family: 'SF Mono', monospace; font-size: 0.62rem; color: var(--text2); line-height: 1.6; word-break: break-all; }
 .callstack-frames .cs-sep { color: var(--text3); margin: 0 2px; }
 .callstack-frames .cs-leaf { color: #fbbf24; font-weight: 700; }
 .callstack-frames .cs-phylo { color: #f97316; }
 .callstack-frames .cs-lh { color: #ef4444; }
-.callstack-frames .cs-omp { color: #3b82f6; }
-.callstack-frames .cs-unk { color: #64748b; font-style: italic; }
-.callstack-category { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.6rem; font-weight: 600; margin-left: 6px; }
+.callstack-frames .cs-omp { color: #4f8fff; }
+.callstack-frames .cs-unk { color: #5a6880; font-style: italic; }
+.callstack-category { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.58rem; font-weight: 600; margin-left: 6px; }
 .callstack-show-more { text-align: center; padding: 10px; }
-.callstack-show-more button { background: transparent; border: 1px solid var(--border); color: var(--text2); padding: 5px 16px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.8rem; }
+.callstack-show-more button { background: transparent; border: 1px solid var(--border); color: var(--text2); padding: 5px 16px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.78rem; }
 .callstack-show-more button:hover { border-color: var(--accent); color: var(--accent); }
 /* ---- Run Selector ---- */
 .run-selector { display: flex; align-items: center; gap: 12px; }
 .run-selector select {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  color: var(--text); padding: 6px 12px; font-size: 0.85rem; font-family: inherit;
+  color: var(--text); padding: 6px 12px; font-size: 0.82rem; font-family: inherit;
 }
 /* ---- Allocation ---- */
 .alloc-bar {
-  height: 8px; background: var(--surface); border-radius: 4px; overflow: hidden; margin: 8px 0;
+  height: 7px; background: var(--surface); border-radius: 4px; overflow: hidden; margin: 8px 0;
 }
 .alloc-bar .fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
 /* ---- Search/Filter ---- */
 .filter-bar {
-  display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;
+  display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap;
 }
 .filter-bar input[type="text"] {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  color: var(--text); padding: 8px 14px; font-size: 0.85rem; font-family: inherit;
-  min-width: 240px; outline: none; transition: border-color 0.2s;
+  color: var(--text); padding: 8px 14px; font-size: 0.82rem; font-family: inherit;
+  min-width: 220px; outline: none; transition: border-color 0.15s;
 }
-.filter-bar input[type="text"]:focus { border-color: var(--accent); }
+.filter-bar input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,143,255,0.1); }
 .filter-bar input[type="text"]::placeholder { color: var(--text3); }
 .filter-bar select {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  color: var(--text); padding: 8px 12px; font-size: 0.85rem; font-family: inherit;
+  color: var(--text); padding: 8px 12px; font-size: 0.82rem; font-family: inherit;
 }
-.filter-bar .count { color: var(--text3); font-size: 0.8rem; margin-left: auto; }
+.filter-bar .count { color: var(--text3); font-size: 0.78rem; margin-left: auto; }
 /* ---- Run List (leaderboard style) ---- */
 .run-row {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-  margin-bottom: 8px; transition: border-color 0.2s, box-shadow 0.2s; cursor: pointer;
+  margin-bottom: 6px; transition: all 0.15s; cursor: pointer;
+  box-shadow: var(--shadow-card);
 }
-.run-row:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+.run-row:hover { border-color: var(--accent); box-shadow: var(--shadow-hover); }
 .run-row.active { border-color: var(--accent); }
 .run-row-summary {
-  display: grid; grid-template-columns: 40px 1fr 120px 100px 100px 80px 80px;
-  align-items: center; padding: 14px 18px; gap: 12px;
+  display: grid; grid-template-columns: 40px 1fr 110px 90px 90px 70px 72px;
+  align-items: center; padding: 12px 16px; gap: 10px;
 }
-.run-row-summary .rank { font-size: 0.85rem; font-weight: 700; color: var(--text3); text-align: center; }
+.run-row-summary .rank { font-size: 0.82rem; font-weight: 700; color: var(--text3); text-align: center; }
 .run-row-summary .rank.gold { color: #fbbf24; }
 .run-row-summary .rank.silver { color: #cbd5e1; }
 .run-row-summary .rank.bronze { color: #d97706; }
 .run-row-summary .run-info { min-width: 0; }
-.run-row-summary .run-id { font-weight: 600; font-size: 0.9rem; }
-.run-row-summary .run-meta { font-size: 0.75rem; color: var(--text3); margin-top: 2px; }
-.run-row-summary .run-time { font-weight: 700; font-size: 1rem; text-align: right; }
+.run-row-summary .run-id { font-weight: 600; font-size: 0.88rem; }
+.run-row-summary .run-meta { font-size: 0.72rem; color: var(--text3); margin-top: 2px; }
+.run-row-summary .run-time { font-weight: 700; font-size: 0.95rem; text-align: right; }
 .run-row-summary .run-tests { text-align: center; }
 .run-row-summary .run-ipc { text-align: center; font-weight: 600; color: var(--accent); }
-.run-row-summary .run-cores { text-align: center; color: var(--text2); }
+.run-row-summary .run-cores { text-align: center; color: var(--text2); font-size: 0.82rem; }
 .run-row-summary .run-detail-btn {
-  padding: 4px 12px; border-radius: var(--radius-sm); font-size: 0.75rem;
+  padding: 4px 10px; border-radius: 7px; font-size: 0.72rem;
   font-weight: 600; border: 1px solid var(--border); background: var(--surface);
-  color: var(--accent); cursor: pointer; transition: all 0.2s; text-align: center;
+  color: var(--accent); cursor: pointer; transition: all 0.15s; text-align: center;
 }
 .run-row-summary .run-detail-btn:hover { background: var(--accent-glow); border-color: var(--accent); }
 /* ---- Run Detail Expand ---- */
 .run-detail {
-  display: none; border-top: 1px solid var(--border); padding: 20px 18px;
-  animation: fadeIn 0.25s ease;
+  display: none; border-top: 1px solid var(--border); padding: 18px 16px;
+  animation: fadeIn 0.2s ease;
 }
 .run-detail.open { display: block; }
-.detail-section { margin-bottom: 20px; }
+.detail-section { margin-bottom: 18px; }
 .detail-section:last-child { margin-bottom: 0; }
 .detail-section h3 {
-  font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text3); margin-bottom: 10px; font-weight: 600;
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text3); margin-bottom: 8px; font-weight: 600;
 }
 /* ---- Command Block ---- */
 .cmd-block {
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 12px 14px; margin-bottom: 8px; display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: flex-start; gap: 10px;
 }
 .cmd-block .cmd-num {
-  font-size: 0.7rem; color: var(--text3); font-weight: 700; min-width: 20px;
+  font-size: 0.68rem; color: var(--text3); font-weight: 700; min-width: 18px;
   padding-top: 2px; text-align: right;
 }
 .cmd-block .cmd-text {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 0.8rem; color: var(--text); flex: 1; word-break: break-all;
+  font-size: 0.78rem; color: var(--text); flex: 1; word-break: break-all;
   white-space: pre-wrap; line-height: 1.5;
 }
 .cmd-block .cmd-time {
-  font-size: 0.75rem; color: var(--accent); font-weight: 600; white-space: nowrap;
+  font-size: 0.72rem; color: var(--accent); font-weight: 600; white-space: nowrap;
 }
 .cmd-block .cmd-copy {
-  padding: 3px 8px; border-radius: 4px; font-size: 0.7rem;
+  padding: 3px 8px; border-radius: 5px; font-size: 0.68rem;
   border: 1px solid var(--border); background: var(--surface);
-  color: var(--text3); cursor: pointer; transition: all 0.2s; white-space: nowrap;
+  color: var(--text3); cursor: pointer; transition: all 0.15s; white-space: nowrap;
 }
 .cmd-block .cmd-copy:hover { border-color: var(--accent); color: var(--accent); }
 .cmd-block .cmd-copy.copied { border-color: var(--green); color: var(--green); }
 /* ---- Detail Grid ---- */
-.detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
 .detail-kv {
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  padding: 9px 12px;
 }
-.detail-kv .dk-label { font-size: 0.7rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.04em; }
-.detail-kv .dk-value { font-size: 0.85rem; font-weight: 600; margin-top: 3px; word-break: break-all; }
+.detail-kv .dk-label { font-size: 0.68rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.04em; }
+.detail-kv .dk-value { font-size: 0.82rem; font-weight: 600; margin-top: 3px; word-break: break-all; }
 /* ---- Verify Mini Table ---- */
 .verify-mini { width: 100%; border-collapse: collapse; }
 .verify-mini th {
-  text-align: left; padding: 6px 10px; font-size: 0.7rem; text-transform: uppercase;
+  text-align: left; padding: 6px 10px; font-size: 0.68rem; text-transform: uppercase;
   color: var(--text3); border-bottom: 1px solid var(--border); font-weight: 600;
 }
-.verify-mini td { padding: 6px 10px; font-size: 0.8rem; border-bottom: 1px solid rgba(42,52,68,0.5); }
+.verify-mini td { padding: 6px 10px; font-size: 0.78rem; border-bottom: 1px solid rgba(30,42,62,0.4); }
 /* ---- Copy All ---- */
 .copy-all-btn {
-  padding: 6px 16px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 500;
+  padding: 5px 14px; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 500;
   border: 1px solid var(--accent); background: transparent; color: var(--accent);
-  cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
 }
 .copy-all-btn:hover { background: var(--accent-glow); }
 .copy-all-btn.copied { border-color: var(--green); color: var(--green); }
 /* ---- Responsive ---- */
 @media (max-width: 1400px) {
-  .charts-row { grid-template-columns: 1fr 1fr; gap: 16px; }
+  .charts-row { grid-template-columns: 1fr 1fr; gap: 14px; }
   .chart-wrapper { height: 220px; }
+  .config-grid { grid-template-columns: 1fr 1fr 1fr; }
 }
 @media (max-width: 1200px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -347,11 +400,13 @@ body {
   .gpu-grid { grid-template-columns: repeat(2, 1fr); }
   .run-row-summary { grid-template-columns: 40px 1fr 100px 80px 80px; }
   .run-row-summary .run-ipc, .run-row-summary .run-cores { display: none; }
+  .config-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 768px) {
   .chart-wrapper { height: 200px; }
   .stats-grid { grid-template-columns: 1fr; }
   .detail-grid { grid-template-columns: 1fr !important; }
+  .config-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
   .sidebar { display: none; }
@@ -360,78 +415,140 @@ body {
   .run-row-summary { grid-template-columns: 30px 1fr 80px 70px; }
   .run-row-summary .run-detail-btn { display: none; }
 }
-/* ---- Run Pills ---- */
-.run-pills {
-  display: flex; gap: 8px; margin-bottom: 20px; overflow-x: auto;
-  padding: 4px 0; flex-wrap: wrap;
+/* ---- Run Selector ---- */
+.run-selector-bar {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 18px; margin-bottom: 18px; transition: border-color 0.15s;
 }
-.run-pill {
-  padding: 8px 16px; border-radius: 20px; font-size: 0.8rem;
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--text2); cursor: pointer; transition: all 0.2s;
-  white-space: nowrap; display: flex; align-items: center; gap: 8px;
+.run-selector-bar:hover { border-color: var(--border-hover); }
+.run-selector-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.run-ds-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.run-ds-tab {
+  padding: 5px 14px; border-radius: 16px; font-size: 0.75rem; font-weight: 500;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text3); cursor: pointer; transition: all 0.15s;
+  white-space: nowrap; font-family: 'SF Mono', 'Fira Code', monospace;
 }
-.run-pill:hover { border-color: var(--accent); color: var(--text); }
-.run-pill.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
-.run-pill .pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.run-pill .pill-time { font-size: 0.7rem; color: var(--text3); }
+.run-ds-tab:hover { border-color: var(--accent); color: var(--text2); }
+.run-ds-tab.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.run-ds-tab .ds-count { font-size: 0.62rem; color: var(--text3); margin-left: 4px; opacity: 0.7; }
+.run-ds-tab.active .ds-count { color: var(--accent); opacity: 0.8; }
+.run-selector-info {
+  margin-left: auto; display: flex; align-items: center; gap: 14px;
+  font-size: 0.75rem; color: var(--text3);
+}
+.run-selector-info .rsi-value { font-weight: 600; color: var(--text); }
+.run-selector-info .rsi-accent { color: var(--accent); font-weight: 700; }
+.run-thread-row { display: flex; align-items: center; gap: 14px; }
+.run-thread-label { font-size: 0.68rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; flex-shrink: 0; }
+.run-thread-slider-wrap { flex: 1; position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.run-thread-stops { display: flex; justify-content: space-between; flex: 1; position: relative; }
+.run-thread-stop {
+  display: flex; flex-direction: column; align-items: center; cursor: pointer;
+  padding: 6px 10px; border-radius: 8px; transition: all 0.15s; position: relative; z-index: 1;
+  min-width: 52px; border: 1px solid transparent;
+}
+.run-thread-stop:hover { background: rgba(79,143,255,0.06); }
+.run-thread-stop.active { background: rgba(79,143,255,0.1); border-color: var(--accent); }
+.run-thread-stop .ts-threads { font-size: 0.82rem; font-weight: 700; color: var(--text2); transition: color 0.15s; }
+.run-thread-stop.active .ts-threads { color: var(--accent); }
+.run-thread-stop .ts-time { font-size: 0.65rem; color: var(--text3); margin-top: 2px; font-family: 'SF Mono', monospace; }
+.run-thread-stop.active .ts-time { color: var(--accent); opacity: 0.8; }
+.run-thread-stop .ts-speedup { font-size: 0.58rem; color: var(--green); margin-top: 1px; font-weight: 600; }
+.run-thread-track {
+  position: absolute; top: 50%; left: 20px; right: 20px; height: 2px;
+  background: var(--border); z-index: 0; transform: translateY(-50%);
+}
+.run-thread-track .track-fill {
+  height: 100%; background: var(--accent); border-radius: 1px; transition: width 0.2s;
+}
+.run-no-threads { font-size: 0.75rem; color: var(--text3); font-style: italic; padding: 8px 0; }
 /* ---- Leaderboard Table ---- */
 #leaderboardTable th { cursor: pointer; user-select: none; }
 #leaderboardTable th:hover { color: var(--accent); }
-#leaderboardTable td { font-size: 0.8rem; }
+#leaderboardTable td { font-size: 0.78rem; }
 #leaderboardTable .lb-dataset { font-family: 'SF Mono', 'Fira Code', monospace; color: var(--text); font-weight: 600; }
-#leaderboardTable .lb-model { font-family: 'SF Mono', 'Fira Code', monospace; color: var(--accent2); font-size: 0.75rem; }
+#leaderboardTable .lb-model { font-family: 'SF Mono', 'Fira Code', monospace; color: var(--accent2); font-size: 0.72rem; }
 #leaderboardTable .lb-rank { font-weight: 700; text-align: center; }
 #leaderboardTable .lb-rank.gold { color: #fbbf24; }
 #leaderboardTable .lb-rank.silver { color: #cbd5e1; }
 #leaderboardTable .lb-rank.bronze { color: #d97706; }
 .speedup-badge {
   display: inline-block; padding: 2px 8px; border-radius: 10px;
-  font-size: 0.75rem; font-weight: 600;
+  font-size: 0.72rem; font-weight: 600;
 }
-.speedup-good { background: rgba(34,197,94,0.1); color: #22c55e; }
-.speedup-warn { background: rgba(234,179,8,0.1); color: #eab308; }
-.speedup-bad { background: rgba(239,68,68,0.1); color: #ef4444; }
-.eff-bar { width: 60px; height: 6px; background: var(--surface); border-radius: 3px; display: inline-block; vertical-align: middle; overflow: hidden; }
+.speedup-good { background: rgba(52,211,153,0.1); color: var(--green); }
+.speedup-warn { background: rgba(251,191,36,0.1); color: var(--yellow); }
+.speedup-bad { background: rgba(248,113,113,0.1); color: var(--red); }
+.eff-bar { width: 55px; height: 5px; background: var(--surface); border-radius: 3px; display: inline-block; vertical-align: middle; overflow: hidden; }
 .eff-bar .fill { height: 100%; border-radius: 3px; }
-.no-data-msg { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 40px 20px; }
+.no-data-msg { color: var(--text3); font-size: 0.82rem; text-align: center; padding: 32px 20px; }
+/* ---- Scaling Comparison Cards ---- */
+.scaling-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.scaling-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 22px; box-shadow: var(--shadow-card); transition: border-color 0.2s;
+}
+.scaling-card:hover { border-color: var(--border-hover); }
+.scaling-card-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;
+}
+.scaling-card-title { font-size: 0.88rem; font-weight: 700; letter-spacing: -0.01em; }
+.scaling-card-meta { font-size: 0.68rem; color: var(--text3); }
+.scaling-card-meta .sc-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 8px;
+  background: var(--accent-glow); color: var(--accent); font-weight: 600; margin-left: 6px;
+}
+.scaling-rows { }
+.scaling-row {
+  display: grid; grid-template-columns: 48px 1fr 80px 70px 65px; gap: 8px;
+  align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(30,42,62,0.3);
+  font-size: 0.78rem;
+}
+.scaling-row:last-child { border-bottom: none; }
+.scaling-row .sr-threads { font-weight: 700; color: var(--accent); text-align: right; font-size: 0.82rem; }
+.scaling-row .sr-bar-wrap { height: 8px; background: var(--surface); border-radius: 4px; overflow: hidden; position: relative; }
+.scaling-row .sr-bar { height: 100%; border-radius: 4px; transition: width 0.5s; }
+.scaling-row .sr-time { font-weight: 600; text-align: right; font-family: 'SF Mono', monospace; font-size: 0.75rem; }
+.scaling-row .sr-speedup { text-align: center; }
+.scaling-row .sr-eff { text-align: right; font-size: 0.72rem; }
 /* ---- Tab Bar ---- */
 .tab-bar {
-  display: flex; gap: 4px; margin-bottom: 20px; background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; width: fit-content;
+  display: flex; gap: 3px; margin-bottom: 18px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px; width: fit-content;
 }
 .tab-btn {
-  padding: 8px 20px; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 500;
-  border: none; background: transparent; color: var(--text3); cursor: pointer; transition: all 0.2s;
+  padding: 7px 18px; border-radius: var(--radius-sm); font-size: 0.82rem; font-weight: 500;
+  border: none; background: transparent; color: var(--text3); cursor: pointer; transition: all 0.15s;
 }
 .tab-btn.active { background: var(--accent-glow); color: var(--accent); }
-.tab-btn:hover:not(.active) { color: var(--text); }
+.tab-btn:hover:not(.active) { color: var(--text2); }
 .tab-btn .tab-count {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 18px; border-radius: 9px; font-size: 0.7rem;
-  background: var(--border); color: var(--text3); margin-left: 6px; padding: 0 6px;
+  min-width: 18px; height: 16px; border-radius: 8px; font-size: 0.68rem;
+  background: var(--border); color: var(--text3); margin-left: 6px; padding: 0 5px;
 }
-.tab-btn.active .tab-count { background: rgba(59,130,246,0.2); color: var(--accent); }
+.tab-btn.active .tab-count { background: rgba(79,143,255,0.15); color: var(--accent); }
 /* ---- Profile Row (All Runs) ---- */
 .profile-row {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-  margin-bottom: 8px; padding: 16px 20px; transition: border-color 0.2s; cursor: pointer;
-  display: grid; grid-template-columns: 40px 1fr 120px 100px 100px 100px;
-  align-items: center; gap: 12px;
+  margin-bottom: 6px; padding: 14px 18px; transition: all 0.15s; cursor: pointer;
+  display: grid; grid-template-columns: 40px 1fr 110px 90px 1fr 90px;
+  align-items: center; gap: 12px; box-shadow: var(--shadow-card);
 }
-.profile-row:hover { border-color: var(--accent2); box-shadow: 0 0 0 1px rgba(139,92,246,0.15); }
-.profile-row .rank { font-size: 0.85rem; font-weight: 700; color: var(--text3); text-align: center; }
+.profile-row:hover { border-color: var(--accent2); box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(167,139,250,0.1) inset; }
+.profile-row .rank { font-size: 0.82rem; font-weight: 700; color: var(--text3); text-align: center; }
 .profile-row .prof-info { min-width: 0; }
-.profile-row .prof-id { font-weight: 600; font-size: 0.9rem; }
-.profile-row .prof-meta { font-size: 0.75rem; color: var(--text3); margin-top: 2px; }
-.profile-row .prof-dataset { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; color: var(--text2); }
+.profile-row .prof-id { font-weight: 600; font-size: 0.88rem; }
+.profile-row .prof-meta { font-size: 0.72rem; color: var(--text3); margin-top: 2px; }
+.profile-row .prof-dataset { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.78rem; color: var(--text2); }
 .profile-row .prof-ipc { text-align: center; font-weight: 600; color: var(--accent2); }
-.profile-row .prof-hotspot { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-row .prof-gpu { text-align: center; color: var(--text2); font-size: 0.85rem; }
+.profile-row .prof-hotspot { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.72rem; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-row .prof-gpu { text-align: center; color: var(--text2); font-size: 0.82rem; }
 /* ---- Page transitions ---- */
 .page { display: none; }
-.page.active { display: block; animation: fadeIn 0.25s ease; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.page.active { display: block; animation: fadeIn 0.2s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
@@ -492,20 +609,48 @@ body {
         </div>
         <span class="badge" id="statusBadge">--</span>
       </div>
-      <div class="run-pills" id="runPills"></div>
-      <div class="stats-grid" id="statsGrid" style="grid-template-columns: repeat(5, 1fr);"></div>
+      <div class="run-selector-bar" id="runSelectorBar">
+        <div class="run-selector-top">
+          <div class="run-ds-tabs" id="runDsTabs"></div>
+          <div class="run-selector-info" id="runSelectorInfo"></div>
+        </div>
+        <div class="run-thread-row">
+          <div class="run-thread-label">Threads</div>
+          <div class="run-thread-slider-wrap">
+            <div class="run-thread-track"><div class="track-fill" id="trackFill"></div></div>
+            <div class="run-thread-stops" id="runThreadStops"></div>
+          </div>
+        </div>
+      </div>
+      <!-- Hero Stats -->
+      <div class="stats-grid" id="statsGrid" style="grid-template-columns: repeat(4, 1fr);"></div>
+      <!-- IQ-TREE Configuration for current run -->
+      <div class="card" id="overviewConfigCard" style="display:none;">
+        <div class="card-header">
+          <h2>IQ-TREE Configuration</h2>
+          <div class="actions">
+            <button class="copy-all-btn" id="copyOverviewConfigBtn" onclick="copyOverviewConfig(this)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy Config
+            </button>
+          </div>
+        </div>
+        <div id="overviewConfigContent"></div>
+      </div>
       <!-- Performance Leaderboard -->
       <div class="card">
         <div class="card-header">
           <h2>Performance Leaderboard</h2>
           <div class="actions">
-            <button class="btn" onclick="sortLeaderboard('time')" id="lbSortTime">Wall Time</button>
+            <span class="count" id="lbCount" style="margin-right:8px;"></span>
+            <button class="btn active" onclick="sortLeaderboard('time')" id="lbSortTime">Wall Time</button>
             <button class="btn" onclick="sortLeaderboard('speedup')" id="lbSortSpeedup">Speedup</button>
           </div>
         </div>
+        <div class="filter-bar" id="lbDatasetFilters" style="padding:0 16px 8px 16px;gap:6px;flex-wrap:wrap;"></div>
         <div class="table-scroll">
         <table class="data-table" id="leaderboardTable">
-          <thead><tr><th>#</th><th>Dataset</th><th>Taxa</th><th>Sites</th><th>Model</th><th>Block</th><th>T</th><th>GPU</th><th>Wall(s)</th><th>Speedup</th><th>Eff.</th><th>LogLik</th><th></th></tr></thead>
+          <thead><tr><th>#</th><th>Dataset</th><th>Taxa</th><th>Sites</th><th>Model</th><th>Block</th><th>T</th><th>GPU</th><th>Wall(s)</th><th>Speedup</th><th></th><th>IPC</th><th>LogLik</th></tr></thead>
           <tbody></tbody>
         </table>
         </div>
@@ -514,11 +659,27 @@ body {
         <!-- Hotspot Breakdown -->
         <div class="card">
           <div class="card-header"><h2>Hotspot Breakdown</h2></div>
+          <div class="cs-panel">
+            <div class="cs-search-row">
+              <input type="text" class="cs-search" id="hotspotSearch" placeholder="Filter profiles..." oninput="renderHotspotSelector()">
+              <button class="cs-btn" onclick="hotspotSelectAll()">All</button>
+              <button class="cs-btn" onclick="hotspotSelectNone()">None</button>
+            </div>
+            <div class="cs-list" id="hotspotCheckList"></div>
+          </div>
           <div class="chart-wrapper"><canvas id="hotspotChart"></canvas></div>
         </div>
         <!-- Microarchitecture Radar -->
         <div class="card">
           <div class="card-header"><h2>Microarchitecture Profile</h2></div>
+          <div class="cs-panel">
+            <div class="cs-search-row">
+              <input type="text" class="cs-search" id="microarchSearch" placeholder="Filter runs..." oninput="renderMicroarchSelector()">
+              <button class="cs-btn" onclick="microarchSelectAll()">All</button>
+              <button class="cs-btn" onclick="microarchSelectNone()">None</button>
+            </div>
+            <div class="cs-list" id="microarchCheckList"></div>
+          </div>
           <div class="chart-wrapper"><canvas id="microarchChart"></canvas></div>
         </div>
       </div>
@@ -527,14 +688,6 @@ body {
         <div class="card">
           <div class="card-header"><h2>Thread Scaling</h2></div>
           <div class="chart-wrapper"><canvas id="scalingChart"></canvas></div>
-        </div>
-        <!-- Latest Profile Summary -->
-        <div class="card" id="latestProfileCard" style="display:none;">
-          <div class="card-header">
-            <h2>Latest Deep Profile</h2>
-            <div class="actions"><button class="btn" onclick="showPage('profiling')">View Full Profile &rarr;</button></div>
-          </div>
-          <div id="latestProfileContent"></div>
         </div>
       </div>
       <!-- Quick command reference for current run -->
@@ -819,8 +972,12 @@ var DATA = [{"run_id": "2026-04-18_201515", "slurm_id": "41683322", "timing": [{
 var PROFILES = [{"profile_id": "2026-04-18_223223", "date": "2026-04-18T22:32:23+08:00", "dataset": "test_scripts/test_data/turtle.fa", "threads": 1, "model": "GTR+G4", "cpu": {"counters": {"cycles": 5217266714, "instructions": 12176445021, "cache-references": 624885458, "cache-misses": 17844625, "branch-instructions": 1242451082, "branch-misses": 4061928, "L1-dcache-loads": 5459471512, "L1-dcache-load-misses": 485401643, "L1-icache-load-misses": 1629067, "dTLB-loads": 10831110, "dTLB-load-misses": 56444, "iTLB-loads": 703581, "iTLB-load-misses": 401892, "stalled-cycles-frontend": 162782116, "task-clock": 1623.53, "context-switches": 0, "cpu-migrations": 0, "page-faults": 1609}, "derived": {"IPC": 2.334, "cache-miss-rate": 2.8557, "branch-miss-rate": 0.3269, "L1-dcache-miss-rate": 8.891, "dTLB-miss-rate": 0.5211, "iTLB-miss-rate": 57.1209, "frontend-stall-rate": 3.1201, "backend-stall-rate": 0.0}, "hotspots": [{"percent": 39.12, "samples": 48, "command": "iqtree3", "module": "iqtree3", "function": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*) [c"}], "folded_stacks": [{"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void", "count": 48}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void;void;void", "count": 41}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void;void", "count": 5}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;double;void", "count": 4}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];void;void", "count": 3}, {"stack": "_dl_start_user;_dl_start;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 2}, {"stack": "[unknown]", "count": 2}, {"stack": "[unknown];[unknown]", "count": 2}, {"stack": "[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 2}, {"stack": "[unknown];[unknown];[unknown];[unknown]", "count": 2}, {"stack": "_start;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "_dl_start_user;_dl_start;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "[unknown];[unknown];__GI___tunables_init", "count": 1}, {"stack": "[unknown];[unknown];do_lookup_x", "count": 1}, {"stack": "clone3;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "start_thread;[unknown];[unknown]", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];PhyloTree::computeBioNJ(Params&)", "count": 1}, {"stack": "[unknown];std::__basic_file<char>::close()", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];PhyloTree::computeBioNJ(Params&);StartTree::Builder<StartTree::BoundingMatrix<float,;std::ios_base::_M_dispose_callbacks()", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];PhyloTree::computeBioNJ(Params&);operator", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];PhyloTree::computeBioNJ(Params&);StartTree::UPGMA_Matrix<float>::~UPGMA_Matrix();[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "std::_Rb_tree_rebalance_for_erase(std::_Rb_tree_node_base*,", "count": 1}, {"stack": "[unknown];addTraverseParsimony.constprop.0;evaluateParsimonyIterativeFast;newviewParsimonyIterativeFast", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;double", "count": 1}, {"stack": "[unknown];_int_free_merge_chunk", "count": 1}, {"stack": "_int_free", "count": 1}, {"stack": "__mpn_mul_1", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];[unknown]", "count": 1}, {"stack": "[unknown];PhyloNode::~PhyloNode();[unknown];void;PhyloTree::computeTraversalInfo(PhyloNeighbor*,", "count": 1}, {"stack": "[unknown];PhyloNode::~PhyloNode();[unknown];void;Node::isLeaf()", "count": 1}, {"stack": "[unknown];_int_free_create_chunk", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];IQTree::evaluateNNIs(std::map<int,;Node::findNeighbor(Node*)", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "malloc", "count": 1}]}, "gpu": {"hardware": {"temperature_c": 38.0, "power_w": null, "utilization_pct": 0.0}, "kernels": [], "hip_calls": [], "memory_copies": []}, "system": {"hostname": "nid002996", "date": "2026-04-18T22:32:23+08:00", "run_id": "41686812", "cpu": "AMD EPYC 7A53 64-Core Processor", "cores": "16", "threads_per_core": "2", "sockets": "1", "numa_nodes": "4", "l1d_cache": "2 MiB (64 instances)", "l1i_cache": "2 MiB (64 instances)", "l2_cache": "32 MiB (64 instances)", "l3_cache": "256 MiB (8 instances)", "mem_total_gb": "250", "gcc": "gcc (SUSE Linux) 14.3.0", "rocm": "HIP version: 6.3.42131-fa1d09cbd", "gpu": "N/A"}, "commands": {"modules": "module load rocm/6.3.0 eigen/3.4.0 boost/1.86.0-c++14-python", "perf_stat": "perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-load-misses,LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,task-clock,context-switches,cpu-migrations,page-faults ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "perf_record": "perf record -g -F 99 ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocprofv3_kernel": "rocprofv3 --kernel-trace --stats --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocprofv3_hip": "rocprofv3 --hip-trace --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocprofv3_memory": "rocprofv3 --memory-copy-trace --output-format csv -- ./iqtree3 -s test_scripts/test_data/turtle.fa -m GTR+G4 -T 1", "rocm_smi": "rocm-smi --showtemp --showpower --showuse --showmemuse --showclkfrq --json"}, "alignment": {"taxa": 12, "sites": 1000, "data_type": "nucleotide", "constant_sites": 546, "constant_sites_pct": 54.6, "informative_sites": 315, "site_patterns": 434, "substitution_model": "GTR+F+G4", "rate_model": "Gamma with 4 categories", "gamma_alpha": 0.3754, "log_likelihood": -5377.9451, "aic": 10815.8903, "bic": 10963.1229, "free_parameters": 30, "tree_length": 1.4724, "state_frequencies": {"A": 0.3271, "C": 0.2039, "G": 0.2243, "T": 0.2447}, "wall_time_sec": 1.62, "cpu_time_sec": 1.491, "file_size_bytes": 12150}, "slurm_id": "41686812"}, {"profile_id": "2026-04-18_225047", "date": "2026-04-18T22:50:47+08:00", "dataset": "benchmarks/medium_dna.fa", "threads": 4, "model": "GTR+G4", "cpu": {"counters": {"cycles": 356509358883, "instructions": 819737884542, "cache-references": 55359380056, "cache-misses": 4247463821, "branch-instructions": 70699214278, "branch-misses": 102794462, "L1-dcache-loads": 373410984758, "L1-dcache-load-misses": 30770443563, "L1-icache-load-misses": 17865198, "dTLB-loads": 500964363, "dTLB-load-misses": 3907823, "iTLB-loads": 4790529, "iTLB-load-misses": 6588259, "stalled-cycles-frontend": 7949661525, "task-clock": 103435.14, "context-switches": 0, "cpu-migrations": 0, "page-faults": 75866}, "derived": {"IPC": 2.299, "cache-miss-rate": 7.6725, "branch-miss-rate": 0.1454, "L1-dcache-miss-rate": 8.2404, "dTLB-miss-rate": 0.7801, "iTLB-miss-rate": 137.5268, "frontend-stall-rate": 2.2299, "backend-stall-rate": 0.0}, "hotspots": [{"percent": 39.04, "samples": 3773, "command": "iqtree3", "module": "iqtree3", "function": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*) [c"}, {"percent": 32.5, "samples": 3138, "command": "iqtree3", "module": "iqtree3", "function": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long,"}, {"percent": 10.24, "samples": 998, "command": "iqtree3", "module": "iqtree3", "function": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, uns"}, {"percent": 6.56, "samples": 1382, "command": "iqtree3", "module": "libgomp.so.1.0.0", "function": "0x0000000000025766"}, {"percent": 1.58, "samples": 302, "command": "iqtree3", "module": "libgomp.so.1.0.0", "function": "0x0000000000025762"}, {"percent": 1.53, "samples": 163, "command": "iqtree3", "module": "libgomp.so.1.0.0", "function": "0x0000000000025946"}, {"percent": 0.86, "samples": 51, "command": "iqtree3", "module": "iqtree3", "function": "newviewParsimonyIterativeFast"}, {"percent": 0.82, "samples": 80, "command": "iqtree3", "module": "iqtree3", "function": "double PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>() [clone ._omp_fn.0]"}], "folded_stacks": [{"stack": "[unknown];[unknown];void", "count": 2827}, {"stack": "[unknown];[unknown];void;void;void", "count": 2206}, {"stack": "[unknown];[unknown]", "count": 1897}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void", "count": 948}, {"stack": "[unknown];[unknown];void;void", "count": 746}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void;void;void", "count": 723}, {"stack": "[unknown]", "count": 312}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void;void", "count": 251}, {"stack": "[unknown];[unknown];double;void", "count": 155}, {"stack": "start_thread;[unknown];[unknown];[unknown]", "count": 150}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown]", "count": 113}, {"stack": "[unknown];[unknown];[unknown]", "count": 90}, {"stack": "start_thread;[unknown]", "count": 87}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 74}, {"stack": "start_thread", "count": 66}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 66}, {"stack": "[unknown];[unknown];double", "count": 66}, {"stack": "[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 60}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;double;void", "count": 54}, {"stack": "start_thread;[unknown];[unknown]", "count": 51}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;[unknown]", "count": 40}, {"stack": "[unknown];addTraverseParsimony.constprop.0;newviewParsimonyIterativeFast", "count": 35}, {"stack": "[unknown];[unknown];[unknown];[unknown]", "count": 34}, {"stack": "[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 23}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 22}, {"stack": "[unknown];PhyloNode::~PhyloNode();[unknown];Node::findNeighbor(Node*)", "count": 22}, {"stack": "[unknown];StartTree::BoundingMatrix<float,;[unknown];[unknown];StartTree::BoundingMatrix<float,", "count": 21}, {"stack": "allocateParsimonyDataStructures", "count": 21}, {"stack": "__call_tls_dtors", "count": 20}, {"stack": "[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 19}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];void;void", "count": 18}, {"stack": "PhyloTree::computePartialParsimonyFast(PhyloNeighbor*,", "count": 18}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;double", "count": 18}, {"stack": "__madvise;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 15}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 15}, {"stack": "PhyloTree::setParsimonyBranchLengths()", "count": 15}, {"stack": "[unknown];__GI___pthread_self", "count": 14}, {"stack": "__madvise;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 14}, {"stack": "[unknown];StartTree::NJMatrix<float>::cluster(unsigned", "count": 13}, {"stack": "_setjmp", "count": 13}, {"stack": "__madvise;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 13}, {"stack": "GOMP_loop_nonmonotonic_dynamic_start", "count": 13}, {"stack": "[unknown];non-virtual;void", "count": 13}, {"stack": "[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 12}, {"stack": "[unknown];pthread_detach@@GLIBC_2.34", "count": 11}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 10}, {"stack": "__getpagesize", "count": 9}, {"stack": "[unknown];addTraverseParsimony.constprop.0;evaluateParsimonyIterativeFast;newviewParsimonyIterativeFast", "count": 9}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;[unknown];[unknown]", "count": 9}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];IQTree::evaluateNNIs(std::map<int,;PhyloTree::getBestNNIForBran(PhyloNode*,;double", "count": 8}, {"stack": "[unknown];stepwiseAddition;evaluateParsimonyIterativeFast;newviewParsimonyIterativeFast", "count": 7}, {"stack": "AlignmentSummary::constructSequenceMatrix(bool,", "count": 7}, {"stack": "[unknown];[unknown];void;void;Node::isLeaf()", "count": 7}, {"stack": "__madvise;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 6}, {"stack": "getBitVector", "count": 6}, {"stack": "[unknown];omp_get_num_threads", "count": 5}, {"stack": "__malloc_arena_thread_freeres", "count": 5}, {"stack": "__madvise;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 5}, {"stack": "[unknown];StartTree::BoundingMatrix<float,;[unknown];[unknown];omp_get_num_threads", "count": 5}, {"stack": "[unknown];void", "count": 5}, {"stack": "[unknown];[unknown];void;void;__memmove_avx_unaligned_erms", "count": 5}, {"stack": "__madvise;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 4}, {"stack": "[unknown];__GI___pthread_self;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 4}, {"stack": "[unknown];StartTree::BoundingMatrix<float,;[unknown];StartTree::Matrix<float>::removeRowAndColumn(unsigned", "count": 4}, {"stack": "start_thread;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 4}, {"stack": "[unknown];StartTree::BoundingMatrix<float,;[unknown];[unknown];GOMP_critical_name_start", "count": 4}, {"stack": "__libc_dlerror_result_free", "count": 4}, {"stack": "malloc", "count": 4}, {"stack": "[unknown];[unknown];void;Node::findNeighbor(Node*)", "count": 4}, {"stack": "PhyloTree::getBufferPartialLhSize()", "count": 4}, {"stack": "[unknown];PhyloNode::~PhyloNode();[unknown];PhyloNode::clearReversePartialLh(PhyloNode*)", "count": 4}, {"stack": "clone3;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 3}, {"stack": "std::__cxx11::basic_string<char,", "count": 3}, {"stack": "__madvise;[unknown];[unknown]", "count": 3}, {"stack": "cfree@GLIBC_2.2.5", "count": 3}, {"stack": "allocateParsimonyDataStructures;isInformative", "count": 3}, {"stack": "[unknown];addTraverseParsimony.constprop.0;evaluateParsimonyIterativeFast", "count": 3}, {"stack": "__printf_fp_l_buffer;__printf_fp_buffer_1.isra.0", "count": 3}, {"stack": "[unknown];computeTraversalInfoParsimony.constprop.0", "count": 3}, {"stack": "Optimization::minimizeNewton(double,", "count": 3}, {"stack": "[unknown];[unknown];GOMP_atomic_start", "count": 3}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;[unknown];[unknown];[unknown];[unknown]", "count": 3}, {"stack": "[unknown];non-virtual", "count": 3}, {"stack": "[unknown];[unknown];GOMP_atomic_end", "count": 3}, {"stack": "_dl_fixup", "count": 2}, {"stack": "__madvise;[unknown]", "count": 2}, {"stack": "[unknown];StartTree::BoundingMatrix<float,;[unknown];omp_get_num_threads", "count": 2}, {"stack": "[unknown];__GI___pthread_self;[unknown];[unknown];[unknown];[unknown]", "count": 2}, {"stack": "[unknown];StartTree::BoundingMatrix<float,", "count": 2}, {"stack": "__madvise;[unknown];[unknown];[unknown]", "count": 2}, {"stack": "[unknown];StartTree::Matrix<float>::removeRowAndColumn(unsigned", "count": 2}, {"stack": "__resolv_context_freeres", "count": 2}, {"stack": "__call_tls_dtors;[unknown];[unknown];[unknown]", "count": 2}, {"stack": "__call_tls_dtors;[unknown]", "count": 2}, {"stack": "[unknown];[unknown];__memmove_avx_unaligned_erms;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 2}, {"stack": "[unknown];addTraverseParsimony.constprop.0", "count": 2}, {"stack": "[unknown];non-virtual;Node::findNeighbor(Node*)", "count": 2}, {"stack": "AlignmentSummary::AlignmentSummary(Alignment", "count": 2}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;void;void;__memmove_avx_unaligned_erms", "count": 2}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;GOMP_loop_end_nowait", "count": 2}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];[unknown];GOMP_parallel;[unknown];[unknown];[unknown]", "count": 2}, {"stack": "[unknown];_int_free_merge_chunk", "count": 2}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];cfree@GLIBC_2.2.5;[unknown];[unknown]", "count": 2}, {"stack": "[unknown];_int_malloc", "count": 2}, {"stack": "void;[unknown]", "count": 2}, {"stack": "[unknown];non-virtual;virtual", "count": 2}, {"stack": "_start;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "_dl_start_user;_dl_start;[unknown]", "count": 1}, {"stack": "_dl_start_user;_dl_start;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "_dl_start_user;_dl_start;[unknown];[unknown];[unknown]", "count": 1}, {"stack": "[unknown];[unknown];__GI___tunables_init;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "clone3;[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "[unknown];[unknown];Alignment::detectSequenceType(std::vector<std::__cxx11::basic_string<char,", "count": 1}, {"stack": "std::basic_ifstream<char,;ModelsBlock::Read(NxsToken&)", "count": 1}, {"stack": "[unknown];[unknown];std::istream::sentry::sentry(std::istream&,", "count": 1}, {"stack": "[unknown];[unknown];std::istream::get()", "count": 1}, {"stack": "[unknown];AlignmentPairwise::setSequenceNumbers(int,", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];Optimization::minimizeNewton(double,;AlignmentPairwise::computeFuncDerv(double,;ModelMarkov::dotProduct(double", "count": 1}, {"stack": "clone3;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "StartTree::UPGMA_Matrix<float>::loadMatrix(std::vector<std::__cxx11::basic_string<char,", "count": 1}, {"stack": "progress_display::operator", "count": 1}, {"stack": "__getrusage;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "omp_get_num_threads", "count": 1}, {"stack": "free@plt;[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__call_tls_dtors;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__libc_thread_freeres", "count": 1}, {"stack": "__libc_thread_freeres;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__glibc_tls_internal_free", "count": 1}, {"stack": "[unknown];StartTree::BoundingMatrix<float,;[unknown];[unknown];[unknown]", "count": 1}, {"stack": "StartTree::NJMatrix<float>::cluster(unsigned", "count": 1}, {"stack": "__GI___nptl_deallocate_tsd", "count": 1}, {"stack": "__res_thread_freeres;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__resolv_context_freeres;[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "[unknown];start_thread", "count": 1}, {"stack": "__sigsetjmp", "count": 1}, {"stack": "__malloc_arena_thread_freeres;[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__call_tls_dtors;[unknown];[unknown]", "count": 1}, {"stack": "__getpagesize;[unknown]", "count": 1}, {"stack": "__rpc_thread_destroy;[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__uselocale", "count": 1}, {"stack": "[unknown];PhyloTree::copyTree(MTree*,;[unknown];IQTree::getNNIBranches(SplitIntMap&,", "count": 1}, {"stack": "[unknown];stepwiseAddition", "count": 1}, {"stack": "[unknown];[unknown];__memmove_avx_unaligned_erms;[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown];[unknown]", "count": 1}, {"stack": "__strchrnul_avx2", "count": 1}, {"stack": "[unknown];PhyloNode::~PhyloNode();[unknown];PhyloTree::computePartialParsimonyFast(PhyloNeighbor*,", "count": 1}, {"stack": "__GI_____strtod_l_internal", "count": 1}, {"stack": "[unknown];non-virtual;[unknown];MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;std::ostream::sentry::sentry(std::ostream&)", "count": 1}, {"stack": "[unknown];non-virtual;[unknown];MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;std::ostream::sentry::sentry(std::ostream&)", "count": 1}, {"stack": "[unknown];non-virtual;[unknown];MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;std::basic_streambuf<char,", "count": 1}, {"stack": "[unknown];[unknown];std::locale::id::_M_id()", "count": 1}]}, "gpu": {"hardware": {"temperature_c": 33.0, "power_w": 89.0, "utilization_pct": 0.0}, "kernels": [], "hip_calls": [], "memory_copies": []}, "system": {"hostname": "nid002996", "date": "2026-04-18T22:50:47+08:00", "run_id": "41686954", "cpu": "AMD EPYC 7A53 64-Core Processor", "cores": "16", "threads_per_core": "2", "sockets": "1", "numa_nodes": "4", "l1d_cache": "2 MiB (64 instances)", "l1i_cache": "2 MiB (64 instances)", "l2_cache": "32 MiB (64 instances)", "l3_cache": "256 MiB (8 instances)", "mem_total_gb": "250", "gcc": "gcc (SUSE Linux) 14.3.0", "rocm": "HIP version: 6.3.42131-fa1d09cbd", "gpu": "N/A"}, "commands": {"modules": "module load rocm/6.3.0 eigen/3.4.0 boost/1.86.0-c++14-python", "perf_stat": "perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-load-misses,LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,task-clock,context-switches,cpu-migrations,page-faults ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4", "perf_record": "perf record -g -F 99 ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4", "rocprofv3_kernel": "rocprofv3 --kernel-trace --stats --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4", "rocprofv3_hip": "rocprofv3 --hip-trace --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4", "rocprofv3_memory": "rocprofv3 --memory-copy-trace --output-format csv -- ./iqtree3 -s benchmarks/medium_dna.fa -m GTR+G4 -T 4", "rocm_smi": "rocm-smi --showtemp --showpower --showuse --showmemuse --showclkfrq --json"}, "alignment": {"taxa": 50, "sites": 5000, "data_type": "nucleotide", "constant_sites": 311, "constant_sites_pct": 6.22, "informative_sites": 4326, "site_patterns": 4559, "substitution_model": "GTR+F+G4", "rate_model": "Gamma with 4 categories", "gamma_alpha": 0.9915, "log_likelihood": -160268.6623, "aic": 320749.3247, "bic": 321440.1471, "free_parameters": 106, "tree_length": 10.7852, "state_frequencies": {"A": 0.3156, "C": 0.2196, "G": 0.1864, "T": 0.2784}, "wall_time_sec": 26.922, "cpu_time_sec": 102.538, "file_size_bytes": 250600}, "slurm_id": "41686954"}];
 var currentRunIdx = DATA.length - 1;
 var currentProfileIdx = PROFILES.length - 1;
+var currentDataset = null; // selected dataset for run selector
+var _profViewingRun = null; // tracking which run is shown in profiling page
 var charts = {};
 var expandedRunId = null;
+var hotspotSelection = {};
+var microarchSelection = {};
 
 // ============ Navigation ============
 document.querySelectorAll('.sidebar nav a').forEach(function(a) {
@@ -870,6 +1027,7 @@ function copySingleCmd(text, btn) { copyText(text, btn); }
 
 // ============ Formatting ============
 function fmtTime(s) {
+  if (s >= 3600) return (s / 3600).toFixed(1) + 'h';
   if (s >= 60) return (s / 60).toFixed(1) + 'm';
   return s.toFixed(2) + 's';
 }
@@ -884,12 +1042,15 @@ function loadData() {
   }
   currentRunIdx = DATA.length - 1;
   populateAllSelectors();
+  initChartSelectors();
+  renderHotspotSelector();
+  renderMicroarchSelector();
   renderAll();
   renderRunsList();
   renderProfilesList();
   document.getElementById('serverDot').style.background = 'var(--green)';
   document.getElementById('serverStatus').textContent = 'Static (GitHub Pages)';
-  document.getElementById('lastUpdate').textContent = 'Generated: 2026-04-20 17:41:39';
+  document.getElementById('lastUpdate').textContent = 'Generated: 2026-04-20 21:28:14';
 }
 
 function populateAllSelectors() {
@@ -898,7 +1059,8 @@ function populateAllSelectors() {
     var sel = document.getElementById(id);
     if (!sel) return;
     sel.innerHTML = DATA.map(function(r, i) {
-      return '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>Run ' + r.run_id + '</option>';
+      var label = r.label || r.run_id;
+      return '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>' + escHtml(label) + ' (' + fmtTime(r.summary.total_time) + ')</option>';
     }).join('');
   });
   // Update tab counts
@@ -919,7 +1081,7 @@ function refreshData() { loadData(); }
 // ============ Rendering ============
 function renderAll() {
   var run = DATA[currentRunIdx];
-  renderRunPills();
+  renderRunSelector();
   renderOverview(run);
   renderTests(run);
   renderProfiling(run);
@@ -929,111 +1091,414 @@ function renderAll() {
   renderQuickCmds(run);
 }
 
-// ============ Overview ============
-function renderRunPills() {
-  var pills = document.getElementById('runPills');
-  if (!pills) return;
-  pills.innerHTML = DATA.map(function(r, i) {
-    var isActive = i === currentRunIdx;
-    var dotColor = r.summary.all_pass ? 'var(--green)' : 'var(--red)';
-    var dateShort = (r.env.date || '').substring(0, 10);
-    var timeShort = fmtTime(r.summary.total_time);
-    return '<div class="run-pill' + (isActive ? ' active' : '') + '" onclick="switchRun(' + i + ')" title="' + r.run_id + '">' +
-      '<span class="pill-dot" style="background:' + dotColor + '"></span>' +
-      '<span>' + r.run_id.substring(0, 16) + '</span>' +
-      '<span class="pill-time">' + timeShort + '</span>' +
+// ============ Run Selector ============
+function buildRunIndex() {
+  // Group runs by dataset, mapping dataset->thread->DATA index
+  var index = {};
+  DATA.forEach(function(r, i) {
+    r.timing.forEach(function(t) {
+      var p = parseCmd(t.command);
+      var ds = p.dataset;
+      if (ds === 'unknown') ds = r.label || r.run_id;
+      if (!index[ds]) index[ds] = {};
+      index[ds][p.threads] = i;
+    });
+  });
+  return index;
+}
+
+function renderRunSelector() {
+  var tabsEl = document.getElementById('runDsTabs');
+  var stopsEl = document.getElementById('runThreadStops');
+  var infoEl = document.getElementById('runSelectorInfo');
+  if (!tabsEl || !stopsEl) return;
+
+  var runIndex = buildRunIndex();
+  var dsKeys = Object.keys(runIndex).sort(function(a, b) {
+    // Sort benchmark datasets first, then others
+    var aIsBench = false, bIsBench = false;
+    var aThreads = Object.keys(runIndex[a]);
+    var bThreads = Object.keys(runIndex[b]);
+    aThreads.forEach(function(t) { var r = DATA[runIndex[a][t]]; if (r.run_type === 'cpu_baseline' || r.run_type === 'gpu_benchmark') aIsBench = true; });
+    bThreads.forEach(function(t) { var r = DATA[runIndex[b][t]]; if (r.run_type === 'cpu_baseline' || r.run_type === 'gpu_benchmark') bIsBench = true; });
+    if (aIsBench && !bIsBench) return -1;
+    if (!aIsBench && bIsBench) return 1;
+    return a.localeCompare(b);
+  });
+
+  // Auto-select dataset if not set or invalid
+  if (!currentDataset || dsKeys.indexOf(currentDataset) === -1) {
+    var found = false;
+    dsKeys.forEach(function(ds) {
+      var threads = Object.keys(runIndex[ds]);
+      threads.forEach(function(t) {
+        if (runIndex[ds][t] === currentRunIdx) { currentDataset = ds; found = true; }
+      });
+    });
+    if (!found) currentDataset = dsKeys[0];
+  }
+
+  // Render dataset tabs
+  tabsEl.innerHTML = dsKeys.map(function(ds) {
+    var short = ds.replace('.fa', '').replace('.phy', '');
+    var count = Object.keys(runIndex[ds]).length;
+    var isActive = ds === currentDataset;
+    return '<div class="run-ds-tab' + (isActive ? ' active' : '') + '" onclick="selectDataset(\''+escAttr(ds)+'\')"><span>' + escHtml(short) + '</span><span class="ds-count">' + count + '</span></div>';
+  }).join('');
+
+  // Get thread configs for current dataset
+  var dsRuns = runIndex[currentDataset] || {};
+  var threadKeys = Object.keys(dsRuns).map(function(t) { return parseInt(t); }).sort(function(a, b) { return a - b; });
+
+  if (threadKeys.length === 0) {
+    stopsEl.innerHTML = '<div class="run-no-threads">No thread variants</div>';
+    document.getElementById('trackFill').style.width = '0';
+    return;
+  }
+
+  // Find active thread index
+  var activeThreadIdx = 0;
+  threadKeys.forEach(function(t, idx) {
+    if (dsRuns[t] === currentRunIdx) activeThreadIdx = idx;
+  });
+
+  // Track fill percentage
+  var fillPct = threadKeys.length > 1 ? (activeThreadIdx / (threadKeys.length - 1) * 100) : 0;
+  document.getElementById('trackFill').style.width = fillPct + '%';
+
+  // Render thread stops
+  stopsEl.innerHTML = threadKeys.map(function(t, idx) {
+    var runIdx = dsRuns[t];
+    var isActive = runIdx === currentRunIdx;
+    return '<div class="run-thread-stop' + (isActive ? ' active' : '') + '" onclick="selectThread(' + t + ')">' +
+      '<div class="ts-threads">' + t + 'T</div>' +
     '</div>';
   }).join('');
+
+  // Info panel: show current run details
+  var curRun = DATA[currentRunIdx];
+  var curCmd = curRun.timing.length > 0 ? curRun.timing[0] : null;
+  var curInfo = curCmd ? parseCmd(curCmd.command) : null;
+  var model = '';
+  if (curRun.modelfinder && curRun.modelfinder.model_selected) {
+    model = curRun.modelfinder.model_selected.replace(' chosen according to BIC', '');
+  } else if (curInfo) {
+    model = curInfo.model;
+  }
+  infoEl.innerHTML =
+    '<span>Model: <span class="rsi-value">' + escHtml(model || 'AUTO') + '</span></span>' +
+    '<span>Time: <span class="rsi-accent">' + fmtTime(curRun.summary.total_time) + '</span></span>' +
+    '<span>' + escHtml(curRun.env.hostname || '') + '</span>';
+}
+
+function selectDataset(ds) {
+  currentDataset = ds;
+  // Switch to the first thread in this dataset
+  var runIndex = buildRunIndex();
+  var dsRuns = runIndex[ds] || {};
+  var threadKeys = Object.keys(dsRuns).map(function(t) { return parseInt(t); }).sort(function(a, b) { return a - b; });
+  if (threadKeys.length > 0) {
+    currentRunIdx = dsRuns[threadKeys[0]];
+  }
+  populateAllSelectors();
+  renderAll();
+}
+
+function selectThread(t) {
+  var runIndex = buildRunIndex();
+  var dsRuns = runIndex[currentDataset] || {};
+  if (dsRuns[t] != null) {
+    currentRunIdx = dsRuns[t];
+    populateAllSelectors();
+    renderAll();
+  }
 }
 
 function renderOverview(run) {
   var s = run.summary;
   var profile = (run.profile && run.profile.metrics) || {};
-  var latestProf = PROFILES.length > 0 ? PROFILES[PROFILES.length - 1] : null;
-  var lpCpu = latestProf ? (latestProf.cpu || {}) : {};
-  var lpDerived = lpCpu.derived || {};
-  var lpHotspots = lpCpu.hotspots || [];
 
-  document.getElementById('overviewSubtitle').textContent =
-    'Run ' + run.run_id + ' | ' + (run.env.date || 'N/A') + ' | ' + (run.env.hostname || 'N/A');
+  // Show label/description if available, otherwise run_id
+  var runLabel = run.label || run.run_id;
+  var subtitleParts = [runLabel, run.env.date || 'N/A', run.env.hostname || 'N/A'];
+  if (run.env.cpu) subtitleParts.push(run.env.cpu.replace(' 64-Core Processor', ''));
+  document.getElementById('overviewSubtitle').textContent = subtitleParts.join(' | ');
+
+  // Aggregate test results across ALL runs (many baseline runs have no verify data)
+  var totalTests = 0, totalPass = 0, totalFail = 0;
+  DATA.forEach(function(r) {
+    var rs = r.summary;
+    totalPass += rs.pass;
+    totalFail += rs.fail;
+    totalTests += rs.pass + rs.fail;
+  });
+  var allTestsPass = totalFail === 0;
 
   var badge = document.getElementById('statusBadge');
-  badge.textContent = s.all_pass ? 'ALL PASS' : s.fail + ' FAILED';
-  badge.className = 'badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail');
+  if (totalTests === 0) {
+    badge.textContent = 'BASELINES';
+    badge.className = 'badge badge-pass';
+  } else {
+    badge.textContent = allTestsPass ? 'ALL PASS' : totalFail + ' FAILED';
+    badge.className = 'badge ' + (allTestsPass ? 'badge-pass' : 'badge-fail');
+  }
 
-  var bestTime = Math.min.apply(null, DATA.map(function(r) { return r.summary.total_time; }));
-  var ipcVal = lpDerived.IPC || profile.IPC || 'N/A';
-  var feStall = lpDerived['frontend-stall-rate'];
-  var cacheMiss = lpDerived['cache-miss-rate'];
+  // Count benchmark runs and datasets
+  var benchmarkCount = 0;
+  var datasets = {};
+  DATA.forEach(function(r) {
+    if (r.run_type !== 'cpu_baseline' && r.run_type !== 'gpu_benchmark') return;
+    benchmarkCount++;
+    r.timing.forEach(function(t) { var p = parseCmd(t.command); if (p.dataset !== 'unknown') datasets[p.dataset] = true; });
+  });
+  var datasetCount = Object.keys(datasets).length;
+
+  // Calculate best speedup across benchmark runs (exclude tests)
+  var bestSpeedup = 0;
+  var bestSpeedupLabel = '';
+  var speedupBaselines = {};
+  DATA.forEach(function(r) {
+    if (r.run_type !== 'cpu_baseline' && r.run_type !== 'gpu_benchmark') return;
+    r.timing.forEach(function(t) {
+      var p = parseCmd(t.command);
+      if (p.threads === 1) {
+        var key = p.dataset;
+        if (!speedupBaselines[key] || t.time_s < speedupBaselines[key]) speedupBaselines[key] = t.time_s;
+      }
+    });
+  });
+  DATA.forEach(function(r) {
+    if (r.run_type !== 'cpu_baseline' && r.run_type !== 'gpu_benchmark') return;
+    r.timing.forEach(function(t) {
+      var p = parseCmd(t.command);
+      if (p.threads > 1) {
+        var key = p.dataset;
+        var base = speedupBaselines[key];
+        if (base) {
+          var sp = base / t.time_s;
+          if (sp > bestSpeedup) { bestSpeedup = sp; bestSpeedupLabel = p.dataset.replace('.fa','').replace('.phy','') + ' @ ' + p.threads + 'T'; }
+        }
+      }
+    });
+  });
+
+  // Find best and worst IPC across benchmark runs
+  var worstIPC = Infinity, worstIPCLabel = '', bestIPC = 0, bestIPCLabel = '';
+  DATA.forEach(function(r) {
+    if (r.run_type !== 'cpu_baseline' && r.run_type !== 'gpu_benchmark') return;
+    if (r.profile && r.profile.metrics && r.profile.metrics.IPC != null) {
+      var ipc = r.profile.metrics.IPC;
+      var ds = (r.profile.dataset || '?').replace('.fa','').replace('.phy','');
+      var threads = r.profile.threads || 1;
+      var label = ds + ' T' + threads;
+      if (ipc < worstIPC) { worstIPC = ipc; worstIPCLabel = label; }
+      if (ipc > bestIPC) { bestIPC = ipc; bestIPCLabel = label; }
+    }
+  });
 
   document.getElementById('statsGrid').innerHTML =
     '<div class="stat-card">' +
-      '<div class="label">Tests</div>' +
-      '<div class="value" style="color:' + (s.all_pass ? 'var(--green)' : 'var(--red)') + '">' + s.pass + '/' + (s.pass + s.fail) + '</div>' +
-      '<div class="change">' + (s.all_pass ? 'All passing' : s.fail + ' failed') + '</div>' +
+      '<div class="stat-icon" style="background:var(--accent-glow);color:var(--accent);">&#x25B6;</div>' +
+      '<div class="label">Benchmark Runs</div>' +
+      '<div class="value" style="color:var(--accent)">' + benchmarkCount + '</div>' +
+      '<div class="change">' + datasetCount + ' dataset' + (datasetCount > 1 ? 's' : '') + ' | ' + (totalTests > 0 ? totalPass + '/' + totalTests + ' tests pass' : 'Baseline runs') + '</div>' +
     '</div>' +
     '<div class="stat-card">' +
-      '<div class="label">Pipeline Time</div>' +
-      '<div class="value">' + fmtTime(s.total_time) + '</div>' +
-      '<div class="change">' + run.timing.length + ' commands | Best: ' + fmtTime(bestTime) + '</div>' +
+      '<div class="stat-icon" style="background:rgba(234,179,8,0.1);color:var(--yellow);">&#x26A1;</div>' +
+      '<div class="label">Best Speedup</div>' +
+      '<div class="value" style="color:var(--yellow)">' + (bestSpeedup > 0 ? bestSpeedup.toFixed(2) + '\u00d7' : 'N/A') + '</div>' +
+      '<div class="change">' + (bestSpeedupLabel || 'Need multi-thread baselines') + '</div>' +
     '</div>' +
     '<div class="stat-card">' +
-      '<div class="label">IPC</div>' +
-      '<div class="value" style="color:var(--accent2)">' + ipcVal + '</div>' +
-      '<div class="change">' + (feStall != null ? 'Frontend stalls: ' + feStall + '%' : 'Instructions per cycle') + '</div>' +
+      '<div class="stat-icon" style="background:rgba(52,211,153,0.1);color:var(--green);">&#x1F4CA;</div>' +
+      '<div class="label">Best IPC</div>' +
+      '<div class="value" style="color:var(--green)">' + (bestIPC > 0 ? bestIPC.toFixed(3) : 'N/A') + '</div>' +
+      '<div class="change">' + (bestIPCLabel || 'No perf data') + '</div>' +
     '</div>' +
     '<div class="stat-card">' +
-      '<div class="label">Cache Miss</div>' +
-      '<div class="value" style="color:' + (cacheMiss != null && cacheMiss > 5 ? 'var(--yellow)' : 'var(--green)') + '">' + (cacheMiss != null ? cacheMiss + '%' : 'N/A') + '</div>' +
-      '<div class="change">' + (lpDerived['L1-dcache-miss-rate'] != null ? 'L1-D: ' + lpDerived['L1-dcache-miss-rate'] + '%' : 'Run deep profile for data') + '</div>' +
-    '</div>' +
-    '<div class="stat-card">' +
-      '<div class="label">Profiles</div>' +
-      '<div class="value">' + PROFILES.length + '</div>' +
-      '<div class="change">' + DATA.length + ' pipeline run' + (DATA.length > 1 ? 's' : '') + '</div>' +
+      '<div class="stat-icon" style="background:rgba(248,113,113,0.1);color:var(--red);">&#x26A0;</div>' +
+      '<div class="label">Worst IPC</div>' +
+      '<div class="value" style="color:var(--red)">' + (worstIPC < Infinity ? worstIPC.toFixed(3) : 'N/A') + '</div>' +
+      '<div class="change">' + (worstIPCLabel || 'No perf data') + '</div>' +
     '</div>';
-
-  // Latest profile summary card
-  var profCard = document.getElementById('latestProfileCard');
-  if (latestProf && profCard) {
-    profCard.style.display = '';
-    var topFunc = lpHotspots.length > 0 ? lpHotspots[0] : null;
-    var gpuHw = (latestProf.gpu || {}).hardware || {};
-    var aln = latestProf.alignment || {};
-    document.getElementById('latestProfileContent').innerHTML =
-      '<div class="detail-grid" style="grid-template-columns:repeat(4,1fr);">' +
-        '<div class="detail-kv"><div class="dk-label">Dataset</div><div class="dk-value">' + escHtml(latestProf.dataset || 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Taxa \u00d7 Sites</div><div class="dk-value" style="color:var(--accent2);font-weight:600;">' + (aln.taxa || '?') + ' \u00d7 ' + (aln.sites ? aln.sites.toLocaleString() : '?') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Model</div><div class="dk-value">' + escHtml(aln.substitution_model || latestProf.model || 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Threads</div><div class="dk-value">' + (latestProf.threads || 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">IPC</div><div class="dk-value" style="color:var(--accent2)">' + (lpDerived.IPC || 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Frontend Stalls</div><div class="dk-value" style="color:' + (feStall > 10 ? 'var(--red)' : 'var(--green)') + '">' + (feStall != null ? feStall + '%' : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Log-Likelihood</div><div class="dk-value" style="font-family:monospace;font-size:0.8rem;color:var(--green);">' + (aln.log_likelihood != null ? aln.log_likelihood.toLocaleString() : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Wall Time</div><div class="dk-value">' + (aln.wall_time_sec != null ? aln.wall_time_sec.toFixed(1) + 's' : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Top Hotspot</div><div class="dk-value" style="font-family:monospace;font-size:0.7rem;">' + (topFunc ? topFunc.percent.toFixed(1) + '%  ' + escHtml(topFunc['function'].substring(0, 35)) : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Site Patterns</div><div class="dk-value">' + (aln.site_patterns ? aln.site_patterns.toLocaleString() : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">GPU Temp</div><div class="dk-value">' + (gpuHw.temperature_c != null ? gpuHw.temperature_c + '\u00b0C' : 'N/A') + '</div></div>' +
-        '<div class="detail-kv"><div class="dk-label">Profile ID</div><div class="dk-value" style="font-size:0.75rem;">' + latestProf.profile_id + '</div></div>' +
-      '</div>';
-  } else if (profCard) {
-    profCard.style.display = 'none';
-  }
 
   renderLeaderboard(run);
   renderHotspotChart();
   renderMicroarchChart();
   renderScalingChart();
+  renderOverviewConfig(run);
+}
+
+function renderOverviewConfig(run) {
+  var card = document.getElementById('overviewConfigCard');
+  var content = document.getElementById('overviewConfigContent');
+  if (!card || !content) return;
+
+  var env = run.env || {};
+  var mf = run.modelfinder || {};
+
+  // Parse the first (or main) command to extract dataset/model/threads
+  var mainCmd = run.timing.length > 0 ? run.timing[run.timing.length - 1] : null;
+  var cmdInfo = mainCmd ? parseCmd(mainCmd.command) : null;
+
+  // Try to find a matching deep profile for richer data
+  var matchedProfile = null;
+  if (cmdInfo) {
+    PROFILES.forEach(function(p) {
+      var pds = (p.dataset || '').split('/').pop();
+      if (pds === cmdInfo.dataset || (pds && cmdInfo.dataset && pds.indexOf(cmdInfo.dataset.replace('.fa','').replace('.phy','')) >= 0)) {
+        matchedProfile = p;
+      }
+    });
+  }
+
+  var aln = matchedProfile ? (matchedProfile.alignment || {}) : {};
+  var sys = matchedProfile ? (matchedProfile.system || {}) : {};
+  var hasProfile = matchedProfile != null;
+
+  // Build display values — prefer profile data, fall back to run data
+  var dataset = cmdInfo ? cmdInfo.dataset : 'N/A';
+  var taxa = hasProfile && aln.taxa ? aln.taxa : (cmdInfo ? cmdInfo.taxa : '?');
+  var sites = hasProfile && aln.sites ? aln.sites : (cmdInfo ? cmdInfo.sites : '?');
+  var model = mf.model_selected || (hasProfile && aln.substitution_model ? aln.substitution_model : (cmdInfo ? cmdInfo.model : 'AUTO'));
+  var threads = cmdInfo ? cmdInfo.threads : (env.cores || '?');
+  var wallTime = run.summary.total_time;
+
+  // System info
+  var cpu = sys.cpu || env.cpu || 'N/A';
+  var cores = sys.cores || env.cores || '?';
+  var gcc = sys.gcc || env.gcc || 'N/A';
+  var rocm = sys.rocm || env.rocm || 'N/A';
+  var hostname = sys.hostname || env.hostname || 'N/A';
+
+  function fmtFileSize(bytes) {
+    if (!bytes) return 'N/A';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  card.style.display = '';
+
+  var html =
+    '<div class="config-grid">' +
+      '<div class="config-section">' +
+        '<div class="section-label" style="margin-top:0;">Alignment</div>' +
+        '<div class="config-items">' +
+          '<div class="config-item"><span class="ci-label">Dataset</span><span class="ci-value" style="color:var(--accent)">' + escHtml(dataset) + '</span></div>' +
+          '<div class="config-item"><span class="ci-label">Taxa</span><span class="ci-value" style="color:var(--accent2);font-weight:700;font-size:1.1rem;">' + taxa + '</span></div>' +
+          '<div class="config-item"><span class="ci-label">Sites</span><span class="ci-value" style="color:var(--accent2);font-weight:700;font-size:1.1rem;">' + (typeof sites === 'number' ? sites.toLocaleString() : sites) + '</span></div>' +
+          (hasProfile ? '<div class="config-item"><span class="ci-label">Data Type</span><span class="ci-value">' + escHtml(aln.data_type || 'N/A') + '</span></div>' : '') +
+          (hasProfile ? '<div class="config-item"><span class="ci-label">File Size</span><span class="ci-value">' + fmtFileSize(aln.file_size_bytes) + '</span></div>' : '') +
+          (hasProfile && aln.site_patterns ? '<div class="config-item"><span class="ci-label">Site Patterns</span><span class="ci-value">' + aln.site_patterns.toLocaleString() + '</span></div>' : '') +
+          (hasProfile && aln.informative_sites ? '<div class="config-item"><span class="ci-label">Informative Sites</span><span class="ci-value">' + aln.informative_sites.toLocaleString() + '</span></div>' : '') +
+          (hasProfile && aln.constant_sites != null ? '<div class="config-item"><span class="ci-label">Constant Sites</span><span class="ci-value">' + aln.constant_sites + ' (' + (aln.constant_sites_pct || 0) + '%)</span></div>' : '') +
+          (hasProfile && aln.free_parameters ? '<div class="config-item"><span class="ci-label">Free Parameters</span><span class="ci-value">' + aln.free_parameters + '</span></div>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="config-section">' +
+        '<div class="section-label" style="margin-top:0;">Model &amp; Results</div>' +
+        '<div class="config-items">' +
+          '<div class="config-item"><span class="ci-label">Model</span><span class="ci-value" style="color:var(--accent);font-weight:600;">' + escHtml(model) + '</span></div>' +
+          (hasProfile && aln.rate_model ? '<div class="config-item"><span class="ci-label">Rate Heterogeneity</span><span class="ci-value">' + escHtml(aln.rate_model) + '</span></div>' : '') +
+          (hasProfile && aln.gamma_alpha ? '<div class="config-item"><span class="ci-label">Gamma \u03b1</span><span class="ci-value">' + aln.gamma_alpha + '</span></div>' : '') +
+          '<div class="config-item"><span class="ci-label">Threads</span><span class="ci-value">' + threads + '</span></div>' +
+          (hasProfile && aln.log_likelihood != null ? '<div class="config-item"><span class="ci-label">Log-Likelihood</span><span class="ci-value" style="color:var(--green);font-family:monospace;">' + aln.log_likelihood.toLocaleString() + '</span></div>' : '') +
+          (hasProfile && aln.bic != null ? '<div class="config-item"><span class="ci-label">BIC</span><span class="ci-value" style="font-family:monospace;">' + aln.bic.toLocaleString() + '</span></div>' : '') +
+          (hasProfile && aln.tree_length ? '<div class="config-item"><span class="ci-label">Tree Length</span><span class="ci-value">' + aln.tree_length + '</span></div>' : '') +
+          '<div class="config-item"><span class="ci-label">Wall Time</span><span class="ci-value">' + fmtTime(wallTime) + '</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="config-section">' +
+        '<div class="section-label" style="margin-top:0;">System</div>' +
+        '<div class="config-items">' +
+          '<div class="config-item"><span class="ci-label">CPU</span><span class="ci-value">' + escHtml(cpu.replace(' 64-Core Processor', '')) + '</span></div>' +
+          '<div class="config-item"><span class="ci-label">Cores</span><span class="ci-value">' + cores + (sys.threads_per_core ? ' (' + sys.threads_per_core + 'T/core)' : '') + '</span></div>' +
+          (sys.mem_total_gb ? '<div class="config-item"><span class="ci-label">Memory</span><span class="ci-value">' + sys.mem_total_gb + ' GB</span></div>' : '') +
+          (sys.l3_cache ? '<div class="config-item"><span class="ci-label">L3 Cache</span><span class="ci-value">' + escHtml(sys.l3_cache) + '</span></div>' : '') +
+          '<div class="config-item"><span class="ci-label">GPU</span><span class="ci-value">' + escHtml(sys.gpu || env.gpu || 'N/A') + '</span></div>' +
+          '<div class="config-item"><span class="ci-label">ROCm</span><span class="ci-value">' + escHtml(rocm) + '</span></div>' +
+          '<div class="config-item"><span class="ci-label">GCC</span><span class="ci-value">' + escHtml(gcc) + '</span></div>' +
+          (sys.numa_nodes ? '<div class="config-item"><span class="ci-label">NUMA Nodes</span><span class="ci-value">' + sys.numa_nodes + '</span></div>' : '') +
+          '<div class="config-item"><span class="ci-label">Host</span><span class="ci-value">' + escHtml(hostname) + '</span></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  // Command line
+  var cmdLine = mainCmd ? mainCmd.command : '';
+  if (cmdLine) {
+    html += '<div class="config-cmd">' +
+      '<span style="color:var(--text3);margin-right:8px;">$</span>' + escHtml(cmdLine) +
+      '<button class="btn-sm" onclick="copySingleCmd(\'' + escAttr(cmdLine) + '\', this)">Copy</button>' +
+    '</div>';
+  }
+
+  content.innerHTML = html;
+  content.setAttribute('data-run-config', JSON.stringify({
+    dataset: dataset, model: model, threads: threads, wallTime: wallTime,
+    env: env, alignment: aln, system: sys, command: cmdLine,
+    run_id: run.run_id, date: env.date
+  }));
+}
+
+function copyOverviewConfig(btn) {
+  var el = document.getElementById('overviewConfigContent');
+  var data = JSON.parse(el.getAttribute('data-run-config') || '{}');
+  var aln = data.alignment || {};
+  var sys = data.system || {};
+  var env = data.env || {};
+  var lines = [
+    '=== IQ-TREE Run Configuration ===',
+    'Run ID: ' + (data.run_id || 'N/A'),
+    'Date: ' + (data.date || 'N/A'),
+    '',
+    '--- Alignment ---',
+    'Dataset: ' + (data.dataset || 'N/A'),
+    'Taxa: ' + (aln.taxa || 'N/A'),
+    'Sites: ' + (aln.sites || 'N/A'),
+    aln.data_type ? 'Data Type: ' + aln.data_type : null,
+    aln.site_patterns ? 'Site Patterns: ' + aln.site_patterns : null,
+    aln.informative_sites ? 'Informative Sites: ' + aln.informative_sites : null,
+    aln.constant_sites != null ? 'Constant Sites: ' + aln.constant_sites + ' (' + (aln.constant_sites_pct || 0) + '%)' : null,
+    '',
+    '--- Model & Results ---',
+    'Model: ' + (data.model || 'AUTO'),
+    'Threads: ' + (data.threads || 'N/A'),
+    aln.log_likelihood ? 'Log-Likelihood: ' + aln.log_likelihood : null,
+    aln.bic ? 'BIC Score: ' + aln.bic : null,
+    aln.tree_length ? 'Tree Length: ' + aln.tree_length : null,
+    'Wall Time: ' + (data.wallTime != null ? data.wallTime + 's' : 'N/A'),
+    '',
+    '--- System ---',
+    'CPU: ' + (sys.cpu || env.cpu || 'N/A'),
+    'Cores: ' + (sys.cores || env.cores || 'N/A'),
+    sys.mem_total_gb ? 'Memory: ' + sys.mem_total_gb + ' GB' : null,
+    'GPU: ' + (sys.gpu || env.gpu || 'N/A'),
+    'ROCm: ' + (sys.rocm || env.rocm || 'N/A'),
+    'GCC: ' + (sys.gcc || env.gcc || 'N/A'),
+    '',
+    '--- Command ---',
+    data.command || ''
+  ].filter(function(l) { return l !== null; });
+  navigator.clipboard.writeText(lines.join('\n'));
+  btn.textContent = 'Copied!';
+  setTimeout(function() {
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Config';
+  }, 1500);
 }
 
 // ============ IQ-TREE Performance Metrics ============
 
 // Known dataset sizes — extended as more benchmarks are added
 var DATASET_INFO = {
-  'turtle.fa': { taxa: 16, sites: 1998 },
-  'medium_dna.fa': { taxa: 50, sites: 5000 },
-  'medium_dna.phy': { taxa: 50, sites: 5000 },
-  'large_dna.phy': { taxa: 100, sites: 10000 },
-  'stress_dna.phy': { taxa: 200, sites: 20000 }
+  'turtle.fa': { taxa: 16, sites: 1998, sizeMB: 0.04 },
+  'medium_dna.fa': { taxa: 50, sites: 5000, sizeMB: 0.5 },
+  'medium_dna.phy': { taxa: 50, sites: 5000, sizeMB: 0.5 },
+  'large_dna.phy': { taxa: 100, sites: 10000, sizeMB: 2.0 },
+  'large_modelfinder.fa': { taxa: 100, sites: 10000, sizeMB: 2.0 },
+  'xlarge_dna.fa': { taxa: 200, sites: 50000, sizeMB: 19.1 },
+  'stress_dna.phy': { taxa: 200, sites: 20000, sizeMB: 7.6 }
 };
 
 // Model block sizes: nstates x ncat
@@ -1053,13 +1518,14 @@ function parseCmd(cmd) {
   var mMatch = cmd.match(/-m\s+(\S+)/);
   if (mMatch) model = mMatch[1];
   if (cmd.indexOf('--gpu') !== -1 || cmd.indexOf('-gpu') !== -1) gpu = true;
-  var info = DATASET_INFO[ds] || { taxa: '?', sites: '?' };
+  var info = DATASET_INFO[ds] || { taxa: '?', sites: '?', sizeMB: null };
   var blockKey = model.replace(/\+F/g, '').replace(/\+I/g, '');
   var block = MODEL_BLOCKS[blockKey] || MODEL_BLOCKS['default'];
-  return { dataset: ds, taxa: info.taxa, sites: info.sites, threads: threads, model: model, block: block, gpu: gpu };
+  return { dataset: ds, taxa: info.taxa, sites: info.sites, sizeMB: info.sizeMB, threads: threads, model: model, block: block, gpu: gpu };
 }
 
 var leaderboardSort = 'time';
+var leaderboardDatasetFilter = 'all';
 
 function sortLeaderboard(by) {
   leaderboardSort = by;
@@ -1068,111 +1534,276 @@ function sortLeaderboard(by) {
   renderLeaderboard(DATA[currentRunIdx]);
 }
 
+function filterLeaderboardDataset(ds) {
+  leaderboardDatasetFilter = ds;
+  renderLeaderboard(DATA[currentRunIdx]);
+}
+
 function renderLeaderboard(run) {
-  // Build entries from all commands across all runs + profiles
+  // Build entries from benchmark runs only (exclude test/integration runs)
   var entries = [];
 
-  // From run timing data
   DATA.forEach(function(r) {
+    // Skip non-benchmark runs (integration pipeline tests with turtle.fa)
+    var isTest = r.run_type !== 'cpu_baseline' && r.run_type !== 'gpu_benchmark';
+    if (isTest) return;
+
     r.timing.forEach(function(t) {
       var p = parseCmd(t.command);
-      // Find matching verify entry for log-likelihood
-      var loglik = '\u2014';
+      // Get log-likelihood from modelfinder description or verify data
+      var loglik = null;
+      if (r.modelfinder && r.modelfinder.log_likelihood) {
+        loglik = r.modelfinder.log_likelihood;
+      }
       r.verify.forEach(function(v) {
-        if (t.command.indexOf(v.file.replace('.iqtree', '')) !== -1) loglik = v.reported;
+        if (t.command.indexOf(v.file.replace('.iqtree', '')) !== -1 && v.reported) loglik = v.reported;
       });
-      // Calc speedup: find 1T baseline for same dataset+model
+      // Try extracting from description field (e.g. "logLik=-123456.789")
+      if (!loglik && r.description) {
+        var llMatch = r.description.match(/logLik[=:]\s*(-?[\d.]+)/i);
+        if (llMatch) loglik = parseFloat(llMatch[1]);
+      }
+      // Get the model selected from modelfinder if model was AUTO
+      var displayModel = p.model;
+      if (displayModel === 'AUTO' && r.modelfinder && r.modelfinder.model_selected) {
+        displayModel = r.modelfinder.model_selected.replace(' chosen according to BIC', '');
+      }
+
+      // Get IPC from run profile if available
+      var ipc = (r.profile && r.profile.metrics && r.profile.metrics.IPC) ? r.profile.metrics.IPC : null;
+
       entries.push({
-        dataset: p.dataset, taxa: p.taxa, sites: p.sites, model: p.model,
-        block: p.block, threads: p.threads, gpu: p.gpu ? 'Yes' : '\u2014',
-        time: t.time_s, loglik: loglik, runId: r.run_id, cmd: t.command
+        dataset: p.dataset, taxa: p.taxa, sites: p.sites, sizeMB: p.sizeMB,
+        model: displayModel, block: p.block, threads: p.threads,
+        gpu: p.gpu ? 'Yes' : '\u2014',
+        time: t.time_s, loglik: loglik, runId: r.run_id, cmd: t.command,
+        label: r.label || r.run_id, ipc: ipc
       });
     });
   });
 
-  // Calculate speedups — find 1T baseline for each dataset
+  // Calculate speedups — compare same dataset runs (1T baseline vs multi-T)
   var baselines = {};
   entries.forEach(function(e) {
     if (e.threads === 1) {
-      var key = e.dataset + '|' + e.model;
+      var key = e.dataset;
       if (!baselines[key] || e.time < baselines[key]) baselines[key] = e.time;
     }
   });
   entries.forEach(function(e) {
-    var key = e.dataset + '|' + e.model;
+    var key = e.dataset;
     var base = baselines[key];
-    if (base && e.threads > 1) {
+    if (base) {
       e.speedup = (base / e.time).toFixed(2);
-      e.efficiency = ((base / e.time / e.threads) * 100).toFixed(0);
-    } else if (e.threads === 1) {
-      e.speedup = '1.00';
-      e.efficiency = '100';
+      e.baselineTime = base;
     } else {
-      e.speedup = '\u2014';
-      e.efficiency = '\u2014';
+      e.speedup = '1.00';
+      e.baselineTime = e.time;
     }
   });
 
-  // Sort
-  if (leaderboardSort === 'speedup') {
-    entries.sort(function(a, b) { return parseFloat(b.speedup || 0) - parseFloat(a.speedup || 0); });
-  } else {
-    entries.sort(function(a, b) { return a.time - b.time; });
+  // Find max speedup per dataset for bar scaling
+  var maxSpeedups = {};
+  entries.forEach(function(e) {
+    var sp = parseFloat(e.speedup);
+    if (!maxSpeedups[e.dataset] || sp > maxSpeedups[e.dataset]) maxSpeedups[e.dataset] = sp;
+  });
+
+  // Apply dataset filter
+  var filtered = entries;
+  if (leaderboardDatasetFilter !== 'all') {
+    filtered = entries.filter(function(e) { return e.dataset === leaderboardDatasetFilter; });
   }
 
+  // Sort
+  if (leaderboardSort === 'speedup') {
+    filtered.sort(function(a, b) { return parseFloat(b.speedup || 0) - parseFloat(a.speedup || 0); });
+  } else {
+    filtered.sort(function(a, b) { return a.time - b.time; });
+  }
+
+  // Build dataset filter buttons
+  var dsSet = {};
+  entries.forEach(function(e) { dsSet[e.dataset] = true; });
+  var dsKeys = Object.keys(dsSet).sort();
+  var filterHtml = '<button class="btn' + (leaderboardDatasetFilter === 'all' ? ' active' : '') + '" onclick="filterLeaderboardDataset(\'all\')">All</button>';
+  dsKeys.forEach(function(ds) {
+    var shortName = ds.replace('.fa', '').replace('.phy', '');
+    var info = DATASET_INFO[ds];
+    var sizeStr = info && info.sizeMB ? ' (' + info.sizeMB + ' MB)' : '';
+    filterHtml += '<button class="btn' + (leaderboardDatasetFilter === ds ? ' active' : '') + '" onclick="filterLeaderboardDataset(\'' + escAttr(ds) + '\')">' + escHtml(shortName) + sizeStr + '</button>';
+  });
+  var filterEl = document.getElementById('lbDatasetFilters');
+  if (filterEl) filterEl.innerHTML = filterHtml;
+
+  // Update count
+  var countEl = document.getElementById('lbCount');
+  if (countEl) countEl.textContent = filtered.length + ' benchmark run' + (filtered.length !== 1 ? 's' : '');
+
   var tbody = document.querySelector('#leaderboardTable tbody');
-  tbody.innerHTML = entries.map(function(e, i) {
+  tbody.innerHTML = filtered.map(function(e, i) {
     var rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
-    var spClass = parseFloat(e.speedup) >= 3 ? 'speedup-good' : parseFloat(e.speedup) >= 1.5 ? 'speedup-warn' : 'speedup-bad';
-    var effPct = parseInt(e.efficiency) || 0;
-    var effColor = effPct >= 80 ? 'var(--green)' : effPct >= 50 ? 'var(--yellow)' : 'var(--red)';
+    var spVal = parseFloat(e.speedup) || 0;
+    var spClass = spVal >= 3 ? 'speedup-good' : spVal >= 1.5 ? 'speedup-warn' : 'speedup-bad';
+    var maxSp = maxSpeedups[e.dataset] || 1;
+    var barPct = Math.min(100, (spVal / Math.max(maxSp, e.threads)) * 100);
+    var barColor = spVal >= e.threads * 0.5 ? 'var(--green)' : spVal >= e.threads * 0.25 ? 'var(--yellow)' : 'var(--red)';
+    if (e.threads === 1) barColor = 'var(--accent)';
+    var sizeStr = e.sizeMB != null ? e.sizeMB.toFixed(1) : '\u2014';
+    var loglikStr = e.loglik != null ? (typeof e.loglik === 'number' ? e.loglik.toLocaleString() : e.loglik) : '\u2014';
+    var loglikStyle = e.loglik != null ? 'color:var(--green);font-family:monospace;' : 'color:var(--text3);';
+    var ipcStr = e.ipc != null ? e.ipc.toFixed(3) : '\u2014';
+    var ipcColor = e.ipc != null ? (e.ipc >= 2 ? 'var(--green)' : e.ipc >= 1 ? 'var(--yellow)' : 'var(--red)') : 'var(--text3)';
     return '<tr title="' + escAttr(e.cmd) + '">' +
       '<td class="lb-rank ' + rankClass + '">' + (i + 1) + '</td>' +
-      '<td class="lb-dataset">' + escHtml(e.dataset) + '</td>' +
+      '<td class="lb-dataset">' + escHtml(e.dataset) + '<span style="color:var(--text3);font-size:0.68rem;margin-left:6px;">' + sizeStr + ' MB</span></td>' +
       '<td>' + e.taxa + '</td>' +
-      '<td>' + e.sites + '</td>' +
+      '<td>' + (typeof e.sites === 'number' ? e.sites.toLocaleString() : e.sites) + '</td>' +
       '<td class="lb-model">' + escHtml(e.model) + '</td>' +
       '<td>' + e.block + '</td>' +
       '<td>' + e.threads + '</td>' +
       '<td>' + e.gpu + '</td>' +
-      '<td style="font-weight:700;">' + e.time.toFixed(3) + '</td>' +
+      '<td style="font-weight:700;">' + fmtTime(e.time) + '</td>' +
       '<td><span class="speedup-badge ' + spClass + '">' + e.speedup + '\u00d7</span></td>' +
-      '<td>' + (effPct > 0 ? '<div class="eff-bar"><div class="fill" style="width:' + effPct + '%;background:' + effColor + '"></div></div> ' + e.efficiency + '%' : '\u2014') + '</td>' +
-      '<td>' + e.loglik + '</td>' +
+      '<td><div class="eff-bar"><div class="fill" style="width:' + barPct.toFixed(0) + '%;background:' + barColor + '"></div></div></td>' +
+      '<td style="font-weight:600;color:' + ipcColor + ';">' + ipcStr + '</td>' +
+      '<td style="' + loglikStyle + '">' + loglikStr + '</td>' +
     '</tr>';
   }).join('');
 }
 
+// ============ Chart Source Builders ============
+function buildHotspotSources() {
+  var sources = [];
+  PROFILES.forEach(function(p, i) {
+    var hs = (p.cpu || {}).hotspots || [];
+    if (hs.length === 0) return;
+    var dsName = (p.dataset || '?').split('/').pop().replace('.fa', '').replace('.phy', '') + ' T' + (p.threads || 1);
+    sources.push({ key: 'p' + i, label: dsName, profile: p });
+  });
+  return sources;
+}
+
+function buildMicroarchSources() {
+  var sources = [];
+  PROFILES.forEach(function(p, i) {
+    var d = (p.cpu || {}).derived || {};
+    if (!d.IPC && !d['cache-miss-rate']) return;
+    var dsName = (p.dataset || '?').split('/').pop().replace('.fa', '').replace('.phy', '') + ' T' + (p.threads || 1);
+    sources.push({ key: 'p' + i, label: dsName, metrics: d, type: 'deep' });
+  });
+  DATA.forEach(function(r, i) {
+    if (!r.profile || !r.profile.metrics || !r.profile.metrics.IPC) return;
+    var m = r.profile.metrics;
+    var rDs = (r.profile.dataset || '').replace('.fa', '').replace('.phy', '');
+    var dsName = rDs + ' T' + (r.profile.threads || 1) + ' (perf)';
+    sources.push({ key: 'd' + i, label: dsName, metrics: m, type: 'run' });
+  });
+  return sources;
+}
+
+function initChartSelectors() {
+  buildHotspotSources().forEach(function(s) {
+    if (hotspotSelection[s.key] === undefined) hotspotSelection[s.key] = true;
+  });
+  buildMicroarchSources().forEach(function(s) {
+    if (microarchSelection[s.key] === undefined) microarchSelection[s.key] = true;
+  });
+}
+
+function renderHotspotSelector() {
+  var el = document.getElementById('hotspotCheckList');
+  if (!el) return;
+  var sources = buildHotspotSources();
+  var searchEl = document.getElementById('hotspotSearch');
+  var search = searchEl ? searchEl.value.toLowerCase() : '';
+  var html = '';
+  sources.forEach(function(s) {
+    if (search && s.label.toLowerCase().indexOf(search) === -1) return;
+    var sel = hotspotSelection[s.key] !== false;
+    html += '<div class="cs-item' + (sel ? ' selected' : '') + '" onclick="toggleHotspot(\'' + s.key + '\')">' + escHtml(s.label) + '</div>';
+  });
+  if (!html) html = '<span class="cs-empty">No matching profiles</span>';
+  el.innerHTML = html;
+}
+
+function toggleHotspot(key) {
+  hotspotSelection[key] = !hotspotSelection[key];
+  renderHotspotSelector();
+  renderHotspotChart();
+}
+
+function hotspotSelectAll() {
+  buildHotspotSources().forEach(function(s) { hotspotSelection[s.key] = true; });
+  renderHotspotSelector();
+  renderHotspotChart();
+}
+
+function hotspotSelectNone() {
+  buildHotspotSources().forEach(function(s) { hotspotSelection[s.key] = false; });
+  renderHotspotSelector();
+  renderHotspotChart();
+}
+
+function renderMicroarchSelector() {
+  var el = document.getElementById('microarchCheckList');
+  if (!el) return;
+  var sources = buildMicroarchSources();
+  var searchEl = document.getElementById('microarchSearch');
+  var search = searchEl ? searchEl.value.toLowerCase() : '';
+  var html = '';
+  sources.forEach(function(s) {
+    if (search && s.label.toLowerCase().indexOf(search) === -1) return;
+    var sel = microarchSelection[s.key] !== false;
+    html += '<div class="cs-item' + (sel ? ' selected' : '') + '" onclick="toggleMicroarch(\'' + s.key + '\')">' + escHtml(s.label) + '</div>';
+  });
+  if (!html) html = '<span class="cs-empty">No matching runs</span>';
+  el.innerHTML = html;
+}
+
+function toggleMicroarch(key) {
+  microarchSelection[key] = !microarchSelection[key];
+  renderMicroarchSelector();
+  renderMicroarchChart();
+}
+
+function microarchSelectAll() {
+  buildMicroarchSources().forEach(function(s) { microarchSelection[s.key] = true; });
+  renderMicroarchSelector();
+  renderMicroarchChart();
+}
+
+function microarchSelectNone() {
+  buildMicroarchSources().forEach(function(s) { microarchSelection[s.key] = false; });
+  renderMicroarchSelector();
+  renderMicroarchChart();
+}
+
+// ============ Hotspot Chart ============
 function renderHotspotChart() {
   if (charts.hotspot) charts.hotspot.destroy();
   var ctx = document.getElementById('hotspotChart');
   if (!ctx) return;
 
-  // Gather hotspot data across profiles
-  var labels = [];
   var kernelNames = ['DervSIMD', 'PartialLH', 'BufferSIMD', 'FromBuffer', 'libgomp', 'parsimony', 'Other'];
   var kernelColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#6b7280', '#06b6d4', '#3b82f6'];
+  var labels = [];
   var datasets = kernelNames.map(function(name, idx) {
     return { label: name, backgroundColor: kernelColors[idx], data: [] };
   });
 
-  var sources = PROFILES.length > 0 ? PROFILES : [];
-  // Also add run profile if available
-  DATA.forEach(function(r) {
-    if (r.profile && r.profile.metrics && r.profile.metrics.IPC) {
-      // No hotspot detail in basic profiles, skip
-    }
-  });
+  // Use only sources selected in the selector
+  var sources = buildHotspotSources().filter(function(s) { return hotspotSelection[s.key] !== false; });
 
   if (sources.length === 0) {
     ctx.parentElement.innerHTML = '<div class="no-data-msg">No hotspot data. Run deep profiling on Setonix.</div>';
     return;
   }
 
-  sources.forEach(function(p) {
+  sources.forEach(function(s) {
+    var p = s.profile;
     var hs = (p.cpu || {}).hotspots || [];
-    var dsName = (p.dataset || '?').split('/').pop().replace('.fa', '').replace('.phy', '') + ' T' + (p.threads || 1);
-    labels.push(dsName);
+    labels.push(s.label);
     var buckets = { DervSIMD: 0, PartialLH: 0, BufferSIMD: 0, FromBuffer: 0, libgomp: 0, parsimony: 0, Other: 0 };
     hs.forEach(function(h) {
       var fn = h['function'] || '';
@@ -1184,7 +1815,6 @@ function renderHotspotChart() {
       else if (fn.indexOf('arsimony') !== -1) buckets.parsimony += h.percent;
       else buckets.Other += h.percent;
     });
-    // Fill remaining as Other
     var total = 0; for (var k in buckets) total += buckets[k];
     if (total < 100) buckets.Other += (100 - total);
     datasets[0].data.push(buckets.DervSIMD);
@@ -1223,24 +1853,18 @@ function renderMicroarchChart() {
 
   var radarLabels = ['IPC', 'Cache Hit %', 'Branch Acc %', 'FE Efficiency %', 'L1D Hit %', 'dTLB Hit %'];
   var radarDatasets = [];
-  var colors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f97316', '#ef4444'];
+  var colors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f97316', '#ef4444', '#06b6d4', '#eab308', '#ec4899', '#14b8a6', '#a78bfa'];
 
-  // Gather from profiles
-  var sources = PROFILES.length > 0 ? PROFILES : [];
-  if (sources.length === 0 && profile && profile.IPC) {
-    // No radar possible from basic metrics only
-    ctx.parentElement.innerHTML = '<div class="no-data-msg">Run deep profiling for microarchitecture analysis.</div>';
-    return;
-  }
+  // Use only sources selected in the selector
+  var sources = buildMicroarchSources().filter(function(s) { return microarchSelection[s.key] !== false; });
+
   if (sources.length === 0) {
-    ctx.parentElement.innerHTML = '<div class="no-data-msg">No profile data. Run deep profiling on Setonix.</div>';
+    ctx.parentElement.innerHTML = '<div class="no-data-msg">No profile data. Select runs above or run benchmarks on Setonix.</div>';
     return;
   }
 
-  sources.forEach(function(p, i) {
-    var d = (p.cpu || {}).derived || {};
-    var dsName = (p.dataset || '?').split('/').pop().replace('.fa', '').replace('.phy', '') + ' T' + (p.threads || 1);
-    // Normalize to 0-100 for radar: IPC scaled to max 4.0 theoretical
+  sources.forEach(function(src, i) {
+    var d = src.metrics;
     var ipcNorm = Math.min((d.IPC || 0) / 4.0 * 100, 100);
     var cacheHit = 100 - (d['cache-miss-rate'] || 0);
     var branchAcc = 100 - (d['branch-miss-rate'] || 0);
@@ -1248,12 +1872,12 @@ function renderMicroarchChart() {
     var l1dHit = 100 - (d['L1-dcache-miss-rate'] || 0);
     var dtlbHit = 100 - (d['dTLB-miss-rate'] || 0);
     radarDatasets.push({
-      label: dsName,
+      label: src.label,
       data: [ipcNorm, cacheHit, branchAcc, feEff, l1dHit, dtlbHit],
       borderColor: colors[i % colors.length],
-      backgroundColor: colors[i % colors.length] + '22',
+      backgroundColor: colors[i % colors.length] + '15',
       pointBackgroundColor: colors[i % colors.length],
-      pointRadius: 4, borderWidth: 2
+      pointRadius: 3, borderWidth: 2
     });
   });
 
@@ -1394,10 +2018,11 @@ function renderRunsList() {
 
 function renderAllRunsStats() {
   var total = DATA.length;
-  var passing = DATA.filter(function(r) { return r.summary.all_pass; }).length;
-  var failing = total - passing;
+  var runsWithTests = DATA.filter(function(r) { return r.summary.pass + r.summary.fail > 0; }).length;
+  var baselines = DATA.filter(function(r) { return r.run_type === 'cpu_baseline'; }).length;
+  var failing = DATA.filter(function(r) { return r.summary.fail > 0; }).length;
   var bestTime = Math.min.apply(null, DATA.map(function(r) { return r.summary.total_time; }));
-  var avgTime = (DATA.reduce(function(a, r) { return a + r.summary.total_time; }, 0) / total).toFixed(1);
+  var avgTime = fmtTime(DATA.reduce(function(a, r) { return a + r.summary.total_time; }, 0) / total);
   var ipcs = DATA.map(function(r) { return (r.profile && r.profile.metrics && r.profile.metrics.IPC) || 0; });
   var bestIPC = Math.max.apply(null, ipcs);
   var totalCmds = DATA.reduce(function(a, r) { return a + r.timing.length; }, 0);
@@ -1409,14 +2034,14 @@ function renderAllRunsStats() {
       '<div class="change">' + totalCmds + ' total commands</div>' +
     '</div>' +
     '<div class="stat-card">' +
-      '<div class="label">Passing</div>' +
-      '<div class="value" style="color:var(--green)">' + passing + '</div>' +
-      '<div class="change">' + (failing > 0 ? failing + ' with failures' : 'All green') + '</div>' +
+      '<div class="label">Run Types</div>' +
+      '<div class="value" style="color:var(--green)">' + baselines + ' / ' + runsWithTests + '</div>' +
+      '<div class="change">' + baselines + ' baselines, ' + runsWithTests + ' with tests' + (failing > 0 ? ', ' + failing + ' failing' : '') + '</div>' +
     '</div>' +
     '<div class="stat-card">' +
-      '<div class="label">Best Time</div>' +
+      '<div class="label">Fastest Run</div>' +
       '<div class="value" style="color:var(--accent)">' + fmtTime(bestTime) + '</div>' +
-      '<div class="change">Avg: ' + avgTime + 's</div>' +
+      '<div class="change">Avg: ' + avgTime + '</div>' +
     '</div>' +
     '<div class="stat-card">' +
       '<div class="label">Peak IPC</div>' +
@@ -1451,7 +2076,8 @@ function filterRuns() {
     runs = runs.filter(function(item) {
       var r = item.run;
       var haystack = [
-        r.run_id, r.env.hostname || '', r.env.date || '', r.env.cpu || '', r.env.gcc || '', r.env.rocm || ''
+        r.run_id, r.label || '', r.description || '', r.run_type || '',
+        r.env.hostname || '', r.env.date || '', r.env.cpu || '', r.env.gcc || '', r.env.rocm || ''
       ].concat(r.timing.map(function(t) { return t.command; })).join(' ').toLowerCase();
       return haystack.indexOf(query) !== -1;
     });
@@ -1483,16 +2109,22 @@ function filterRuns() {
     var rankClass = rank === 0 ? 'gold' : rank === 1 ? 'silver' : rank === 2 ? 'bronze' : '';
     var isExpanded = expandedRunId === r.run_id;
     var cpuShort = (r.env.cpu || '').replace(' 64-Core Processor', '');
+    var runLabel = r.label || r.run_id;
+    var hasTests = s.pass + s.fail > 0;
+    var testBadge = hasTests
+      ? '<span class="badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail') + '">' + s.pass + '/' + (s.pass + s.fail) + '</span>'
+      : '<span class="badge" style="background:var(--bg-tertiary);color:var(--text3);">Baseline</span>';
 
     return '<div class="run-row ' + (isExpanded ? 'active' : '') + '" id="run-' + r.run_id + '">' +
       '<div class="run-row-summary" onclick="toggleRunDetail(\'' + r.run_id + '\', ' + item.idx + ')">' +
         '<div class="rank ' + rankClass + '">#' + (rank + 1) + '</div>' +
         '<div class="run-info">' +
-          '<div class="run-id">' + r.run_id + '</div>' +
+          '<div class="run-id">' + escHtml(runLabel) + '</div>' +
           '<div class="run-meta">' + (r.env.date || 'N/A') + ' &middot; ' + (r.env.hostname || 'N/A') + ' &middot; ' + (r.env.cores || '?') + ' cores &middot; ' + cpuShort + '</div>' +
+          (r.description ? '<div class="run-meta" style="color:var(--text3);font-size:0.7rem;margin-top:2px;">' + escHtml(r.description.substring(0, 80)) + '</div>' : '') +
         '</div>' +
         '<div class="run-time">' + fmtTime(s.total_time) + '</div>' +
-        '<div class="run-tests"><span class="badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail') + '">' + s.pass + '/' + (s.pass + s.fail) + '</span></div>' +
+        '<div class="run-tests">' + testBadge + '</div>' +
         '<div class="run-ipc">' + (m.IPC || '\u2014') + '</div>' +
         '<div class="run-cores">' + (r.env.cores || '?') + 'C</div>' +
         '<button class="run-detail-btn" onclick="event.stopPropagation(); toggleRunDetail(\'' + r.run_id + '\', ' + item.idx + ')">' + (isExpanded ? 'Hide' : 'Details') + '</button>' +
@@ -1679,17 +2311,31 @@ function copyRunCmds(runId, btn) {
 function renderTests(run) {
   var s = run.summary;
   var badge = document.getElementById('testsBadge');
-  badge.textContent = s.pass + '/' + (s.pass + s.fail) + ' passing';
-  badge.className = 'badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail');
+  var hasTests = s.pass + s.fail > 0;
+
+  if (hasTests) {
+    badge.textContent = s.pass + '/' + (s.pass + s.fail) + ' passing';
+    badge.className = 'badge ' + (s.all_pass ? 'badge-pass' : 'badge-fail');
+  } else {
+    badge.textContent = 'No Tests';
+    badge.className = 'badge';
+  }
 
   var tbody = document.querySelector('#testsTable tbody');
-  tbody.innerHTML = run.verify.map(function(v) {
-    return '<tr data-status="' + v.status + '">' +
-      '<td class="status-icon">' + (v.status === 'pass' ? '\u2705' : '\u274c') + '</td>' +
-      '<td style="font-family:monospace;font-size:0.8rem">' + v.file + '</td>' +
-      '<td>' + v.expected + '</td><td>' + v.reported + '</td>' +
-      '<td style="color:' + (v.diff < 0.01 ? 'var(--green)' : 'var(--yellow)') + '">' + v.diff + '</td></tr>';
-  }).join('');
+  if (run.verify.length > 0) {
+    tbody.innerHTML = run.verify.map(function(v) {
+      return '<tr data-status="' + v.status + '">' +
+        '<td class="status-icon">' + (v.status === 'pass' ? '\u2705' : '\u274c') + '</td>' +
+        '<td style="font-family:monospace;font-size:0.8rem">' + v.file + '</td>' +
+        '<td>' + v.expected + '</td><td>' + v.reported + '</td>' +
+        '<td style="color:' + (v.diff < 0.01 ? 'var(--green)' : 'var(--yellow)') + '">' + v.diff + '</td></tr>';
+    }).join('');
+  } else {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px;">' +
+      'No verification data for this run. ' +
+      (run.run_type === 'cpu_baseline' ? 'Baseline runs measure performance only.' : 'Run the test pipeline to generate verification results.') +
+      '</td></tr>';
+  }
 
   var totalTime = run.timing.reduce(function(a, t) { return a + t.time_s; }, 0);
   var ttbody = document.querySelector('#timingTable tbody');
@@ -1733,22 +2379,55 @@ function renderProfileMetric(val, lbl, color) {
 }
 
 function renderProfiling(run) {
-  var prof = getActiveProfile();
   var sel = document.getElementById('profRunSelector');
 
+  // Build combined list: deep profiles + baseline runs with perf data
+  var options = '';
   if (PROFILES.length > 0) {
-    sel.innerHTML = PROFILES.map(function(p, i) {
-      return '<option value="' + i + '"' + (i === currentProfileIdx ? ' selected' : '') + '>' + p.profile_id + ' (' + p.dataset + ', T' + p.threads + ')</option>';
-    }).join('');
-    sel.onchange = function() { switchProfile(this.value); };
-  } else {
-    sel.innerHTML = DATA.map(function(r, i) {
-      return '<option value="' + i + '"' + (i === currentRunIdx ? ' selected' : '') + '>Run ' + r.run_id + '</option>';
-    }).join('');
-    sel.onchange = function() { switchRun(this.value); };
+    options += '<optgroup label="Deep Profiles">';
+    PROFILES.forEach(function(p, i) {
+      options += '<option value="deep-' + i + '"' + (currentProfileIdx === i && !window._profViewingRun ? ' selected' : '') + '>' +
+        p.profile_id + ' (' + p.dataset + ', T' + p.threads + ')</option>';
+    });
+    options += '</optgroup>';
   }
 
-  if (prof) {
+  // Baseline runs with perf counter data
+  var runsWithPerf = [];
+  DATA.forEach(function(r, i) {
+    if (r.profile && r.profile.metrics && r.profile.metrics.IPC) {
+      runsWithPerf.push(i);
+    }
+  });
+  if (runsWithPerf.length > 0) {
+    options += '<optgroup label="Benchmark Runs (perf counters)">';
+    runsWithPerf.forEach(function(i) {
+      var r = DATA[i];
+      var pf = r.profile;
+      var ds = (pf.dataset || '?').replace('.fa','').replace('.phy','');
+      options += '<option value="run-' + i + '"' + (window._profViewingRun === i ? ' selected' : '') + '>' +
+        ds + ' T' + (pf.threads || 1) + ' — IPC ' + (pf.metrics.IPC || '?') + '</option>';
+    });
+    options += '</optgroup>';
+  }
+
+  sel.innerHTML = options;
+  sel.onchange = function() {
+    var v = this.value;
+    if (v.indexOf('deep-') === 0) {
+      window._profViewingRun = null;
+      switchProfile(v.replace('deep-', ''));
+    } else if (v.indexOf('run-') === 0) {
+      var ri = parseInt(v.replace('run-', ''));
+      window._profViewingRun = ri;
+      currentRunIdx = ri;
+      renderProfileConfig(null);
+      renderBasicProfile(DATA[ri]);
+    }
+  };
+
+  var prof = getActiveProfile();
+  if (prof && !window._profViewingRun) {
     renderProfileConfig(prof);
     renderDeepProfile(prof);
   } else {
@@ -2788,23 +3467,52 @@ function renderBasicProfile(run) {
 // ============ GPU ============
 function renderGPU(run) {
   var gpu = run.gpu_info || '';
-  document.getElementById('gpuRaw').textContent = gpu || 'No GPU data available';
+  document.getElementById('gpuRaw').textContent = gpu || 'No GPU data for this run. Select a run executed on a GPU node, or run with --gpu flag.';
   var lines = gpu.split('\n');
   var temp = 'N/A', power = 'N/A', vram = 'N/A', usage = 'N/A';
+  var hasGpuData = false;
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
     if (/^0\s+/.test(line)) {
       var parts = line.trim().split(/\s+/);
       if (parts.length >= 14) {
         temp = parts[4]; power = parts[5]; vram = parts[13]; usage = parts[14] || '0';
+        hasGpuData = true;
       }
     }
   }
-  document.getElementById('gpuGrid').innerHTML =
-    '<div class="gpu-stat"><div class="val" style="color:var(--green)">' + temp + '</div><div class="lbl">Temperature</div></div>' +
-    '<div class="gpu-stat"><div class="val" style="color:var(--accent)">' + power + '</div><div class="lbl">Power (Avg)</div></div>' +
-    '<div class="gpu-stat"><div class="val" style="color:var(--text3)">' + usage + '</div><div class="lbl">GPU Utilization</div></div>' +
-    '<div class="gpu-stat"><div class="val" style="color:var(--accent2)">' + vram + '</div><div class="lbl">VRAM Used</div></div>';
+
+  // Also check deep profiles for GPU data
+  var profGpu = null;
+  PROFILES.forEach(function(p) {
+    var hw = (p.gpu || {}).hardware || {};
+    if (hw.temperature_c != null) profGpu = hw;
+  });
+
+  if (!hasGpuData && profGpu) {
+    temp = profGpu.temperature_c + '\u00b0C';
+    power = profGpu.power_w ? profGpu.power_w + 'W' : 'N/A';
+    vram = profGpu.vram_used_mb ? (profGpu.vram_used_mb / 1024).toFixed(1) + 'GB' : 'N/A';
+    usage = profGpu.utilization_pct != null ? profGpu.utilization_pct + '%' : 'N/A';
+    hasGpuData = true;
+  }
+
+  if (hasGpuData) {
+    document.getElementById('gpuGrid').innerHTML =
+      '<div class="gpu-stat"><div class="val" style="color:var(--green)">' + temp + '</div><div class="lbl">Temperature</div></div>' +
+      '<div class="gpu-stat"><div class="val" style="color:var(--accent)">' + power + '</div><div class="lbl">Power (Avg)</div></div>' +
+      '<div class="gpu-stat"><div class="val" style="color:var(--text3)">' + usage + '</div><div class="lbl">GPU Utilization</div></div>' +
+      '<div class="gpu-stat"><div class="val" style="color:var(--accent2)">' + vram + '</div><div class="lbl">VRAM Used</div></div>';
+  } else {
+    var runType = run.run_type || '';
+    var msg = runType === 'cpu_baseline' ? 'CPU-only baseline run \u2014 no GPU data collected.' : 'No GPU data available. Run on a GPU node to collect metrics.';
+    document.getElementById('gpuGrid').innerHTML =
+      '<div style="grid-column:1/-1;text-align:center;color:var(--text3);padding:24px;">' +
+        '<div style="font-size:2rem;margin-bottom:8px;">\ud83d\udcbb</div>' +
+        '<div>' + msg + '</div>' +
+        '<div style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);">Profiles with GPU data: ' + PROFILES.filter(function(p) { return (p.gpu || {}).hardware && (p.gpu.hardware).temperature_c != null; }).length + '/' + PROFILES.length + '</div>' +
+      '</div>';
+  }
 }
 
 // ============ Allocation ============

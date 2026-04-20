@@ -56,6 +56,35 @@ No GPU measurements yet. Expected based on workload characteristics:
 
 ## Changelog
 
+### 20 April 2026: Dashboard UI/UX redesign + IQ-TREE Configuration card
+
+**Overview page cleanup:**
+- Removed 3 useless stat cards from overview (Best IPC, Cache Miss Rate, Deep Profiles) — these showed static, out-of-context numbers
+- Replaced with: **Best Speedup** (calculated across all runs comparing multi-threaded vs 1T baselines) and **Fastest Run** (best wall time across all runs)
+- Added stat card icons (`.stat-icon`) for visual distinction
+
+**IQ-TREE Configuration card (new):**
+- Added `renderOverviewConfig()` function — shows 3-column config grid on overview page when a run is selected
+- Sections: Alignment (dataset, taxa, sites, data type, file size, patterns, informative/constant sites, free params), Model & Results (model, rate heterogeneity, gamma alpha, threads, log-likelihood, BIC, tree length, wall time), System (CPU, cores, memory, L3, GPU, ROCm, GCC, NUMA, hostname)
+- Tries to match deep profiles by dataset name for richer alignment/system data
+- Shows the IQ-TREE command line with copy button
+- Added `copyOverviewConfig()` — exports full config as formatted text to clipboard
+- Added HTML container (`#overviewConfigCard`) to overview page
+
+**CSS modernization (UI/UX redesign):**
+- Darker, more refined color palette (--bg: #060a13, --surface: #0d1321, --card: #131b2e)
+- Added card elevation system: `--shadow-card` and `--shadow-hover` with subtle inset highlights
+- Stat cards now have hover lift effect (translateY + glow border)
+- All cards get hover border-color transition
+- Added `font-feature-settings` for Inter font (cv02, cv03, cv04, cv11)
+- Tightened spacing throughout (padding, gaps, font sizes)
+- Added `.config-grid`, `.config-section`, `.config-items`, `.config-item`, `.ci-label`, `.ci-value`, `.config-cmd` CSS classes
+- Responsive breakpoints updated for config-grid (3→2→1 columns)
+- Sidebar slightly narrower (260px→240px), refined nav link sizing
+- Added `--bg-tertiary` variable for nested surfaces (command blocks)
+
+**Bug fix:** Re-added `feStall` variable declaration in `renderOverview()` — was removed with the stat cards but still used by `latestProfileCard`.
+
 ### 19 April 2026: Comprehensive profiling report + Setonix cross-platform comparison
 
 **What was done:**
