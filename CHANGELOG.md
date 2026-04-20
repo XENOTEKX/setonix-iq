@@ -73,6 +73,16 @@ No GPU measurements yet. Expected based on workload characteristics:
 
 ## Changelog
 
+### 20 April 2026 (c): hpc-01 dashboard hosting + commit-back pipeline
+
+**Architecture change — private dashboard served from hpc-01:**
+- GitHub Pages requires Pro for private repos — switched to commit-back approach
+- GitHub Action now generates `dashboard.html` + `docs/index.html` and commits back to repo with `[skip ci]`
+- Created `host.sh` for hpc-01: HTTP server (screen) + cron auto-refresh every 5 min
+- Full pipeline: Setonix pushes data → Action generates dashboard → hpc-01 cron pulls → serves on HTTP
+- Updated `IMPLEMENTATION_PLAN.md` with full architecture diagram and Pawsey network policy notes
+- Added `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to avoid Node.js 20 deprecation warnings
+
 ### 20 April 2026 (b): GitHub Actions CI/CD overhaul + Setonix baseline hotspots
 
 **CI/CD overhaul — data-only pushes from Setonix, Action generates website:**
@@ -80,8 +90,7 @@ No GPU measurements yet. Expected based on workload characteristics:
   - Triggers on push to `main` when `logs/`, `serve.py`, or `website/` change
   - Runs `python3 serve.py` to generate `docs/index.html` from committed JSON logs
   - Validates output (file exists, size > 1KB, contains expected marker)
-  - Deploys to GitHub Pages via `actions/deploy-pages@v4`
-  - Uses `actions/configure-pages@v5` + `actions/upload-pages-artifact@v3`
+  - Commits generated dashboard back to repo (see 20c for final approach)
 - Updated `.gitignore` — generated files (`dashboard.html`, `docs/`, `PROFILING_REPORT.html`, `website/api/runs.json`) are not tracked
 - Updated `start.sh`:
   - `cmd_start`, `cmd_pipeline`, `cmd_profile`, `cmd_deepprofile` no longer call `serve.py` before pushing
