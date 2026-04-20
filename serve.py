@@ -2688,11 +2688,11 @@ function renderAllocation() {
     '<div class="stat-card"><div class="label">GPU Used</div><div class="value" style="color:var(--accent)">' + gpuUsedKSU.toFixed(3) + ' kSU</div><div class="change">of ' + gpuTotal.toLocaleString() + ' kSU</div></div>';
 
   document.getElementById('allocGrid').innerHTML =
-    '<div class="card"><div class="card-header"><h2>CPU Allocation (pawsey1351)</h2></div>' +
+    '<div class="card"><div class="card-header"><h2>CPU Allocation</h2></div>' +
     '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>' + cpuUsedKSU.toFixed(3) + ' kSU used</span><span style="color:var(--text3)">' + cpuTotal.toLocaleString() + ' kSU total</span></div>' +
     '<div class="alloc-bar"><div class="fill" style="width:' + Math.max(cpuPct, 0.05) + '%%;background:var(--green);min-width:2px;"></div></div>' +
     '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">' + (cpuTotal - cpuUsedKSU).toFixed(1) + ' kSU remaining (' + (100 - cpuPct).toFixed(2) + '%%)</div></div>' +
-    '<div class="card"><div class="card-header"><h2>GPU Allocation (pawsey1351-gpu)</h2></div>' +
+    '<div class="card"><div class="card-header"><h2>GPU Allocation</h2></div>' +
     '<div style="display:flex;justify-content:space-between;margin-top:8px;"><span>' + gpuUsedKSU.toFixed(3) + ' kSU used</span><span style="color:var(--text3)">' + gpuTotal.toLocaleString() + ' kSU total</span></div>' +
     '<div class="alloc-bar"><div class="fill" style="width:' + Math.max(gpuPct, 0.05) + '%%;background:var(--accent);min-width:2px;"></div></div>' +
     '<div style="color:var(--green);font-size:0.85rem;margin-top:4px;">' + (gpuTotal - gpuUsedKSU).toFixed(1) + ' kSU remaining (' + (100 - gpuPct).toFixed(2) + '%%)</div></div>';

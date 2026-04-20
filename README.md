@@ -2,7 +2,7 @@
 
 Self-contained dashboard for monitoring IQ-TREE pipeline runs on the [Setonix supercomputer](https://pawsey.org.au/systems/setonix/) (Pawsey Supercomputing Centre). Automatically collects timing, verification, profiling, GPU, and environment data from each run and renders it as a static HTML dashboard deployed to GitHub Pages.
 
-**Live dashboard:** [https://xenotekx.github.io/setonix-iq/](https://xenotekx.github.io/setonix-iq/)
+**Live dashboard:** *(deployed via GitHub Pages)*
 
 ---
 
@@ -11,7 +11,7 @@ Self-contained dashboard for monitoring IQ-TREE pipeline runs on the [Setonix su
 ```
 ┌──────────────────────── Setonix (Pawsey HPC) ────────────────────────┐
 │                                                                       │
-│  /scratch/pawsey1351/asamuel/iqtree3/                                │
+│  /scratch/$PAWSEY_PROJECT/$USER/iqtree3/                             │
 │  ├── setonix-ci/                                                      │
 │  │   ├── run_pipeline.sh    ← runs IQ-TREE tests, writes logs        │
 │  │   ├── run_profiling.sh   ← perf stat profiling                    │
@@ -96,7 +96,7 @@ Setonix disables SSH TCP forwarding on shared login nodes for security. Port for
 
 ```bash
 cd ~
-git clone https://github.com/XENOTEKX/setonix-iq.git
+git clone https://github.com/<YOUR_USERNAME>/setonix-iq.git
 cd setonix-iq
 ```
 
@@ -105,8 +105,8 @@ cd setonix-iq
 `start.sh` calls `check_links()` which creates symlinks from `website/results` and `website/profiles` to the pipeline output directories on scratch:
 
 ```
-website/results  →  /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/results
-website/profiles →  /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles
+website/results  →  /scratch/$PAWSEY_PROJECT/$USER/iqtree3/setonix-ci/results
+website/profiles →  /scratch/$PAWSEY_PROJECT/$USER/iqtree3/setonix-ci/profiles
 ```
 
 These symlinks are gitignored (they only work on Setonix).
@@ -115,10 +115,10 @@ These symlinks are gitignored (they only work on Setonix).
 
 ```bash
 # If using HTTPS with a PAT:
-git remote set-url origin https://<TOKEN>@github.com/XENOTEKX/setonix-iq.git
+git remote set-url origin https://<TOKEN>@github.com/<YOUR_USERNAME>/setonix-iq.git
 
 # Or use SSH if configured:
-git remote set-url origin git@github.com:XENOTEKX/setonix-iq.git
+git remote set-url origin git@github.com:<YOUR_USERNAME>/setonix-iq.git
 ```
 
 ---
@@ -302,7 +302,7 @@ Key-value pairs:
 
 ```
 date: 2026-04-18 14:30:00
-hostname: nid002145
+hostname: setonix-node
 cpu: AMD EPYC 7A53 64-Core Processor
 cores: 64
 gcc: 12.2.0
@@ -342,7 +342,7 @@ Raw `rocm-smi` output (parsed for temperature, power, VRAM, utilization).
 - **Timing** — bar/doughnut chart of per-command wall time, trend chart across runs
 - **Profiling** — IPC, cache miss rate, branch mispredict, hardware counter bar chart, IPC trend across runs
 - **GPU** — temperature, power, VRAM, utilization from `rocm-smi`
-- **Allocation** — CPU/GPU SU balance for `pawsey1351`
+- **Allocation** — CPU/GPU SU balance
 - **Environment** — full key-value dump per run
 
 ---
@@ -355,8 +355,8 @@ Raw `rocm-smi` output (parsed for temperature, power, VRAM, utilization).
 | CPU | AMD EPYC 7A53 "Trento" 64-core |
 | GPU | 8× AMD Instinct MI250X per node (128 GB HBM2e each) |
 | GPU Stack | HIP/ROCm |
-| Project | `pawsey1351` / `pawsey1351-gpu` |
-| Scratch | `/scratch/pawsey1351/asamuel/` |
+| Project | `$PAWSEY_PROJECT` / `$PAWSEY_PROJECT-gpu` |
+| Scratch | `/scratch/$PAWSEY_PROJECT/$USER/` |
 | Scheduler | SLURM |
 
 ---
@@ -409,7 +409,7 @@ Benefits over a monolithic `runs.json` array:
 | Problem | Fix |
 |---------|-----|
 | Dashboard shows "No pipeline runs" locally | Run `git pull` to get latest `logs/runs/*.json` files |
-| Symlink errors on Setonix | Verify `/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/results` exists |
+| Symlink errors on Setonix | Verify `/scratch/$PAWSEY_PROJECT/$USER/iqtree3/setonix-ci/results` exists |
 | `git push` fails on Setonix | Check remote URL has valid token: `git remote -v` |
 | Dashboard doesn't update on GitHub Pages | Check `docs/index.html` was committed; Pages serves from `docs/` on `main` |
 | Charts not rendering | Requires internet for Chart.js CDN (`cdn.jsdelivr.net`) |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Setonix Agent — Dashboard Host (run on hpc-01)
+# Setonix Agent — Dashboard Host (run on development server)
 #
 # Serves the IQ-TREE dashboard on a local HTTP port.
 # Pulls latest data from GitHub and regenerates periodically via cron.
@@ -9,7 +9,7 @@
 #   1. Clone the repo:    git clone <repo-url> ~/setonix-iq
 #   2. Start the server:  cd ~/setonix-iq && ./host.sh start
 #   3. Install cron:      ./host.sh cron
-#   4. Open in browser:   http://hpc-01:<PORT>
+#   4. Open in browser:   http://<hostname>:<PORT>
 #
 # Commands:
 #   ./host.sh start    — Start HTTP server in background (screen)

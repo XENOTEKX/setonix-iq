@@ -8,7 +8,7 @@ Profiling complete (VTune + perf, April 2026). Five hot functions identified in 
 
 ## Current baselines
 
-### CPU wall-clock times (hpc-01, Xeon E5-2670, medium_dna.phy 50 taxa × 5,000 sites)
+### CPU wall-clock times (Intel Xeon E5-2670, medium_dna.phy 50 taxa × 5,000 sites)
 
 | Config | 1T | 4T | 8T |
 |--------|-----|-----|-----|
@@ -73,13 +73,13 @@ No GPU measurements yet. Expected based on workload characteristics:
 
 ## Changelog
 
-### 20 April 2026 (c): hpc-01 dashboard hosting + commit-back pipeline
+### 20 April 2026 (c): Dashboard hosting + commit-back pipeline
 
-**Architecture change — private dashboard served from hpc-01:**
+**Architecture change — private dashboard served from development server:**
 - GitHub Pages requires Pro for private repos — switched to commit-back approach
 - GitHub Action now generates `dashboard.html` + `docs/index.html` and commits back to repo with `[skip ci]`
-- Created `host.sh` for hpc-01: HTTP server (screen) + cron auto-refresh every 5 min
-- Full pipeline: Setonix pushes data → Action generates dashboard → hpc-01 cron pulls → serves on HTTP
+- Created `host.sh` for development server: HTTP server (screen) + cron auto-refresh every 5 min
+- Full pipeline: Setonix pushes data → Action generates dashboard → dev server cron pulls → serves on HTTP
 - Updated `IMPLEMENTATION_PLAN.md` with full architecture diagram and Pawsey network policy notes
 - Added `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to avoid Node.js 20 deprecation warnings
 
@@ -143,9 +143,9 @@ No GPU measurements yet. Expected based on workload characteristics:
 ### 19 April 2026: Comprehensive profiling report + Setonix cross-platform comparison
 
 **What was done:**
-- Created `PROFILING_REPORT.html` — a comprehensive, downloadable HTML profiling report combining hpc-01 (Intel Sandy Bridge) and Setonix (AMD EPYC Trento) profiling data
+- Created `PROFILING_REPORT.html` — a comprehensive, downloadable HTML profiling report combining Intel (Sandy Bridge) and Setonix (AMD EPYC Trento) profiling data
 - 16 sections with table of contents, page breaks for printing, explanations for non-technical readers, jargon glossary, colour-coded findings, ASCII bar charts, and a download button
-- Cross-platform comparison: Setonix 4T is **2.54× faster** than hpc-01 4T on medium_dna GTR+G4 (26.9s vs 68.2s), with **2.15× better IPC** (2.30 vs 1.07) and **~30× reduction in frontend stalls** (2.23% vs 65.71%)
+- Cross-platform comparison: Setonix 4T is **2.54× faster** than Intel reference 4T on medium_dna GTR+G4 (26.9s vs 68.2s), with **2.15× better IPC** (2.30 vs 1.07) and **~30× reduction in frontend stalls** (2.23% vs 65.71%)
 - Function hotspot ranking is identical across both platforms (DervSIMD ~39%, PartialLikelihood ~33%, Buffer ~10%), confirming GPU offload targets are architecture-independent
 - Added `PROFILING_REPORT.html` to `.gitignore` (generated report, not tracked in repo)
 - Fixed `dashboard.html` and `serve.py` rendering bug (stray JS from template replacement — see entry below)

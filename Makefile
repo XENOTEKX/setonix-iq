@@ -22,7 +22,7 @@ SHELL := /usr/bin/env bash
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 AGENT_DIR   := $(shell cd "$(dir $(abspath $(lastword $(MAKEFILE_LIST))))" && pwd)
-IQTREE_DIR  := /scratch/pawsey1351/asamuel/iqtree3
+IQTREE_DIR  := $(or $(IQTREE_DIR),/scratch/$(or $(PAWSEY_PROJECT),pawsey0000)/$(USER)/iqtree3)
 
 BUILD_DIR         := $(IQTREE_DIR)/build
 BUILD_PROFILING   := $(IQTREE_DIR)/build-profiling

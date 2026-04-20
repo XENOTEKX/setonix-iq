@@ -13,7 +13,7 @@
   ],
   "verify": [],
   "env": {
-    "hostname": "nid002599",
+    "hostname": "setonix-node",
     "date": "2026-04-19T22:09:32+08:00",
     "run_id": "41703864",
     "cpu": "AMD EPYC 7763 64-Core Processor",

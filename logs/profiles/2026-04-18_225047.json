@@ -707,7 +707,7 @@
     "memory_copies": []
   },
   "system": {
-    "hostname": "nid002996",
+    "hostname": "setonix-node",
     "date": "2026-04-18T22:50:47+08:00",
     "run_id": "41686954",
     "cpu": "AMD EPYC 7A53 64-Core Processor",

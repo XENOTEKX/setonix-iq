@@ -12,11 +12,11 @@
 set -euo pipefail
 
 AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IQTREE_DIR="/scratch/pawsey1351/asamuel/iqtree3"
+IQTREE_DIR="${IQTREE_DIR:-/scratch/${PAWSEY_PROJECT:-pawsey0000}/${USER}/iqtree3}"
 PIPELINE="$IQTREE_DIR/setonix-ci/run_pipeline.sh"
 PROFILER="$IQTREE_DIR/setonix-ci/run_profiling.sh"
 DEEP_PROFILER="$IQTREE_DIR/setonix-ci/run_deep_profile.sh"
-REPO_URL="https://github.com/XENOTEKX/setonix-iq.git"
+REPO_URL="$(cd "$AGENT_DIR" && git remote get-url origin 2>/dev/null || echo 'https://github.com/OWNER/setonix-iq.git')"
 
 # Colors
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
@@ -118,9 +118,9 @@ cmd_status() {
   squeue -u "$USER" --format="%i %j %T %M %l %N" 2>/dev/null || echo "No SLURM access"
   echo ""
   echo -e "${BLUE}=== Allocation Balance ===${NC}"
-  pawseyAccountBalance -p pawsey1351 2>/dev/null || echo "N/A"
+  pawseyAccountBalance -p "${PAWSEY_PROJECT:-$USER}" 2>/dev/null || echo "N/A"
   echo ""
-  pawseyAccountBalance -p pawsey1351-gpu 2>/dev/null || echo "N/A"
+  pawseyAccountBalance -p "${PAWSEY_PROJECT:-$USER}-gpu" 2>/dev/null || echo "N/A"
   echo ""
   echo -e "${BLUE}=== Disk Quota ===${NC}"
   quota -s 2>/dev/null | head -6 || echo "N/A"
