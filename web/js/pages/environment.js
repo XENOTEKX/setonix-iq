@@ -32,9 +32,18 @@ export async function mount(root) {
 
 function renderEnv(run) {
   const env = run?.env || {};
-  const entries = Object.entries(env);
-  document.getElementById('envBody').innerHTML = entries.length
-    ? `<div class="kv-grid">${entries.map(([k, v]) =>
+  const flat = [];
+  for (const [k, v] of Object.entries(env)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const [k2, v2] of Object.entries(v)) {
+        flat.push([`${k}.${k2}`, v2]);
+      }
+    } else {
+      flat.push([k, v]);
+    }
+  }
+  document.getElementById('envBody').innerHTML = flat.length
+    ? `<div class="kv-grid">${flat.map(([k, v]) =>
         `<div class="kv-item"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(String(v))}</div></div>`
       ).join('')}</div>`
     : '<div class="empty">No environment data captured for this run.</div>';

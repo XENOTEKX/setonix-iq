@@ -46,7 +46,7 @@ DATASET_INFO: dict[str, dict] = {
     "xlarge_dna.fa":        {"taxa": 200, "sites": 100000, "kind": "dna"},
     "medium_dna.fa":        {"taxa": 50,  "sites": 4559,   "kind": "dna"},
     "example.phy":          {"taxa": 17,  "sites": 1998,   "kind": "dna"},
-    "mega_dna.fa":          {"taxa": 500, "sites": 200000, "kind": "dna"},
+    "mega_dna.fa":          {"taxa": 500, "sites": 100000, "kind": "dna"},
 }
 
 

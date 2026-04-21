@@ -47,7 +47,38 @@
         "cpu": { "type": "string" },
         "cores": { "type": ["string", "number"] },
         "gcc": { "type": "string" },
-        "rocm": { "type": "string" }
+        "rocm": { "type": "string" },
+        "kernel": { "type": "string" },
+        "os": { "type": "string" },
+        "glibc": { "type": "string" },
+        "python": { "type": "string" },
+        "iqtree_version": { "type": "string" },
+        "iqtree_binary": { "type": "string" },
+        "cpu_sockets": { "type": ["integer", "string"] },
+        "cpu_cores_per_socket": { "type": ["integer", "string"] },
+        "cpu_threads_per_core": { "type": ["integer", "string"] },
+        "cpu_count_logical": { "type": ["integer", "string"] },
+        "cpu_governor": { "type": "string" },
+        "smt_active": { "type": ["boolean", "string"] },
+        "numa_nodes": { "type": ["integer", "string"] },
+        "mem_total_kb": { "type": ["integer", "string"] },
+        "slurm": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "job_id": { "type": ["string", "integer"] },
+            "job_name": { "type": "string" },
+            "partition": { "type": "string" },
+            "account": { "type": "string" },
+            "nodelist": { "type": "string" },
+            "num_nodes": { "type": ["integer", "string"] },
+            "cpus_per_task": { "type": ["integer", "string"] },
+            "ntasks": { "type": ["integer", "string"] },
+            "mem_per_node": { "type": ["string", "integer"] },
+            "submit_host": { "type": "string" },
+            "submit_dir": { "type": "string" }
+          }
+        }
       }
     },
     "gpu_info": { "type": "string" },
@@ -112,8 +143,65 @@
             "cache-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "branch-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "L1-dcache-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
-            "frontend-stall-rate": { "type": "number", "minimum": 0, "maximum": 100 }
+            "frontend-stall-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "backend-stall-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "dTLB-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "iTLB-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "amd-branch-mispred-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "amd-l1-dtlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "amd-l2-tlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 }
+          },
+          "additionalProperties": true
+        },
+        "memory_timeseries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "t_s":     { "type": "number", "minimum": 0 },
+              "rss_kb":  { "type": "number", "minimum": 0 },
+              "peak_kb": { "type": "number", "minimum": 0 },
+              "vms_kb":  { "type": "number", "minimum": 0 },
+              "threads_now": { "type": "number", "minimum": 0 },
+              "voluntary_cs":   { "type": "number", "minimum": 0 },
+              "involuntary_cs": { "type": "number", "minimum": 0 }
+            }
           }
+        },
+        "peak_rss_kb": { "type": "number", "minimum": 0 },
+        "numa": {
+          "type": "object",
+          "properties": {
+            "per_node_mb": { "type": "object", "additionalProperties": { "type": "number" } },
+            "total_mb":    { "type": "number", "minimum": 0 }
+          }
+        },
+        "io": {
+          "type": "object",
+          "properties": {
+            "read_bytes":  { "type": "number", "minimum": 0 },
+            "write_bytes": { "type": "number", "minimum": 0 },
+            "syscr":       { "type": "number", "minimum": 0 },
+            "syscw":       { "type": "number", "minimum": 0 },
+            "rchar":       { "type": "number", "minimum": 0 },
+            "wchar":       { "type": "number", "minimum": 0 }
+          }
+        },
+        "per_thread": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tid":   { "type": "integer" },
+              "utime": { "type": "number", "minimum": 0 },
+              "stime": { "type": "number", "minimum": 0 },
+              "nice":  { "type": "number" }
+            }
+          }
+        },
+        "raw_events": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
         },
         "hotspots": {
           "type": "array",

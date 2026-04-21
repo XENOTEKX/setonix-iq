@@ -35,12 +35,94 @@ PROFILE_ROOT = SCRATCH / "setonix-ci" / "profiles"
 BENCHMARKS = SCRATCH / "benchmarks"
 
 # Map the run labels we have in logs/runs to scratch profile directory names.
-# Scratch dirs are suffixed with the SLURM ID of the parent job (41703864).
+# Scratch dirs are suffixed with the SLURM ID of the parent job; since mega/
+# subsequent jobs have different IDs we fall back to glob-matching.
 SLURM_ID = "41703864"
 
 
 def profile_dir_for(label: str) -> Path:
-    return PROFILE_ROOT / f"{label}_{SLURM_ID}"
+    """Locate the profile directory for ``label``.
+
+    Tries the canonical ``<label>_<SLURM_ID>`` first, then falls back to the
+    newest ``<label>_*`` directory (so new mega-batch SLURM IDs are picked up
+    automatically).
+    """
+    primary = PROFILE_ROOT / f"{label}_{SLURM_ID}"
+    if primary.is_dir():
+        return primary
+    candidates = sorted(
+        (p for p in PROFILE_ROOT.glob(f"{label}_*") if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else primary
+
+
+def parse_profile_meta(path: Path) -> dict:
+    """Parse ``profile_meta.json`` emitted by run_mega_profile.sh."""
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def parse_env_json(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def parse_samples_jsonl(path: Path) -> dict:
+    """Summarize samples.jsonl into timeseries + peak + io + numa + per-thread."""
+    if not path.is_file():
+        return {}
+    series: list[dict] = []
+    peak_rss = 0
+    last: dict = {}
+    try:
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                last = rec
+                rss = int(rec.get("rss_kb") or 0)
+                peak = int(rec.get("peak_kb") or 0)
+                if rss > peak_rss:
+                    peak_rss = rss
+                if peak > peak_rss:
+                    peak_rss = peak
+                series.append({
+                    "t_s": rec.get("t_s"),
+                    "rss_kb": rec.get("rss_kb"),
+                    "peak_kb": rec.get("peak_kb"),
+                    "vms_kb": rec.get("vms_kb"),
+                    "threads_now": rec.get("threads_now"),
+                    "voluntary_cs": rec.get("voluntary_cs"),
+                    "involuntary_cs": rec.get("involuntary_cs"),
+                })
+    except OSError:
+        return {}
+    out: dict = {"memory_timeseries": series}
+    if peak_rss:
+        out["peak_rss_kb"] = peak_rss
+    if last:
+        if last.get("io"):
+            out["io"] = last["io"]
+        if last.get("numa"):
+            out["numa"] = last["numa"]
+        if last.get("per_thread"):
+            out["per_thread"] = last["per_thread"]
+    return out
 
 
 def parse_iqtree_report(path: Path) -> dict:
@@ -312,13 +394,114 @@ def enrich_run(run: dict) -> bool:
     if profile != (run.get("profile") or {}):
         run["profile"] = profile
 
+    # ── mega-profile extras (profile_meta.json / env.json / samples.jsonl) ─
+    meta = parse_profile_meta(pdir / "profile_meta.json")
+    env_extra = parse_env_json(pdir / "env.json")
+    samples_summary = parse_samples_jsonl(pdir / "samples.jsonl")
+
+    if env_extra:
+        env = dict(run.get("env") or {})
+        for k, v in env_extra.items():
+            if k == "dataset":
+                continue  # dataset handled separately
+            if env.get(k) != v:
+                env[k] = v
+                changed = True
+        if env != (run.get("env") or {}):
+            run["env"] = env
+
+    if meta:
+        profile = dict(run.get("profile") or {})
+        # profile_meta.json structure: {env, perf_stat{metrics, raw_events},
+        # samples{...}, ...}
+        perf_stat = meta.get("perf_stat") or {}
+        metrics = perf_stat.get("metrics") or meta.get("metrics") or {}
+        raw_events = perf_stat.get("raw_events") or meta.get("raw_events") or {}
+        if metrics:
+            merged = dict(profile.get("metrics") or {})
+            merged.update(metrics)
+            if merged != profile.get("metrics"):
+                profile["metrics"] = merged
+                changed = True
+        if raw_events and profile.get("raw_events") != raw_events:
+            profile["raw_events"] = raw_events
+            changed = True
+        run["profile"] = profile
+
+    if samples_summary:
+        profile = dict(run.get("profile") or {})
+        for k, v in samples_summary.items():
+            if profile.get(k) != v:
+                profile[k] = v
+                changed = True
+        run["profile"] = profile
+
     return changed
+
+
+def discover_new_profile_runs() -> int:
+    """Create stub run JSON files for profile dirs that don't have one yet.
+
+    Scans ``PROFILE_ROOT`` for ``<label>_<slurm>`` directories. If no
+    ``logs/runs/<label>_baseline.json`` exists but ``profile_meta.json``
+    does, emit a minimal skeleton so the subsequent enrichment pass can
+    populate it.
+    """
+    if not PROFILE_ROOT.is_dir():
+        return 0
+    created = 0
+    for pdir in sorted(PROFILE_ROOT.iterdir()):
+        if not pdir.is_dir():
+            continue
+        meta_path = pdir / "profile_meta.json"
+        if not meta_path.is_file():
+            continue
+        # directory naming convention: <label>_<slurmid>
+        parts = pdir.name.rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        label = parts[0]
+        slurm_id = parts[1]
+        target = RUNS_DIR / f"{label}_baseline.json"
+        if target.exists():
+            continue
+        meta = parse_profile_meta(meta_path)
+        env = (meta.get("env") or {})
+        perf_stat = meta.get("perf_stat") or {}
+        threads = env.get("threads") or perf_stat.get("threads")
+        dataset_file = (env.get("dataset") or {}).get("file") or meta.get("dataset_file")
+        wall_time = perf_stat.get("wall_time_s") or meta.get("wall_time_s") or 0
+        stub = {
+            "run_id": label,
+            "slurm_id": slurm_id,
+            "label": label,
+            "run_type": "deep_profile",
+            "timing": ([{"command": "iqtree", "time_s": float(wall_time)}]
+                       if wall_time else []),
+            "verify": [],
+            "env": {k: v for k, v in env.items() if k != "dataset"},
+            "profile": {
+                "dataset": dataset_file,
+                "threads": threads,
+            },
+            "summary": {
+                "pass": 0, "fail": 0,
+                "total_time": float(wall_time or 0),
+                "all_pass": True,
+            },
+        }
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(stub, indent=2) + "\n")
+        print(f"[harvest] created stub {target.name} from {pdir.name}")
+        created += 1
+    return created
 
 
 def main() -> int:
     if not PROFILE_ROOT.is_dir():
         print(f"[harvest] scratch profiles not visible at {PROFILE_ROOT}")
         return 1
+    discover_new_profile_runs()
     touched = 0
     for run_file in sorted(RUNS_DIR.glob("*.json")):
         try:

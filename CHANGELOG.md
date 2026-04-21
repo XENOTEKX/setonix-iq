@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-04-21 — Mega dataset: enhanced Setonix profiling pipeline
+
+Addresses wishlist items **1**, **2** (partial — L3 admin-locked), **3** (partial), **4** (partial), **11**, **12**.
+
+### Enhanced profiler — `setonix-ci/run_mega_profile.sh`
+
+Single-job, single-thread-count wrapper for `mega_dna.fa` (500 taxa × 100 000 sites, 48 MB).
+Captures the full Zen3 data we have access to in one pass:
+
+- **27-event `perf stat`** (multiplexed ≈ 40 %): `cycles, instructions,
+  branch-{instructions,misses}, cache-{references,misses}, L1-dcache-{loads,load-misses},
+  dTLB-{loads,load-misses}, iTLB-{loads,load-misses}, stalled-cycles-{frontend,backend},
+  task-clock, page-faults, context-switches, cpu-migrations`, plus AMD raw events
+  `ex_ret_ops, ex_ret_brn_misp, ls_l1_d_tlb_miss.all, bp_l1_tlb_miss_l2_tlb_{hit,miss},
+  ls_tablewalker.{dside,iside}, ls_dispatch.{ld_dispatch,store_dispatch}`.
+- Derived rates: IPC, cache-/branch-/L1-dcache-/dTLB-/iTLB-/frontend-stall-/backend-stall-rate,
+  AMD branch-mispred / L1-dTLB-miss / L2-TLB-miss rates.
+- **`perf record -g -F 99`** → `hotspots.txt` (perf report) + `perf_folded.txt`
+  (inline `stackcollapse`).
+- **10 s /proc sampler** (embedded Python) → `samples.jsonl` with RSS/VmHWM/VmSize,
+  voluntary/involuntary ctxt-switches, `/proc/<pid>/io` (read/write bytes, rchar/wchar,
+  syscr/syscw), `numastat -p` per-node MB, and per-TID `utime/stime/nice`.
+- **`env.json`** snapshot: kernel, glibc, gcc, python, iqtree version, CPU sockets /
+  cores / threads / governor, SMT state, NUMA nodes, SLURM context (job id / partition /
+  nodelist / cpus_per_task / mem).
+- Emits unified `profile_meta.json` combining all of the above.
+
+Not enabled (admin-locked on Setonix, `perf_event_paranoid=2`):
+
+- L3 uncore events (`l3_lookup_state.*`, `l3_comb_clstr_state.*`, `l3_misses`,
+  `l3_read_miss_latency`) — require `-a` / CAP_SYS_ADMIN.
+- DRAM bandwidth metrics (`nps1_die_to_dram`, `all_remote_links_outbound`) — uncore.
+- `perf stat -M TopdownL1` — needs elevated events.
+
+### Batch submission — `setonix-ci/submit_mega_batch.sh`
+
+Fans out 4 independent SLURM jobs. Submitted 2026-04-21:
+
+| Threads | JobID     |
+|---------|-----------|
+| 16      | 41784642  |
+| 32      | 41784643  |
+| 64      | 41784644  |
+| 128     | 41784645  |
+
+1T / 4T / 8T deliberately dropped — tree-search on 500 taxa is O(N²) so those
+runtimes exceed the 24 h wall limit. Each job requests 1 node × 128 CPUs ×
+230 GB on `work`.
+
+### Pipeline extensions
+
+- `tools/schemas/run.schema.json` — added `profile.memory_timeseries[]`,
+  `profile.peak_rss_kb`, `profile.numa.{per_node_mb,total_mb}`, `profile.io.*`,
+  `profile.per_thread[]`, `profile.raw_events`, new metric keys
+  (`backend-stall-rate, dTLB-miss-rate, iTLB-miss-rate, amd-*`), and rich
+  `env.*` / `env.slurm.*` properties.
+- `tools/harvest_scratch.py` — no longer pinned to `SLURM_ID=41703864`; globs
+  `<label>_*` and picks the newest. Parses `profile_meta.json`, `env.json`, and
+  `samples.jsonl`. Auto-creates stub `logs/runs/<label>_baseline.json` files
+  for new profile dirs that lack a run record.
+- `tools/normalize.py` — corrected `mega_dna.fa` sites from 200 000 → 100 000.
+- `web/js/pages/profiling.js` — new cards: Memory &amp; context switches (RSS
+  timeseries SVG), NUMA residency (per-node bar), I/O totals, Per-thread CPU
+  time (user vs sys). Expanded metrics grid to include BE-stall / dTLB / iTLB.
+- `web/js/pages/environment.js` — flattens nested `env.slurm.*` keys so SLURM
+  context appears in the KV grid.
+
+### Outstanding
+
+Jobs queued (priority-waiting). On completion:
+`ssh setonix` → `make harvest && make build && git commit && git push`.
+
+---
+
+
 ## 📋 Data inputs needed from Setonix (open requests)
 
 > **Context.** The dashboard currently has full hardware-counter coverage on
