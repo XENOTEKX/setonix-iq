@@ -2,10 +2,9 @@
 
 import { hashColour } from '../utils.js';
 
-let chart;
-
 export function render(canvas, runsIndex) {
-  if (chart) chart.destroy();
+  const existing = window.Chart?.getChart?.(canvas);
+  if (existing) existing.destroy();
   const byDataset = new Map();
   for (const r of runsIndex) {
     if (!r.dataset_short || r.threads == null || r.efficiency == null) continue;
@@ -36,7 +35,7 @@ export function render(canvas, runsIndex) {
     borderWidth: 1.5,
   });
 
-  chart = new Chart(canvas, {
+  new Chart(canvas, {
     type: 'line',
     data: { datasets },
     options: {

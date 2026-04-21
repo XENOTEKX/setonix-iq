@@ -102,7 +102,7 @@ function renderRow(r) {
   const ds = r.dataset_short || r.dataset || 'n/a';
   const modelLabel = r.model || (r.run_type === 'modelfinder' ? 'ModelFinder' : (r.description || r.run_type || '—'));
   const dims = (r.taxa && r.sites) ? `${r.taxa}×${r.sites}` : null;
-  const size = r.size_mb ? `${r.size_mb} MB` : null;
+  const size = r.size_mb ? `${r.size_estimated ? '~' : ''}${r.size_mb} MB` : null;
   const metaBits = [ds, dims, size, modelLabel].filter(Boolean).join(' · ');
   return `
     <div class="run-row" data-runrow="${escHtml(r.run_id)}">

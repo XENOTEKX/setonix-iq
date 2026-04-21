@@ -201,10 +201,11 @@ function renderDatasets(idx) {
         <h3>${escHtml(ds)}</h3>
         <div class="ds-row"><span>Taxa</span><strong>${first.taxa ?? '—'}</strong></div>
         <div class="ds-row"><span>Sites</span><strong>${first.sites?.toLocaleString?.() ?? '—'}</strong></div>
-        <div class="ds-row"><span>File size</span><strong>${first.size_mb != null ? first.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
+        <div class="ds-row"><span>File size</span><strong>${first.size_mb != null ? (first.size_estimated ? '~' : '') + first.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
         <div class="ds-row"><span>Runs</span><strong>${runs.length}</strong></div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
         <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>
+        ${first.size_estimated ? '<div class="ds-note">~ size estimated from alignment dimensions</div>' : ''}
       </div>
     `);
   }

@@ -15,24 +15,23 @@ const TMPL = `
   <div class="run-picker-wrap" style="margin-bottom:22px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <span style="font-size:0.72rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.1em; font-weight:700;">Selected run</span>
-      <span style="font-size:0.68rem; color:var(--text-muted);">Only runs with profile data shown first</span>
+      <span style="font-size:0.68rem; color:var(--text-muted);">Only runs with profile data listed</span>
     </div>
     <div id="profRunPicker"></div>
   </div>
 
   <div class="stats-grid" id="profMetrics"></div>
-  <div class="charts-row">
-    <div class="card">
-      <div class="card-header"><h2>Top hotspots</h2></div>
-      <div id="profHotspots"></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><h2>Top call stacks</h2></div>
-      <div id="profCallstack"></div>
-    </div>
+
+  <div class="card">
+    <div class="card-header"><h2>Top hotspots</h2><div class="actions"><span class="btn-sm">perf sampling · self time</span></div></div>
+    <div id="profHotspots"></div>
   </div>
   <div class="card">
-    <div class="card-header"><h2>Flamegraph</h2></div>
+    <div class="card-header"><h2>Top call stacks</h2><div class="actions"><span class="btn-sm">folded · grouped by path</span></div></div>
+    <div id="profCallstack"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2>Flamegraph</h2><div class="actions"><span class="btn-sm">X = samples · Y = depth</span></div></div>
     <div id="profFlame"></div>
   </div>
 `;
@@ -40,24 +39,31 @@ const TMPL = `
 export async function mount(root) {
   root.innerHTML = TMPL;
   const idx = store.get('runsIndex') || [];
-  if (!idx.length) {
-    root.querySelector('#profRunPicker').innerHTML = '<div class="empty">No runs indexed.</div>';
+  const profileRuns = idx.filter((r) => r.has_hotspots || r.has_stacks);
+
+  if (!profileRuns.length) {
+    root.querySelector('#profRunPicker').innerHTML =
+      '<div class="empty" style="padding:22px;">No runs with profile data indexed yet. Run <code>perf record</code> and include <code>hotspots</code> / <code>folded_stacks</code> in the log JSON.</div>';
+    document.getElementById('profMetrics').innerHTML = '';
+    document.getElementById('profHotspots').innerHTML = '';
+    document.getElementById('profCallstack').innerHTML = '';
+    document.getElementById('profFlame').innerHTML = '';
     return;
   }
-  // Runs with hotspots first
-  const sorted = [...idx].sort((a, b) => (Number(!!b.has_hotspots) - Number(!!a.has_hotspots)));
+
+  const sorted = [...profileRuns].sort((a, b) => {
+    // hotspots+stacks first, then stacks only, then hotspots only
+    const rank = (r) => (r.has_hotspots && r.has_stacks ? 2 : (r.has_stacks ? 1 : 0));
+    return rank(b) - rank(a);
+  });
   const first = sorted[0];
 
   mountRunPicker(document.getElementById('profRunPicker'), sorted, {
     selectedId: first?.run_id,
-    onChange: async (r) => {
-      const full = await loadRun(r.run_id);
-      updateForRun(full);
-    },
+    onChange: async (r) => updateForRun(await loadRun(r.run_id)),
   });
 
-  const full = await loadRun(first.run_id);
-  updateForRun(full);
+  updateForRun(await loadRun(first.run_id));
 }
 
 function updateForRun(run) {

@@ -9,26 +9,28 @@
 .chart-wrapper canvas { max-width: 100%; }
 
 /* ------------- Hotspot row ------------- */
+.hotspot-list { padding: 4px 0 8px; }
 .hotspot-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 64px 140px 1fr auto;
   align-items: center;
-  gap: 12px;
-  padding: 9px 16px;
+  gap: 14px;
+  padding: 10px 18px;
   border-bottom: 1px solid rgba(30, 42, 62, 0.4);
 }
 .hotspot-row:last-child { border-bottom: none; }
 .hotspot-pct {
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   font-weight: 700;
-  min-width: 52px;
   text-align: right;
   color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 .hotspot-bar-wrap {
-  width: 110px;
   background: var(--surface);
   border-radius: 4px;
   overflow: hidden;
+  height: 7px;
 }
 .hotspot-bar {
   height: 7px;
@@ -40,7 +42,7 @@
   font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--text2);
-  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -48,8 +50,27 @@
 .hotspot-module {
   font-size: 0.68rem;
   color: var(--text3);
-  min-width: 75px;
-  text-align: right;
+  font-family: var(--font-mono);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .hotspot-row {
+    grid-template-columns: 56px 1fr;
+    grid-template-areas:
+      "pct func"
+      "bar bar"
+      "mod mod";
+    gap: 6px 10px;
+    padding: 10px 14px;
+  }
+  .hotspot-pct { grid-area: pct; }
+  .hotspot-func { grid-area: func; white-space: normal; word-break: break-word; }
+  .hotspot-bar-wrap { grid-area: bar; }
+  .hotspot-module { grid-area: mod; max-width: none; font-size: 0.66rem; }
 }
 
 /* ------------- Flamegraph ------------- */
@@ -95,10 +116,10 @@
 /* ------------- Callstack ------------- */
 .callstack-row {
   display: grid;
-  grid-template-columns: 60px 60px 1fr;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 16px;
+  grid-template-columns: 80px 120px 1fr;
+  align-items: start;
+  gap: 14px;
+  padding: 10px 18px;
   border-bottom: 1px solid rgba(30, 42, 62, 0.4);
   font-size: 0.72rem;
 }
@@ -108,6 +129,8 @@
   color: var(--accent2);
   text-align: right;
   font-family: var(--font-mono);
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 .callstack-bar-wrap {
   position: relative;
@@ -115,6 +138,7 @@
   background: rgba(30, 41, 59, 0.5);
   border-radius: 3px;
   overflow: hidden;
+  margin-top: 3px;
 }
 .callstack-bar-fill {
   height: 100%;
@@ -125,10 +149,12 @@
 }
 .callstack-frames {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   color: var(--text2);
-  line-height: 1.5;
-  word-break: break-all;
+  line-height: 1.55;
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 .callstack-frames .cs-sep {
   color: var(--text3);
@@ -142,3 +168,13 @@
 .callstack-frames .cs-lh { color: var(--red); }
 .callstack-frames .cs-omp { color: var(--accent); }
 .callstack-frames .cs-unk { color: var(--text3); font-style: italic; }
+
+@media (max-width: 720px) {
+  .callstack-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 10px 14px;
+  }
+  .callstack-count { text-align: left; }
+  .callstack-bar-wrap { height: 6px; }
+}

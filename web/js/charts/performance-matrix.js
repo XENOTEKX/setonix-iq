@@ -3,10 +3,9 @@
 
 import { hashColour } from '../utils.js';
 
-let chart;
-
 export function render(canvas, runsIndex) {
-  if (chart) chart.destroy();
+  const existing = window.Chart?.getChart?.(canvas);
+  if (existing) existing.destroy();
 
   // Compute min/max sites for bubble-size scaling
   const sites = runsIndex.map(r => r.sites || 0).filter(Boolean);
@@ -44,7 +43,7 @@ export function render(canvas, runsIndex) {
     });
   }
 
-  chart = new Chart(canvas, {
+  new Chart(canvas, {
     type: 'bubble',
     data: { datasets },
     options: {

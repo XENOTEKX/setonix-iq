@@ -51,12 +51,39 @@ def main() -> int:
 
     # 3. Stamp build info
     bi = DOCS / "build-info.json"
+    built_at = datetime.now(timezone.utc).isoformat()
+    version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     bi.write_text(json.dumps({
-        "built_at": datetime.now(timezone.utc).isoformat(),
+        "built_at": built_at,
+        "version": version,
         "source": "tools/build.py",
     }, indent=2))
 
-    print(f"[build] OK → {DOCS}")
+    # 4. Cache-bust: inject ?v=<version> onto the main.js module entry + CSS
+    #    AND rewrite all relative ES-module import paths inside docs/js/ so
+    #    every module URL is unique per build. GitHub Pages serves with a
+    #    10-minute max-age cache; without busting, users see stale code.
+    index_html = DOCS / "index.html"
+    if index_html.exists():
+        html = index_html.read_text()
+        html = html.replace('js/main.js"', f'js/main.js?v={version}"')
+        import re as _re
+        html = _re.sub(r'href="(css/[^"?]+\.css)"', rf'href="\1?v={version}"', html)
+        html = html.replace('<head>', f'<head>\n  <meta name="site-version" content="{version}">', 1)
+        index_html.write_text(html)
+
+    # Rewrite relative imports in every JS module under docs/js/
+    import re as _re2
+    import_re = _re2.compile(r"""((?:import|from)\s+(?:[^'"]*?\s+from\s+)?['"])((?:\./|\.\./)[^'"?]+\.js)(['"])""")
+    dyn_import_re = _re2.compile(r"""(import\(['"])((?:\./|\.\./)[^'"?]+\.js)(['"]\))""")
+    for js in (DOCS / "js").rglob("*.js"):
+        text = js.read_text()
+        new = import_re.sub(lambda m: f"{m.group(1)}{m.group(2)}?v={version}{m.group(3)}", text)
+        new = dyn_import_re.sub(lambda m: f"{m.group(1)}{m.group(2)}?v={version}{m.group(3)}", new)
+        if new != text:
+            js.write_text(new)
+
+    print(f"[build] OK → {DOCS} (v={version})")
     return 0
 
 

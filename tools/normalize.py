@@ -34,22 +34,39 @@ SCHEMA_VERSION = 1
 
 
 # Curated dataset profiles. The HPC scripts don't embed taxa/site counts in the
-# run JSON, so we keep a static lookup here. Sizes are rough — enough for
-# scaling visualisations. Extend this when you add new datasets.
+# run JSON, so we keep a static lookup here. `size_mb` is computed from FASTA
+# geometry (taxa × sites + header overhead). Sizes are marked estimated because
+# the raw .fa files are not bundled with this repo.
 DATASET_INFO: dict[str, dict] = {
-    "turtle.fa":            {"taxa": 16,  "sites": 20820, "size_mb": 0.33},
-    "large_modelfinder.fa": {"taxa": 50,  "sites": 5000,  "size_mb": 0.28},
-    "xlarge_dna.fa":        {"taxa": 200, "sites": 10000, "size_mb": 2.20},
-    "medium_dna.fa":        {"taxa": 50,  "sites": 4559,  "size_mb": 0.25},
-    "example.phy":          {"taxa": 17,  "sites": 1998,  "size_mb": 0.03},
+    "turtle.fa":            {"taxa": 16,  "sites": 20820, "kind": "dna"},
+    "large_modelfinder.fa": {"taxa": 50,  "sites": 5000,  "kind": "dna"},
+    "xlarge_dna.fa":        {"taxa": 200, "sites": 10000, "kind": "dna"},
+    "medium_dna.fa":        {"taxa": 50,  "sites": 4559,  "kind": "dna"},
+    "example.phy":          {"taxa": 17,  "sites": 1998,  "kind": "dna"},
 }
+
+
+def _compute_size_mb(info: dict) -> float | None:
+    taxa = info.get("taxa")
+    sites = info.get("sites")
+    if not taxa or not sites:
+        return None
+    # FASTA: ">hdr\n" (~32B avg) + sequence (1B/site for DNA) + "\n"
+    bytes_est = taxa * (32 + sites + 1)
+    return round(bytes_est / 1_000_000, 2)
 
 
 def dataset_lookup(name: str | None) -> dict | None:
     if not name:
         return None
     base = os.path.basename(name)
-    return DATASET_INFO.get(base) or DATASET_INFO.get(name)
+    info = DATASET_INFO.get(base) or DATASET_INFO.get(name)
+    if not info:
+        return None
+    enriched = dict(info)
+    enriched["size_mb"] = _compute_size_mb(info)
+    enriched["size_estimated"] = True
+    return enriched
 
 
 def load_all(directory: Path) -> list[dict]:
@@ -145,6 +162,7 @@ def summarize_run(run: dict) -> dict:
         "taxa": info.get("taxa"),
         "sites": info.get("sites"),
         "size_mb": info.get("size_mb"),
+        "size_estimated": info.get("size_estimated", False),
         "model": hints.get("model"),
         "threads": p.get("threads") or hints.get("threads"),
         "hostname": env.get("hostname"),
