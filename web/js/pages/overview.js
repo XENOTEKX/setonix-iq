@@ -195,12 +195,20 @@ function renderDatasets(idx) {
     const first = runs[0];
     const best = runs.reduce((a, b) => (b.wall_s < (a?.wall_s ?? Infinity) ? b : a), null);
     const threads = [...new Set(runs.map(r => r.threads).filter(Boolean))].sort((a, b) => a - b);
+    // Site compression: distinct patterns / sites · lower == more redundancy,
+    // which IQ-TREE exploits to skip work.
+    const patterns = first.patterns;
+    const sites = first.sites;
+    const compression = (patterns && sites)
+      ? `${patterns.toLocaleString()} · ${((patterns / sites) * 100).toFixed(1)}% unique`
+      : null;
     cards.push(`
       <div class="ds-card">
         <span class="ds-tag">Dataset</span>
         <h3>${escHtml(ds)}</h3>
         <div class="ds-row"><span>Taxa</span><strong>${first.taxa ?? '—'}</strong></div>
         <div class="ds-row"><span>Sites</span><strong>${first.sites?.toLocaleString?.() ?? '—'}</strong></div>
+        ${compression ? `<div class="ds-row"><span>Patterns</span><strong>${compression}</strong></div>` : ''}
         <div class="ds-row"><span>File size</span><strong>${first.size_mb != null ? (first.size_estimated ? '~' : '') + first.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
         <div class="ds-row"><span>Runs</span><strong>${runs.length}</strong></div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
@@ -289,6 +297,7 @@ function renderConfig(run) {
       <div class="config-section"><h3>Model &amp; Results</h3><div class="config-items">${model}</div></div>
       <div class="config-section"><h3>System</h3><div class="config-items">${sys}</div></div>
     </div>
+    ${renderModelfinderShare(mf, run.summary)}
     ${renderCandidatesTable(mf.candidates)}
     ${p.perf_cmd ? `
       <details class="config-cmd" style="margin-top:12px;">
@@ -329,26 +338,37 @@ function renderConfig(run) {
 
 function renderCandidatesTable(candidates) {
   if (!Array.isArray(candidates) || !candidates.length) return '';
-  const rows = candidates.slice(0, 10).map(c => `
-    <tr>
-      <td><code>${escHtml(c.model || '')}</code></td>
-      <td class="num">${c.log_likelihood != null ? c.log_likelihood.toLocaleString() : '—'}</td>
-      <td class="num">${c.bic != null ? c.bic.toLocaleString() : '—'}</td>
-      <td class="num">${c.bic_weight != null ? c.bic_weight.toPrecision(3) : '—'}</td>
-      <td class="num">${c.aic != null ? c.aic.toLocaleString() : '—'}</td>
-      <td class="num">${c.aic_weight != null ? c.aic_weight.toPrecision(3) : '—'}</td>
-    </tr>
-  `).join('');
+  const sorted = [...candidates].sort((a, b) => (a.bic ?? Infinity) - (b.bic ?? Infinity));
+  const bestBic = sorted[0]?.bic;
+  const rows = sorted.slice(0, 10).map((c, i) => {
+    const dBic = (c.bic != null && bestBic != null) ? c.bic - bestBic : null;
+    const dBicCell = dBic == null
+      ? '—'
+      : (i === 0 ? '<span style="color:var(--accent); font-weight:600;">best</span>'
+                 : (dBic > 1e4 ? (dBic / 1000).toFixed(1) + 'k' : dBic.toFixed(1)));
+    return `
+      <tr${i === 0 ? ' class="mf-best"' : ''}>
+        <td><code>${escHtml(c.model || '')}</code></td>
+        <td class="num">${c.log_likelihood != null ? c.log_likelihood.toLocaleString() : '—'}</td>
+        <td class="num">${c.bic != null ? c.bic.toLocaleString() : '—'}</td>
+        <td class="num">${dBicCell}</td>
+        <td class="num">${c.bic_weight != null ? c.bic_weight.toPrecision(3) : '—'}</td>
+        <td class="num">${c.aic != null ? c.aic.toLocaleString() : '—'}</td>
+        <td class="num">${c.aic_weight != null ? c.aic_weight.toPrecision(3) : '—'}</td>
+      </tr>
+    `;
+  }).join('');
   return `
     <div style="margin-top:16px;">
       <h3 style="font-size:0.82rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text3); margin:0 0 8px;">Top ModelFinder candidates</h3>
       <div style="overflow-x:auto;">
-        <table class="mf-candidates" style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+        <table class="mf-candidates" style="width:100%; border-collapse:collapse; font-size:0.78rem; min-width:560px;">
           <thead>
             <tr style="text-align:left; color:var(--text3);">
               <th style="padding:6px 8px;">Model</th>
               <th style="padding:6px 8px; text-align:right;">LogL</th>
               <th style="padding:6px 8px; text-align:right;">BIC</th>
+              <th style="padding:6px 8px; text-align:right;" title="BIC minus best BIC — &gt;10 = decisively worse">ΔBIC</th>
               <th style="padding:6px 8px; text-align:right;">w-BIC</th>
               <th style="padding:6px 8px; text-align:right;">AIC</th>
               <th style="padding:6px 8px; text-align:right;">w-AIC</th>
@@ -357,7 +377,25 @@ function renderCandidatesTable(candidates) {
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">Top ${Math.min(candidates.length, 10)} of ${candidates.length} models sorted by BIC. The + / – weight sign in IQ-TREE is a significance marker; absolute value shown.</div>
+      <div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">Top ${Math.min(candidates.length, 10)} of ${candidates.length} models sorted by BIC. ΔBIC &gt; 10 = decisively worse than best.</div>
+    </div>
+  `;
+}
+
+function renderModelfinderShare(mf, summary) {
+  const mfWall = mf?.wall_time_s;
+  const total = summary?.total_time;
+  if (!mfWall || !total) return '';
+  const pct = Math.max(0, Math.min(100, (mfWall / total) * 100));
+  return `
+    <div class="mf-share" style="margin-top:14px; padding:10px 12px; background:var(--card-2); border:1px solid var(--border); border-radius:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap;">
+        <div style="font-size:0.74rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.08em; font-weight:600;">ModelFinder share of wall time</div>
+        <div style="font-size:0.82rem; color:var(--text);"><strong style="color:var(--accent);">${pct.toFixed(1)}%</strong> — ${fmtTime(mfWall)} of ${fmtTime(total)}</div>
+      </div>
+      <div style="margin-top:8px; background:var(--bg-2); border-radius:999px; height:6px; overflow:hidden;">
+        <div style="height:100%; width:${pct}%; background:var(--accent-grad); border-radius:999px;"></div>
+      </div>
     </div>
   `;
 }

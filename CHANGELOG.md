@@ -292,20 +292,27 @@ Optional but useful for large runs:
 
 ### Priority order
 
-| # | Item                                        | Blocks                              | Effort on Setonix |
-|---|---------------------------------------------|-------------------------------------|-------------------|
-| 1 | Hotspots + folded stacks for remaining 11 runs | Profiling page completeness         | rerun under `perf record -g` |
-| 2 | L2 / L3 / TLB counters                       | Cache-hierarchy insight chart       | one extra `-e` list in `perf stat` |
-| 3 | Backend-stall + TMA top-down                 | IPC-collapse root cause             | `perf stat -M ...` |
-| 7 | Real alignment stats                         | Replace `~estimated` sizes          | `grep` in wrapper |
-| 6 | GPU telemetry                                | Unlock GPU page (empty today)       | `rocprof --stats` wrap |
-| 4 | Memory + NUMA time series                    | Memory-over-time chart              | `/usr/bin/time -v` + `numastat` |
-| 10| Per-thread breakdown                          | Scaling-collapse story              | `perf stat --per-thread` |
-| 9 | Richer verify (RF distance, lnL)              | Tests page depth                    | post-run Python |
-| 8 | ModelFinder candidate trace                   | ModelFinder comparison page         | parse `.iqtree`    |
-|11 | Kernel / compiler / SLURM env                 | Reproducibility breadcrumbs         | one-off shell    |
-|12 | IO counters                                   | Lustre-bound diagnostics            | `/proc/$pid/io`   |
-| 5 | Flamegraph SVG (optional)                     | Higher-fidelity flamegraph          | `flamegraph.pl`   |
+> Items ✅ = delivered via `tools/harvest_scratch.py` on 2026-04-21 (see
+> section below). Items ⏳ = still need a Setonix-side change.
+
+| # | Item                                        | Status | Blocks                              | Effort on Setonix |
+|---|---------------------------------------------|--------|-------------------------------------|-------------------|
+| 1 | Hotspots + folded stacks for remaining 10 runs | ⏳ (4/14 done) | Profiling page completeness         | rerun under `perf record -g` |
+| 2 | L2 / L3 / TLB counters                       | ⏳     | Cache-hierarchy insight chart       | one extra `-e` list in `perf stat` |
+| 3 | Backend-stall + TMA top-down                 | ⏳     | IPC-collapse root cause             | `perf stat -M ...` |
+| 7 | Real alignment stats                         | ✅     | Replace `~estimated` sizes          | harvested from `.iqtree` |
+| 6 | GPU telemetry                                | ⏳     | Unlock GPU page (empty today)       | `rocprof --stats` wrap |
+| 4 | Memory + NUMA time series                    | ⏳     | Memory-over-time chart              | `/usr/bin/time -v` + `numastat` |
+| 10| Per-thread breakdown                          | ⏳     | Scaling-collapse story              | `perf stat --per-thread` |
+| 9 | Richer verify (RF distance, lnL)              | ⏳     | Tests page depth                    | post-run Python |
+| 8 | ModelFinder candidate trace                   | ✅     | ModelFinder comparison page         | harvested from `.iqtree`    |
+|11 | Kernel / compiler / SLURM env                 | ⏳     | Reproducibility breadcrumbs         | one-off shell    |
+|12 | IO counters                                   | ⏳     | Lustre-bound diagnostics            | `/proc/$pid/io`   |
+| 5 | Flamegraph SVG (optional)                     | ⏳     | Higher-fidelity flamegraph          | `flamegraph.pl`   |
+
+Also new since the wishlist was written: `profile.perf_cmd` is now captured
+for all runs that have `perf_stat.txt`, and surfaces on the Overview
+"How this was measured" disclosure.
 
 Once any of these land in `logs/runs/<run>.json` (schema-valid), running
 `python3 tools/build.py` + `git push` is enough — the site auto-renders.

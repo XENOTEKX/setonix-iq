@@ -318,6 +318,11 @@
     overscroll-behavior: contain;
     padding-top: calc(18px + env(safe-area-inset-top, 0px));
     padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    /* Above backdrop (25) and topbar (30) while open so nav items are tappable. */
+    z-index: 40;
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
   .layout.sidebar-open .sidebar { transform: translateX(0); }
 
@@ -349,7 +354,8 @@
     opacity: 0;
     pointer-events: none;
     transition: opacity var(--dur) var(--ease);
-    z-index: 25;
+    /* Below the sidebar (40) so the drawer is tappable while this dims the rest. */
+    z-index: 35;
   }
   .layout.sidebar-open .backdrop { opacity: 1; pointer-events: auto; }
   .layout.sidebar-open { overflow: hidden; }

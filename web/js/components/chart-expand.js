@@ -11,8 +11,14 @@ export function attachExpand(card, { title, badge, renderFn }) {
   btn.type = 'button';
   btn.className = 'chart-expand-btn';
   btn.setAttribute('aria-label', `Expand ${title}`);
+  btn.title = `Expand ${title}`;
   btn.innerHTML = EXPAND_SVG;
-  card.appendChild(btn);
+
+  // Prefer to slot inside the card header's .actions row so it sits cleanly
+  // next to the badge instead of overlapping it. Fall back to the card itself.
+  const actions = card.querySelector('.card-header .actions');
+  if (actions) actions.appendChild(btn);
+  else card.appendChild(btn);
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();

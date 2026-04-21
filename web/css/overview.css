@@ -2,6 +2,16 @@
    Overview v2 — dataset cards, best-run cards, run picker combobox
 ================================================================ */
 
+/* ModelFinder candidate table */
+.mf-candidates tbody tr { border-top: 1px solid var(--border); }
+.mf-candidates tbody tr.mf-best {
+  background: rgba(129, 140, 248, 0.07);
+}
+.mf-candidates tbody tr.mf-best td { color: var(--text); font-weight: 500; }
+.mf-candidates td, .mf-candidates th { padding: 6px 8px; }
+.mf-candidates td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mf-candidates code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.76rem; }
+
 /* ----- Run picker (searchable combobox) ----- */
 .run-picker {
   position: relative;
@@ -385,11 +395,9 @@
    Chart expand button + modal
 ================================================================ */
 .chart-expand-btn {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 32px;
-  height: 32px;
+  /* Inline, sits inside .card-header .actions next to the badge. */
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -398,16 +406,23 @@
   background: var(--card-2);
   color: var(--text3);
   cursor: pointer;
-  z-index: 4;
   transition: all var(--dur-fast) var(--ease);
   padding: 0;
+  flex-shrink: 0;
 }
 .chart-expand-btn:hover {
   color: var(--accent);
   border-color: var(--accent);
-  transform: scale(1.05);
 }
-.chart-expand-btn svg { width: 14px; height: 14px; }
+.chart-expand-btn svg { width: 13px; height: 13px; }
+/* When the card couldn't find a .card-header .actions slot, fall back to
+   absolute positioning but stay out of the way on small cards. */
+.card > .chart-expand-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+}
 .card { position: relative; }
 
 .chart-modal {
