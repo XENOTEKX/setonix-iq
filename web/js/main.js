@@ -64,6 +64,7 @@ async function boot() {
 
   registerRoutes();
   setupSidebarToggle();
+  setupMobileDrawer();
   router.start();
 }
 
@@ -86,6 +87,49 @@ function setupSidebarToggle() {
       e.preventDefault();
       apply();
     }
+  });
+}
+
+function setupMobileDrawer() {
+  const layout = document.getElementById('layout');
+  const menuBtn = document.getElementById('menuToggle');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  const sidebar = document.getElementById('sidebar');
+  if (!layout || !menuBtn) return;
+
+  const open = () => {
+    layout.classList.add('sidebar-open');
+    document.body.classList.add('drawer-open');
+    menuBtn.setAttribute('aria-expanded', 'true');
+  };
+  const close = () => {
+    layout.classList.remove('sidebar-open');
+    document.body.classList.remove('drawer-open');
+    menuBtn.setAttribute('aria-expanded', 'false');
+  };
+  const toggle = () => {
+    if (layout.classList.contains('sidebar-open')) close();
+    else open();
+  };
+
+  menuBtn.addEventListener('click', toggle);
+  backdrop?.addEventListener('click', close);
+
+  // Close when tapping a nav link inside the drawer
+  sidebar?.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-page]');
+    if (a) close();
+  });
+
+  // Close on Esc
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && layout.classList.contains('sidebar-open')) close();
+  });
+
+  // Close on hashchange (route change) and on resize up from mobile
+  window.addEventListener('hashchange', close);
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 768) close();
   });
 }
 

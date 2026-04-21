@@ -18,7 +18,21 @@
 </head>
 <body>
 <div class="layout" id="layout">
-  <aside class="sidebar" aria-label="Primary navigation">
+  <header class="topbar" aria-label="Mobile header">
+    <button class="topbar-menu" id="menuToggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="topbar-logo">
+      <div class="logo-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L4 7v10l8 5 8-5V7l-8-5z"/><path d="M12 22V12M4 7l8 5 8-5"/>
+        </svg>
+      </div>
+      <span>Setonix-IQ</span>
+    </div>
+  </header>
+  <div class="backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
+  <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
     <div class="sidebar-top">
       <div class="logo">
         <div class="logo-mark" aria-hidden="true">
