@@ -17,15 +17,28 @@ function current() {
   return (m && m[1]) || 'overview';
 }
 
+function currentQuery() {
+  const i = location.hash.indexOf('?');
+  if (i < 0) return {};
+  const out = {};
+  for (const pair of location.hash.slice(i + 1).split('&')) {
+    if (!pair) continue;
+    const [k, v = ''] = pair.split('=');
+    out[decodeURIComponent(k)] = decodeURIComponent(v);
+  }
+  return out;
+}
+
 async function dispatch() {
   const name = current();
+  const query = currentQuery();
   const links = document.querySelectorAll('[data-page]');
   links.forEach((a) => {
     if (a.dataset.page === name) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
   const handler = routes.get(name) || routes.get('overview');
-  if (handler) await handler();
+  if (handler) await handler({ query });
 }
 
 export function start() {

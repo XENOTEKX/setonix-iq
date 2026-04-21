@@ -1,33 +1,42 @@
-// web/js/pages/overview.js
+// web/js/pages/overview.js — v2 (insight-oriented)
 
 import { store } from '../state.js';
 import { loadRun } from '../data.js';
-import * as runSelector from '../components/run-selector.js';
+import { mountRunPicker } from '../components/run-picker.js';
 import { bindCopyButtons } from '../components/copy-button.js';
-import * as hotspotChart from '../charts/hotspot.js';
-import * as microarch from '../charts/microarch.js';
 import * as scaling from '../charts/scaling.js';
-import * as callstack from '../charts/callstack.js';
+import * as efficiency from '../charts/efficiency.js';
+import * as ipcScaling from '../charts/ipc-scaling.js';
+import * as perfMatrix from '../charts/performance-matrix.js';
 import { escHtml, fmtTime, fmtNum } from '../utils.js';
 
 const TMPL = `
   <div class="page-header">
     <div>
       <h1>Pipeline Overview</h1>
-      <div class="subtitle" id="ovSubtitle">Loading…</div>
+      <div class="subtitle" id="ovSubtitle">Insight dashboard for IQ-TREE runs on Setonix</div>
     </div>
     <span class="badge badge-info" id="ovBadge">—</span>
   </div>
-  <div class="run-selector-bar" id="ovRunSelector"></div>
 
   <div class="stats-grid" id="ovStats"></div>
 
+  <div class="run-picker-wrap" style="margin-bottom:22px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <span style="font-size:0.72rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.1em; font-weight:700;">Selected run</span>
+      <span style="font-size:0.68rem; color:var(--text-muted);">Search · ↑↓ navigate · ↵ select · Esc close</span>
+    </div>
+    <div id="ovRunPicker"></div>
+  </div>
+
+  <section id="ovBestRuns" class="best-runs" aria-label="Top runs"></section>
+
+  <div style="font-size:0.72rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.12em; font-weight:700; margin:8px 0 10px;">Datasets</div>
+  <section id="ovDatasets" class="ds-grid" aria-label="Dataset profiles"></section>
+
   <div class="card">
-    <div class="card-header">
-      <h2>IQ-TREE Configuration</h2>
-      <div class="actions">
-        <button class="copy-btn" data-copy="#ovConfigText">Copy config</button>
-      </div>
+    <div class="card-header"><h2>IQ-TREE Configuration · <span style="color:var(--text3); font-weight:500; font-size:0.78rem;" id="ovConfigRunId">—</span></h2>
+      <div class="actions"><button class="copy-btn" data-copy="#ovConfigText">Copy config</button></div>
     </div>
     <div class="card-body" id="ovConfig"></div>
     <pre id="ovConfigText" class="sr-only"></pre>
@@ -35,37 +44,29 @@ const TMPL = `
 
   <div class="charts-row">
     <div class="card">
-      <div class="card-header"><h2>Hotspot Breakdown</h2></div>
-      <div id="ovHotspots"></div>
+      <div class="card-header"><h2>Thread Scaling</h2><div class="actions"><span class="btn-sm">wall vs threads (log–log)</span></div></div>
+      <div class="chart-wrapper"><canvas id="ovScalingCanvas"></canvas></div>
     </div>
     <div class="card">
-      <div class="card-header">
-        <h2>Microarchitecture Profile (all runs)</h2>
-        <div class="actions"><span class="btn" id="ovMicroarchCount"></span></div>
-      </div>
-      <div class="chart-wrapper"><canvas id="ovMicroarchCanvas"></canvas></div>
+      <div class="card-header"><h2>Parallel Efficiency</h2><div class="actions"><span class="btn-sm">speedup ÷ threads · ideal = 100%</span></div></div>
+      <div class="chart-wrapper"><canvas id="ovEfficiencyCanvas"></canvas></div>
+    </div>
+  </div>
+
+  <div class="charts-row">
+    <div class="card">
+      <div class="card-header"><h2>IPC vs Threads</h2><div class="actions"><span class="btn-sm">microarch efficiency per dataset</span></div></div>
+      <div class="chart-wrapper"><canvas id="ovIpcCanvas"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><h2>Performance Matrix</h2><div class="actions"><span class="btn-sm">wall × threads · bubble = sites</span></div></div>
+      <div class="chart-wrapper"><canvas id="ovMatrixCanvas"></canvas></div>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-header"><h2>Thread Scaling (all datasets)</h2></div>
-    <div class="chart-wrapper"><canvas id="ovScalingCanvas"></canvas></div>
-  </div>
-
-  <div class="card">
-    <div class="card-header">
-      <h2>Call Stack (top paths)</h2>
-      <div class="actions"><span class="btn-sm" id="ovStacksMeta">—</span></div>
-    </div>
-    <div id="ovCallstack"></div>
-  </div>
-
-  <div class="card">
-    <div class="card-header">
-      <h2>Commands</h2>
-      <div class="actions">
-        <button class="copy-btn" data-copy="#ovCmdsText">Copy all</button>
-      </div>
+    <div class="card-header"><h2>Commands · <span style="color:var(--text3); font-weight:500; font-size:0.78rem;" id="ovCmdsRunId">—</span></h2>
+      <div class="actions"><button class="copy-btn" data-copy="#ovCmdsText">Copy all</button></div>
     </div>
     <div class="card-body" id="ovCmds"></div>
     <pre id="ovCmdsText" class="sr-only"></pre>
@@ -74,54 +75,37 @@ const TMPL = `
 
 export async function mount(root) {
   root.innerHTML = TMPL;
+  const idx = store.get('runsIndex');
 
-  // Paint cross-run charts first (don't depend on a single run)
-  renderStats();
-  scaling.render(document.getElementById('ovScalingCanvas'), store.get('runsIndex'));
+  renderStats(idx);
+  renderBestRuns(idx);
+  renderDatasets(idx);
 
-  // All-runs microarch
-  const runsIndex = store.get('runsIndex');
-  const withMetrics = runsIndex.filter((r) => r.IPC != null);
-  const microarchEl = document.getElementById('ovMicroarchCount');
-  if (microarchEl) microarchEl.textContent = `${withMetrics.length} runs`;
+  scaling.render(document.getElementById('ovScalingCanvas'), idx);
+  efficiency.render(document.getElementById('ovEfficiencyCanvas'), idx);
+  ipcScaling.render(document.getElementById('ovIpcCanvas'), idx);
+  perfMatrix.render(document.getElementById('ovMatrixCanvas'), idx);
 
-  // Load all runs that have metrics so we can plot microarch for all of them
-  const runsFull = await Promise.all(
-    withMetrics.slice(0, 20).map((r) => loadRun(r.run_id))
-  );
-  microarch.render(document.getElementById('ovMicroarchCanvas'), runsFull);
-
-  // Bind selector → per-run sections
-  runSelector.render(document.getElementById('ovRunSelector'), (run) => {
-    updateRunSections(run);
+  // Default: fastest run
+  const defaultRun = [...idx].sort((a, b) => (a.wall_s ?? 1e12) - (b.wall_s ?? 1e12))[0];
+  mountRunPicker(document.getElementById('ovRunPicker'), idx, {
+    selectedId: defaultRun?.run_id,
+    onChange: (r) => loadRun(r.run_id).then((full) => updateRunSections(full)),
   });
+  if (defaultRun) {
+    const full = await loadRun(defaultRun.run_id);
+    updateRunSections(full);
+  }
 
   bindCopyButtons(root);
 }
 
-function renderStats() {
-  const idx = store.get('runsIndex');
+/* --------------------------- Stats --------------------------- */
+function renderStats(idx) {
   const total = idx.length;
   const allPass = idx.every((r) => r.all_pass);
-  const fastest = idx.reduce((a, b) => (b.wall_s < a.wall_s ? b : a), idx[0] || { wall_s: 0 });
-  const bestIPC = idx.reduce((a, b) => (Number(b.IPC || 0) > Number(a.IPC || 0) ? b : a), idx[0] || {});
-
-  // Speedup vs 1T of same dataset
-  let bestSpeedup = 0;
-  const byDS = new Map();
-  for (const r of idx) {
-    if (!r.dataset) continue;
-    if (!byDS.has(r.dataset)) byDS.set(r.dataset, {});
-    byDS.get(r.dataset)[String(r.threads)] = r.wall_s;
-  }
-  for (const m of byDS.values()) {
-    if (!m['1']) continue;
-    for (const k in m) {
-      if (k === '1') continue;
-      const s = m['1'] / m[k];
-      if (s > bestSpeedup) bestSpeedup = s;
-    }
-  }
+  const bestIPC = idx.reduce((a, b) => (Number(b.IPC || 0) > Number(a?.IPC || 0) ? b : a), null);
+  const bestSpeedup = idx.reduce((a, b) => (Number(b.speedup || 0) > Number(a?.speedup || 0) ? b : a), null);
 
   document.getElementById('ovStats').innerHTML = `
     <div class="stat-card">
@@ -130,28 +114,91 @@ function renderStats() {
       <div class="change">${allPass ? 'All tests passing' : 'Some failures'}</div>
     </div>
     <div class="stat-card">
-      <div class="label">Fastest run</div>
-      <div class="value">${fmtTime(fastest.wall_s)}</div>
-      <div class="change">${escHtml(fastest.label || '—')}</div>
+      <div class="label">Datasets</div>
+      <div class="value">${new Set(idx.map(r => r.dataset_short).filter(Boolean)).size}</div>
+      <div class="change">${[...new Set(idx.map(r => r.threads).filter(Boolean))].length} thread configs</div>
     </div>
     <div class="stat-card">
       <div class="label">Best speedup</div>
-      <div class="value">${bestSpeedup ? bestSpeedup.toFixed(2) + '×' : '—'}</div>
-      <div class="change">vs 1-thread baseline</div>
+      <div class="value">${bestSpeedup?.speedup ? bestSpeedup.speedup.toFixed(2) + '×' : '—'}</div>
+      <div class="change">${escHtml(bestSpeedup?.dataset_short || '—')} @ ${bestSpeedup?.threads || '—'}T</div>
     </div>
     <div class="stat-card">
       <div class="label">Peak IPC</div>
-      <div class="value">${bestIPC.IPC ? bestIPC.IPC.toFixed(2) : '—'}</div>
-      <div class="change">${escHtml(bestIPC.label || '—')}</div>
+      <div class="value">${bestIPC?.IPC ? bestIPC.IPC.toFixed(2) : '—'}</div>
+      <div class="change">${escHtml(bestIPC?.dataset_short || '—')} @ ${bestIPC?.threads || '—'}T</div>
     </div>
   `;
 }
 
+/* --------------------------- Best runs (clickable) --------------------------- */
+function renderBestRuns(idx) {
+  if (!idx.length) return;
+  const fastest = [...idx].sort((a, b) => (a.wall_s ?? 1e12) - (b.wall_s ?? 1e12))[0];
+  const bestSpeedup = [...idx].sort((a, b) => (b.speedup ?? 0) - (a.speedup ?? 0))[0];
+  const bestIPC = [...idx].sort((a, b) => (b.IPC ?? 0) - (a.IPC ?? 0))[0];
+
+  const card = (kind, valueHtml, run, subHtml) => `
+    <a class="best-run-card" href="#/runs?open=${encodeURIComponent(run.run_id)}" aria-label="Open ${escHtml(run.run_id)} in All Runs">
+      <span class="br-cta">Details
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </span>
+      <div class="br-kind">${kind}</div>
+      <div class="br-value">${valueHtml}</div>
+      <div class="br-meta">${escHtml(run.run_id)}</div>
+      <div class="br-sub">${subHtml}</div>
+    </a>
+  `;
+
+  document.getElementById('ovBestRuns').innerHTML = [
+    card('Fastest run',   fmtTime(fastest.wall_s),                      fastest,     `${escHtml(fastest.dataset_short || '—')} · ${fastest.threads}T`),
+    card('Best speedup',  (bestSpeedup.speedup || 0).toFixed(2) + '×',  bestSpeedup, `${escHtml(bestSpeedup.dataset_short || '—')} · ${bestSpeedup.threads}T (${((bestSpeedup.efficiency || 0) * 100).toFixed(0)}% eff)`),
+    card('Peak IPC',      (bestIPC.IPC || 0).toFixed(3),                bestIPC,     `${escHtml(bestIPC.dataset_short || '—')} · ${bestIPC.threads}T`),
+  ].join('');
+}
+
+/* --------------------------- Dataset profile cards --------------------------- */
+function renderDatasets(idx) {
+  const byDs = new Map();
+  for (const r of idx) {
+    const ds = r.dataset_short;
+    if (!ds) continue;
+    if (!byDs.has(ds)) byDs.set(ds, []);
+    byDs.get(ds).push(r);
+  }
+  if (!byDs.size) {
+    document.getElementById('ovDatasets').innerHTML = '<div class="empty">No dataset metadata available.</div>';
+    return;
+  }
+  const cards = [];
+  for (const [ds, runs] of [...byDs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const first = runs[0];
+    const best = runs.reduce((a, b) => (b.wall_s < (a?.wall_s ?? Infinity) ? b : a), null);
+    const threads = [...new Set(runs.map(r => r.threads).filter(Boolean))].sort((a, b) => a - b);
+    cards.push(`
+      <div class="ds-card">
+        <span class="ds-tag">Dataset</span>
+        <h3>${escHtml(ds)}</h3>
+        <div class="ds-row"><span>Taxa</span><strong>${first.taxa ?? '—'}</strong></div>
+        <div class="ds-row"><span>Sites</span><strong>${first.sites?.toLocaleString?.() ?? '—'}</strong></div>
+        <div class="ds-row"><span>File size</span><strong>${first.size_mb != null ? first.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
+        <div class="ds-row"><span>Runs</span><strong>${runs.length}</strong></div>
+        <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
+        <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>
+      </div>
+    `);
+  }
+  document.getElementById('ovDatasets').innerHTML = cards.join('');
+}
+
+/* --------------------------- Selected-run sections --------------------------- */
 function updateRunSections(run) {
   if (!run) return;
 
   document.getElementById('ovSubtitle').textContent =
     `Run ${run.run_id} · ${run.env?.date || 'n/a'} · ${run.env?.hostname || 'n/a'}`;
+  document.getElementById('ovConfigRunId').textContent = run.run_id;
+  document.getElementById('ovCmdsRunId').textContent = run.run_id;
 
   const badge = document.getElementById('ovBadge');
   const s = run.summary || {};
@@ -162,17 +209,7 @@ function updateRunSections(run) {
     badge.className = 'badge badge-fail';
     badge.textContent = `${s.fail} FAILED`;
   }
-
   renderConfig(run);
-  hotspotChart.render(document.getElementById('ovHotspots'), run.profile?.hotspots);
-  callstack.render(document.getElementById('ovCallstack'), run.profile?.folded_stacks);
-
-  const stacksMeta = document.getElementById('ovStacksMeta');
-  if (stacksMeta) {
-    const n = run.profile?.folded_stacks?.length || 0;
-    stacksMeta.textContent = `${n.toLocaleString()} unique stacks`;
-  }
-
   renderCmds(run);
 }
 
@@ -193,7 +230,6 @@ function renderConfig(run) {
     ['Threads', p.threads ?? h.threads],
     ['Run type', run.run_type],
   ]);
-
   const model = items([
     ['Model', h.model],
     ['Wall', fmtTime(run.summary?.total_time)],
@@ -201,7 +237,6 @@ function renderConfig(run) {
     ['Verify pass', run.summary?.pass],
     ['Verify fail', run.summary?.fail],
   ]);
-
   const sys = items([
     ['Hostname', env.hostname],
     ['CPU', env.cpu],
@@ -221,7 +256,6 @@ function renderConfig(run) {
     ${run.description ? `<div class="config-cmd" style="margin-top:12px;">${escHtml(run.description)}</div>` : ''}
   `;
 
-  // Plain-text version for copy button
   const toText = (label, pairs) =>
     `# ${label}\n` + pairs.filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k}: ${v}`).join('\n');
   document.getElementById('ovConfigText').textContent = [

@@ -26,10 +26,10 @@ const MAIN = () => document.getElementById('main');
 
 function registerRoutes() {
   for (const [name, mount] of Object.entries(PAGE_MOUNT)) {
-    router.register(name, async () => {
+    router.register(name, async (ctx) => {
       store.set({ currentPage: name });
       try {
-        await mount(MAIN());
+        await mount(MAIN(), ctx);
       } catch (err) {
         console.error(err);
         MAIN().innerHTML = `
@@ -65,7 +65,30 @@ async function boot() {
   }
 
   registerRoutes();
+  setupSidebarToggle();
   router.start();
+}
+
+function setupSidebarToggle() {
+  const layout = document.getElementById('layout');
+  const btn = document.getElementById('sidebarToggle');
+  if (!layout || !btn) return;
+  const KEY = 'sidebar.collapsed';
+  const saved = localStorage.getItem(KEY) === '1';
+  if (saved) layout.classList.add('sidebar-collapsed');
+  const apply = () => {
+    const collapsed = layout.classList.toggle('sidebar-collapsed');
+    localStorage.setItem(KEY, collapsed ? '1' : '0');
+    btn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  };
+  btn.addEventListener('click', apply);
+  // ⌘B / Ctrl-B shortcut
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault();
+      apply();
+    }
+  });
 }
 
 boot();

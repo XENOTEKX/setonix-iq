@@ -32,12 +32,13 @@ const TMPL = `
   <div id="runsList"></div>
 `;
 
-export function mount(root) {
+export function mount(root, ctx = {}) {
   root.innerHTML = TMPL;
   const list = document.getElementById('runsList');
   const search = document.getElementById('runsSearch');
   const sort = document.getElementById('runsSort');
   const status = document.getElementById('runsStatus');
+  const autoOpenId = ctx.query?.open || null;
 
   function paint() {
     const q = (search.value || '').toLowerCase();
@@ -70,6 +71,16 @@ export function mount(root) {
   sort.addEventListener('change', paint);
   status.addEventListener('change', paint);
   paint();
+
+  // Auto-open a requested run and scroll it into view
+  if (autoOpenId) {
+    const target = list.querySelector(`[data-runrow="${CSS.escape(autoOpenId)}"]`);
+    if (target) {
+      const summary = target.querySelector('.run-row-summary');
+      summary?.click();
+      setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    }
+  }
 }
 
 function renderRow(r) {

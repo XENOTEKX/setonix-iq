@@ -33,6 +33,25 @@ OUT = ROOT / "web" / "data"
 SCHEMA_VERSION = 1
 
 
+# Curated dataset profiles. The HPC scripts don't embed taxa/site counts in the
+# run JSON, so we keep a static lookup here. Sizes are rough — enough for
+# scaling visualisations. Extend this when you add new datasets.
+DATASET_INFO: dict[str, dict] = {
+    "turtle.fa":            {"taxa": 16,  "sites": 20820, "size_mb": 0.33},
+    "large_modelfinder.fa": {"taxa": 50,  "sites": 5000,  "size_mb": 0.28},
+    "xlarge_dna.fa":        {"taxa": 200, "sites": 10000, "size_mb": 2.20},
+    "medium_dna.fa":        {"taxa": 50,  "sites": 4559,  "size_mb": 0.25},
+    "example.phy":          {"taxa": 17,  "sites": 1998,  "size_mb": 0.03},
+}
+
+
+def dataset_lookup(name: str | None) -> dict | None:
+    if not name:
+        return None
+    base = os.path.basename(name)
+    return DATASET_INFO.get(base) or DATASET_INFO.get(name)
+
+
 def load_all(directory: Path) -> list[dict]:
     if not directory.is_dir():
         return []
@@ -113,13 +132,19 @@ def summarize_run(run: dict) -> dict:
     metrics = p.get("metrics") or {}
     hints = run.get("hints") or {}
     env = run.get("env") or {}
+    dataset = p.get("dataset") or hints.get("dataset")
+    info = dataset_lookup(dataset) or {}
     return {
         "run_id": run.get("run_id"),
         "slurm_id": run.get("slurm_id"),
         "label": run.get("label") or run.get("run_id"),
         "description": run.get("description", ""),
         "run_type": run.get("run_type", "pipeline"),
-        "dataset": p.get("dataset") or hints.get("dataset"),
+        "dataset": dataset,
+        "dataset_short": os.path.basename(dataset) if dataset else None,
+        "taxa": info.get("taxa"),
+        "sites": info.get("sites"),
+        "size_mb": info.get("size_mb"),
         "model": hints.get("model"),
         "threads": p.get("threads") or hints.get("threads"),
         "hostname": env.get("hostname"),
@@ -135,6 +160,27 @@ def summarize_run(run: dict) -> dict:
         "has_hotspots": bool(p.get("hotspots")),
         "has_stacks": bool(p.get("folded_stacks") or p.get("callstacks")),
     }
+
+
+def enrich_index_with_speedup(index: list[dict]) -> None:
+    """Add `speedup` and `efficiency` per entry using 1-thread baseline of the
+    same dataset. Mutates the entries in place."""
+    baseline: dict[str, float] = {}
+    for r in index:
+        ds = r.get("dataset_short")
+        if ds and r.get("threads") == 1 and r.get("wall_s"):
+            baseline.setdefault(ds, r["wall_s"])
+    for r in index:
+        ds = r.get("dataset_short")
+        t = r.get("threads") or 0
+        w = r.get("wall_s") or 0
+        base = baseline.get(ds)
+        if base and w:
+            r["speedup"] = round(base / w, 3)
+            r["efficiency"] = round((base / w) / t, 4) if t else None
+        else:
+            r["speedup"] = None
+            r["efficiency"] = None
 
 
 def summarize_profile(prof: dict) -> dict:
@@ -177,7 +223,9 @@ def main() -> int:
         write_json(OUT / "profiles" / f"{pid}.json", p)
 
     # Indexes
-    write_json(OUT / "runs.index.json", [summarize_run(r) for r in runs])
+    runs_index = [summarize_run(r) for r in runs]
+    enrich_index_with_speedup(runs_index)
+    write_json(OUT / "runs.index.json", runs_index)
     write_json(OUT / "profiles.index.json", [summarize_profile(p) for p in profs])
 
     # Manifest

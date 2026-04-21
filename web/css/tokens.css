@@ -1,40 +1,63 @@
 :root {
-  /* Colour tokens */
-  --bg: #060a13;
-  --surface: #0d1321;
-  --card: #131b2e;
-  --bg-tertiary: #0a1020;
-  --border: #1e2a3e;
-  --border-hover: #2d4060;
+  /* Colour tokens — v2 palette: warm-dark with indigo/violet/cyan accents */
+  --bg: #08090d;
+  --bg-2: #0b0d14;
+  --surface: #0f1119;
+  --card: #14171f;
+  --card-2: #181c26;
+  --card-hover: #1c2030;
+  --bg-tertiary: #0a0c13;
+  --border: #222634;
+  --border-2: #2a2f40;
+  --border-hover: #353c54;
 
-  --text: #e8edf5;
-  --text2: #8b97ad;
-  --text3: #5a6880;
-  --text-muted: #3d4a5e;
+  --text: #f2f4fa;
+  --text2: #a0a7bd;
+  --text3: #666c81;
+  --text-muted: #434959;
 
-  --accent: #4f8fff;
-  --accent2: #a78bfa;
-  --accent-glow: rgba(79, 143, 255, 0.1);
+  /* Indigo / violet primary */
+  --accent:       #818cf8;
+  --accent-bold:  #6366f1;
+  --accent2:      #a78bfa;
+  --accent-cyan:  #22d3ee;
+  --accent-rose:  #fb7185;
+  --accent-mint:  #34d399;
+  --accent-glow:  rgba(129, 140, 248, 0.14);
+  --accent-grad:  linear-gradient(135deg, #818cf8 0%, #a78bfa 60%, #22d3ee 110%);
+  --accent-grad-soft: linear-gradient(135deg, rgba(129,140,248,0.18) 0%, rgba(167,139,250,0.12) 60%, rgba(34,211,238,0.10) 110%);
 
-  --green: #34d399;
-  --green-bg: rgba(52, 211, 153, 0.08);
-  --red: #f87171;
-  --red-bg: rgba(248, 113, 113, 0.08);
-  --yellow: #fbbf24;
-  --yellow-bg: rgba(251, 191, 36, 0.08);
-  --orange: #f97316;
+  --green:     #34d399;
+  --green-bg:  rgba(52, 211, 153, 0.10);
+  --red:       #f87171;
+  --red-bg:    rgba(248, 113, 113, 0.10);
+  --yellow:    #fbbf24;
+  --yellow-bg: rgba(251, 191, 36, 0.10);
+  --orange:    #fb923c;
 
   /* Shape */
-  --radius: 14px;
+  --radius:    14px;
   --radius-sm: 10px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
 
   /* Shadow */
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
-  --shadow-hover: 0 4px 24px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(79, 143, 255, 0.08) inset;
+  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.025) inset;
+  --shadow-hover: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(129, 140, 248, 0.14) inset;
+  --shadow-float: 0 22px 60px -20px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(129, 140, 248, 0.12) inset;
+  --shadow-glow:  0 0 50px -12px rgba(129, 140, 248, 0.45);
+
+  /* Motion */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 360ms;
 
   /* Fonts */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-display: 'Inter', sans-serif;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -58,7 +81,10 @@ html {
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background: var(--bg);
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(129, 140, 248, 0.07), transparent 60%),
+    radial-gradient(900px 500px at -10% 120%, rgba(34, 211, 238, 0.05), transparent 60%),
+    var(--bg);
   color: var(--text);
   min-height: 100vh;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
