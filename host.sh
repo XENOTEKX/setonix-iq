@@ -41,7 +41,8 @@ cmd_refresh() {
   git pull --quiet 2>>"$LOG_FILE" || { log "ERROR: git pull failed"; return 1; }
 
   log "Regenerating dashboard..."
-  python3 serve.py >>"$LOG_FILE" 2>&1 || { log "ERROR: serve.py failed"; return 1; }
+  python3 tools/validate.py >>"$LOG_FILE" 2>&1 || { log "ERROR: tools/validate.py failed"; return 1; }
+  python3 tools/build.py    >>"$LOG_FILE" 2>&1 || { log "ERROR: tools/build.py failed"; return 1; }
 
   log "Dashboard refreshed"
 }
@@ -60,7 +61,7 @@ cmd_start() {
 
   # Ensure docs/ exists
   if [[ ! -f "$SCRIPT_DIR/docs/index.html" ]]; then
-    echo -e "${RED}Error: docs/index.html not found. Run serve.py first.${NC}"
+    echo -e "${RED}Error: docs/index.html not found. Run 'python3 tools/build.py' first.${NC}"
     return 1
   fi
 

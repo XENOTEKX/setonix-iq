@@ -31,32 +31,20 @@ banner() {
 }
 
 check_links() {
-  local ok=true
-  if [[ ! -L "$AGENT_DIR/website/results" ]] || [[ ! -d "$AGENT_DIR/website/results" ]]; then
-    echo -e "${YELLOW}Setting up results symlink...${NC}"
-    ln -sf "$IQTREE_DIR/setonix-ci/results" "$AGENT_DIR/website/results"
-  fi
-  if [[ ! -L "$AGENT_DIR/website/profiles" ]] || [[ ! -d "$AGENT_DIR/website/profiles" ]]; then
-    echo -e "${YELLOW}Setting up profiles symlink...${NC}"
-    ln -sf "$IQTREE_DIR/setonix-ci/profiles" "$AGENT_DIR/website/profiles"
-  fi
-  if [[ ! -L "$AGENT_DIR/website/assets/flamegraph.svg" ]]; then
-    mkdir -p "$AGENT_DIR/website/assets"
-    ln -sf "$IQTREE_DIR/setonix-ci/dashboard/flamegraph.svg" "$AGENT_DIR/website/assets/flamegraph.svg" 2>/dev/null || true
-  fi
-  if [[ ! -L "$AGENT_DIR/website/deep_profiles" ]] || [[ ! -d "$AGENT_DIR/website/deep_profiles" ]]; then
-    echo -e "${YELLOW}Setting up deep_profiles symlink...${NC}"
-    ln -sf "$IQTREE_DIR/setonix-ci/deep_profiles" "$AGENT_DIR/website/deep_profiles"
-  fi
+  # The new dashboard pipeline reads from logs/runs/*.json and logs/profiles/*.json
+  # (the run_pipeline.sh / run_profiling.sh scripts on Setonix write those JSON files
+  # directly). No symlinks into scratch are required anymore — just make sure the
+  # directories exist so git commits succeed.
+  mkdir -p "$AGENT_DIR/logs/runs" "$AGENT_DIR/logs/profiles"
 }
 
 sync_to_github() {
   cd "$AGENT_DIR"
   if [[ -d .git ]]; then
-    echo -e "${BLUE}Pushing to GitHub (including logs/)...${NC}"
+    echo -e "${BLUE}Pushing logs/ to GitHub (Actions will build + publish Pages)...${NC}"
     git add -A
-    git commit -m "Update dashboard $(date '+%Y-%m-%d %H:%M')" 2>/dev/null || echo "No changes to commit"
-    git push origin main 2>&1 && echo -e "${GREEN}Pushed! On Mac run: cd setonix-iq && git pull && open dashboard.html${NC}" || echo -e "${RED}Push failed — check auth${NC}"
+    git commit -m "Update runs $(date '+%Y-%m-%d %H:%M')" 2>/dev/null || echo "No changes to commit"
+    git push origin main 2>&1 && echo -e "${GREEN}Pushed! GitHub Pages URL will update once the build workflow finishes.${NC}" || echo -e "${RED}Push failed — check auth${NC}"
   else
     echo -e "${YELLOW}Git not initialized. Run: git init && git remote add origin $REPO_URL${NC}"
   fi
@@ -107,9 +95,10 @@ cmd_deepprofile() {
 
 cmd_generate() {
   check_links
-  echo -e "${GREEN}Generating local dashboard preview...${NC}"
-  python3 "$AGENT_DIR/serve.py"
-  echo -e "${GREEN}Done. Open dashboard.html for local preview.${NC}"
+  echo -e "${GREEN}Building local dashboard preview to docs/ ...${NC}"
+  python3 "$AGENT_DIR/tools/validate.py"
+  python3 "$AGENT_DIR/tools/build.py"
+  echo -e "${GREEN}Done. Open docs/index.html or run: python3 -m http.server -d docs${NC}"
 }
 
 cmd_status() {

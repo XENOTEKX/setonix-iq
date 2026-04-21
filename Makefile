@@ -66,7 +66,8 @@ help:
 	@printf '  $(GREEN)make build-profiling$(NC)  Build with frame pointers (fixes perf [unknown])\n'
 	@printf '  $(GREEN)make profile$(NC)          Profile with perf, update dashboard\n'
 	@printf '  $(GREEN)make deep-profile$(NC)     Deep profile (CPU + GPU hardware counters)\n'
-	@printf '  $(GREEN)make dashboard$(NC)        Regenerate HTML and push to GitHub\n'
+	@printf '  $(GREEN)make dashboard$(NC)        Validate + build static site, push to GitHub\n'
+	@printf '  $(GREEN)make test$(NC)             Run pytest suite over logs/*.json\n'
 	@printf '  $(GREEN)make status$(NC)           Show HPC job and allocation status\n'
 	@printf '  $(GREEN)make clean$(NC)            Remove build directories\n'
 	@echo ""
@@ -123,18 +124,24 @@ deep-profile:
 
 .PHONY: dashboard
 dashboard:
-	$(call header,Regenerating dashboard)
-	python3 "$(AGENT_DIR)/serve.py"
+	$(call header,Validating + building static dashboard)
+	python3 "$(AGENT_DIR)/tools/validate.py"
+	python3 "$(AGENT_DIR)/tools/build.py"
 	@$(MAKE) --no-print-directory push
+
+.PHONY: test
+test:
+	$(call header,Running pytest)
+	python3 -m pytest "$(AGENT_DIR)/tests" -v
 
 .PHONY: push
 push:
-	$(call header,Pushing to GitHub)
+	$(call header,Pushing to GitHub (Pages will rebuild automatically))
 	cd "$(AGENT_DIR)" && \
 	  git add -A && \
 	  git commit -m "Update dashboard $$(date '+%Y-%m-%d %H:%M')" 2>/dev/null || true && \
 	  git push origin main && \
-	  printf '$(GREEN)Pushed — on Mac: git pull && open dashboard.html$(NC)\n'
+	  printf '$(GREEN)Pushed — GitHub Actions will publish to Pages.$(NC)\n'
 
 # ── Status ────────────────────────────────────────────────────────────────────
 

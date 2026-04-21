@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://setonix-iq/schemas/run.json",
+  "title": "Setonix-IQ Run",
+  "type": "object",
+  "required": ["run_id", "timing", "env", "summary"],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "slurm_id": { "type": ["string", "null"] },
+    "label": { "type": "string" },
+    "description": { "type": "string" },
+    "run_type": {
+      "type": "string",
+      "enum": ["pipeline", "cpu_baseline", "gpu_baseline", "profile", "deep_profile", "other"]
+    },
+    "timing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "time_s"],
+        "properties": {
+          "command": { "type": "string" },
+          "time_s": { "type": "number", "minimum": 0 },
+          "memory_kb": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "verify": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["status", "file"],
+        "properties": {
+          "status": { "enum": ["pass", "fail"] },
+          "file": { "type": "string" },
+          "expected": { "type": "number" },
+          "reported": { "type": "number" },
+          "diff": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "hostname": { "type": "string" },
+        "cpu": { "type": "string" },
+        "cores": { "type": ["string", "number"] },
+        "gcc": { "type": "string" },
+        "rocm": { "type": "string" }
+      }
+    },
+    "gpu_info": { "type": "string" },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "dataset": { "type": "string" },
+        "threads": { "type": ["integer", "string"] },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "IPC": { "type": "number", "minimum": 0, "maximum": 10 },
+            "cache-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "branch-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "L1-dcache-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "frontend-stall-rate": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+        "hotspots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["percent", "function"],
+            "properties": {
+              "percent": { "type": "number", "minimum": 0, "maximum": 100 },
+              "samples": { "type": "number", "minimum": 0 },
+              "function": { "type": "string" },
+              "module": { "type": "string" },
+              "command": { "type": "string" }
+            }
+          }
+        },
+        "folded_stacks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["stack", "count"],
+            "properties": {
+              "stack": { "type": "string" },
+              "count": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "callstacks": { "type": "object" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["pass", "fail", "total_time", "all_pass"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 },
+        "total_time": { "type": "number", "minimum": 0 },
+        "all_pass": { "type": "boolean" }
+      }
+    }
+  }
+}

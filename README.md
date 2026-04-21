@@ -1,5 +1,260 @@
 # Setonix IQ-TREE Dashboard
 
+Static dashboard for monitoring [IQ-TREE](http://www.iqtree.org/) pipeline runs on
+the [Setonix supercomputer](https://pawsey.org.au/systems/setonix/) at the
+Pawsey Supercomputing Centre. Each run pushes structured JSON to this repo; a
+GitHub Actions workflow validates it, builds a modern client-side dashboard, and
+deploys to GitHub Pages.
+
+**Live dashboard:** `https://xenotekx.github.io/setonix-iq/` *(once Pages is enabled — see below)*
+
+---
+
+## Architecture
+
+```
+┌──────────── Setonix (Pawsey HPC) ─────────────┐        ┌────────── GitHub Actions ──────────┐
+│                                                │        │                                    │
+│  ~/setonix-iq/                                 │        │  .github/workflows/validate.yml    │
+│   └── start.sh  ─► run_pipeline.sh             │        │   • jsonschema validation          │
+│                    └─► logs/runs/*.json        │  push  │   • pytest tests/                  │
+│                    └─► logs/profiles/*.json    │ ─────► │                                    │
+│                    └─► git push origin main    │        │  .github/workflows/build.yml       │
+│                                                │        │   • tools/build.py → docs/         │
+└────────────────────────────────────────────────┘        │   • actions/deploy-pages@v4        │
+                                                          │                                    │
+                                                          └────────────┬───────────────────────┘
+                                                                       │
+                                                                       ▼
+                                                            GitHub Pages (static site)
+                                                            docs/ served as root
+```
+
+The dashboard itself is a small set of ES modules (no framework, no build step)
+that fetches JSON from `data/` and renders everything client-side.
+
+---
+
+## Repository layout
+
+```
+setonix-iq/
+├── README.md
+├── CHANGELOG.md
+├── LICENSE                 MIT
+├── Makefile                build/profile/dashboard convenience targets
+├── start.sh                Setonix entry point — runs pipeline + git push
+├── host.sh                 optional: serve docs/ locally with periodic refresh
+│
+├── logs/                   SOURCE OF TRUTH — one JSON per run (committed)
+│   ├── runs/               .json per run (timing + verify + env + summary)
+│   └── profiles/           .json per deep profile (perf counters + hotspots)
+│
+├── tools/                  data pipeline (Python stdlib + jsonschema)
+│   ├── schemas/            Draft-7 JSON schemas for runs & profiles
+│   ├── normalize.py        logs/  →  web/data/{runs,profiles}.index.json + per-record files
+│   ├── validate.py         schema-validates every file under logs/
+│   └── build.py            runs normalize, mirrors web/ → docs/
+│
+├── tests/                  pytest suite run in CI (validate.yml)
+│   ├── test_schemas.py          every run/profile matches its schema
+│   ├── test_data_invariants.py  summary consistency, IPC/miss-rate ranges, etc.
+│   ├── test_regression.py       wall-time regression guard (xfail by default)
+│   └── test_build.py            tools/normalize.py end-to-end
+│
+├── web/                    dashboard source (deployed as-is to docs/)
+│   ├── index.html
+│   ├── css/   tokens, layout, components, charts, pages
+│   └── js/    main.js, router, state, data, utils
+│       ├── components/   copy-button, toast, run-selector
+│       ├── charts/       hotspot, microarch, scaling, callstack, flamegraph, timing
+│       └── pages/        overview, runs, tests, profiling, gpu, allocation, environment
+│
+├── docs/                   build output (gitignored; published by Pages workflow)
+│
+└── .github/workflows/
+    ├── validate.yml        schema + pytest on every push/PR to logs/, tools/, tests/
+    └── build.yml           build + deploy Pages on every push to logs/, web/, tools/
+```
+
+---
+
+## Requirements
+
+### HPC node (Setonix / Pawsey)
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | ≥ 3.8 | stdlib only (`tools/` uses `jsonschema` — `pip install -r tools/requirements.txt` in CI) |
+| Git | ≥ 2.x | for push |
+| CMake / GCC | 3.16+ / 12+ | to build IQ-TREE (`make build-profiling`) |
+| perf | kernel perf tools | CPU profiling |
+| ROCm / SLURM | latest | GPU + scheduler |
+
+Build IQ-TREE with `-fno-omit-frame-pointer` so `perf -g` can unwind stacks:
+
+```bash
+make build-profiling
+```
+
+### Local machine (dashboard preview)
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | ≥ 3.8 | `pip install jsonschema pytest` (or `tools/requirements.txt`) |
+| Web browser | modern | Chart.js 4.4 via CDN; ES modules |
+
+---
+
+## Usage on Setonix
+
+All commands are thin wrappers in `start.sh`:
+
+```bash
+./start.sh                 # push current logs/ to GitHub
+./start.sh pipeline        # run CI pipeline, then push
+./start.sh profile FILE    # run perf profiling, then push
+./start.sh deepprofile     # CPU + GPU deep profile, then push
+./start.sh generate        # local preview — validate + build → docs/
+./start.sh status          # SLURM jobs + pawseyAccountBalance
+```
+
+The Setonix pipeline scripts write **one JSON file per run** directly to
+`logs/runs/<YYYY-MM-DD_HHMMSS>.json` (and `logs/profiles/<id>.json` for deep
+profiles). They're validated by `tools/validate.py` against the schemas in
+`tools/schemas/` before being committed.
+
+## Usage locally (preview)
+
+```bash
+git pull
+
+# Validate + build static site into docs/
+python3 tools/validate.py
+python3 tools/build.py
+
+# Serve
+python3 -m http.server -d docs 8000
+# → open http://localhost:8000
+```
+
+Or just:
+
+```bash
+make dashboard   # validate + build + commit + push
+make test        # run pytest
+```
+
+---
+
+## Data format
+
+Every run is a single JSON file conforming to `tools/schemas/run.schema.json`:
+
+```jsonc
+{
+  "run_id": "2026-04-18_201515",          // required — YYYY-MM-DD_HHMMSS
+  "slurm_id": "41683322",
+  "run_type": "pipeline",                 // pipeline | profile | deep
+  "label": "large_mf_8t_baseline",
+  "description": "50 taxa, ~5k sites",
+  "timing": [                             // required
+    { "command": "iqtree3 -s turtle.fa …", "time_s": 17.71 }
+  ],
+  "verify": [
+    { "file": "turtle.fa", "status": "pass", "expected": -5681.1, "reported": -5681.1, "diff": 0.0 }
+  ],
+  "env": {                                // required — hostname + date + …
+    "hostname": "setonix-node",
+    "date": "2026-04-18T20:15:15+08:00",
+    "cpu": "AMD EPYC 7A53 64-Core Processor",
+    "cores": 64, "gcc": "12.2.0", "rocm": "6.3.0"
+  },
+  "summary": {                            // required — counts + total_time
+    "pass": 7, "fail": 0, "total_time": 17.71
+  },
+  "profile": {
+    "dataset": "turtle.fa", "threads": 1,
+    "metrics": { "IPC": 2.945, "cache-miss-rate": 3.17, … },
+    "hotspots":     [ { "function": "computeLikelihood", "percent": 42.1, "module": "iqtree3" }, … ],
+    "folded_stacks":[ { "stack": "main;foo;bar",         "count":   1234                          }, … ]
+  }
+}
+```
+
+Deep profiles follow `tools/schemas/profile.schema.json` and add a `gpu` section
+with parsed `rocm-smi` output. Schemas are the source of truth — both are enforced
+in CI on every push.
+
+---
+
+## Dashboard features
+
+The dashboard is organised into seven pages (sidebar nav, hash-routed):
+
+- **Overview** — hero stats, run picker with dataset/IPC/wall summary, config card
+  (alignment / model / system), hotspot breakdown, multi-run microarch radar,
+  per-dataset thread-scaling curves, top call stacks, copy-all commands button.
+- **All Runs** — searchable / sortable / status-filterable list. Each row expands
+  to show env, metrics, verification table, and commands with per-command wall time.
+- **Tests** — aggregated verification across every run (pass/fail, |Δlnℒ|).
+- **Profiling** — deep dive: CPU counters, top hotspots, top call stacks, and a
+  lightweight flamegraph rendered client-side from `folded_stacks`.
+- **GPU** — `rocm-smi` key/value grid per profile.
+- **Allocation** — Pawsey SU balance (checked live via `./start.sh status`).
+- **Environment** — full env dump per run.
+
+All charts use Chart.js 4.4 via CDN. The dashboard is keyboard navigable, honours
+`prefers-reduced-motion`, and reports copy actions via a toast live region.
+
+---
+
+## CI / CD
+
+Two workflows under `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `validate.yml` | push / PR touching `logs/`, `tools/`, `tests/` | `pip install` deps, run `tools/validate.py`, run `pytest tests/` |
+| `build.yml`    | push to `main` touching `logs/`, `web/`, `tools/` | build `docs/` via `tools/build.py`, upload Pages artifact, deploy |
+
+Tests verify:
+
+- every run / profile matches its JSON schema
+- `run_id`s are unique
+- `summary.total_time` matches the sum of `timing[].time_s` (±1 s + 1 %)
+- IPC ∈ (0, 10); miss / stall rates ∈ [0, 100]
+- hotspot percents sum to ≤ 100 within a small tolerance
+- wall time does not regress more than 20 % (warn-only `xfail`)
+
+Run locally with `make test`.
+
+---
+
+## Enabling GitHub Pages
+
+After the first successful `build.yml` run:
+
+1. Go to the repo → **Settings** → **Pages**.
+2. Under **Build and deployment**, set **Source** to **GitHub Actions** (not a branch).
+3. The site will be served at `https://<org>.github.io/setonix-iq/` after the next
+   push to `main` touching `web/`, `tools/`, or `logs/`.
+
+---
+
+## Run naming
+
+`YYYY-MM-DD_HHMMSS` derived from the pipeline start time — sortable,
+filesystem-safe, SLURM-ID-independent. The SLURM ID is preserved as
+`slurm_id` inside each JSON for correlation with scratch log files.
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+# Setonix IQ-TREE Dashboard
+
 Self-contained dashboard for monitoring IQ-TREE pipeline runs on the [Setonix supercomputer](https://pawsey.org.au/systems/setonix/) (Pawsey Supercomputing Centre). Automatically collects timing, verification, profiling, GPU, and environment data from each run and renders it as a static HTML dashboard deployed to GitHub Pages.
 
 **Live dashboard:** *(deployed via GitHub Pages)*

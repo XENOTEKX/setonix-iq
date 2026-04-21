@@ -1,5 +1,26 @@
 # IQ-TREE GPU Offload — Development Progress
 
+## 2026-04-21 — Dashboard + CI overhaul
+
+- Made the repository public (MIT licence).
+- Replaced the monolithic `serve.py` template with a modular pipeline:
+  - `tools/normalize.py` writes per-record JSON + indexes under `web/data/`
+  - `tools/validate.py` + JSON Schemas in `tools/schemas/`
+  - `tools/build.py` mirrors `web/` → `docs/`
+- Rebuilt the frontend as ES modules (`web/js/{main,router,state,data}.js`,
+  plus `components/`, `charts/`, `pages/`). New pages: Overview, All Runs,
+  Tests, Profiling, GPU, Allocation, Environment. Client-side flamegraph +
+  call-stack views rendered straight from `folded_stacks`.
+- Added `pytest` suite (`tests/`) covering schema, data invariants, build, and
+  a warn-only wall-time regression guard.
+- Added two GitHub Actions workflows:
+  - `validate.yml` — schema + pytest on every push / PR
+  - `build.yml`    — build `docs/` and deploy to GitHub Pages (`actions/deploy-pages@v4`)
+- Removed legacy `serve.py`, `website/`, `dashboard.html`; `docs/` is now built
+  in CI instead of committed.
+
+---
+
 ## Status: Project initialized, profiling complete, GPU implementation not started
 
 Profiling complete (VTune + perf, April 2026). Five hot functions identified in `phylokernelnew.h` consuming >95% CPU time. GPU PoC exists with CUDA/cuBLAS backends but needs HIP port for Setonix AMD MI250X GPUs. No GPU kernels have been validated against CPU oracle output yet.

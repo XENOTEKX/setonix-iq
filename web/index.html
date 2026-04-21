@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="IQ-TREE pipeline runs, profiling, and benchmarks from the Setonix supercomputer (Pawsey).">
+<title>Setonix-IQ Dashboard</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/charts.css">
+<link rel="stylesheet" href="css/pages.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"/>
+      </svg>
+      Setonix-IQ
+    </div>
+    <nav>
+      <a href="#/overview" data-page="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/></svg>
+        Overview
+      </a>
+      <a href="#/runs" data-page="runs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        All Runs
+      </a>
+      <a href="#/tests" data-page="tests">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Tests
+      </a>
+      <a href="#/profiling" data-page="profiling">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18M7 15l4-4 4 4 6-6"/></svg>
+        Profiling
+      </a>
+      <div class="section-label">HPC</div>
+      <a href="#/gpu" data-page="gpu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10v4M10 10v4M14 10v4M18 10v4"/></svg>
+        GPU
+      </a>
+      <a href="#/allocation" data-page="allocation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 12V8a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h8"/><path d="M16 16h6M19 13v6"/></svg>
+        Allocation
+      </a>
+      <a href="#/environment" data-page="environment">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20"/></svg>
+        Environment
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="buildInfo">Loading…</span>
+    </div>
+  </aside>
+  <main class="main" id="main" aria-live="polite">
+    <div class="card"><div class="card-body"><div class="skeleton" style="height:32px;width:40%;margin-bottom:14px;"></div>
+      <div class="skeleton" style="height:20px;width:60%;"></div></div></div>
+  </main>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

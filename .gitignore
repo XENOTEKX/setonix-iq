@@ -1,17 +1,11 @@
-# Symlinks to scratch (not available outside Setonix)
-website/results
-website/profiles
-website/deep_profiles
-website/assets/flamegraph.svg
-
-# Generated locally (committed by GitHub Action, not from Setonix)
-# Use `git add -f` in the Action to override these ignores
-dashboard.html
+# Build output (GitHub Actions publishes via artifact, not commit)
 docs/
-website/api/runs.json
+web/data/
 
 # Internal / development files (not for public)
 CLAUDE.md
+.github/CLAUDE.md
+.github/REFACTOR_PLAN.md
 PROFILING_REPORT.html
 IMPLEMENTATION_PLAN.md
 .host.log
