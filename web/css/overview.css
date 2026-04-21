@@ -3,14 +3,39 @@
 ================================================================ */
 
 /* ModelFinder candidate table */
-.mf-candidates tbody tr { border-top: 1px solid var(--border); }
-.mf-candidates tbody tr.mf-best {
-  background: rgba(129, 140, 248, 0.07);
+.mf-title {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+  margin: 0 0 8px;
+  font-weight: 600;
 }
-.mf-candidates tbody tr.mf-best td { color: var(--text); font-weight: 500; }
-.mf-candidates td, .mf-candidates th { padding: 6px 8px; }
+.mf-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.mf-note { font-size: 0.68rem; color: var(--text-muted); margin-top: 6px; }
+
+.mf-candidates {
+  width: 100%;
+  min-width: 580px;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+/* Unified cell sizing — th and td both use these rules */
+.mf-candidates th,
+.mf-candidates td { padding: 6px 10px; text-align: left; }
+/* Right-align numeric columns identically on both th and td */
+.mf-candidates th.num,
 .mf-candidates td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.mf-candidates code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.76rem; }
+.mf-candidates thead tr { color: var(--text3); border-bottom: 1px solid var(--border); }
+.mf-candidates thead th { font-weight: 600; white-space: nowrap; }
+.mf-candidates tbody tr { border-top: 1px solid rgba(255,255,255,0.04); }
+.mf-candidates tbody tr:first-child { border-top: none; }
+.mf-candidates tbody tr.mf-best { background: rgba(129, 140, 248, 0.07); }
+.mf-candidates tbody tr.mf-best td { color: var(--text); font-weight: 500; }
+.mf-candidates code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.76rem;
+}
 
 /* ----- Run picker (searchable combobox) ----- */
 .run-picker {

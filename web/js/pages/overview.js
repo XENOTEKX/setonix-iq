@@ -360,24 +360,24 @@ function renderCandidatesTable(candidates) {
   }).join('');
   return `
     <div style="margin-top:16px;">
-      <h3 style="font-size:0.82rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text3); margin:0 0 8px;">Top ModelFinder candidates</h3>
-      <div style="overflow-x:auto;">
-        <table class="mf-candidates" style="width:100%; border-collapse:collapse; font-size:0.78rem; min-width:560px;">
+      <h3 class="mf-title">Top ModelFinder candidates</h3>
+      <div class="mf-scroll">
+        <table class="mf-candidates">
           <thead>
-            <tr style="text-align:left; color:var(--text3);">
-              <th style="padding:6px 8px;">Model</th>
-              <th style="padding:6px 8px; text-align:right;">LogL</th>
-              <th style="padding:6px 8px; text-align:right;">BIC</th>
-              <th style="padding:6px 8px; text-align:right;" title="BIC minus best BIC — &gt;10 = decisively worse">ΔBIC</th>
-              <th style="padding:6px 8px; text-align:right;">w-BIC</th>
-              <th style="padding:6px 8px; text-align:right;">AIC</th>
-              <th style="padding:6px 8px; text-align:right;">w-AIC</th>
+            <tr>
+              <th>Model</th>
+              <th class="num">LogL</th>
+              <th class="num">BIC</th>
+              <th class="num" title="BIC minus best BIC — &gt;10 = decisively worse">ΔBIC</th>
+              <th class="num">w-BIC</th>
+              <th class="num">AIC</th>
+              <th class="num">w-AIC</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">Top ${Math.min(candidates.length, 10)} of ${candidates.length} models sorted by BIC. ΔBIC &gt; 10 = decisively worse than best.</div>
+      <div class="mf-note">Top ${Math.min(candidates.length, 10)} of ${candidates.length} models sorted by BIC. ΔBIC &gt; 10 = decisively worse than best.</div>
     </div>
   `;
 }
