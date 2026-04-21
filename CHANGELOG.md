@@ -40,16 +40,15 @@ Not enabled (admin-locked on Setonix, `perf_event_paranoid=2`):
 
 Fans out 4 independent SLURM jobs. Submitted 2026-04-21:
 
-| Threads | JobID     |
-|---------|-----------|
-| 16      | 41784642  |
-| 32      | 41784643  |
-| 64      | 41784644  |
-| 128     | 41784645  |
+| Threads | JobID     | Status | Est. Start (AWST) | Est. End (AWST)  |
+|---------|-----------|--------|-------------------|------------------|
+| 16      | 41784642  | PD     | 2026-04-22 01:16  | 2026-04-23 01:16 |
+| 32      | 41784643  | PD     | 2026-04-22 01:16  | 2026-04-23 01:16 |
+| 64      | 41784644  | PD     | 2026-04-22 01:18  | 2026-04-23 01:18 |
+| 128     | 41784645  | PD     | 2026-04-22 01:19  | 2026-04-23 01:19 |
 
-1T / 4T / 8T deliberately dropped — tree-search on 500 taxa is O(N²) so those
-runtimes exceed the 24 h wall limit. Each job requests 1 node × 128 CPUs ×
-230 GB on `work`.
+All 4 jobs confirmed queued as of 2026-04-21 (reason: Priority). Each requests
+1 node × 128 CPUs × 230 GB on `work`, 24 h wall limit.
 
 ### Pipeline extensions
 
