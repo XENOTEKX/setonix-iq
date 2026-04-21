@@ -51,11 +51,60 @@
       }
     },
     "gpu_info": { "type": "string" },
+    "dataset_info": {
+      "type": "object",
+      "properties": {
+        "file":             { "type": "string" },
+        "file_size_bytes":  { "type": "number", "minimum": 0 },
+        "fasta_taxa":       { "type": "integer", "minimum": 0 },
+        "fasta_sites":      { "type": "integer", "minimum": 0 },
+        "taxa":             { "type": "integer", "minimum": 0 },
+        "sites":            { "type": "integer", "minimum": 0 },
+        "patterns":         { "type": "integer", "minimum": 0 },
+        "constant_sites":   { "type": "integer", "minimum": 0 },
+        "invariant_sites":  { "type": "integer", "minimum": 0 },
+        "informative_sites":{ "type": "integer", "minimum": 0 },
+        "sequence_type":    { "type": "string" }
+      }
+    },
+    "modelfinder": {
+      "type": "object",
+      "properties": {
+        "model_selected":              { "type": "string" },
+        "best_model_bic":              { "type": "string" },
+        "wall_time_s":                 { "type": "number", "minimum": 0 },
+        "log_likelihood":              { "type": "number" },
+        "unconstrained_log_likelihood":{ "type": "number" },
+        "gamma_alpha":                 { "type": "number" },
+        "tree_length":                 { "type": "number" },
+        "bic":                         { "type": "number" },
+        "aic":                         { "type": "number" },
+        "aicc":                        { "type": "number" },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["model"],
+            "properties": {
+              "model":          { "type": "string" },
+              "log_likelihood": { "type": "number" },
+              "aic":            { "type": "number" },
+              "aic_weight":     { "type": "number" },
+              "aicc":           { "type": "number" },
+              "aicc_weight":    { "type": "number" },
+              "bic":            { "type": "number" },
+              "bic_weight":     { "type": "number" }
+            }
+          }
+        }
+      }
+    },
     "profile": {
       "type": "object",
       "properties": {
         "dataset": { "type": "string" },
         "threads": { "type": ["integer", "string"] },
+        "perf_cmd": { "type": "string" },
         "metrics": {
           "type": "object",
           "properties": {

@@ -41,11 +41,122 @@
       "branch-miss-rate": 0.0454,
       "L1-dcache-miss-rate": 7.45,
       "frontend-stall-rate": 0.78
-    }
+    },
+    "perf_cmd": "/scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/xlarge_dna.fa -T 32 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/xlarge_mf_32t_41703864/iqtree_run"
   },
   "modelfinder": {
-    "model_selected": "TPM3u+F+G4 chosen according to BIC",
-    "wall_time_s": 1568.472
+    "model_selected": "TPM3u+F+G4",
+    "wall_time_s": 1568.472,
+    "best_model_bic": "TPM3u+F+G4",
+    "log_likelihood": -11940288.9479,
+    "unconstrained_log_likelihood": -1151008.5922,
+    "gamma_alpha": 1.001,
+    "tree_length": 43.2923,
+    "bic": 23885217.6048,
+    "aic": 23881383.8959,
+    "aicc": 23881387.1653,
+    "candidates": [
+      {
+        "model": "TPM3u+F+G4",
+        "log_likelihood": -11940288.95,
+        "aic": 23881383.9,
+        "aic_weight": 0.14,
+        "aicc": 23881387.169,
+        "aicc_weight": 0.142,
+        "bic": 23885217.609,
+        "bic_weight": 0.786
+      },
+      {
+        "model": "F81+F+G4",
+        "log_likelihood": -11940301.8,
+        "aic": 23881405.6,
+        "aic_weight": 2.71e-06,
+        "aicc": 23881408.837,
+        "aicc_weight": 2.8e-06,
+        "bic": 23885220.283,
+        "bic_weight": 0.206
+      },
+      {
+        "model": "TIM3+F+G4",
+        "log_likelihood": -11940288.65,
+        "aic": 23881385.3,
+        "aic_weight": 0.0694,
+        "aicc": 23881388.586,
+        "aicc_weight": 0.07,
+        "bic": 23885228.522,
+        "bic_weight": 0.00336
+      },
+      {
+        "model": "TPM3u+F+I+G4",
+        "log_likelihood": -11940289.22,
+        "aic": 23881386.44,
+        "aic_weight": 0.0392,
+        "aicc": 23881389.726,
+        "aicc_weight": 0.0396,
+        "bic": 23885229.662,
+        "bic_weight": 0.0019
+      },
+      {
+        "model": "HKY+F+G4",
+        "log_likelihood": -11940300.99,
+        "aic": 23881405.98,
+        "aic_weight": 2.24e-06,
+        "aicc": 23881409.233,
+        "aicc_weight": 2.3e-06,
+        "bic": 23885230.176,
+        "bic_weight": 0.00147
+      },
+      {
+        "model": "F81+F+I+G4",
+        "log_likelihood": -11940302.02,
+        "aic": 23881408.04,
+        "aic_weight": 8e-07,
+        "aicc": 23881411.293,
+        "aicc_weight": 8.2e-07,
+        "bic": 23885232.236,
+        "bic_weight": 0.000524
+      },
+      {
+        "model": "TVM+F+G4",
+        "log_likelihood": -11940285.99,
+        "aic": 23881381.98,
+        "aic_weight": 0.365,
+        "aicc": 23881385.282,
+        "aicc_weight": 0.365,
+        "bic": 23885234.715,
+        "bic_weight": 0.000152
+      },
+      {
+        "model": "TPM2u+F+G4",
+        "log_likelihood": -11940299.05,
+        "aic": 23881404.1,
+        "aic_weight": 5.74e-06,
+        "aicc": 23881407.369,
+        "aicc_weight": 5.84e-06,
+        "bic": 23885237.809,
+        "bic_weight": 3.23e-05
+      },
+      {
+        "model": "TIM3+F+I+G4",
+        "log_likelihood": -11940288.81,
+        "aic": 23881387.62,
+        "aic_weight": 0.0217,
+        "aicc": 23881390.922,
+        "aicc_weight": 0.0218,
+        "bic": 23885240.355,
+        "bic_weight": 9.04e-06
+      },
+      {
+        "model": "TN+F+G4",
+        "log_likelihood": -11940300.65,
+        "aic": 23881407.3,
+        "aic_weight": 1.16e-06,
+        "aicc": 23881410.569,
+        "aicc_weight": 1.18e-06,
+        "bic": 23885241.009,
+        "bic_weight": 6.52e-06
+      }
+    ]
   },
   "summary": {
     "pass": 0,
@@ -53,5 +164,18 @@
     "total_time": 8070,
     "all_pass": true,
     "wall_time": "2h14m29s"
+  },
+  "dataset_info": {
+    "file": "xlarge_dna.fa",
+    "file_size_bytes": 20002400,
+    "fasta_taxa": 200,
+    "fasta_sites": 100000,
+    "taxa": 200,
+    "sites": 100000,
+    "patterns": 99897,
+    "constant_sites": 76,
+    "invariant_sites": 76,
+    "informative_sites": 99467,
+    "sequence_type": "DNA"
   }
 }

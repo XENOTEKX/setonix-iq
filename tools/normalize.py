@@ -37,12 +37,16 @@ SCHEMA_VERSION = 1
 # run JSON, so we keep a static lookup here. `size_mb` is computed from FASTA
 # geometry (taxa × sites + header overhead). Sizes are marked estimated because
 # the raw .fa files are not bundled with this repo.
+# NOTE: values verified against /scratch/pawsey1351/asamuel/iqtree3/benchmarks
+# on 2026-04-21. Use `dataset_info` on the run record itself when available;
+# this lookup is only a fallback for runs that predate the harvest step.
 DATASET_INFO: dict[str, dict] = {
-    "turtle.fa":            {"taxa": 16,  "sites": 20820, "kind": "dna"},
-    "large_modelfinder.fa": {"taxa": 50,  "sites": 5000,  "kind": "dna"},
-    "xlarge_dna.fa":        {"taxa": 200, "sites": 10000, "kind": "dna"},
-    "medium_dna.fa":        {"taxa": 50,  "sites": 4559,  "kind": "dna"},
-    "example.phy":          {"taxa": 17,  "sites": 1998,  "kind": "dna"},
+    "turtle.fa":            {"taxa": 16,  "sites": 20820,  "kind": "dna"},
+    "large_modelfinder.fa": {"taxa": 100, "sites": 50000,  "kind": "dna"},
+    "xlarge_dna.fa":        {"taxa": 200, "sites": 100000, "kind": "dna"},
+    "medium_dna.fa":        {"taxa": 50,  "sites": 4559,   "kind": "dna"},
+    "example.phy":          {"taxa": 17,  "sites": 1998,   "kind": "dna"},
+    "mega_dna.fa":          {"taxa": 500, "sites": 200000, "kind": "dna"},
 }
 
 
@@ -149,8 +153,21 @@ def summarize_run(run: dict) -> dict:
     metrics = p.get("metrics") or {}
     hints = run.get("hints") or {}
     env = run.get("env") or {}
+    mf = run.get("modelfinder") or {}
     dataset = p.get("dataset") or hints.get("dataset")
-    info = dataset_lookup(dataset) or {}
+
+    # Prefer harvested ground truth over the heuristic lookup.
+    ds_gt = run.get("dataset_info") or {}
+    fallback = dataset_lookup(dataset) or {}
+    taxa = ds_gt.get("taxa") or fallback.get("taxa")
+    sites = ds_gt.get("sites") or fallback.get("sites")
+    if ds_gt.get("file_size_bytes"):
+        size_mb = round(ds_gt["file_size_bytes"] / 1_000_000, 2)
+        size_estimated = False
+    else:
+        size_mb = fallback.get("size_mb")
+        size_estimated = fallback.get("size_estimated", False)
+
     return {
         "run_id": run.get("run_id"),
         "slurm_id": run.get("slurm_id"),
@@ -159,11 +176,20 @@ def summarize_run(run: dict) -> dict:
         "run_type": run.get("run_type", "pipeline"),
         "dataset": dataset,
         "dataset_short": os.path.basename(dataset) if dataset else None,
-        "taxa": info.get("taxa"),
-        "sites": info.get("sites"),
-        "size_mb": info.get("size_mb"),
-        "size_estimated": info.get("size_estimated", False),
-        "model": hints.get("model"),
+        "taxa": taxa,
+        "sites": sites,
+        "patterns": ds_gt.get("patterns"),
+        "informative_sites": ds_gt.get("informative_sites"),
+        "constant_sites": ds_gt.get("constant_sites"),
+        "sequence_type": ds_gt.get("sequence_type"),
+        "size_mb": size_mb,
+        "size_estimated": size_estimated,
+        "model": mf.get("model_selected") or hints.get("model"),
+        "model_bic": mf.get("bic"),
+        "model_aic": mf.get("aic"),
+        "gamma_alpha": mf.get("gamma_alpha"),
+        "tree_length": mf.get("tree_length"),
+        "log_likelihood": mf.get("log_likelihood"),
         "threads": p.get("threads") or hints.get("threads"),
         "hostname": env.get("hostname"),
         "cpu": env.get("cpu"),
@@ -177,6 +203,8 @@ def summarize_run(run: dict) -> dict:
         "cache_miss_rate": metrics.get("cache-miss-rate"),
         "has_hotspots": bool(p.get("hotspots")),
         "has_stacks": bool(p.get("folded_stacks") or p.get("callstacks")),
+        "has_candidates": bool(mf.get("candidates")),
+        "has_perf_cmd": bool(p.get("perf_cmd")),
     }
 
 

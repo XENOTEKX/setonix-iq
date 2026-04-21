@@ -237,6 +237,8 @@ function renderConfig(run) {
   const m = p.metrics || {};
   const env = run.env || {};
   const h = run.hints || {};
+  const di = run.dataset_info || {};
+  const mf = run.modelfinder || {};
 
   const items = (pairs) => pairs
     .filter(([, v]) => v != null && v !== '')
@@ -244,15 +246,30 @@ function renderConfig(run) {
       <div class="config-item"><span class="ci-label">${escHtml(k)}</span><span class="ci-value">${escHtml(String(v))}</span></div>
     `).join('');
 
+  const fmtInt = (n) => (typeof n === 'number') ? n.toLocaleString() : n;
+  const sizeMb = di.file_size_bytes ? (di.file_size_bytes / 1_000_000).toFixed(2) + ' MB' : null;
+
   const alignment = items([
     ['Dataset', p.dataset || h.dataset],
+    ['Sequence type', di.sequence_type],
+    ['Taxa', fmtInt(di.taxa)],
+    ['Sites', fmtInt(di.sites)],
+    ['Distinct patterns', fmtInt(di.patterns)],
+    ['Informative sites', fmtInt(di.informative_sites)],
+    ['Constant sites', fmtInt(di.constant_sites)],
+    ['File size', sizeMb],
     ['Threads', p.threads ?? h.threads],
     ['Run type', run.run_type],
   ]);
   const model = items([
-    ['Model', h.model],
+    ['Model selected', mf.model_selected || h.model],
+    ['Best-fit (BIC)', mf.best_model_bic],
+    ['Log-likelihood', mf.log_likelihood != null ? mf.log_likelihood.toLocaleString() : null],
+    ['Tree length', mf.tree_length],
+    ['Gamma α', mf.gamma_alpha],
+    ['BIC', mf.bic != null ? mf.bic.toLocaleString() : null],
+    ['AIC', mf.aic != null ? mf.aic.toLocaleString() : null],
     ['Wall', fmtTime(run.summary?.total_time)],
-    ['Commands', (run.timing || []).length],
     ['Verify pass', run.summary?.pass],
     ['Verify fail', run.summary?.fail],
   ]);
@@ -272,6 +289,12 @@ function renderConfig(run) {
       <div class="config-section"><h3>Model &amp; Results</h3><div class="config-items">${model}</div></div>
       <div class="config-section"><h3>System</h3><div class="config-items">${sys}</div></div>
     </div>
+    ${renderCandidatesTable(mf.candidates)}
+    ${p.perf_cmd ? `
+      <details class="config-cmd" style="margin-top:12px;">
+        <summary style="cursor:pointer;">How this was measured (perf command)</summary>
+        <pre style="margin-top:8px; white-space:pre-wrap; word-break:break-all; font-size:0.72rem; color:var(--text2);">${escHtml(p.perf_cmd)}</pre>
+      </details>` : ''}
     ${run.description ? `<div class="config-cmd" style="margin-top:12px;">${escHtml(run.description)}</div>` : ''}
   `;
 
@@ -279,10 +302,64 @@ function renderConfig(run) {
     `# ${label}\n` + pairs.filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k}: ${v}`).join('\n');
   document.getElementById('ovConfigText').textContent = [
     `# Run ${run.run_id}`,
-    toText('Alignment', [['Dataset', p.dataset || h.dataset], ['Threads', p.threads ?? h.threads], ['Run type', run.run_type]]),
-    toText('Model & Results', [['Model', h.model], ['Wall', fmtTime(run.summary?.total_time)], ['Commands', (run.timing || []).length], ['Pass', run.summary?.pass], ['Fail', run.summary?.fail]]),
+    toText('Alignment', [
+      ['Dataset', p.dataset || h.dataset],
+      ['Sequence type', di.sequence_type],
+      ['Taxa', di.taxa], ['Sites', di.sites],
+      ['Patterns', di.patterns],
+      ['Informative sites', di.informative_sites],
+      ['Constant sites', di.constant_sites],
+      ['Threads', p.threads ?? h.threads],
+      ['Run type', run.run_type],
+    ]),
+    toText('Model & Results', [
+      ['Model', mf.model_selected || h.model],
+      ['Best-fit (BIC)', mf.best_model_bic],
+      ['Log-likelihood', mf.log_likelihood],
+      ['Tree length', mf.tree_length],
+      ['Gamma α', mf.gamma_alpha],
+      ['BIC', mf.bic], ['AIC', mf.aic],
+      ['Wall', fmtTime(run.summary?.total_time)],
+      ['Pass', run.summary?.pass], ['Fail', run.summary?.fail],
+    ]),
     toText('System', [['Host', env.hostname], ['CPU', env.cpu], ['Cores', env.cores], ['GCC', env.gcc], ['ROCm', env.rocm], ['IPC', m.IPC]]),
-  ].join('\n\n');
+    p.perf_cmd ? `# Perf command\n${p.perf_cmd}` : null,
+  ].filter(Boolean).join('\n\n');
+}
+
+function renderCandidatesTable(candidates) {
+  if (!Array.isArray(candidates) || !candidates.length) return '';
+  const rows = candidates.slice(0, 10).map(c => `
+    <tr>
+      <td><code>${escHtml(c.model || '')}</code></td>
+      <td class="num">${c.log_likelihood != null ? c.log_likelihood.toLocaleString() : '—'}</td>
+      <td class="num">${c.bic != null ? c.bic.toLocaleString() : '—'}</td>
+      <td class="num">${c.bic_weight != null ? c.bic_weight.toPrecision(3) : '—'}</td>
+      <td class="num">${c.aic != null ? c.aic.toLocaleString() : '—'}</td>
+      <td class="num">${c.aic_weight != null ? c.aic_weight.toPrecision(3) : '—'}</td>
+    </tr>
+  `).join('');
+  return `
+    <div style="margin-top:16px;">
+      <h3 style="font-size:0.82rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text3); margin:0 0 8px;">Top ModelFinder candidates</h3>
+      <div style="overflow-x:auto;">
+        <table class="mf-candidates" style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+          <thead>
+            <tr style="text-align:left; color:var(--text3);">
+              <th style="padding:6px 8px;">Model</th>
+              <th style="padding:6px 8px; text-align:right;">LogL</th>
+              <th style="padding:6px 8px; text-align:right;">BIC</th>
+              <th style="padding:6px 8px; text-align:right;">w-BIC</th>
+              <th style="padding:6px 8px; text-align:right;">AIC</th>
+              <th style="padding:6px 8px; text-align:right;">w-AIC</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">Top ${Math.min(candidates.length, 10)} of ${candidates.length} models sorted by BIC. The + / – weight sign in IQ-TREE is a significance marker; absolute value shown.</div>
+    </div>
+  `;
 }
 
 function renderActivity(idx) {

@@ -312,6 +312,52 @@ Once any of these land in `logs/runs/<run>.json` (schema-valid), running
 
 ---
 
+## 2026-04-21 — Scratch harvest: ground-truth dataset & ModelFinder data
+
+Added `tools/harvest_scratch.py` which reads Setonix scratch
+(`/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/<label>_41703864/`)
+and enriches every `logs/runs/*.json` in place. Fills gaps that were
+previously missing from the dashboard (items 1, 4, 5, 6, 8 on the
+open-requests list above).
+
+New fields now carried through schema → normaliser → frontend:
+
+- **`dataset_info`** — real taxa / sites / distinct patterns /
+  constant & informative sites / sequence type, parsed from the `.iqtree`
+  analysis report; file size read from the raw `.fa` on scratch. Replaces the
+  static `DATASET_INFO` heuristic (which was off by 10× on large_mf & xlarge
+  — corrected here too).
+- **`modelfinder.{log_likelihood, bic, aic, aicc, tree_length, gamma_alpha,
+  best_model_bic, candidates[]}`** — candidate table contains the top-10
+  models ranked by BIC with LogL / AIC / AICc / BIC and their Akaike-weight
+  columns.
+- **`profile.perf_cmd`** — the exact `perf stat` command that produced the
+  counters, parsed from the `perf_stat.txt` header. Displayed under a
+  collapsible "how this was measured" disclosure on the overview.
+- **`profile.hotspots[]` + `profile.folded_stacks[]`** — backfilled for
+  `xlarge_mf_128t_baseline` (previously only 3 of 14 runs had perf-record
+  data, now 4).
+
+Frontend:
+
+- `web/js/pages/overview.js` — Alignment card now surfaces taxa / sites /
+  distinct patterns / informative / constant sites / sequence type / real
+  file size. Model & Results card adds LogL, tree length, Gamma α, BIC, AIC.
+  New "Top ModelFinder candidates" table (top 10 by BIC with w-BIC/w-AIC).
+- `tools/normalize.py` — `summarize_run()` prefers `dataset_info` over the
+  heuristic lookup, emits `patterns`, `informative_sites`, `constant_sites`,
+  `sequence_type`, `model_bic`, `model_aic`, `gamma_alpha`, `tree_length`,
+  `log_likelihood`, plus `has_candidates` / `has_perf_cmd` flags into the
+  runs index.
+- `tools/schemas/run.schema.json` — added optional `dataset_info`,
+  `modelfinder.candidates[]`, `profile.perf_cmd`.
+
+Verified: 14/14 runs pass schema validation, 14 pytests + 1 xpassed.
+
+Not backfilled (require re-running on Setonix): full L2/L3/LLC counters,
+backend stall cycles, GPU telemetry, memory / NUMA / IO timeseries,
+per-thread breakdown — still open on the requests list above.
+
 ## 2026-04-21 — Dashboard + CI overhaul
 
 - Made the repository public (MIT licence).

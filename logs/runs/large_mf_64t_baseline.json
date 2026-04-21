@@ -11459,11 +11459,122 @@
         "stack": "__libc_start_call_main;main;runPhyloAnalysis(Params&,;runPhyloAnalysis(Params&,;runTreeReconstruction(Params&,;IQTree::printResultTree(std::__cxx11::basic_string<char,;MTree::printTree(char;MTree::printTree(std::ostream&,;MTree::printTree(std::ostream&,;__memmove_avx_unaligned_erms",
         "count": 1
       }
-    ]
+    ],
+    "perf_cmd": "/scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa -T 64 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/large_mf_64t_41703864/iqtree_run"
   },
   "modelfinder": {
-    "model_selected": "F81+F+G4 chosen according to BIC",
-    "wall_time_s": 1842.941
+    "model_selected": "F81+F+G4",
+    "wall_time_s": 1842.941,
+    "best_model_bic": "F81+F+G4",
+    "log_likelihood": -2996714.5739,
+    "unconstrained_log_likelihood": -535546.706,
+    "gamma_alpha": 0.9994,
+    "tree_length": 21.6593,
+    "bic": 5995603.9232,
+    "aic": 5993831.1478,
+    "aicc": 5993832.7785,
+    "candidates": [
+      {
+        "model": "F81+F+G4",
+        "log_likelihood": -2996714.577,
+        "aic": 5993831.154,
+        "aic_weight": 0.000256,
+        "aicc": 5993832.785,
+        "aicc_weight": 0.000265,
+        "bic": 5995603.929,
+        "bic_weight": 0.98
+      },
+      {
+        "model": "TPM2u+F+G4",
+        "log_likelihood": -2996708.746,
+        "aic": 5993823.492,
+        "aic_weight": 0.0118,
+        "aicc": 5993825.155,
+        "aicc_weight": 0.012,
+        "bic": 5995613.907,
+        "bic_weight": 0.00667
+      },
+      {
+        "model": "HKY+F+G4",
+        "log_likelihood": -2996714.361,
+        "aic": 5993832.722,
+        "aic_weight": 0.000117,
+        "aicc": 5993834.369,
+        "aicc_weight": 0.00012,
+        "bic": 5995614.317,
+        "bic_weight": 0.00544
+      },
+      {
+        "model": "TN+F+G4",
+        "log_likelihood": -2996709.471,
+        "aic": 5993824.942,
+        "aic_weight": 0.00571,
+        "aicc": 5993826.605,
+        "aicc_weight": 0.00583,
+        "bic": 5995615.357,
+        "bic_weight": 0.00323
+      },
+      {
+        "model": "TIM2+F+G4",
+        "log_likelihood": -2996704.066,
+        "aic": 5993816.132,
+        "aic_weight": 0.467,
+        "aicc": 5993817.812,
+        "aicc_weight": 0.473,
+        "bic": 5995615.367,
+        "bic_weight": 0.00322
+      },
+      {
+        "model": "F81+F+I+G4",
+        "log_likelihood": -2996715.575,
+        "aic": 5993835.15,
+        "aic_weight": 3.47e-05,
+        "aicc": 5993836.797,
+        "aicc_weight": 3.57e-05,
+        "bic": 5995616.745,
+        "bic_weight": 0.00161
+      },
+      {
+        "model": "K3Pu+F+G4",
+        "log_likelihood": -2996712.901,
+        "aic": 5993831.802,
+        "aic_weight": 0.000185,
+        "aicc": 5993833.465,
+        "aicc_weight": 0.000189,
+        "bic": 5995622.217,
+        "bic_weight": 0.000105
+      },
+      {
+        "model": "TIM+F+G4",
+        "log_likelihood": -2996708.055,
+        "aic": 5993824.11,
+        "aic_weight": 0.00865,
+        "aicc": 5993825.79,
+        "aicc_weight": 0.00876,
+        "bic": 5995623.345,
+        "bic_weight": 5.96e-05
+      },
+      {
+        "model": "TPM3u+F+G4",
+        "log_likelihood": -2996713.644,
+        "aic": 5993833.288,
+        "aic_weight": 8.79e-05,
+        "aicc": 5993834.951,
+        "aicc_weight": 8.98e-05,
+        "bic": 5995623.703,
+        "bic_weight": 4.98e-05
+      },
+      {
+        "model": "TIM3+F+G4",
+        "log_likelihood": -2996708.736,
+        "aic": 5993825.472,
+        "aic_weight": 0.00438,
+        "aicc": 5993827.152,
+        "aicc_weight": 0.00443,
+        "bic": 5995624.707,
+        "bic_weight": 3.01e-05
+      }
+    ]
   },
   "summary": {
     "pass": 0,
@@ -23154,5 +23265,18 @@
         "count": 737
       }
     ]
+  },
+  "dataset_info": {
+    "file": "large_modelfinder.fa",
+    "file_size_bytes": 5001200,
+    "fasta_taxa": 100,
+    "fasta_sites": 50000,
+    "taxa": 100,
+    "sites": 50000,
+    "patterns": 48293,
+    "constant_sites": 679,
+    "invariant_sites": 679,
+    "informative_sites": 47776,
+    "sequence_type": "DNA"
   }
 }
