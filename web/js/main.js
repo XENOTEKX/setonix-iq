@@ -9,7 +9,6 @@ import * as runs from './pages/runs.js';
 import * as tests from './pages/tests.js';
 import * as profiling from './pages/profiling.js';
 import * as gpu from './pages/gpu.js';
-import * as allocation from './pages/allocation.js';
 import * as environment from './pages/environment.js';
 
 const PAGE_MOUNT = {
@@ -18,7 +17,6 @@ const PAGE_MOUNT = {
   tests: tests.mount,
   profiling: profiling.mount,
   gpu: gpu.mount,
-  allocation: allocation.mount,
   environment: environment.mount,
 };
 

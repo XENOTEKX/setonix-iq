@@ -341,4 +341,217 @@
   .best-runs { grid-template-columns: 1fr; }
 }
 
+/* ================================================================
+   Runs page — column legend
+================================================================ */
+.runs-legend {
+  background: linear-gradient(135deg, var(--card) 0%, var(--card-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+.runs-legend-title {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+.runs-legend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px 18px;
+  font-size: 0.72rem;
+  color: var(--text2);
+}
+.runs-legend-grid b {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+/* ================================================================
+   Chart expand button + modal
+================================================================ */
+.chart-expand-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card-2);
+  color: var(--text3);
+  cursor: pointer;
+  z-index: 4;
+  transition: all var(--dur-fast) var(--ease);
+  padding: 0;
+}
+.chart-expand-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.05);
+}
+.chart-expand-btn svg { width: 14px; height: 14px; }
+.card { position: relative; }
+
+.chart-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 7, 11, 0.85);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  animation: chart-modal-fade 0.22s var(--ease);
+}
+@keyframes chart-modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.chart-modal-inner {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 1400px;
+  height: 100%;
+  max-height: 900px;
+  padding: 24px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 72px rgba(0,0,0,0.5);
+}
+.chart-modal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.chart-modal-header h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0;
+}
+.chart-modal-header .badge {
+  font-size: 0.7rem;
+  color: var(--text3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+}
+.chart-modal-close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: var(--card-2);
+  color: var(--text2);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.chart-modal-close:hover { color: var(--accent); border-color: var(--accent); }
+.chart-modal-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.chart-modal-body .chart-wrapper { height: 100% !important; }
+.chart-modal-body canvas { max-height: 100% !important; }
+
+/* ================================================================
+   Runs Activity panel (replaces Commands)
+================================================================ */
+.activity-panel .activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.activity-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+  text-decoration: none;
+  color: inherit;
+}
+.activity-row:hover { background: var(--surface); }
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.activity-dot.fail { background: #ef5350; box-shadow: 0 0 0 3px rgba(239,83,80,0.15); }
+.activity-main .activity-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-main .activity-sub {
+  font-size: 0.68rem;
+  color: var(--text3);
+  margin-top: 2px;
+}
+.activity-wall {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: right;
+}
+.activity-threads {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text2);
+  background: var(--surface);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+/* ================================================================
+   Responsive: mobile/tablet tweaks
+================================================================ */
+@media (max-width: 900px) {
+  .charts-row { grid-template-columns: 1fr; }
+  .ds-grid { grid-template-columns: 1fr; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  .chart-modal { padding: 10px; }
+  .chart-modal-inner { padding: 16px; }
+  .rp-option {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .runs-legend-grid { grid-template-columns: 1fr; }
+}
+
 /* ----- Existing components keep same structure ----- */

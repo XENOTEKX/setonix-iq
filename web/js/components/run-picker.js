@@ -91,7 +91,15 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
     `;
 
     const trigger = root.querySelector('.run-picker-trigger');
-    trigger.addEventListener('click', () => { open = !open; render(); if (open) setTimeout(() => root.querySelector('.rp-search input')?.focus(), 20); });
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      open = !open;
+      render();
+      if (open) setTimeout(() => root.querySelector('.rp-search input')?.focus(), 20);
+    });
+
+    const panel = root.querySelector('.run-picker-panel');
+    panel?.addEventListener('click', (e) => e.stopPropagation());
 
     const input = root.querySelector('.rp-search input');
     if (input) {

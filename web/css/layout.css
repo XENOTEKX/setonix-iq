@@ -24,6 +24,13 @@
   padding-left: 8px;
   padding-right: 8px;
 }
+.layout.sidebar-collapsed .sidebar-top {
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 0;
+}
+.layout.sidebar-collapsed .logo { gap: 0; }
 .layout.sidebar-collapsed .sidebar .logo-text,
 .layout.sidebar-collapsed .sidebar nav a span:not(.nav-icon),
 .layout.sidebar-collapsed .sidebar .section-label,
@@ -35,7 +42,15 @@
 }
 .layout.sidebar-collapsed .sidebar nav a {
   justify-content: center;
-  padding: 10px;
+  padding: 10px 0;
+  gap: 0;
+}
+.layout.sidebar-collapsed .sidebar nav a[aria-current="page"]::before {
+  left: -8px;
+}
+.layout.sidebar-collapsed .sidebar-footer {
+  justify-content: center;
+  padding: 10px 0;
 }
 
 .sidebar-top {

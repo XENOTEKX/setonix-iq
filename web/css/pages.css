@@ -161,3 +161,19 @@
   .run-row-summary .run-ipc,
   .run-row-summary .run-threads { display: none; }
 }
+
+@media (max-width: 640px) {
+  .run-row-summary {
+    grid-template-columns: 32px 1fr auto;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .run-row-summary .run-time { font-size: 0.82rem; }
+  .run-row-summary > div:nth-child(5),
+  .run-row-summary > div:nth-child(6),
+  .run-row-summary .run-expand { display: none; }
+  .run-row-summary .run-meta { white-space: normal; }
+  .page-header h1 { font-size: 1.4rem; }
+  .filter-bar { flex-wrap: wrap; gap: 6px; }
+  .filter-bar input[type="search"] { width: 100%; min-width: 0; }
+}

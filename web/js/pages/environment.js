@@ -1,22 +1,41 @@
 // web/js/pages/environment.js
 
-import * as runSelector from '../components/run-selector.js';
+import { store } from '../state.js';
+import { loadRun } from '../data.js';
+import { mountRunPicker } from '../components/run-picker.js';
 import { escHtml } from '../utils.js';
 
-export function mount(root) {
+export async function mount(root) {
   root.innerHTML = `
     <div class="page-header"><div><h1>Environment</h1>
     <div class="subtitle">System &amp; toolchain details per run</div></div></div>
-    <div class="run-selector-bar" id="envRunSelector"></div>
+    <div class="run-picker-wrap" style="margin-bottom:22px;">
+      <div style="margin-bottom:10px; font-size:0.72rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.1em; font-weight:700;">Selected run</div>
+      <div id="envRunPicker"></div>
+    </div>
     <div class="card"><div class="card-body" id="envBody"></div></div>
   `;
-  runSelector.render(document.getElementById('envRunSelector'), (run) => {
-    const env = run.env || {};
-    const entries = Object.entries(env);
-    document.getElementById('envBody').innerHTML = entries.length
-      ? `<div class="kv-grid">${entries.map(([k, v]) =>
-          `<div class="kv-item"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(String(v))}</div></div>`
-        ).join('')}</div>`
-      : '<div class="empty">No environment data captured for this run.</div>';
+
+  const idx = store.get('runsIndex') || [];
+  if (!idx.length) {
+    document.getElementById('envBody').innerHTML = '<div class="empty">No runs indexed.</div>';
+    return;
+  }
+  const first = idx[0];
+
+  mountRunPicker(document.getElementById('envRunPicker'), idx, {
+    selectedId: first.run_id,
+    onChange: async (r) => renderEnv(await loadRun(r.run_id)),
   });
+  renderEnv(await loadRun(first.run_id));
+}
+
+function renderEnv(run) {
+  const env = run?.env || {};
+  const entries = Object.entries(env);
+  document.getElementById('envBody').innerHTML = entries.length
+    ? `<div class="kv-grid">${entries.map(([k, v]) =>
+        `<div class="kv-item"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(String(v))}</div></div>`
+      ).join('')}</div>`
+    : '<div class="empty">No environment data captured for this run.</div>';
 }

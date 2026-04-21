@@ -29,6 +29,18 @@ const TMPL = `
     </select>
     <span class="count" id="runsCount"></span>
   </div>
+  <div class="runs-legend" aria-hidden="true">
+    <div class="runs-legend-title">Column key</div>
+    <div class="runs-legend-grid">
+      <span><b>●</b> Pass / fail status</span>
+      <span><b>Label</b> Run id + short description</span>
+      <span><b>Dataset</b> File · taxa × sites · size MB · model</span>
+      <span><b>Wall</b> Total wall-clock (s / m / h)</span>
+      <span><b>IPC</b> Instructions per cycle (microarch efficiency)</span>
+      <span><b>T</b> Thread count</span>
+      <span><b>P/T</b> Verification tests passed / total</span>
+    </div>
+  </div>
   <div id="runsList"></div>
 `;
 
@@ -87,18 +99,23 @@ function renderRow(r) {
   const statusBadge = r.all_pass
     ? '<span class="badge badge-pass">✓</span>'
     : '<span class="badge badge-fail">✗</span>';
+  const ds = r.dataset_short || r.dataset || 'n/a';
+  const modelLabel = r.model || (r.run_type === 'modelfinder' ? 'ModelFinder' : (r.description || r.run_type || '—'));
+  const dims = (r.taxa && r.sites) ? `${r.taxa}×${r.sites}` : null;
+  const size = r.size_mb ? `${r.size_mb} MB` : null;
+  const metaBits = [ds, dims, size, modelLabel].filter(Boolean).join(' · ');
   return `
     <div class="run-row" data-runrow="${escHtml(r.run_id)}">
       <div class="run-row-summary" role="button" tabindex="0">
         <div class="run-status">${statusBadge}</div>
         <div>
           <div class="run-id">${escHtml(r.label || r.run_id)}</div>
-          <div class="run-meta">${escHtml(r.dataset || 'n/a')} · ${escHtml(r.model || '')} · ${escHtml(r.description || r.run_type || '')}</div>
+          <div class="run-meta">${escHtml(metaBits)}</div>
         </div>
-        <div class="run-time">${fmtTime(r.wall_s)}</div>
-        <div class="run-ipc">${r.IPC ? r.IPC.toFixed(2) : '—'}</div>
-        <div class="run-threads">T=${r.threads ?? '—'}</div>
-        <div class="run-status">${r.pass}/${r.pass + r.fail || 0}</div>
+        <div class="run-time" title="Wall time">${fmtTime(r.wall_s)}</div>
+        <div class="run-ipc" title="Instructions per cycle">${r.IPC ? r.IPC.toFixed(2) : '—'}</div>
+        <div class="run-threads" title="Thread count">T=${r.threads ?? '—'}</div>
+        <div class="run-status" title="Tests passed / total">${r.pass}/${r.pass + r.fail || 0}</div>
         <button class="run-expand" aria-expanded="false">Details</button>
       </div>
       <div class="run-detail"></div>

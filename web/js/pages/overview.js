@@ -4,6 +4,7 @@ import { store } from '../state.js';
 import { loadRun } from '../data.js';
 import { mountRunPicker } from '../components/run-picker.js';
 import { bindCopyButtons } from '../components/copy-button.js';
+import { attachExpand } from '../components/chart-expand.js';
 import * as scaling from '../charts/scaling.js';
 import * as efficiency from '../charts/efficiency.js';
 import * as ipcScaling from '../charts/ipc-scaling.js';
@@ -43,33 +44,32 @@ const TMPL = `
   </div>
 
   <div class="charts-row">
-    <div class="card">
+    <div class="card" id="ovScalingCard">
       <div class="card-header"><h2>Thread Scaling</h2><div class="actions"><span class="btn-sm">wall vs threads (log–log)</span></div></div>
       <div class="chart-wrapper"><canvas id="ovScalingCanvas"></canvas></div>
     </div>
-    <div class="card">
+    <div class="card" id="ovEfficiencyCard">
       <div class="card-header"><h2>Parallel Efficiency</h2><div class="actions"><span class="btn-sm">speedup ÷ threads · ideal = 100%</span></div></div>
       <div class="chart-wrapper"><canvas id="ovEfficiencyCanvas"></canvas></div>
     </div>
   </div>
 
   <div class="charts-row">
-    <div class="card">
+    <div class="card" id="ovIpcCard">
       <div class="card-header"><h2>IPC vs Threads</h2><div class="actions"><span class="btn-sm">microarch efficiency per dataset</span></div></div>
       <div class="chart-wrapper"><canvas id="ovIpcCanvas"></canvas></div>
     </div>
-    <div class="card">
+    <div class="card" id="ovMatrixCard">
       <div class="card-header"><h2>Performance Matrix</h2><div class="actions"><span class="btn-sm">wall × threads · bubble = sites</span></div></div>
       <div class="chart-wrapper"><canvas id="ovMatrixCanvas"></canvas></div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-header"><h2>Commands · <span style="color:var(--text3); font-weight:500; font-size:0.78rem;" id="ovCmdsRunId">—</span></h2>
-      <div class="actions"><button class="copy-btn" data-copy="#ovCmdsText">Copy all</button></div>
+  <div class="card activity-panel">
+    <div class="card-header"><h2>Recent Runs</h2>
+      <div class="actions"><a href="#/runs" class="btn-sm" style="text-decoration:none;">View all →</a></div>
     </div>
-    <div class="card-body" id="ovCmds"></div>
-    <pre id="ovCmdsText" class="sr-only"></pre>
+    <div class="card-body" id="ovActivity"></div>
   </div>
 `;
 
@@ -80,11 +80,31 @@ export async function mount(root) {
   renderStats(idx);
   renderBestRuns(idx);
   renderDatasets(idx);
+  renderActivity(idx);
 
   scaling.render(document.getElementById('ovScalingCanvas'), idx);
   efficiency.render(document.getElementById('ovEfficiencyCanvas'), idx);
   ipcScaling.render(document.getElementById('ovIpcCanvas'), idx);
   perfMatrix.render(document.getElementById('ovMatrixCanvas'), idx);
+
+  // Expand buttons for each chart
+  const chartSpecs = [
+    { id: 'ovScalingCard',    title: 'Thread Scaling',      badge: 'wall vs threads (log–log)',      mod: scaling },
+    { id: 'ovEfficiencyCard', title: 'Parallel Efficiency', badge: 'speedup ÷ threads · ideal 100%', mod: efficiency },
+    { id: 'ovIpcCard',        title: 'IPC vs Threads',      badge: 'microarch efficiency',           mod: ipcScaling },
+    { id: 'ovMatrixCard',     title: 'Performance Matrix',  badge: 'wall × threads · bubble=sites',  mod: perfMatrix },
+  ];
+  for (const spec of chartSpecs) {
+    const card = document.getElementById(spec.id);
+    attachExpand(card, {
+      title: spec.title,
+      badge: spec.badge,
+      renderFn: (body) => {
+        body.innerHTML = '<div class="chart-wrapper" style="height:100%;"><canvas></canvas></div>';
+        spec.mod.render(body.querySelector('canvas'), idx);
+      },
+    });
+  }
 
   // Default: fastest run
   const defaultRun = [...idx].sort((a, b) => (a.wall_s ?? 1e12) - (b.wall_s ?? 1e12))[0];
@@ -198,7 +218,6 @@ function updateRunSections(run) {
   document.getElementById('ovSubtitle').textContent =
     `Run ${run.run_id} · ${run.env?.date || 'n/a'} · ${run.env?.hostname || 'n/a'}`;
   document.getElementById('ovConfigRunId').textContent = run.run_id;
-  document.getElementById('ovCmdsRunId').textContent = run.run_id;
 
   const badge = document.getElementById('ovBadge');
   const s = run.summary || {};
@@ -210,7 +229,6 @@ function updateRunSections(run) {
     badge.textContent = `${s.fail} FAILED`;
   }
   renderConfig(run);
-  renderCmds(run);
 }
 
 function renderConfig(run) {
@@ -266,17 +284,31 @@ function renderConfig(run) {
   ].join('\n\n');
 }
 
-function renderCmds(run) {
-  const timing = run.timing || [];
-  document.getElementById('ovCmds').innerHTML = timing.length
-    ? timing.map((t, i) => `
-      <div class="cmd-block">
-        <span class="cmd-num">${i + 1}</span>
-        <span class="cmd-text">${escHtml(t.command)}</span>
-        <span class="cmd-time">${fmtTime(t.time_s)}</span>
-      </div>
-    `).join('')
-    : '<div class="empty">No commands recorded.</div>';
-  document.getElementById('ovCmdsText').textContent =
-    '#!/usr/bin/env bash\nset -euo pipefail\n\n' + timing.map((t) => t.command).join('\n');
+function renderActivity(idx) {
+  const el = document.getElementById('ovActivity');
+  if (!el) return;
+  if (!idx.length) { el.innerHTML = '<div class="empty">No runs recorded yet.</div>'; return; }
+  const recent = [...idx]
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, 6);
+  el.innerHTML = `
+    <div class="activity-list">
+      ${recent.map((r) => {
+        const ds = r.dataset_short || r.dataset || '—';
+        const dims = (r.taxa && r.sites) ? ` · ${r.taxa}×${r.sites}` : '';
+        const model = r.model || (r.run_type === 'modelfinder' ? 'ModelFinder' : '');
+        return `
+          <a class="activity-row" href="#/runs?open=${encodeURIComponent(r.run_id)}">
+            <span class="activity-dot ${r.all_pass ? '' : 'fail'}"></span>
+            <div class="activity-main">
+              <div class="activity-title">${escHtml(r.label || r.run_id)}</div>
+              <div class="activity-sub">${escHtml(ds)}${dims}${model ? ' · ' + escHtml(model) : ''} · ${escHtml(r.date || 'no date')}</div>
+            </div>
+            <span class="activity-threads">T=${r.threads ?? '—'}</span>
+            <span class="activity-wall">${fmtTime(r.wall_s)}</span>
+          </a>
+        `;
+      }).join('')}
+    </div>
+  `;
 }
