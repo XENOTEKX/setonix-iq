@@ -1,0 +1,57 @@
+{
+  "run_id": "xlarge_mf_128t_baseline",
+  "slurm_id": "41703864",
+  "label": "xlarge_mf_128t",
+  "description": "CPU baseline: xlarge_dna.fa @ 128T, ModelFinder \u2192 TPM3u+F+G4 chosen according to BIC, MF=1458s",
+  "run_type": "cpu_baseline",
+  "timing": [
+    {
+      "command": "iqtree3 -s xlarge_dna.fa -T 128 -seed 1",
+      "time_s": 7194,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [],
+  "env": {
+    "hostname": "setonix-node",
+    "date": "2026-04-20T22:47:51+08:00",
+    "run_id": "41703864",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "cores": "128",
+    "gcc": "gcc (SUSE Linux) 14.3.0",
+    "rocm": "N/A (CPU-only baseline)"
+  },
+  "gpu_info": "",
+  "profile": {
+    "run_id": "41703864",
+    "dataset": "xlarge_dna.fa",
+    "threads": 128,
+    "metrics": {
+      "cycles": 2799656795025407,
+      "instructions": 228768563191798,
+      "cache-references": 9810444962645,
+      "cache-misses": 1065033948880,
+      "branch-instructions": 35960522854605,
+      "branch-misses": 17987503580,
+      "L1-dcache-loads": 81715510041320,
+      "L1-dcache-load-misses": 5630185164182,
+      "stalled-cycles-frontend": 44088634735352,
+      "IPC": 0.082,
+      "cache-miss-rate": 10.86,
+      "branch-miss-rate": 0.05,
+      "L1-dcache-miss-rate": 6.89,
+      "frontend-stall-rate": 1.57
+    }
+  },
+  "modelfinder": {
+    "model_selected": "TPM3u+F+G4 chosen according to BIC",
+    "wall_time_s": 1457.989
+  },
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "total_time": 7194,
+    "all_pass": true,
+    "wall_time": "1h59m54s"
+  }
+}
