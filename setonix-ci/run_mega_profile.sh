@@ -310,7 +310,12 @@ echo "========================"
 if [[ "${IQTREE_RC}" -eq 0 ]]; then
     echo "[$(date +%H:%M:%S)] Starting perf record (call-graph)..."
     PERF_DATA="${WORK_DIR}/perf.data"
-    perf record -g -F 99 -o "${PERF_DATA}" \
+    # Bound the perf-record re-run so it cannot consume the remaining SLURM
+    # wall-time and starve step 6 (profile_meta.json). At 99 Hz, 2 h of
+    # samples is > 700 k stacks — more than enough for hotspot ranking.
+    PERF_RECORD_MAX_S="${PERF_RECORD_MAX_S:-7200}"
+    timeout --preserve-status "${PERF_RECORD_MAX_S}" \
+        perf record -g -F 99 -o "${PERF_DATA}" \
         "${BUILD_DIR}/iqtree3" -s "${DATASET}" -T "${THREADS}" -seed 1 \
         -mset GTR,HKY,K80 \
         --prefix "${WORK_DIR}/iqtree_flame" > "${WORK_DIR}/iqtree_flame.log" 2>&1 || true
@@ -320,7 +325,9 @@ if [[ "${IQTREE_RC}" -eq 0 ]]; then
         perf report -i "${PERF_DATA}" --stdio --no-children -n --percent-limit 0.5 \
             2>/dev/null | head -120 > "${WORK_DIR}/hotspots.txt" || true
 
-        perf script -i "${PERF_DATA}" 2>/dev/null | python3 - <<'PYEOF' > "${WORK_DIR}/perf_folded.txt"
+        # pipefail-safe: either side of the pipe may fail without aborting the run
+        set +o pipefail
+        perf script -i "${PERF_DATA}" 2>/dev/null | python3 - <<'PYEOF' > "${WORK_DIR}/perf_folded.txt" || true
 import sys, collections
 stacks = collections.Counter()
 current = []
@@ -339,6 +346,7 @@ for line in sys.stdin:
 for stack, count in stacks.most_common():
     print(f"{stack} {count}")
 PYEOF
+        set -o pipefail
     fi
 fi
 

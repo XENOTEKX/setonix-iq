@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-04-22 — Mega profiling: startup-crash fixes + defensive hardening
+
+Two consecutive bugs killed the 4 mega jobs (`41784642-45`, then `41814628-32`)
+within seconds of launch, before any IQ-TREE work could start. Both are in the
+`env.json` heredoc at the top of `setonix-ci/run_mega_profile.sh`. All
+currently running mega jobs (`41835470-73`) are past this code path.
+
+### Bug 1 — unquoted heredoc + `set -u`  (commit `5c77a5d`)
+
+`python3 <<PYEOF` (vs `<<'PYEOF'`) means bash performs parameter expansion on
+the heredoc body before passing it to Python. With `set -euo pipefail`, the
+first `$2` inside an awk string (`awk '/Socket\(s\)/{print $2}'`) tripped
+bash's unbound-variable check and aborted with exit code 1 before Python even
+ran. Fix: escape every awk field reference inside the unquoted heredoc —
+`\$2`, `\$NF` — so bash leaves them for awk.
+
+### Bug 2 — `int("")` on compute nodes  (commit `6a45bae`)
+
+With `set -e` lifted, the env heredoc now executed under Python, but
+`int(sh("nproc"))` raised `ValueError: invalid literal for int() with base
+10: ''` at line 32. On Setonix compute nodes inside a SLURM allocation,
+`nproc` occasionally emits an empty string (when run before cgroups settle).
+Fix: defensive default matching every other `int(sh(...))` call in the file —
+`int(sh("nproc", "0") or 0)`.
+
+### Defensive hardening (commit `<pending>`)
+
+Additional changes to prevent late-stage failures from losing already-captured
+data in long runs:
+
+- **`perf script | python` pipe is now `pipefail`-safe.** Wrapped the
+  `stackcollapse` pipeline in `set +o pipefail … set -o pipefail` with an
+  explicit `|| true`, so a partial `perf.data` or SIGPIPE inside Python
+  cannot abort the run before step 6 (`profile_meta.json`) is written.
+- **`perf record` wall-time bound.** The re-run under `perf record -g -F 99`
+  is now wrapped in `timeout --preserve-status ${PERF_RECORD_MAX_S:-7200}`,
+  capping it at 2 h. At 99 Hz that is > 700 k stack samples — ample for
+  hotspot ranking — and guarantees that the mega run cannot be killed by
+  SLURM's 24 h wall limit during step 5, starving the profile-meta emit.
+- **Deployed and syntax-checked** on scratch; repo copy pushed to `main`.
+
+### Re-submission history (same 4 threads, 4 JobIDs each wave)
+
+| Wave | JobIDs                        | Outcome / state            |
+|------|-------------------------------|----------------------------|
+| 1    | 41784642, 43, 44, 45          | FAILED — bash `$2` unbound |
+| 2    | 41814628, 29, 30, 32          | FAILED — `int("")` on `nproc` |
+| 3    | 41835470, 71, 72, 73          | 16T + 32T `R`, 64T + 128T `PD` |
+
+As of 2026-04-22 19:04 AWST:
+- **16T (41835470)** — `R` on `nid002039`, past env snapshot, inside
+  `perf stat + IQ-TREE` pass, inner iqtree pid `3464683`. Wall ends
+  tomorrow 19:03.
+- **32T (41835471)** — `R` on `nid002054`, past env snapshot, inside
+  `perf stat + IQ-TREE` pass, inner iqtree pid `1864019`. Wall ends
+  tomorrow 19:03.
+- **64T (41835472)** — `PD Priority`, estimated start 21:00.
+- **128T (41835473)** — `PD Priority`, estimated start 21:00.
+
+Note: queued jobs run from SLURM's snapshot of the script taken at
+submission time, so the pipefail / `timeout` hardening above applies only to
+any future waves.
+
+---
+
 ## 2026-04-21 — Mega dataset: enhanced Setonix profiling pipeline
 
 Addresses wishlist items **1**, **2** (partial — L3 admin-locked), **3** (partial), **4** (partial), **11**, **12**.
