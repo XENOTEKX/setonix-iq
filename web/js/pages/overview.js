@@ -54,7 +54,7 @@ const TMPL = `
   <section id="ovBestRuns" class="best-runs" aria-label="Top runs"></section>
 
   <div style="font-size:0.72rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.12em; font-weight:700; margin:8px 0 10px;">Datasets</div>
-  <section id="ovDatasets" class="ds-grid" aria-label="Dataset profiles"></section>
+  <section id="ovDatasets" aria-label="Dataset profiles"></section>
 
   <div class="card">
     <div class="card-header"><h2>IQ-TREE Configuration · <span style="color:var(--text3); font-weight:500; font-size:0.78rem;" id="ovConfigRunId">—</span></h2>
@@ -246,8 +246,7 @@ function renderBestRuns(idx) {
 
 /* --------------------------- Dataset profile cards --------------------------- */
 function renderDatasets(idx) {
-  // Group by (dataset, platform) — Setonix and Gadi regenerate datasets with
-  // different taxa×sites dimensions, so a combined card would be misleading.
+  // Group by (dataset_short, platform).
   const byKey = new Map();
   for (const r of idx) {
     const ds = r.dataset_short;
@@ -261,40 +260,26 @@ function renderDatasets(idx) {
     document.getElementById('ovDatasets').innerHTML = '<div class="empty">No dataset metadata available.</div>';
     return;
   }
-  // Order: Setonix → Gadi → unknown. Within each platform: real workloads
-  // first, pilot/placeholder workloads last, then alphabetical.
-  const platRank = { setonix: 0, gadi: 1, unknown: 2 };
-  const isPilot = (name) => /(_gadi_pilot|_setonix_pilot)\.fa$/.test(name);
-  const sortedGroups = [...byKey.values()].sort((a, b) => {
-    const pa = platRank[a.platform] ?? 99;
-    const pb = platRank[b.platform] ?? 99;
-    if (pa !== pb) return pa - pb;
-    const ap = isPilot(a.ds) ? 1 : 0;
-    const bp = isPilot(b.ds) ? 1 : 0;
-    if (ap !== bp) return ap - bp;
-    return a.ds.localeCompare(b.ds);
-  });
 
-  // Build section headers per platform transition so the cards are visually
-  // grouped by supercomputer.
-  const sections = new Map(); // platform -> cards[]
-  for (const { ds, platform, runs } of sortedGroups) {
+  const isPilot = (name) => /(_gadi_pilot|_setonix_pilot)\.fa$/.test(name);
+
+  // Build a card HTML string from a group object.
+  function makeCard(group) {
+    const { ds, platform, runs } = group;
     const rep = runs.find(r => r.taxa && r.sites) || runs[0];
     const validRuns = runs.filter(isValidRun);
     const best = validRuns.reduce((a, b) => (b.wall_s < (a?.wall_s ?? Infinity) ? b : a), null);
     const threads = [...new Set(validRuns.map(r => r.threads).filter(Boolean))].sort((a, b) => a - b);
     const stubs = runs.length - validRuns.length;
-    const patterns = rep.patterns;
-    const sites = rep.sites;
-    const compression = (patterns && sites)
-      ? `${patterns.toLocaleString()} · ${((patterns / sites) * 100).toFixed(1)}% unique`
+    const compression = (rep.patterns && rep.sites)
+      ? `${rep.patterns.toLocaleString()} · ${((rep.patterns / rep.sites) * 100).toFixed(1)}% unique`
       : null;
     const platClass = platform === 'gadi' ? 'ds-card--gadi' : platform === 'setonix' ? 'ds-card--setonix' : '';
     const pilot = isPilot(ds);
     const pilotBadge = pilot
       ? `<span class="ds-pilot-badge" title="Pilot run — dimensions do not match cross-platform baseline. Not used in comparison charts.">PILOT</span>`
       : '';
-    const card = `
+    return `
       <div class="ds-card ${platClass}${pilot ? ' ds-card--pilot' : ''}">
         <div class="ds-head">
           <span class="ds-tag ds-tag--${platform}">${platformLabel(platform)} dataset</span>
@@ -309,28 +294,69 @@ function renderDatasets(idx) {
         <div class="ds-row"><span>Runs</span><strong>${runs.length}${stubs ? ` <span style="color:var(--text3); font-weight:400;">(${stubs} stub)</span>` : ''}</strong></div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
         <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>
-        ${pilot ? '<div class="ds-note ds-note--warn">⚠ pilot workload — different dimensions to Setonix baseline; excluded from comparison charts until a matched rerun lands.</div>' : ''}
+        ${pilot ? '<div class="ds-note ds-note--warn">⚠ pilot workload — excluded from comparison charts.</div>' : ''}
         ${rep.size_estimated ? '<div class="ds-note">~ size estimated from alignment dimensions</div>' : ''}
       </div>
     `;
-    if (!sections.has(platform)) sections.set(platform, []);
-    sections.get(platform).push(card);
   }
 
-  const html = [];
-  for (const [platform, cards] of sections) {
-    html.push(`
-      <div class="ds-section ds-section--${platform}">
-        <div class="ds-section-head">
-          <span class="ds-section-dot"></span>
-          <h4>${platformLabel(platform)}${platform === 'setonix' ? ' · Pawsey (AMD Milan)' : platform === 'gadi' ? ' · NCI (Intel Sapphire Rapids)' : ''}</h4>
-          <span class="ds-section-count">${cards.length} dataset${cards.length === 1 ? '' : 's'}</span>
-        </div>
-        <div class="ds-section-grid">${cards.join('')}</div>
+  // Separate into primary platforms and other.
+  const setonixGroups = [...byKey.values()].filter(g => g.platform === 'setonix');
+  const gadiGroups    = [...byKey.values()].filter(g => g.platform === 'gadi');
+  const otherGroups   = [...byKey.values()].filter(g => g.platform !== 'setonix' && g.platform !== 'gadi');
+
+  // Within each platform: non-pilot alphabetical first, pilot alphabetical after.
+  const sortGroups = (arr) => arr.slice().sort((a, b) => {
+    const ap = isPilot(a.ds) ? 1 : 0;
+    const bp = isPilot(b.ds) ? 1 : 0;
+    if (ap !== bp) return ap - bp;
+    return a.ds.localeCompare(b.ds);
+  });
+
+  const sortedSetonix = sortGroups(setonixGroups);
+  const sortedGadi    = sortGroups(gadiGroups);
+
+  // Build column headers.
+  function colHead(platform, count) {
+    const label = platform === 'setonix' ? 'Setonix · Pawsey (AMD Milan)' : 'Gadi · NCI (Intel Sapphire Rapids)';
+    return `
+      <div class="ds-col-head ds-col-head--${platform}">
+        <span class="ds-section-dot"></span>
+        <span class="ds-col-head-label">${label}</span>
+        <span class="ds-section-count">${count} dataset${count === 1 ? '' : 's'}</span>
       </div>
-    `);
+    `;
   }
-  document.getElementById('ovDatasets').innerHTML = html.join('');
+
+  // Render each column as a stack of cards.
+  const setonixCol = sortedSetonix.map(makeCard).join('');
+  const gadiCol    = sortedGadi.map(makeCard).join('');
+
+  const split = (setonixCol || gadiCol) ? `
+    <div class="ds-platform-split">
+      <div class="ds-platform-col ds-platform-col--setonix">
+        ${colHead('setonix', sortedSetonix.length)}
+        ${setonixCol || '<div class="ds-col-empty">No Setonix runs yet</div>'}
+      </div>
+      <div class="ds-platform-col ds-platform-col--gadi">
+        ${colHead('gadi', sortedGadi.length)}
+        ${gadiCol || '<div class="ds-col-empty">No Gadi runs yet</div>'}
+      </div>
+    </div>
+  ` : '';
+
+  const other = otherGroups.length ? `
+    <div class="ds-section ds-section--unknown">
+      <div class="ds-section-head">
+        <span class="ds-section-dot"></span>
+        <h4>Other</h4>
+        <span class="ds-section-count">${otherGroups.length} dataset${otherGroups.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="ds-section-grid">${otherGroups.map(makeCard).join('')}</div>
+    </div>
+  ` : '';
+
+  document.getElementById('ovDatasets').innerHTML = split + other;
 }
 
 /* --------------------------- Selected-run sections --------------------------- */

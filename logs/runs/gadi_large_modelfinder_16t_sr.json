@@ -1,13 +1,14 @@
 {
   "run_id": "gadi_large_modelfinder_16t_sr",
-  "pbs_id": "166969041",
+  "pbs_id": "166978123",
+  "platform": "gadi",
   "run_type": "profile",
   "label": "large_modelfinder_16t_sr",
   "description": "Gadi Sapphire Rapids reproduction of Setonix large_modelfinder @ 16T",
   "timing": [
     {
       "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s large_modelfinder.fa -T 16 -seed 1",
-      "time_s": 341.813,
+      "time_s": 293.725,
       "memory_kb": 0
     }
   ],
@@ -15,16 +16,16 @@
     {
       "file": "large_modelfinder.fa",
       "status": "pass",
-      "expected": -1303518.586,
-      "reported": -1303518.586,
+      "expected": -2690513.343,
+      "reported": -2690513.343,
       "diff": 0.0
     }
   ],
   "env": {
-    "hostname": "gadi-cpu-spr-0366.gadi.nci.org.au",
-    "date": "Fri Apr 24 20:46:46 2026",
-    "cpu": "AVX512, FMA3, 503 GB RAM",
-    "cores": 104,
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
     "gcc": "",
     "icc": "",
     "icx": "",
@@ -32,824 +33,70 @@
     "kernel": "",
     "os": "",
     "pbs": {
-      "job_id": "166969041.gadi-pbs",
+      "job_id": "166978123.gadi-pbs",
       "job_name": "iq-large_modelfinder-16t",
       "queue": "normalsr-exec",
       "project": "rc29",
       "ncpus": "104",
-      "submit_host": "gadi-login-03.gadi.nci.org.au",
-      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "submit_host": "gadi-login-05.gadi.nci.org.au",
+      "submit_dir": "/home/272/as1708/setonix-iq",
       "scheduler": "pbs_pro"
     }
   },
   "summary": {
     "pass": 1,
     "fail": 0,
-    "total_time": 341.813,
+    "total_time": 293.725,
     "all_pass": true
   },
   "profile": {
-    "dataset": "large_modelfinder_gadi_pilot.fa",
+    "dataset": "large_modelfinder.fa",
     "threads": 16,
-    "perf_cmd": null,
-    "metrics": {},
-    "vtune": null,
+    "perf_cmd": "/scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/large_modelfinder.fa -T 16 -seed 1 --prefix /scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/iqtree_perf",
+    "metrics": {
+      "IPC": 1.5618,
+      "cache-miss-rate": 65.0428,
+      "branch-miss-rate": 0.0486,
+      "L1-dcache-miss-rate": 1.9509,
+      "LLC-miss-rate": 72.2285,
+      "dTLB-miss-rate": 0.005,
+      "cycles": 16750485585582,
+      "instructions": 26161481116740,
+      "cache-references": 319971281939,
+      "cache-misses": 208118420596,
+      "branch-instructions": 3853713892850,
+      "branch-misses": 1874394313,
+      "L1-dcache-loads": 11139062171425,
+      "L1-dcache-load-misses": 217312141238,
+      "LLC-loads": 32019618847,
+      "LLC-load-misses": 23127287430,
+      "dTLB-loads": 11153541258665,
+      "dTLB-load-misses": 554040429,
+      "iTLB-load-misses": 19383594
+    },
+    "vtune": {
+      "elapsed_time_s": 364.012,
+      "cpu_time_s": 5643.434
+    },
     "vtune_uarch": null,
     "proc_summary": {
-      "sample_count": 35,
-      "duration_s": 340.34,
-      "peak_rss_kb": 514548,
-      "peak_vms_kb": 1643216,
+      "sample_count": 30,
+      "duration_s": 290.29,
+      "peak_rss_kb": 1077012,
+      "peak_vms_kb": 2304836,
       "max_threads": 17,
-      "read_bytes": 0,
-      "write_bytes": 5611520
+      "read_bytes": 133423104,
+      "write_bytes": 401408
     },
     "artefacts": {
-      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/samples.jsonl",
-      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/perf_script.txt",
-      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/perf_report.txt",
-      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/perf.data",
-      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/vtune_hotspots",
-      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/vtune_hotspots.tsv",
-      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166969041/vtune_hw_events.txt"
-    },
-    "hotspots": [
-      {
-        "percent": 44.38,
-        "samples": 276283,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "kmp_flag_64<false, true>::wait"
-      },
-      {
-        "percent": 17.32,
-        "samples": 108026,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>"
-      },
-      {
-        "percent": 15.27,
-        "samples": 94767,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "__kmp_dispatch_next_algorithm<int>"
-      },
-      {
-        "percent": 5.99,
-        "samples": 37227,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>"
-      },
-      {
-        "percent": 4.86,
-        "samples": 30251,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>"
-      },
-      {
-        "percent": 3.38,
-        "samples": 21009,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check"
-      },
-      {
-        "percent": 1.89,
-        "samples": 11693,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "__kmp_hyper_barrier_gather"
-      },
-      {
-        "percent": 1.1,
-        "samples": 6804,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "__kmp_hyper_barrier_release"
-      },
-      {
-        "percent": 0.94,
-        "samples": 5848,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "__kmpc_dispatch_next_4"
-      },
-      {
-        "percent": 0.73,
-        "samples": 4526,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "__kmp_dispatch_init<int>"
-      },
-      {
-        "percent": 0.49,
-        "samples": 3042,
-        "command": "iqtree3",
-        "module": "libiomp5.so",
-        "function": "__kmp_dispatch_init_algorithm<int>"
-      },
-      {
-        "percent": 0.34,
-        "samples": 2121,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>"
-      },
-      {
-        "percent": 0.33,
-        "samples": 2057,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>"
-      },
-      {
-        "percent": 0.21,
-        "samples": 1246,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "newviewParsimonyIterativeFast"
-      },
-      {
-        "percent": 0.2,
-        "samples": 1281,
-        "command": "iqtree3",
-        "module": "iqtree3",
-        "function": "Node::findNeighbor"
-      }
-    ],
-    "folded_stacks": [
-      {
-        "stack": "kmp_flag_64<false, true>::wait",
-        "count": 276283
-      },
-      {
-        "stack": "kmp_flag_64<false, true>::wait;kmp_flag_64<false, true>::wait",
-        "count": 268393
-      },
-      {
-        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
-        "count": 108026
-      },
-      {
-        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
-        "count": 107046
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;__kmp_dispatch_next_algorithm<int>",
-        "count": 94979
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>",
-        "count": 94767
-      },
-      {
-        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
-        "count": 56353
-      },
-      {
-        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
-        "count": 50630
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
-        "count": 37133
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
-        "count": 30167
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
-        "count": 30167
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check",
-        "count": 17229
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_hyper_barrier_gather",
-        "count": 11631
-      },
-      {
-        "stack": "kmp_flag_64<false, true>::wait;kmp_flag_64<false, true>::wait;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check",
-        "count": 7339
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_hyper_barrier_release",
-        "count": 6779
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmpc_dispatch_next_4",
-        "count": 5846
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_dispatch_init<int>",
-        "count": 4540
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmpc_dispatch_next_4;[runtime]",
-        "count": 3980
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;kmp_flag_64<false, true>::wait",
-        "count": 3794
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_dispatch_init_algorithm<int>",
-        "count": 3047
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
-        "count": 2114
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>",
-        "count": 2052
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;__kmp_dispatch_next_algorithm<int>;[runtime]",
-        "count": 1555
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmpc_dispatch_next_4;[runtime];__kmp_invoke_microtask",
-        "count": 1492
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor",
-        "count": 1244
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;kmp_flag_native<unsigned long long, (flag_type)1, true>::done_check",
-        "count": 1181
-      },
-      {
-        "stack": "kmp_flag_64<false, true>::wait;kmp_flag_64<false, true>::wait;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;[runtime]",
-        "count": 933
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::isLeaf",
-        "count": 933
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_invoke_microtask",
-        "count": 933
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_invoke_microtask;__kmp_invoke_task_func",
-        "count": 933
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__svml_ldexp4_l9",
-        "count": 870
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__svml_ldexp4_l9;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
-        "count": 870
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast",
-        "count": 808
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::isLeaf;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
-        "count": 808
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computePartialInfo<Vec4d, 4>",
-        "count": 808
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computePartialInfo<Vec4d, 4>;PhyloTree::computeTraversalInfo<Vec4d, 4>",
-        "count": 808
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__svml_ldexp4_l9;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
-        "count": 746
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Params::getInstance",
-        "count": 746
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;__kmp_launch_thread",
-        "count": 746
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast;stepwiseAddition",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computePartialInfo<Vec4d, 4>;PhyloTree::computeTraversalInfo<Vec4d, 4>;__kmp_invoke_microtask",
-        "count": 684
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast;stepwiseAddition;stepwiseAddition",
-        "count": 622
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast;stepwiseAddition;stepwiseAddition;stepwiseAddition",
-        "count": 622
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast;stepwiseAddition;stepwiseAddition;stepwiseAddition;stepwiseAddition",
-        "count": 622
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast;stepwiseAddition;stepwiseAddition;stepwiseAddition;stepwiseAddition;stepwiseAddition",
-        "count": 622
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>;evaluateParsimonyIterativeFast;stepwiseAddition;stepwiseAddition;stepwiseAddition;stepwiseAddition;stepwiseAddition;stepwiseAddition",
-        "count": 622
-      },
-      {
-        "stack": "__kmp_dispatch_next_algorithm<int>;kmp_flag_native<unsigned long long, (flag_type)1, true>::notdone_check;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
-        "count": 622
-      }
-    ],
-    "memory_timeseries": [
-      {
-        "t_s": 0.0,
-        "rss_kb": 60480,
-        "peak_kb": 60480,
-        "vms_kb": 1168004,
-        "threads_now": 16,
-        "voluntary_cs": 177,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 10.01,
-        "rss_kb": 428124,
-        "peak_kb": 506464,
-        "vms_kb": 1552796,
-        "threads_now": 16,
-        "voluntary_cs": 252,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 20.02,
-        "rss_kb": 429108,
-        "peak_kb": 508272,
-        "vms_kb": 1552796,
-        "threads_now": 16,
-        "voluntary_cs": 282,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 30.03,
-        "rss_kb": 513992,
-        "peak_kb": 593524,
-        "vms_kb": 1640408,
-        "threads_now": 16,
-        "voluntary_cs": 313,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 40.04,
-        "rss_kb": 514548,
-        "peak_kb": 593912,
-        "vms_kb": 1640408,
-        "threads_now": 16,
-        "voluntary_cs": 313,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 50.05,
-        "rss_kb": 405040,
-        "peak_kb": 660684,
-        "vms_kb": 1561912,
-        "threads_now": 16,
-        "voluntary_cs": 313,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 60.06,
-        "rss_kb": 440032,
-        "peak_kb": 660684,
-        "vms_kb": 1561912,
-        "threads_now": 16,
-        "voluntary_cs": 315,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 70.07,
-        "rss_kb": 438952,
-        "peak_kb": 660684,
-        "vms_kb": 1561912,
-        "threads_now": 16,
-        "voluntary_cs": 325,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 80.08,
-        "rss_kb": 438600,
-        "peak_kb": 660684,
-        "vms_kb": 1561912,
-        "threads_now": 16,
-        "voluntary_cs": 325,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 90.09,
-        "rss_kb": 447100,
-        "peak_kb": 660684,
-        "vms_kb": 1641712,
-        "threads_now": 17,
-        "voluntary_cs": 357,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 100.1,
-        "rss_kb": 447824,
-        "peak_kb": 660684,
-        "vms_kb": 1642396,
-        "threads_now": 17,
-        "voluntary_cs": 357,
-        "involuntary_cs": 1
-      },
-      {
-        "t_s": 110.11,
-        "rss_kb": 448464,
-        "peak_kb": 660684,
-        "vms_kb": 1642944,
-        "threads_now": 17,
-        "voluntary_cs": 357,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 120.12,
-        "rss_kb": 450340,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 357,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 130.13,
-        "rss_kb": 450340,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 357,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 140.14,
-        "rss_kb": 450340,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 357,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 150.15,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 425,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 160.16,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 434,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 170.17,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 434,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 180.18,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 434,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 190.19,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 434,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 200.2,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 434,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 210.21,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 434,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 220.22,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 443,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 230.23,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 474,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 240.24,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 474,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 250.25,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 474,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 260.26,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 474,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 270.27,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 474,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 280.28,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 482,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 290.29,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 482,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 300.3,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 507,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 310.31,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 507,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 320.32,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 507,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 330.33,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 507,
-        "involuntary_cs": 2
-      },
-      {
-        "t_s": 340.34,
-        "rss_kb": 450348,
-        "peak_kb": 660684,
-        "vms_kb": 1643216,
-        "threads_now": 17,
-        "voluntary_cs": 515,
-        "involuntary_cs": 2
-      }
-    ],
-    "peak_rss_kb": 660684,
-    "io": {
-      "rchar": 2574402,
-      "wchar": 5519739,
-      "syscr": 209,
-      "syscw": 2440,
-      "read_bytes": 0,
-      "write_bytes": 5611520,
-      "cancelled_write_bytes": 2506752
+      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/samples.jsonl",
+      "perf_stat": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/perf_stat.txt",
+      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/perf_script.txt",
+      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/perf_report.txt",
+      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/perf.data",
+      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/vtune_hotspots",
+      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/vtune_hotspots.tsv",
+      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_16t_sr_166978123/vtune_hw_events.txt"
     }
-  },
-  "dataset_info": {
-    "file": "large_modelfinder_gadi_pilot.fa",
-    "file_size_bytes": 2506000,
-    "fasta_taxa": 500,
-    "fasta_sites": 5000,
-    "taxa": 500,
-    "sites": 5000,
-    "patterns": 5000,
-    "constant_sites": 0,
-    "invariant_sites": 0,
-    "informative_sites": 4996,
-    "sequence_type": "DNA"
-  },
-  "modelfinder": {
-    "best_model_bic": "GTR+ASC+G4",
-    "model_selected": "GTR+F+ASC+G4",
-    "log_likelihood": -1303518.5862,
-    "unconstrained_log_likelihood": -42585.966,
-    "gamma_alpha": 0.8044,
-    "tree_length": 94.3896,
-    "bic": 2615605.4687,
-    "aic": 2609049.1723,
-    "aicc": 2609556.5813,
-    "candidates": [
-      {
-        "model": "GTR+ASC+G4",
-        "log_likelihood": -1303495.709,
-        "aic": 2608997.418,
-        "aic_weight": 0.181,
-        "aicc": 2609501.428,
-        "aicc_weight": 0.181,
-        "bic": 2615534.163,
-        "bic_weight": 0.181
-      },
-      {
-        "model": "SYM+ASC+G4",
-        "log_likelihood": -1303495.709,
-        "aic": 2608997.418,
-        "aic_weight": 0.181,
-        "aicc": 2609501.428,
-        "aicc_weight": 0.181,
-        "bic": 2615534.163,
-        "bic_weight": 0.181
-      },
-      {
-        "model": "SYM+ASC+G4",
-        "log_likelihood": -1303495.709,
-        "aic": 2608997.418,
-        "aic_weight": 0.181,
-        "aicc": 2609501.428,
-        "aicc_weight": 0.181,
-        "bic": 2615534.163,
-        "bic_weight": 0.181
-      },
-      {
-        "model": "GTR+G4",
-        "log_likelihood": -1303495.885,
-        "aic": 2608997.77,
-        "aic_weight": 0.152,
-        "aicc": 2609501.78,
-        "aicc_weight": 0.152,
-        "bic": 2615534.515,
-        "bic_weight": 0.152
-      },
-      {
-        "model": "SYM+G4",
-        "log_likelihood": -1303495.886,
-        "aic": 2608997.772,
-        "aic_weight": 0.152,
-        "aicc": 2609501.782,
-        "aicc_weight": 0.152,
-        "bic": 2615534.517,
-        "bic_weight": 0.152
-      },
-      {
-        "model": "SYM+G4",
-        "log_likelihood": -1303495.886,
-        "aic": 2608997.772,
-        "aic_weight": 0.152,
-        "aicc": 2609501.782,
-        "aicc_weight": 0.152,
-        "bic": 2615534.517,
-        "bic_weight": 0.152
-      },
-      {
-        "model": "GTR+F+ASC+G4",
-        "log_likelihood": -1303518.589,
-        "aic": 2609049.178,
-        "aic_weight": 1.04e-12,
-        "aicc": 2609556.587,
-        "aicc_weight": 1.91e-13,
-        "bic": 2615605.474,
-        "bic_weight": 5.93e-17
-      },
-      {
-        "model": "GTR+F+G4",
-        "log_likelihood": -1303518.757,
-        "aic": 2609049.514,
-        "aic_weight": 8.83e-13,
-        "aicc": 2609556.923,
-        "aicc_weight": 1.61e-13,
-        "bic": 2615605.81,
-        "bic_weight": 5.02e-17
-      },
-      {
-        "model": "TVM+F+ASC+G4",
-        "log_likelihood": -1303584.462,
-        "aic": 2609178.924,
-        "aic_weight": 7e-41,
-        "aicc": 2609685.198,
-        "aicc_weight": 2.26e-41,
-        "bic": 2615728.703,
-        "bic_weight": 1.03e-43
-      },
-      {
-        "model": "TVM+F+G4",
-        "log_likelihood": -1303584.623,
-        "aic": 2609179.246,
-        "aic_weight": 5.96e-41,
-        "aicc": 2609685.52,
-        "aicc_weight": 1.92e-41,
-        "bic": 2615729.025,
-        "bic_weight": 8.8e-44
-      }
-    ]
-  },
-  "platform": "gadi",
-  "notes": [
-    "Gadi pilot run used simulated alignment with different dimensions than Setonix (different taxa x sites); renamed to *_gadi_pilot to avoid cross-platform comparison contamination. Rerun with matched Setonix dimensions is pending."
-  ]
+  }
 }
