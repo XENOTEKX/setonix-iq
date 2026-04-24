@@ -59,6 +59,15 @@ EIGEN3_INCLUDE_DIR="${EIGEN_ROOT:+${EIGEN_ROOT}/include/eigen3}"
 EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.3.7/include/eigen3}"
 # Boost root — set from module env, or fall back to known Gadi path.
 BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.84.0}"
+# GoogleTest — cmaple's CMakeLists unconditionally calls FetchContent_Declare
+# with a github.com URL, which fails on compute nodes (no outbound internet).
+# Pre-download on the login node:
+#   mkdir -p /scratch/rc29/<user>/iqtree3/deps
+#   cd /scratch/rc29/<user>/iqtree3/deps
+#   curl -L -o googletest.zip https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+#   unzip -q googletest.zip && mv googletest-*/ googletest
+# Then cmake is told to use that local copy via FETCHCONTENT_SOURCE_DIR_googletest.
+GTEST_LOCAL="${PROJECT_DIR}/deps/googletest"
 
 mkdir -p "$(dirname "${SRC_DIR}")"
 
@@ -91,6 +100,17 @@ for sub in cmaple lsd2; do
 done
 echo "[bootstrap] submodules OK: cmaple, lsd2"
 
+# GoogleTest pre-flight: must be present before cmake runs.
+if [[ ! -f "${GTEST_LOCAL}/CMakeLists.txt" ]]; then
+    echo "ERROR: googletest not found at ${GTEST_LOCAL}." >&2
+    echo "       On a login node run:" >&2
+    echo "         mkdir -p ${PROJECT_DIR}/deps && cd ${PROJECT_DIR}/deps" >&2
+    echo "         curl -L -o googletest.zip https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip" >&2
+    echo "         unzip -q googletest.zip && mv googletest-*/ googletest" >&2
+    exit 1
+fi
+echo "[bootstrap] googletest OK: ${GTEST_LOCAL}"
+
 # Compiler selection: prefer icx (Intel LLVM) for -xSAPPHIRERAPIDS. Fall back
 # to gcc with -march=sapphirerapids if icx is not on PATH.
 if command -v icx >/dev/null 2>&1; then
@@ -121,6 +141,8 @@ build_variant() {
         -DEIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR}" \
         -DBOOST_ROOT="${BOOST_ROOT}" \
         -DBoost_NO_SYSTEM_PATHS=ON \
+        -DFETCHCONTENT_SOURCE_DIR_googletest="${GTEST_LOCAL}" \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
         -DCMAKE_C_FLAGS="${ARCH_FLAGS} ${extra}" \
         -DCMAKE_CXX_FLAGS="${ARCH_FLAGS} ${extra}"
     make -j"$(nproc)"
