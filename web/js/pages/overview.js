@@ -15,7 +15,7 @@ const TMPL = `
   <div class="page-header">
     <div>
       <h1>Pipeline Overview</h1>
-      <div class="subtitle" id="ovSubtitle">Insight dashboard for IQ-TREE runs on Gadi (NCI)</div>
+      <div class="subtitle" id="ovSubtitle">Insight dashboard for IQ-TREE runs on Setonix (Pawsey) and Gadi (NCI)</div>
     </div>
     <span class="badge badge-info" id="ovBadge">—</span>
   </div>
