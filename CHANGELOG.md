@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-04-24 — `gadi-iq`: Stage 0 bootstrap **done** (verified end-to-end)
+
+After 7 failed PBS bootstrap submissions burning ≈ 0 SU each (all died in
+seconds on missing-source / missing-deps / linker errors), switched to
+iterating directly on `gadi-login-03` until the build worked standalone,
+then hardened the submission script.
+
+### Issues discovered and fixed
+
+| # | Symptom | Root cause | Fix in `bootstrap_iqtree.sh` |
+|---|---------|-----------|------------------------------|
+| 1 | `fatal: unable to access 'https://github.com/...'` | Compute nodes have no outbound internet | Pre-clone + `git submodule update --init --recursive` on login node (documented in Prerequisites) |
+| 2 | `Could NOT find Eigen3` | No default include path for `eigen/3.3.7` | `module load eigen/3.3.7` + `-DEIGEN3_INCLUDE_DIR=/apps/eigen/3.3.7/include/eigen3` |
+| 3 | `Could NOT find Boost` | No default root for `boost/1.84.0` | `module load boost/1.84.0` + `-DBOOST_ROOT=/apps/boost/1.84.0 -DBoost_NO_SYSTEM_PATHS=ON` |
+| 4 | `cmaple/CMakeLists.txt: No such file` | Submodules not fetched (default branch is `master`, not `main`) | Fetch submodules on login node; pre-flight check in script |
+| 5 | `FetchContent_MakeAvailable(googletest)` hangs / fails | cmaple unconditionally pulls GoogleTest over the network | `sed` patch: comment out `include(FetchContent)` … `FetchContent_MakeAvailable(googletest)` block |
+| 6 | **`ld: File format not recognized`** on `.o` files | cmaple sets `CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE` → `icx` emits LLVM IR bitcode `.o`, but system `ld` can't link bitcode and Gadi has no `lld` | `sed` patch: flip IPO `TRUE` → `FALSE` in `cmaple/CMakeLists.txt` L88 |
+| 7 | `Target cmaple_maintest links to: GTest::gtest_main but the target was not found` | cmaple/unittest still declared even with FetchContent disabled | `sed` patch: comment out `add_subdirectory(unittest)` |
+| 8 | Build on login node crawled (1 file at a time) | Login-node cgroups report `nproc=1` | Added `IQTREE_BUILD_JOBS` env override (defaults to `nproc` on compute nodes, set explicitly for login-node tests) |
+
+All patches are idempotent (`grep -q <sentinel>` before each `sed`).
+
+### Verified binaries
+
+End-to-end run on `gadi-login-03` with `IQTREE_BUILD_JOBS=8` produced:
+
+```
+-rwxr-xr-x 1 as1708 rc29 146M  build/iqtree3           (release, -O3 -xSAPPHIRERAPIDS)
+-rwxr-xr-x 1 as1708 rc29 146M  build-profiling/iqtree3 (+ -fno-omit-frame-pointer -g)
+```
+
+Functional test on `example.phy` (different login-node CPU, so run under
+smaller arch) completed ML inference in 6.8 s wall. `--version` on
+the login node reports `IQ-TREE version 3.1.1 for Linux x86 64-bit
+built Apr 24 2026`; AVX-512-VBMI instruction check refuses to run on
+Skylake-SP login-node CPU as expected (the binary *is* compiled for
+Sapphire Rapids and will run on `normalsr`).
+
+Since login-node binaries are complete and staged under
+`/scratch/rc29/as1708/iqtree3/build{,-profiling}/iqtree3`, **Stage 0
+PBS submission is skipped** — no point burning 210 SU to rebuild what
+we already verified. Proceeding directly to Stage 1.
+
+### Stage 1 — datagen submitted
+
+`qsub gadi-ci/generate_datasets.sh` → regenerates turtle.fa +
+large_modelfinder.fa + xlarge_mf.fa + mega_dna.fa via AliSim. Expected
+≈ 210 SU, ≤ 1 h wall.
+
+Submitted: **`166967018.gadi-pbs`** (queue `normalsr-exec`, 104c/500GB/1h,
+state `Q`). Will append runtime + artefact listing once the job
+completes.
+
+---
+
 ## 2026-04-24 — `gadi-iq`: Sapphire Rapids rerun plan (reproduce Setonix benchmarks)
 
 Before running any PBS jobs, audited the existing Setonix corpus and
