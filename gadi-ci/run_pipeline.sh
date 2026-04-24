@@ -12,7 +12,7 @@
 #   ./run_pipeline.sh
 #
 # Usage (PBS, heavier datasets):
-#   qsub -P rc29 -q normal -l ncpus=48,mem=190GB,walltime=1:00:00,wd \
+#   qsub -P rc29 -q normalsr -l ncpus=104,mem=500GB,walltime=1:00:00,wd \
 #        -l storage=scratch/rc29 run_pipeline.sh
 
 set -euo pipefail

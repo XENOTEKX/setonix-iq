@@ -5,19 +5,20 @@
 # Top-down Microarchitecture Analysis (TMA) events, Intel VTune hotspot
 # collection, and software-polled RSS/NUMA/IO/per-thread timeseries.
 #
-# Target system:  Gadi (NCI) — Intel Xeon Platinum 8268 Cascade Lake,
-#                 48 cores/node, 192 GB/node, PBS Professional scheduler.
+# Target system:  Gadi (NCI) — Intel Xeon Platinum 8470Q Sapphire Rapids,
+#                 104 cores/node (2×52c), 512 GiB/node, 8 NUMA (13c each),
+#                 normalsr queue, PBS Professional scheduler.
 #
 # Usage (qsub):
-#   qsub -v THREADS=48 run_mega_profile.sh
+#   qsub -v THREADS=104 run_mega_profile.sh
 #
 # Or via submit_mega_batch.sh for a sweep across thread counts.
 #
 #PBS -N iqtree-mega
 #PBS -P rc29
-#PBS -q normal
-#PBS -l ncpus=48
-#PBS -l mem=190GB
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=500GB
 #PBS -l walltime=24:00:00
 #PBS -l wd
 #PBS -l storage=scratch/rc29
@@ -26,7 +27,7 @@
 
 set -euo pipefail
 
-THREADS="${THREADS:-${1:-48}}"
+THREADS="${THREADS:-${1:-104}}"
 PROJECT="${PROJECT:-rc29}"
 USER_ID="${USER:-as1708}"
 PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3}"
@@ -47,11 +48,11 @@ cd "${WORK_DIR}"
 # module environment is absent (e.g. running under "bash" outside PBS).
 if command -v module >/dev/null 2>&1; then
     module load intel-vtune/2024.2.0 2>/dev/null || true
-    module load intel-compiler/2024.2.1 2>/dev/null || true
+    module load intel-compiler-llvm/2024.2.0 2>/dev/null || true
 fi
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Gadi mega_dna.fa profiling (Intel Cascade Lake)"
+echo "║  Gadi mega_dna.fa profiling (Intel Sapphire Rapids, normalsr)"
 echo "║  Threads:   ${THREADS}"
 echo "║  Run ID:    ${RUN_ID}"
 echo "║  Work dir:  ${WORK_DIR}"
@@ -262,14 +263,14 @@ SAMPLE_JSONL="${WORK_DIR}/samples.jsonl"
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. perf stat pass — Intel Cascade Lake events + Top-down TMA slots
 # ─────────────────────────────────────────────────────────────────────────────
-# Notes on Intel event selection (Cascade Lake / Skylake-SP perf alias names):
+# Notes on Intel event selection (Sapphire Rapids / spr_core perf alias names):
 #   • Core: cycles, instructions, branches/misses, cache-refs/misses
 #   • Memory: L1-dcache-*, LLC-loads/misses, dTLB-*/iTLB-*
 #   • Stalls: stalled-cycles-frontend/backend
 #   • Top-down slots (TMA Level-1): topdown-{total-slots,slots-issued,
 #     slots-retired,fetch-bubbles,recovery-bubbles} — aliases exist on
-#     Cascade Lake for the skx_core pmu. perf will multiplex if more events
-#     than counters.
+#     Sapphire Rapids for the spr_core pmu. perf will multiplex if more
+#     events than counters.
 #   • `perf_event_paranoid=2` on Gadi → process-scope only, no system-wide
 #     uncore (LLC hit/miss via CHA), same restriction as Setonix.
 echo "[$(date +%H:%M:%S)] Starting perf stat + IQ-TREE (pass 1: counters)..."

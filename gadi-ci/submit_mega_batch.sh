@@ -1,14 +1,15 @@
 #!/bin/bash
 # submit_mega_batch.sh — fan out run_mega_profile.sh across thread counts on Gadi.
 #
-# Usage:  ./submit_mega_batch.sh            # submits 4, 8, 16, 24, 48
-#         ./submit_mega_batch.sh 16 48      # submits only those two
+# Usage:  ./submit_mega_batch.sh            # submits 1 4 13 26 52 104
+#         ./submit_mega_batch.sh 52 104     # submits only those two
 #
 # Each thread count runs as a separate PBS job so partial failures don't
-# lose all data. The normal queue on Gadi is Cascade Lake (Xeon 8268),
-# 48 cores/node, 192 GB/node. We request a full node's worth of cpus+mem
-# regardless of THREADS so the inner IQ-TREE OpenMP pool can spin up to
-# the requested count without sharing with other users.
+# lose all data. Target queue is `normalsr` (Sapphire Rapids, Xeon 8470Q),
+# 104 cores/node and 512 GiB/node. We request a full node regardless of
+# THREADS so the inner IQ-TREE OpenMP pool can spin up to the requested
+# count without sharing with other users. Charge rate is 2 SU / core-h
+# = 208 SU / node-h.
 
 set -euo pipefail
 
@@ -26,7 +27,7 @@ if [[ ! -x "${SCRIPT}" ]]; then
     exit 1
 fi
 
-THREAD_COUNTS=("${@:-4 8 16 24 48}")
+THREAD_COUNTS=("${@:-1 4 13 26 52 104}")
 if [[ ${#THREAD_COUNTS[@]} -eq 1 && "${THREAD_COUNTS[0]}" == *" "* ]]; then
     read -r -a THREAD_COUNTS <<< "${THREAD_COUNTS[0]}"
 fi
@@ -41,8 +42,8 @@ for t in "${THREAD_COUNTS[@]}"; do
     jid=$(qsub -N "iqtree-mega-${t}t" \
                -v "THREADS=${t},PROJECT=${PROJECT}" \
                -P "${PROJECT}" \
-               -q normal \
-               -l "ncpus=48,mem=190GB,walltime=24:00:00,storage=scratch/${PROJECT},wd" \
+               -q normalsr \
+               -l "ncpus=104,mem=500GB,walltime=24:00:00,storage=scratch/${PROJECT},wd" \
                -j oe \
                -o "${LOGS_DIR}/mega_${t}t_\${PBS_JOBID}.log" \
                "${SCRIPT}")

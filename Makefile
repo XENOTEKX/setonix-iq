@@ -28,19 +28,22 @@ DATASET   ?= $(IQTREE_DIR)/test_scripts/test_data/turtle.fa
 THREADS   ?= 1
 MODEL     ?= GTR+G4
 
-# Optional: pre-load Intel VTune + compiler via Gadi's module system.
+# Optional: pre-load Intel VTune + LLVM-based compiler via Gadi's module system.
 # Safe to leave empty on non-Gadi systems — make simply runs the commands.
-MODULES   ?= intel-vtune/2024.2.0 intel-compiler/2024.2.1
+MODULES   ?= intel-vtune/2024.2.0 intel-compiler-llvm/2024.2.0
 MODCMD    := if command -v module >/dev/null 2>&1; then module load $(MODULES) 2>/dev/null || true; fi
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
+# Sapphire Rapids is the target — build with -xSAPPHIRERAPIDS when icx is
+# available, fall back to portable -O3 otherwise.
+SR_FLAGS      := -O3 -xSAPPHIRERAPIDS -fno-omit-frame-pointer
 CMAKE_STANDARD := \
 	-DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 CMAKE_PROFILING := \
 	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-	-DCMAKE_CXX_FLAGS="-fno-omit-frame-pointer -g" \
-	-DCMAKE_C_FLAGS="-fno-omit-frame-pointer -g"
+	-DCMAKE_CXX_FLAGS="$(SR_FLAGS) -g" \
+	-DCMAKE_C_FLAGS="$(SR_FLAGS) -g"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 BOLD  := \033[1m

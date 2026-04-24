@@ -2,7 +2,141 @@
 
 ---
 
-## 2026-04-24 — `gadi-iq` branch: Gadi / NCI / Intel / PBS port
+## 2026-04-24 — `gadi-iq`: Sapphire Rapids rerun plan (reproduce Setonix benchmarks)
+
+Before running any PBS jobs, audited the existing Setonix corpus and
+sized the equivalent workload for Gadi. Target platform is now Intel
+**Sapphire Rapids** (`normalsr` queue, not the older Cascade Lake nodes):
+
+| Component      | Spec                                                      |
+|----------------|-----------------------------------------------------------|
+| CPU            | 2× Intel Xeon Platinum **8470Q** (Sapphire Rapids), 52c each |
+| Cores / node   | **104** (was 48 on Cascade Lake `normal`)                 |
+| NUMA           | 8 domains, 13 cores / NUMA, 64 GB / NUMA                   |
+| Memory / node  | **512 GiB** (request `mem=500GB`)                          |
+| Charge rate    | 2 SU / core-h → **208 SU / node-hour**                    |
+| Walltime cap   | 48 h for 1-1040 cores                                      |
+| Compiler       | `intel-compiler-llvm/2024.2.0` → `icx -xSAPPHIRERAPIDS`    |
+| IQ-TREE source | `https://github.com/iqtree/iqtree3.git` (branch `main`)    |
+
+### Setonix corpus (what we want to reproduce)
+
+18 runs in `logs/runs/`, 2 deep profiles in `logs/profiles/`. Total
+**48.64 CPU-hours of IQ-TREE work** split across three datasets:
+
+| Dataset                 | Setonix threads          | Sum wall |
+|-------------------------|--------------------------|---------:|
+| `large_modelfinder.fa`  | 1, 4, 8, 16, 32, 64      |  8.07 h  |
+| `xlarge_mf`             | 1, 4, 8, 16, 32, 64, 128 | 18.47 h  |
+| `mega_dna.fa` (500×100k)| 16, 32, 64, 128          | 22.05 h  |
+| turtle.fa CI pipeline   | serial                   |  0.005 h |
+
+### Gadi matrix (adjusted for Sapphire Rapids 104-core node)
+
+Thread sweep renormalised to `{1, 4, 13, 26, 52, 104}` — powers-of-two
+plus NUMA-aligned widths (13 = one NUMA, 26 = NUMA pair, 52 = one socket,
+104 = full node). `mega_dna.fa` runs only at `{13, 26, 52, 104}`
+(lower thread counts are bandwidth-starved on 100 kbp alignments).
+
+| Dataset                | Threads                   | Runs | Wall (est)¹  | SU²     |
+|------------------------|---------------------------|:----:|-------------:|--------:|
+| `large_modelfinder.fa` | 1, 4, 13, 26, 52, 104     |   6  |  3.2 node-h  |     670 |
+| `xlarge_mf`            | 1, 4, 13, 26, 52, 104     |   6  |  7.4 node-h  |   1 540 |
+| `mega_dna.fa`          | 13, 26, 52, 104           |   4  |  6.8 node-h  |   1 420 |
+| VTune pass × 14 (not 1T)| 30 min cap               |  14  |  7.0 node-h  |   1 456 |
+| Bootstrap + datagen    | —                         |   2  |  1.0 node-h  |     210 |
+| 15 % headroom          | —                         |      |              |     795 |
+| **Total**              |                           | **16 jobs** | **≈ 25 node-h** | **≈ 6.1 KSU** |
+
+¹ Estimates assume Sapphire Rapids delivers ≈ 1.2 × Cascade Lake per
+  core (AVX-512 + higher IPC on IQ-TREE's SIMD likelihood kernels) and
+  sub-linear scaling above 52T from NUMA traffic. Billing is on the
+  full `ncpus=104` reservation regardless of `-T` passed to IQ-TREE.
+² `normalsr` charges 2 SU / core-h = **208 SU / node-hour**.
+
+### Budget check
+
+- Project `rc29` 2026.q2 grant: **25 000 SU**, used 0, reserved 0.
+- Full sweep ≈ **6.1 KSU ≈ 24 %** of grant → well within budget.
+- Scratch: 1 TiB quota, 188 KiB used. Raw outputs ≈ 100-500 MB per run;
+  16 runs ≈ 8 GB worst case. Non-issue.
+- Local disk (`jobfs`): 400 GiB per node — ample for VTune's trace DB.
+
+### Real wall-clock estimate
+
+Submitted as 16 parallel PBS jobs (the matrix script auto-fans out),
+normalsr has 720 nodes so queuing should be short. Expected clock
+≈ **8-15 h** for the bulk of the matrix to finish, mostly unattended.
+
+### Prerequisites (resolved by new scripts)
+
+1. **No IQ-TREE binary on Gadi** → `gadi-ci/bootstrap_iqtree.sh` clones
+   **`https://github.com/iqtree/iqtree3.git`** and builds it twice:
+   - `${PROJECT_DIR}/build/iqtree3` — release, `icx -O3 -xSAPPHIRERAPIDS`.
+   - `${PROJECT_DIR}/build-profiling/iqtree3` — adds
+     `-fno-omit-frame-pointer -g` for `perf -g` stack unwinding.
+
+   Fallback to `gcc -march=sapphirerapids` if `icx` is not on PATH. The
+   script is a 1-hour `normalsr` PBS job (~210 SU).
+2. **No benchmark alignments on Gadi** (they live on Setonix scratch and
+   can't be rsynced cross-site from a login node) →
+   `gadi-ci/generate_datasets.sh` regenerates equivalent workloads
+   deterministically via IQ-TREE 3's built-in **AliSim** simulator with
+   fixed seeds (101 / 202 / 303):
+
+   | Output               | Dimensions          | Model              |
+   |----------------------|---------------------|--------------------|
+   | `large_modelfinder.fa` |  500 taxa × 5 000 bp | GTR{...}+F+G4 |
+   | `xlarge_mf.fa`       | 1000 taxa × 10 000 bp | GTR{...}+F+G4 |
+   | `mega_dna.fa`        |  500 taxa × 100 000 bp| GTR{...}+F+G4 |
+
+   Plus `turtle.fa` + `example.phy` copied from the iqtree3 repo's
+   `example_data/` for the CI smoke test. ~1 hour, ~210 SU.
+3. **Orchestration** → `gadi-ci/submit_benchmark_matrix.sh` enumerates
+   the 16-job matrix, emits an embedded worker (`_run_matrix_job.sh`),
+   and submits each point as a separate `qsub -q normalsr
+   -l ncpus=104,mem=500GB,walltime=24:00:00` job. Each worker runs IQ-TREE
+   under `perf stat`, optionally under VTune hotspots for `THREADS ≥ 13`,
+   then writes a single JSON to `$REPO_DIR/logs/runs/<id>.json` that
+   conforms to `tools/schemas/run.schema.json` (Intel TMA metrics +
+   `env.pbs` + `profile.vtune`).
+
+### Updated gadi-ci scripts
+
+All existing scripts (`run_mega_profile.sh`, `submit_mega_batch.sh`,
+`run_pipeline.sh`, `run_profiling.sh`, `gadi-ci/README.md`) switched
+from `normal` / `ncpus=48` / `mem=190GB` / Cascade Lake to
+`normalsr` / `ncpus=104` / `mem=500GB` / Sapphire Rapids. Intel event
+names are unchanged (perf aliases apply to `spr_core` pmu). Default
+thread sweep for the mega-profile batch is now `1 4 13 26 52 104`.
+
+The Makefile's `CMAKE_PROFILING` flags now set
+`-O3 -xSAPPHIRERAPIDS -fno-omit-frame-pointer` and `MODULES` defaults
+to `intel-vtune/2024.2.0 intel-compiler-llvm/2024.2.0`.
+
+### Rollout (to minimise SU burn on bugs)
+
+1. **Stage 0 — bootstrap.** `qsub gadi-ci/bootstrap_iqtree.sh`. Verify
+   binary produced, `iqtree3 --version` prints Intel LLVM toolchain.
+   ≈ 210 SU.
+2. **Stage 1 — datasets.** `qsub gadi-ci/generate_datasets.sh`. Verify
+   the three `.fa` files land under `$PROJECT_DIR/benchmarks/`. ≈ 210 SU.
+3. **Stage 2 — CI smoke.** `./start.sh pipeline` (turtle.fa +
+   example.phy). Confirms `pbs_id`, `env.pbs.*`, verify block, schema
+   validation end-to-end. ≈ 1 SU (runs on login node or small PBS job).
+4. **Stage 3 — one matrix point.**
+   `./gadi-ci/submit_benchmark_matrix.sh large_modelfinder 52` — single
+   job, confirms perf + VTune data ingestion into `logs/runs/`. ≈ 100 SU.
+5. **Stage 4 — full matrix.** Only launch once 0-3 are green.
+   `./gadi-ci/submit_benchmark_matrix.sh`. Auto-rerunnable (records are
+   immutable once written; re-running overwrites only matching
+   `<timestamp>_<label>` records).
+
+This changelog entry is pre-execution: it locks in the plan and
+budget. Actual numbers will be appended as jobs complete.
+
+---
+
 
 Forked `main` (wave-4 Setonix data complete) into a new branch, `gadi-iq`,
 targeted at the NCI Gadi supercomputer. The dashboard front-end and data
@@ -14,25 +148,26 @@ scripts and the schema that binds them to the web UI.
 | Component | Spec |
 |---|---|
 | Machine   | Gadi (NCI, Canberra) |
-| CPU       | Intel Xeon Platinum 8268 "Cascade Lake", 48c/node, 2 sockets, 4 NUMA |
-| Memory    | 192 GB/node (`mem=190GB` leaves scheduler headroom) |
+| CPU       | Intel Xeon Platinum 8470Q "Sapphire Rapids", 104c/node (2×52), 8 NUMA domains (13c each) |
+| Memory    | 512 GiB/node (`mem=500GB` leaves scheduler headroom) |
 | Scheduler | PBS Professional 2024.1 (`qsub`, `qstat`, `qdel`, `nqstat`) |
-| Queues    | `normal`, `normalbw`, `express`, `hugemem`, `gpuvolta` (V100), `copyq`, `megamem` |
+| Queues    | `normalsr` (default), `expresssr`, plus legacy `normal`/`normalbw`/`hugemem`/`gpuvolta`/`megamem` |
 | Profiler  | Intel VTune 2024.2.0 (`module load intel-vtune/2024.2.0`) + `perf` |
+| Compiler  | `intel-compiler-llvm/2024.2.0` — `icx -xSAPPHIRERAPIDS` |
 | Project   | `rc29`; scratch `/scratch/rc29`; home 10 GB quota |
 
 ### New `gadi-ci/` scripts (PBS / Intel / VTune)
 
 - `gadi-ci/run_mega_profile.sh` — PBS job script mirroring the Setonix
   mega profiler. Key changes:
-  - `#SBATCH` directives → `#PBS -N / -P rc29 / -q normal /
-    -l ncpus=48,mem=190GB,walltime=24:00:00,wd,storage=scratch/rc29 / -j oe`.
+  - `#SBATCH` directives → `#PBS -N / -P rc29 / -q normalsr /
+    -l ncpus=104,mem=500GB,walltime=24:00:00,wd,storage=scratch/rc29 / -j oe`.
   - SLURM env vars → PBS env vars (`PBS_JOBID`, `PBS_JOBNAME`,
     `PBS_QUEUE`, `PBS_NCPUS`, `PBS_NODEFILE`, `PBS_O_HOST`,
     `PBS_O_WORKDIR`). `env.json` now records them under `env.pbs.*`.
   - AMD Zen 3 raw events (`ex_ret_*`, `ls_l1_d_tlb_miss.*`,
     `bp_l1_tlb_miss_l2_tlb_*`, `ls_dispatch.*`, `ls_tablewalker.*`)
-    replaced with Intel Cascade Lake Top-down TMA slot events
+    replaced with Intel Sapphire Rapids Top-down TMA slot events
     (`topdown-{total-slots,slots-issued,slots-retired,fetch-bubbles,
     recovery-bubbles}`) plus `LLC-loads`/`LLC-load-misses`.
   - Derived TMA Level-1 categories emitted as
@@ -46,10 +181,10 @@ scripts and the schema that binds them to the web UI.
     avg_cpu_freq_ghz, hotspots[]}`.
   - `RUN_ID="${PBS_JOBID%%.*}"` strips the `.gadi-pbs` suffix.
 - `gadi-ci/submit_mega_batch.sh` — `sbatch --parsable` loop rewritten as
-  `qsub` loop. Default thread sweep adjusted to `4 8 16 24 48` to match
-  Gadi's per-node ceiling (no 128T here; use `gpuvolta` / `hugemem` for
-  higher). Each job gets an explicit `-P $PROJECT -q normal -l
-  ncpus=48,mem=190GB,walltime=24:00:00,storage=scratch/$PROJECT,wd`.
+  `qsub` loop. Default thread sweep is `1 4 13 26 52 104` to match
+  Sapphire Rapids' 104c/node ceiling with NUMA-aligned points. Each
+  job gets an explicit `-P $PROJECT -q normalsr -l
+  ncpus=104,mem=500GB,walltime=24:00:00,storage=scratch/$PROJECT,wd`.
 - `gadi-ci/run_pipeline.sh` — small deterministic CI pipeline runnable on
   a login node. Emits `logs/runs/<YYYY-MM-DD_HHMMSS>.json` in the exact
   shape of the Setonix records but with `pbs_id` + `env.pbs.*` populated.
