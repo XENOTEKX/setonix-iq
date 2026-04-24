@@ -86,21 +86,31 @@ cd "${WORK_DIR}"
 
 echo "[matrix] run_id=${RUN_ID} dataset=${DATA_PATH} threads=${THREADS}"
 
+# stalled-cycles-frontend/backend not available on Gadi Sapphire Rapids kernel PMU.
+# Removed to prevent perf stat aborting before IQ-TREE starts.
 PERF_EVENTS="cycles,instructions,branch-instructions,branch-misses,\
 cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,\
 LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,\
-iTLB-loads,iTLB-load-misses,stalled-cycles-frontend,stalled-cycles-backend,\
+iTLB-loads,iTLB-load-misses,\
 topdown-total-slots,topdown-slots-issued,topdown-slots-retired,\
 topdown-fetch-bubbles,topdown-recovery-bubbles"
 
+# Run IQ-TREE directly first so we always get results regardless of perf.
 START_EPOCH=$(date +%s)
-perf stat -e "${PERF_EVENTS}" -o "${WORK_DIR}/perf_stat.txt" \
-    "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
-                --prefix "${WORK_DIR}/iqtree_run" \
+"${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
+            --prefix "${WORK_DIR}/iqtree_run" \
     > "${WORK_DIR}/iqtree_run.log" 2>&1 || IQRC=$?
 IQRC="${IQRC:-0}"
 END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
+
+# Collect hardware counters in a second pass (won't affect primary timing).
+if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
+    perf stat -e "${PERF_EVENTS}" -o "${WORK_DIR}/perf_stat.txt" \
+        "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
+                    --prefix "${WORK_DIR}/iqtree_perf" \
+        > /dev/null 2>&1 || true
+fi
 
 # Optional bounded VTune pass (skip for 1T to save SU).
 if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 && "${THREADS}" -ge 13 ]]; then

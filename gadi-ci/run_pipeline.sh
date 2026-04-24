@@ -52,7 +52,8 @@ first=1
 for t in "${TESTS[@]}"; do
     file="$(echo "${t}" | awk '{print $1}')"
     expected="$(echo "${t}" | awk '{print $2}')"
-    args="$(echo "${t}" | cut -d' ' -f3-)"
+    # Use awk (not cut) so multiple-space separators are treated as one.
+    args="$(echo "${t}" | awk '{for(i=3;i<=NF;i++) printf "%s%s",$i,(i<NF?" ":"\n")}')"
     input="${TEST_DATA}/${file}"
 
     if [[ ! -f "${input}" ]]; then
