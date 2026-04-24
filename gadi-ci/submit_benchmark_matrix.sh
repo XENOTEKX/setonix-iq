@@ -97,14 +97,123 @@ iTLB-loads,iTLB-load-misses,\
 topdown-total-slots,topdown-slots-issued,topdown-slots-retired,\
 topdown-fetch-bubbles,topdown-recovery-bubbles"
 
-# Run IQ-TREE directly first so we always get results regardless of perf.
+# Pass 1: IQ-TREE direct run with /proc time-series sampler in background.
+# The sampler polls RSS, IO, NUMA placement, and per-thread CPU ticks at 10 s
+# intervals → samples.jsonl (same format as setonix-ci/run_mega_profile.sh).
+cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
+#!/usr/bin/env python3
+"""Poll /proc/$pid for rss/io/numa/per-thread stats. One JSON line per tick."""
+import json, os, subprocess, sys, time, pathlib
+
+pid = int(sys.argv[1])
+out = pathlib.Path(sys.argv[2])
+interval = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
+t0 = time.monotonic()
+
+def read_status(pid):
+    d = {}
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                d[k.strip()] = v.strip()
+    except FileNotFoundError:
+        return None
+    return d
+
+def read_io(pid):
+    d = {}
+    try:
+        with open(f"/proc/{pid}/io") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                try: d[k.strip()] = int(v.strip())
+                except ValueError: pass
+    except (FileNotFoundError, PermissionError):
+        return None
+    return d
+
+def read_numa(pid):
+    try:
+        r = subprocess.run(["numastat", "-p", str(pid)],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    nodes = None; total = None
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Node "):
+            parts = line.split()
+            nodes = [p for p in parts if p.isdigit()]
+        if line.startswith("Total"):
+            vals = line.split()[1:]
+            try: total = [float(v) for v in vals]
+            except ValueError: total = None
+    if not nodes or not total:
+        return None
+    per = {n: total[i] for i, n in enumerate(nodes) if i < len(total)}
+    return {"per_node_mb": per, "total_mb": total[-1] if total else None}
+
+def per_thread(pid):
+    out = []
+    try:
+        tasks = os.listdir(f"/proc/{pid}/task")
+    except FileNotFoundError:
+        return out
+    for tid in tasks:
+        try:
+            with open(f"/proc/{pid}/task/{tid}/stat") as f:
+                fields = f.read().split()
+            out.append({"tid": int(tid), "utime": int(fields[13]),
+                         "stime": int(fields[14]), "nice": int(fields[18])})
+        except (FileNotFoundError, IndexError, ValueError):
+            continue
+    return out
+
+fp = out.open("w")
+while True:
+    t = time.monotonic() - t0
+    status = read_status(pid)
+    if status is None:
+        break
+    snap = {
+      "t_s":            round(t, 2),
+      "rss_kb":         int(status.get("VmRSS",  "0 kB").split()[0]) if "VmRSS"    in status else None,
+      "peak_kb":        int(status.get("VmHWM",  "0 kB").split()[0]) if "VmHWM"    in status else None,
+      "vms_kb":         int(status.get("VmSize", "0 kB").split()[0]) if "VmSize"   in status else None,
+      "threads_now":    int(status.get("Threads", "0"))               if "Threads"  in status else None,
+      "voluntary_cs":   int(status.get("voluntary_ctxt_switches",    "0")),
+      "involuntary_cs": int(status.get("nonvoluntary_ctxt_switches", "0")),
+      "io":             read_io(pid) or {},
+      "numa":           read_numa(pid),
+      "thread_count":   len(per_thread(pid)),
+    }
+    fp.write(json.dumps(snap) + "\n")
+    fp.flush()
+    time.sleep(interval)
+fp.close()
+SAMPLER_EOF
+
 START_EPOCH=$(date +%s)
 "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
             --prefix "${WORK_DIR}/iqtree_run" \
-    > "${WORK_DIR}/iqtree_run.log" 2>&1 || IQRC=$?
+    > "${WORK_DIR}/iqtree_run.log" 2>&1 &
+IQTREE_PID=$!
+# Start /proc sampler in background, attaching to the IQ-TREE process.
+python3 "${WORK_DIR}/_sampler.py" "${IQTREE_PID}" \
+    "${WORK_DIR}/samples.jsonl" 10 &
+SAMPLER_PID=$!
+
+wait "${IQTREE_PID}" || IQRC=$?
 IQRC="${IQRC:-0}"
 END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
+
+# Stop sampler cleanly once IQ-TREE exits.
+kill "${SAMPLER_PID}" 2>/dev/null || true
+wait "${SAMPLER_PID}" 2>/dev/null || true
 
 # Pass 2: perf stat — hardware counters (IPC, cache, branch, TMA topdown).
 if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
@@ -301,9 +410,33 @@ if os.path.isfile(vu):
             except ValueError: pass
     if out: vtune_uarch = out
 
+# Parse samples.jsonl for a concise proc_summary block.
+proc_summary = None
+sjf = os.path.join(work, "samples.jsonl")
+if os.path.isfile(sjf):
+    snaps = []
+    for raw in open(sjf, errors="replace"):
+        try: snaps.append(json.loads(raw))
+        except json.JSONDecodeError: pass
+    if snaps:
+        peak_rss  = max((s["rss_kb"]  for s in snaps if s.get("rss_kb")  is not None), default=None)
+        peak_vms  = max((s["vms_kb"]  for s in snaps if s.get("vms_kb")  is not None), default=None)
+        max_thr   = max((s["threads_now"] for s in snaps if s.get("threads_now") is not None), default=None)
+        final_io  = snaps[-1].get("io") or {}
+        proc_summary = {
+            "sample_count":   len(snaps),
+            "duration_s":     snaps[-1].get("t_s"),
+            "peak_rss_kb":    peak_rss,
+            "peak_vms_kb":    peak_vms,
+            "max_threads":    max_thr,
+            "read_bytes":     final_io.get("read_bytes"),
+            "write_bytes":    final_io.get("write_bytes"),
+        }
+
 # Record which artefact files were produced (paths on scratch).
 artefacts = {}
 for fname, key in [
+    ("samples.jsonl",          "proc_timeseries"),
     ("perf_stat.txt",          "perf_stat"),
     ("perf_script.txt",        "perf_callgraph"),
     ("perf_report.txt",        "perf_hotspot_report"),
@@ -369,9 +502,10 @@ record = {
     "threads": thr,
     "perf_cmd": perf_cmd,
     "metrics": metrics,
-    "vtune":       vtune,
-    "vtune_uarch": vtune_uarch,
-    "artefacts":   artefacts,
+    "vtune":        vtune,
+    "vtune_uarch":  vtune_uarch,
+    "proc_summary": proc_summary,
+    "artefacts":    artefacts,
   },
 }
 out_path = os.path.join(runs, rid + ".json")
