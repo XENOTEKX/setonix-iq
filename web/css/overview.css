@@ -238,6 +238,111 @@
   margin-bottom: 24px;
 }
 
+/* ----- Dataset carousel ----- */
+.ds-carousel {
+  position: relative;
+  margin-bottom: 24px;
+  padding: 0 44px; /* room for prev/next buttons */
+}
+.ds-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 1fr);
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  padding: 6px 4px 18px;
+  /* Hide scrollbar visually but keep functional. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.ds-track::-webkit-scrollbar { height: 6px; }
+.ds-track::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.ds-track::-webkit-scrollbar-track { background: transparent; }
+.ds-track:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+
+.ds-slide {
+  scroll-snap-align: start;
+  min-width: 0;
+  display: flex;
+}
+.ds-slide > .ds-card {
+  width: 100%;
+  margin: 0;
+}
+
+/* Show 3 cards per view on wide screens, 2 on medium, 1 on narrow. */
+@media (min-width: 1100px) {
+  .ds-track { grid-auto-columns: calc((100% - 32px) / 3); }
+}
+@media (min-width: 760px) and (max-width: 1099px) {
+  .ds-track { grid-auto-columns: calc((100% - 16px) / 2); }
+}
+@media (max-width: 759px) {
+  .ds-carousel { padding: 0 36px; }
+  .ds-track { grid-auto-columns: 100%; }
+}
+
+.ds-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.ds-nav:hover:not(:disabled) {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ds-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.ds-nav--prev { left: 0; }
+.ds-nav--next { right: 0; }
+
+.ds-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.ds-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: var(--border);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s, width 0.15s;
+}
+.ds-dot:hover { background: var(--text3); }
+.ds-dot.is-active {
+  background: var(--accent);
+  width: 22px;
+  border-radius: 4px;
+}
+
 /* Two-column reflexive Setonix | Gadi split */
 .ds-platform-split {
   display: grid;

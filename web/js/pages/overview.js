@@ -378,8 +378,89 @@ function renderDatasets(idx) {
     return a.ds.localeCompare(b.ds);
   });
 
-  document.getElementById('ovDatasets').innerHTML =
-    `<div class="ds-grid">${sorted.map(makeCard).join('')}</div>`;
+  const total = sorted.length;
+  const slides = sorted.map((g, i) => `
+    <div class="ds-slide" role="group" aria-roledescription="slide"
+         aria-label="${i + 1} of ${total}: ${escHtml(g.ds)}" data-idx="${i}">
+      ${makeCard(g)}
+    </div>
+  `).join('');
+  const dots = sorted.map((g, i) => `
+    <button type="button" class="ds-dot${i === 0 ? ' is-active' : ''}"
+            data-idx="${i}" title="${escHtml(g.ds)}"
+            aria-label="Go to ${escHtml(g.ds)}"></button>
+  `).join('');
+
+  document.getElementById('ovDatasets').innerHTML = `
+    <div class="ds-carousel" data-ds-carousel>
+      <button type="button" class="ds-nav ds-nav--prev" data-dir="-1"
+              aria-label="Previous dataset">‹</button>
+      <div class="ds-track" tabindex="0" aria-label="Datasets carousel">
+        ${slides}
+      </div>
+      <button type="button" class="ds-nav ds-nav--next" data-dir="1"
+              aria-label="Next dataset">›</button>
+      <div class="ds-dots" role="tablist" aria-label="Dataset navigation">
+        ${dots}
+      </div>
+    </div>
+  `;
+
+  bindDatasetCarousel();
+}
+
+/* Bind navigation behaviour to the dataset carousel. Re-runs whenever
+   renderDatasets() rewrites #ovDatasets. */
+function bindDatasetCarousel() {
+  const root = document.querySelector('[data-ds-carousel]');
+  if (!root) return;
+  const track = root.querySelector('.ds-track');
+  const slides = [...root.querySelectorAll('.ds-slide')];
+  const dots = [...root.querySelectorAll('.ds-dot')];
+  const prevBtn = root.querySelector('.ds-nav--prev');
+  const nextBtn = root.querySelector('.ds-nav--next');
+  if (!track || !slides.length) return;
+
+  // Keep dots / nav state in sync with which slide is closest to the
+  // track's left edge. Uses scrollLeft so it works for both button-driven
+  // and touch / wheel scrolling.
+  function activeIndex() {
+    const x = track.scrollLeft;
+    let best = 0;
+    let bestDist = Infinity;
+    slides.forEach((s, i) => {
+      const d = Math.abs(s.offsetLeft - x);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    return best;
+  }
+  function syncUI() {
+    const i = activeIndex();
+    dots.forEach((d, j) => d.classList.toggle('is-active', i === j));
+    if (prevBtn) prevBtn.disabled = i <= 0;
+    if (nextBtn) nextBtn.disabled = i >= slides.length - 1;
+  }
+  function goTo(i) {
+    const clamped = Math.max(0, Math.min(slides.length - 1, i));
+    track.scrollTo({ left: slides[clamped].offsetLeft, behavior: 'smooth' });
+  }
+
+  prevBtn?.addEventListener('click', () => goTo(activeIndex() - 1));
+  nextBtn?.addEventListener('click', () => goTo(activeIndex() + 1));
+  dots.forEach((d) => d.addEventListener('click', () => goTo(+d.dataset.idx)));
+  track.addEventListener('scroll', () => {
+    // rAF-throttle scroll handler.
+    if (track._raf) return;
+    track._raf = requestAnimationFrame(() => { track._raf = 0; syncUI(); });
+  });
+  track.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); goTo(activeIndex() - 1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); goTo(activeIndex() + 1); }
+    if (e.key === 'Home')       { e.preventDefault(); goTo(0); }
+    if (e.key === 'End')        { e.preventDefault(); goTo(slides.length - 1); }
+  });
+
+  syncUI();
 }
 
 /* --------------------------- Selected-run sections --------------------------- */
