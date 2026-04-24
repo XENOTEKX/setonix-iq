@@ -78,6 +78,30 @@ normalsr has 720 nodes so queuing should be short. Expected clock
 
    Fallback to `gcc -march=sapphirerapids` if `icx` is not on PATH. The
    script is a 1-hour `normalsr` PBS job (~210 SU).
+
+   > **Build requirements (Gadi modules — load before cmake or set in bootstrap script):**
+   >
+   > | Module                        | Purpose                         | Gadi path                              |
+   > |-------------------------------|---------------------------------|----------------------------------------|
+   > | `cmake/3.31.6`                | Build system                    | `/apps/cmake/3.31.6`                   |
+   > | `intel-compiler-llvm/2024.2.0`| C/C++ compiler (`icx`/`icpx`)  | `/apps/intel-tools/wrappers/icx`       |
+   > | `eigen/3.3.7`                 | Required header-only math lib   | `/apps/eigen/3.3.7/include/eigen3`     |
+   > | `boost/1.84.0`                | Required headers + libs         | `/apps/boost/1.84.0`                   |
+   > | `gcc/14.2.0`                  | Fallback compiler (optional)    | `/apps/gcc/14.2.0`                     |
+   >
+   > CMake hints passed explicitly:
+   > ```
+   > -DEIGEN3_INCLUDE_DIR=/apps/eigen/3.3.7/include/eigen3
+   > -DBOOST_ROOT=/apps/boost/1.84.0
+   > -DBoost_NO_SYSTEM_PATHS=ON
+   > ```
+   > **Compute nodes have no outbound internet** — clone the source on a login
+   > node first, then submit the build job:
+   > ```bash
+   > git clone --depth=1 https://github.com/iqtree/iqtree3.git \
+   >     /scratch/rc29/<user>/iqtree3/src/iqtree3
+   > qsub gadi-ci/bootstrap_iqtree.sh
+   > ```
 2. **No benchmark alignments on Gadi** (they live on Setonix scratch and
    can't be rsynced cross-site from a login node) →
    `gadi-ci/generate_datasets.sh` regenerates equivalent workloads
