@@ -68,10 +68,18 @@ const TMPL = `
     <div class="card" id="ovScalingCard">
       <div class="card-header"><h2>Thread Scaling</h2><div class="actions"><span class="btn-sm">wall vs threads (log–log)</span></div></div>
       <div class="chart-wrapper"><canvas id="ovScalingCanvas"></canvas></div>
+      <div class="chart-legend-key">
+        <span class="lk lk--setonix"><span class="lk-swatch"></span>Setonix (Pawsey · AMD) — solid ●</span>
+        <span class="lk lk--gadi"><span class="lk-swatch"></span>Gadi (NCI · Intel) — dashed ▲</span>
+      </div>
     </div>
     <div class="card" id="ovEfficiencyCard">
       <div class="card-header"><h2>Parallel Efficiency</h2><div class="actions"><span class="btn-sm">speedup ÷ threads · ideal = 100%</span></div></div>
       <div class="chart-wrapper"><canvas id="ovEfficiencyCanvas"></canvas></div>
+      <div class="chart-legend-key">
+        <span class="lk lk--setonix"><span class="lk-swatch"></span>Setonix — solid ●</span>
+        <span class="lk lk--gadi"><span class="lk-swatch"></span>Gadi — dashed ▲</span>
+      </div>
     </div>
   </div>
 
@@ -79,10 +87,18 @@ const TMPL = `
     <div class="card" id="ovIpcCard">
       <div class="card-header"><h2>IPC vs Threads</h2><div class="actions"><span class="btn-sm">microarch efficiency per dataset</span></div></div>
       <div class="chart-wrapper"><canvas id="ovIpcCanvas"></canvas></div>
+      <div class="chart-legend-key">
+        <span class="lk lk--setonix"><span class="lk-swatch"></span>Setonix — solid ●</span>
+        <span class="lk lk--gadi"><span class="lk-swatch"></span>Gadi — counters pending</span>
+      </div>
     </div>
     <div class="card" id="ovMatrixCard">
       <div class="card-header"><h2>Performance Matrix</h2><div class="actions"><span class="btn-sm">wall × threads · bubble = sites</span></div></div>
       <div class="chart-wrapper"><canvas id="ovMatrixCanvas"></canvas></div>
+      <div class="chart-legend-key">
+        <span class="lk lk--setonix"><span class="lk-swatch"></span>Setonix ●</span>
+        <span class="lk lk--gadi"><span class="lk-swatch"></span>Gadi ▲</span>
+      </div>
     </div>
   </div>
 
@@ -260,17 +276,18 @@ function renderDatasets(idx) {
     const compression = (patterns && sites)
       ? `${patterns.toLocaleString()} · ${((patterns / sites) * 100).toFixed(1)}% unique`
       : null;
+    const platClass = platform === 'gadi' ? 'ds-card--gadi' : platform === 'setonix' ? 'ds-card--setonix' : '';
     cards.push(`
-      <div class="ds-card">
+      <div class="ds-card ${platClass}">
         <div class="ds-head">
-          <span class="ds-tag">Dataset</span>
-          ${platformBadge(platform, { compact: true })}
+          <span class="ds-tag ds-tag--${platform}">${platformLabel(platform)} dataset</span>
         </div>
         <h3>${escHtml(ds)}</h3>
-        <div class="ds-row"><span>Taxa</span><strong>${rep.taxa ?? '—'}</strong></div>
-        <div class="ds-row"><span>Sites</span><strong>${rep.sites?.toLocaleString?.() ?? '—'}</strong></div>
-        ${compression ? `<div class="ds-row"><span>Patterns</span><strong>${compression}</strong></div>` : ''}
+        <div class="ds-dim">${rep.taxa ?? '?'} taxa × ${rep.sites?.toLocaleString?.() ?? '?'} sites</div>
         <div class="ds-row"><span>File size</span><strong>${rep.size_mb != null ? (rep.size_estimated ? '~' : '') + rep.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
+        ${compression ? `<div class="ds-row"><span>Patterns</span><strong>${compression}</strong></div>` : ''}
+        ${rep.informative_sites != null ? `<div class="ds-row"><span>Informative sites</span><strong>${rep.informative_sites.toLocaleString()}</strong></div>` : ''}
+        ${rep.sequence_type ? `<div class="ds-row"><span>Sequence type</span><strong>${escHtml(rep.sequence_type)}</strong></div>` : ''}
         <div class="ds-row"><span>Runs</span><strong>${runs.length}${stubs ? ` <span style="color:var(--text3); font-weight:400;">(${stubs} stub)</span>` : ''}</strong></div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
         <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>

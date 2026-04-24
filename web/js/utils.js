@@ -87,6 +87,27 @@ export function hashColour(s, alpha = 1) {
   return `hsla(${hue}, 65%, 60%, ${alpha})`;
 }
 
+// Platform-tinted colour: Setonix runs live in the cool half of the wheel
+// (blue/purple/teal), Gadi runs in the warm half (orange/red/amber). The
+// dataset name chooses the exact hue inside each band, so each
+// (platform, dataset) pair has a stable but platform-recognisable colour.
+export function platformColour(platform, datasetKey, alpha = 1) {
+  let h = 0;
+  for (let i = 0; i < datasetKey.length; i++) h = (h * 31 + datasetKey.charCodeAt(i)) | 0;
+  const band = Math.abs(h) % 80; // 0..79
+  let hue;
+  if (platform === 'gadi') {
+    hue = 15 + band * 0.6;   // ~15..63  (orange → amber)
+  } else if (platform === 'setonix') {
+    hue = 200 + band * 0.9;  // ~200..272 (blue → violet)
+  } else {
+    hue = 140 + band * 0.5;  // teal fallback
+  }
+  const sat = platform === 'gadi' ? 78 : 68;
+  const lum = platform === 'gadi' ? 58 : 62;
+  return `hsla(${hue}, ${sat}%, ${lum}%, ${alpha})`;
+}
+
 export function createEl(tag, attrs = {}, children = []) {
   const el = document.createElement(tag);
   for (const k in attrs) {

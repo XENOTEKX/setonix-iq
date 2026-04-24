@@ -3,10 +3,13 @@
 //   colour = (dataset, platform). Gadi is drawn with triangle markers so the
 //   two platforms can be distinguished at a glance.
 
-import { hashColour } from '../utils.js';
+import { platformColour } from '../utils.js';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
+}
+function platformLabel(p) {
+  return p === 'gadi' ? 'Gadi' : p === 'setonix' ? 'Setonix' : p;
 }
 
 export function render(canvas, runsIndex) {
@@ -27,8 +30,8 @@ export function render(canvas, runsIndex) {
   for (const r of runsIndex) {
     if (!r.dataset_short || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
     const plat = platformOf(r);
-    const key = `${r.dataset_short} · ${plat}`;
-    if (!byKey.has(key)) byKey.set(key, { plat, points: [] });
+    const key = `${platformLabel(plat)} · ${r.dataset_short}`;
+    if (!byKey.has(key)) byKey.set(key, { plat, ds: r.dataset_short, points: [] });
     byKey.get(key).points.push({
       x: Number(r.threads),
       y: r.wall_s,
@@ -42,12 +45,14 @@ export function render(canvas, runsIndex) {
   }
 
   const datasets = [];
-  for (const [label, { plat, points }] of byKey) {
+  const ordered = [...byKey.entries()].sort(([, a], [, b]) =>
+    a.plat.localeCompare(b.plat) || a.ds.localeCompare(b.ds));
+  for (const [label, { plat, ds, points }] of ordered) {
     datasets.push({
       label,
       data: points,
-      backgroundColor: hashColour(label, 0.55),
-      borderColor: hashColour(label, 0.95),
+      backgroundColor: platformColour(plat, ds, 0.55),
+      borderColor: platformColour(plat, ds, 0.95),
       borderWidth: 1.5,
       pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
     });

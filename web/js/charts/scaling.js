@@ -3,10 +3,13 @@
 // the same named datasets with different dimensions, so they must not share
 // a line.
 
-import { hashColour } from '../utils.js';
+import { platformColour } from '../utils.js';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
+}
+function platformLabel(p) {
+  return p === 'gadi' ? 'Gadi' : p === 'setonix' ? 'Setonix' : p;
 }
 
 export function render(canvas, runsIndex) {
@@ -17,19 +20,26 @@ export function render(canvas, runsIndex) {
   for (const r of runsIndex) {
     if (!r.dataset || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
     const plat = platformOf(r);
-    const key = `${r.dataset_short || r.dataset} · ${plat}`;
-    if (!byKey.has(key)) byKey.set(key, { plat, points: [] });
+    const ds = r.dataset_short || r.dataset;
+    // Platform goes first in the label so legend entries group by platform.
+    const key = `${platformLabel(plat)} · ${ds}`;
+    if (!byKey.has(key)) byKey.set(key, { plat, ds, points: [] });
     byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
   }
 
   const datasets = [];
-  for (const [label, { plat, points }] of byKey) {
+  // Sort so Setonix series come first, then Gadi — matches colour bands.
+  const ordered = [...byKey.entries()].sort(([, a], [, b]) => {
+    if (a.plat !== b.plat) return a.plat.localeCompare(b.plat);
+    return a.ds.localeCompare(b.ds);
+  });
+  for (const [label, { plat, ds, points }] of ordered) {
     points.sort((a, b) => a.x - b.x);
     datasets.push({
       label,
       data: points,
-      borderColor: hashColour(label, 0.9),
-      backgroundColor: hashColour(label, 0.2),
+      borderColor: platformColour(plat, ds, 0.95),
+      backgroundColor: platformColour(plat, ds, 0.25),
       borderDash: plat === 'gadi' ? [6, 4] : [],
       tension: 0.2,
       pointRadius: 4,
