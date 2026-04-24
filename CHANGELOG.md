@@ -95,19 +95,29 @@ normalsr has 720 nodes so queuing should be short. Expected clock
    > -DBOOST_ROOT=/apps/boost/1.84.0
    > -DBoost_NO_SYSTEM_PATHS=ON
    > ```
-   > **Compute nodes have no outbound internet** — clone the source AND its
-   > submodules (`cmaple`, `lsd2`) on a login node first, then submit the
-   > build job:
+   > **Compute nodes have no outbound internet** — all source and deps must
+   > be fetched on a login node. Run this once before submitting any job:
    > ```bash
-   > git clone https://github.com/iqtree/iqtree3.git \
-   >     /scratch/rc29/<user>/iqtree3/src/iqtree3
-   > cd /scratch/rc29/<user>/iqtree3/src/iqtree3
-   > git submodule update --init --recursive   # fetches cmaple + lsd2
-   > qsub gadi-ci/bootstrap_iqtree.sh
+   > SCRATCH=/scratch/rc29/<user>/iqtree3
+   >
+   > # 1. Clone IQ-TREE 3 (default branch: master)
+   > git clone https://github.com/iqtree/iqtree3.git ${SCRATCH}/src/iqtree3
+   >
+   > # 2. Fetch submodules (cmaple + lsd2 — required by CMakeLists)
+   > cd ${SCRATCH}/src/iqtree3
+   > git submodule update --init --recursive
+   >
+   > # 3. Pre-download GoogleTest (cmaple FetchContent — fails on compute nodes)
+   > cd ${SCRATCH}/deps
+   > curl -L -o googletest.zip \
+   >   https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+   > unzip -q googletest.zip && mv googletest-*/ googletest
+   >
+   > # 4. Submit build job
+   > cd ${SCRATCH} && qsub gadi-ci/bootstrap_iqtree.sh
    > ```
-   > The bootstrap script pre-flight checks for `cmaple/CMakeLists.txt` and
-   > `lsd2/CMakeLists.txt` and errors out with a clear message if either is
-   > missing, so you never waste SUs on a build that cannot configure.
+   > The bootstrap script pre-flight checks for all three (`cmaple`, `lsd2`,
+   > `googletest`) and errors out with the exact fix command if any are missing.
 2. **No benchmark alignments on Gadi** (they live on Setonix scratch and
    can't be rsynced cross-site from a login node) →
    `gadi-ci/generate_datasets.sh` regenerates equivalent workloads
