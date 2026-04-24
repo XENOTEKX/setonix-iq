@@ -56,17 +56,17 @@ fi
 mkdir -p "$(dirname "${SRC_DIR}")"
 
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
-    echo "[bootstrap] cloning ${IQTREE_REPO} → ${SRC_DIR}"
-    git clone --recursive "${IQTREE_REPO}" "${SRC_DIR}"
-    cd "${SRC_DIR}"
-    git checkout "${IQTREE_REF}"
+    # Compute nodes have no outbound internet — clone must be done on a login
+    # node before submitting this job:
+    #   git clone --depth=1 https://github.com/iqtree/iqtree3.git \
+    #       /scratch/rc29/<user>/iqtree3/src/iqtree3
+    echo "ERROR: ${SRC_DIR} not found." >&2
+    echo "       Clone on a login node first, then resubmit." >&2
+    exit 1
 else
-    echo "[bootstrap] updating ${SRC_DIR}"
+    echo "[bootstrap] source already present at ${SRC_DIR} — skipping clone"
     cd "${SRC_DIR}"
-    git fetch origin
-    git checkout "${IQTREE_REF}"
-    git pull --ff-only origin "${IQTREE_REF}" || true
-    git submodule update --init --recursive
+    git submodule update --init --recursive 2>/dev/null || true
 fi
 
 # Compiler selection: prefer icx (Intel LLVM) for -xSAPPHIRERAPIDS. Fall back
