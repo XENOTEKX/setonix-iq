@@ -36,11 +36,13 @@ RUNS_DIR="${REPO_DIR}/logs/runs"
 
 mkdir -p "${LOGS_DIR}" "${RUNS_DIR}"
 
-# Default matrix: { dataset : thread-sweep }
+# Default matrix: matching Setonix thread sweep for direct cross-platform comparison.
+# Setonix used {1,4,8,16,32,64} for large/xlarge and {16,32,64,128} for mega_dna.
+# Gadi caps at 104 cores (no 128T), so mega_dna uses 16,32,64,104.
 declare -A MATRIX=(
-  [large_modelfinder]="1 4 13 26 52 104"
-  [xlarge_mf]="1 4 13 26 52 104"
-  [mega_dna]="13 26 52 104"
+  [large_modelfinder]="1 4 8 16 32 64"
+  [xlarge_mf]="1 4 8 16 32 64"
+  [mega_dna]="16 32 64 104"
 )
 
 SELECT_DATASET="${1:-}"
