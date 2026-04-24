@@ -23,7 +23,7 @@ USER_ID="${USER:-$(whoami)}"
 PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3}"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build}"
 IQTREE="${IQTREE:-${BUILD_DIR}/iqtree3}"
-TEST_DATA="${TEST_DATA:-${PROJECT_DIR}/test_scripts/test_data}"
+TEST_DATA="${TEST_DATA:-${PROJECT_DIR}/benchmarks}"
 RUNS_DIR="${REPO_DIR}/logs/runs"
 
 mkdir -p "${RUNS_DIR}"

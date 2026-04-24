@@ -77,6 +77,52 @@ Proceeding to Stage 2 (CI smoke) next.
 
 ---
 
+## 2026-04-24 — `gadi-iq`: Stages 2 + 4 **queued** (17 PBS jobs, full sweep)
+
+Per user directive "queue them all up" — skipped Stage 3 (single matrix
+point) since it's a strict subset of Stage 4, and submitted both Stage 2
+(CI pipeline) and Stage 4 (full 16-job benchmark matrix) together. All
+17 jobs accepted onto `normalsr-exec`, state `Q`.
+
+### Stage 2 — CI pipeline (1 job)
+
+| Job ID                  | Jobname          | NCPUs | Mem    | Walltime |
+|-------------------------|------------------|-------|--------|----------|
+| `166967398.gadi-pbs`    | iqtree-pipeline  | 104   | 500 GB | 01:00    |
+
+Runs `turtle.fa` + `example.phy` under the SPR binary to sanity-check
+the run.schema.json emission (pbs_id, env.pbs.*, verify block).
+Pointed `TEST_DATA` at `${PROJECT_DIR}/benchmarks/` where both files
+now live.
+
+### Stage 4 — full benchmark matrix (16 jobs)
+
+Each job: `ncpus=104, mem=500GB, walltime=24:00:00` on `normalsr`,
+builds one `(dataset × threads)` point, emits a JSON record under
+`logs/runs/` via the embedded worker `_run_matrix_job.sh`.
+
+| Dataset               | Threads sweep          | Job IDs (`166967*`) |
+|-----------------------|------------------------|---------------------|
+| `large_modelfinder`   | 1, 4, 13, 26, 52, 104  | 399, 400, 401, 402, 403, 404 |
+| `xlarge_mf`           | 1, 4, 13, 26, 52, 104  | 405, 406, 407, 408, 409, 410 |
+| `mega_dna`            | 13, 26, 52, 104        | 411, 412, 413, 414  |
+
+Expected SU burn (from the plan table above): **≈ 6.1 KSU ≈ 24 %** of
+the 25 000 SU grant. Walltime is billed against the requested 24 h cap
+per job, but each job exits as soon as IQ-TREE + the optional VTune
+hotspots pass finish — so actual SU should track IQ-TREE wall, not the
+reservation.
+
+Monitoring:
+
+```bash
+qstat -u $USER
+ls /scratch/rc29/as1708/iqtree3/gadi-ci/logs/
+ls /home/272/as1708/setonix-iq/logs/runs/
+```
+
+---
+
 ## 2026-04-24 — `gadi-iq`: Sapphire Rapids rerun plan (reproduce Setonix benchmarks)
 
 Before running any PBS jobs, audited the existing Setonix corpus and
