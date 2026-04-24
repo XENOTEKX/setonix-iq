@@ -66,6 +66,7 @@ help:
 	@printf '  $(GREEN)make build-profiling$(NC)  Build with frame pointers (fixes perf [unknown])\n'
 	@printf '  $(GREEN)make profile$(NC)          Profile with perf, update dashboard\n'
 	@printf '  $(GREEN)make deep-profile$(NC)     Deep profile (CPU + GPU hardware counters)\n'
+	@printf '  $(GREEN)make harvest$(NC)          Rsync wave data from Setonix scratch + enrich logs/runs\n'
 	@printf '  $(GREEN)make dashboard$(NC)        Validate + build static site, push to GitHub\n'
 	@printf '  $(GREEN)make test$(NC)             Run pytest suite over logs/*.json\n'
 	@printf '  $(GREEN)make status$(NC)           Show HPC job and allocation status\n'
@@ -121,6 +122,25 @@ deep-profile:
 	@$(MAKE) --no-print-directory dashboard
 
 # ── Dashboard targets ─────────────────────────────────────────────────────────
+
+.PHONY: harvest
+harvest:
+	$(call header,Harvesting wave data from Setonix scratch)
+	@mkdir -p "$(AGENT_DIR)/.scratch-mirror/setonix-ci/profiles"
+	rsync -av --prune-empty-dirs \
+	  --include='*/' \
+	  --include='env.json' \
+	  --include='profile_meta.json' \
+	  --include='samples.jsonl' \
+	  --include='hotspots.txt' \
+	  --include='perf_folded.txt' \
+	  --include='perf_stat.txt' \
+	  --include='iqtree_run.iqtree' \
+	  --include='iqtree_run.log' \
+	  --exclude='*' \
+	  setonix:/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/ \
+	  "$(AGENT_DIR)/.scratch-mirror/setonix-ci/profiles/"
+	SCRATCH_DIR="$(AGENT_DIR)/.scratch-mirror" python3 "$(AGENT_DIR)/tools/harvest_scratch.py"
 
 .PHONY: dashboard
 dashboard:

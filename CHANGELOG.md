@@ -2,6 +2,118 @@
 
 ---
 
+## 2026-04-24 — Wave 4 completed + off-cluster harvest path
+
+All four wave-4 mega jobs finished cleanly. The pipefail/timeout hardening
+held — every job produced a full artifact set (`perf_stat.txt`,
+`hotspots.txt`, `perf_folded.txt`, `profile_meta.json`, `samples.jsonl`,
+`env.json`, `iqtree_run.*`).
+
+| Job ID   | Threads | State     | Elapsed   | Ended (AWST)     |
+|----------|---------|-----------|-----------|------------------|
+| 41849110 | 16T     | COMPLETED | 06h50m28s | 2026-04-23 18:23 |
+| 41849111 | 32T     | COMPLETED | 07h05m37s | 2026-04-23 18:42 |
+| 41849112 | 64T     | COMPLETED | 07h57m24s | 2026-04-23 19:34 |
+| 41849113 | 128T    | COMPLETED | 08h19m02s | 2026-04-23 19:55 |
+
+IPC collapse on `mega_dna.fa` (500 taxa × 100 000 sites) matches the
+xlarge trend: **16T=0.412 → 32T=0.236 → 64T=0.116 → 128T=0.084** — same
+OMP-barrier / coherence saturation, now at a 10× larger problem size.
+
+### Why the site did not update after wave 4
+
+The published workflow assumed `ssh setonix && make harvest && make build
+&& git push` from `~/setonix-iq` on a Setonix login node, but that clone
+did not exist (`/home/asamuel/setonix-iq: No such file or directory`).
+Scratch had all the data; nobody ran harvest. No push → no Pages rebuild.
+
+### Fix: harvest from anywhere with access to Setonix over ssh
+
+- `tools/harvest_scratch.py` now honours `SCRATCH_DIR`, `PROFILE_ROOT`,
+  `BENCHMARKS_DIR` env vars. Defaults remain the Pawsey scratch paths.
+- `tools/harvest_scratch.py` merged-profile parser rewritten for the
+  current `run_mega_profile.sh` layout — `profile_meta.json` nests under
+  `meta["profile"]` (not `meta["perf_stat"]`), perf counter keys carry a
+  `:u` user-mode suffix, and only raw counters are emitted. Harvest now:
+  1. reads both layouts (`meta["profile"]` *or* `meta["perf_stat"]`),
+  2. strips the `:u` / `:k` suffix so keys match older runs,
+  3. derives `IPC`, `{cache,branch,L1-dcache,dTLB,iTLB}-miss-rate`, and
+     `{frontend,backend}-stall-rate` from the raw counters.
+- New `make harvest` target: `rsync -av --include=… --exclude='*'` from
+  Setonix scratch into `./.scratch-mirror/` (gitignored, text artifacts
+  only — no `perf.data`, no `*.ckp.gz`), then runs the Python harvester
+  with `SCRATCH_DIR` set to the mirror. Works from any box with ssh
+  access to Setonix.
+- Published wave-4 data: 4 new run files
+  (`mega_{16,32,64,128}t_baseline.json`), 18/18 schema-valid, 15 pytests
+  pass (14 + 1 xpass on the warn-only regression guard).
+
+### Outstanding
+
+`perf_folded.txt` was empty on all four wave-4 jobs (0 bytes). The
+`set +o pipefail … || true` guard kept the script alive, but
+`perf script | python stackcollapse` still produced no output. Likely
+`perf script` signalled before any stack was written; the `perf.data` is
+intact on scratch so folded stacks can be regenerated post-hoc on a
+login node. Not blocking — hotspots from `perf report` are populated.
+
+---
+
+## 2026-04-23 — Mega profiling wave 3 SIGPIPE failure + wave 4 resubmission
+
+Wave 3 (`41835470-73`) cleared the startup bugs from 04-22 and ran for
+9.5–11.5 h each, but **all four jobs failed with exit code 13 (SIGPIPE)** in
+step 5 during `perf script | python stackcollapse`. Confirmed cause: the
+hardening commit (`set +o pipefail` around the stackcollapse pipe + `timeout`
+around `perf record`) was authored on 04-22 *after* SLURM had already taken
+its submission-time snapshot of the script for wave 3. The hardened script
+sat on scratch but never reached the running jobs.
+
+| Job ID    | Threads | Started     | Failed at  | Elapsed | Stage at exit                  |
+|-----------|---------|-------------|------------|---------|--------------------------------|
+| 41835470  | 16T     | 04-22 19:03 | 04-23 06:34 | 11h30m | Generating hotspots/folded     |
+| 41835471  | 32T     | 04-22 19:03 | 04-23 06:28 | 11h25m | Generating hotspots/folded     |
+| 41835472  | 64T     | 04-22 19:52 | 04-23 05:30 | 9h37m  | Generating hotspots/folded     |
+| 41835473  | 128T    | 04-22 19:54 | 04-23 06:42 | 10h47m | Generating hotspots/folded     |
+
+### What survived on scratch (per `mega_<T>t_<jobid>/`)
+
+- `perf_stat.txt` ✅ — full 27-event multiplexed counter pass (≈21 366 s for 16T)
+- `perf.data` ✅ — 99 Hz call-graph capture
+- `samples.jsonl` ✅ — 10 s `/proc` time series
+- `env.json`, `iqtree_run.{iqtree,treefile,model.gz,log}` ✅
+- **Missing:** `hotspots.txt`, `perf_folded.txt`, `profile_meta.json`
+
+### Resubmission — wave 4 (`41849110-13`)
+
+Verified before submitting:
+
+- `grep` confirmed `set +o pipefail` (line 329) and `PERF_RECORD_MAX_S=7200`
+  with `timeout --preserve-status` (lines 316–317) are present in the
+  scratch copy of `run_mega_profile.sh`.
+- `bash -n` syntax-checked both `run_mega_profile.sh` and `submit_mega_batch.sh`.
+- Re-ran `./submit_mega_batch.sh` from scratch with no thread-count argument →
+  default `16 32 64 128`.
+
+| Job ID    | Threads | State | Reason   | Est. Start (AWST)  | Est. End (AWST)    |
+|-----------|---------|-------|----------|--------------------|--------------------|
+| 41849110  | 16T     | PD    | Priority | 2026-04-23 11:51   | 2026-04-24 11:51   |
+| 41849111  | 32T     | PD    | Priority | 2026-04-23 11:51   | 2026-04-24 11:51   |
+| 41849112  | 64T     | PD    | Priority | 2026-04-23 11:51   | 2026-04-24 11:51   |
+| 41849113  | 128T    | PD    | Priority | 2026-04-23 11:51   | 2026-04-24 11:51   |
+
+This snapshot of the script *includes* the pipefail/timeout hardening, so the
+SIGPIPE failure mode that killed wave 3 cannot recur here.
+
+### Open: backfill from wave-3 `perf.data`
+
+The four `perf.data` files from wave 3 are intact on scratch. A follow-up
+post-processing pass on a login node (`perf report` + `perf script |
+stackcollapse`) can recover hotspots/folded stacks without consuming any
+SLURM time. Not done in this entry.
+
+---
+
 ## 2026-04-22 — Mega profiling: startup-crash fixes + defensive hardening
 
 Two consecutive bugs killed the 4 mega jobs (`41784642-45`, then `41814628-32`)

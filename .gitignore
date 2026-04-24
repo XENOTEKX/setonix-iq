@@ -11,6 +11,9 @@ IMPLEMENTATION_PLAN.md
 .host.log
 .host.pid
 
+# Local rsync mirror of Setonix scratch for off-cluster harvest
+.scratch-mirror/
+
 # Python
 __pycache__/
 *.pyc

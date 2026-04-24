@@ -30,9 +30,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "logs" / "runs"
-SCRATCH = Path("/scratch/pawsey1351/asamuel/iqtree3")
-PROFILE_ROOT = SCRATCH / "setonix-ci" / "profiles"
-BENCHMARKS = SCRATCH / "benchmarks"
+# Where the run_mega_profile.sh outputs live. Defaults to Setonix scratch;
+# override with SCRATCH_DIR= (e.g. a local rsync mirror) when harvesting
+# off-cluster. Individual paths can still be overridden with PROFILE_ROOT/
+# BENCHMARKS_DIR if the mirror has a different layout.
+SCRATCH = Path(os.environ.get("SCRATCH_DIR", "/scratch/pawsey1351/asamuel/iqtree3"))
+PROFILE_ROOT = Path(os.environ.get("PROFILE_ROOT", str(SCRATCH / "setonix-ci" / "profiles")))
+BENCHMARKS = Path(os.environ.get("BENCHMARKS_DIR", str(SCRATCH / "benchmarks")))
 
 # Map the run labels we have in logs/runs to scratch profile directory names.
 # Scratch dirs are suffixed with the SLURM ID of the parent job; since mega/
@@ -334,6 +338,49 @@ def dataset_file_info(filename: str) -> dict:
     return info
 
 
+def _normalise_metric_keys(metrics: dict) -> dict:
+    """Strip perf's ':u' / ':k' mode-suffixes so keys match the older runs."""
+    if not isinstance(metrics, dict):
+        return {}
+    out: dict = {}
+    for k, v in metrics.items():
+        base = k.split(":", 1)[0] if isinstance(k, str) else k
+        out[base] = v
+    return out
+
+
+def _derive_rates(metrics: dict) -> None:
+    """Fill in IPC and *-rate fields that the dashboard expects."""
+    def g(key):
+        v = metrics.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def ratio(num_key, den_key, out_key):
+        n, d = g(num_key), g(den_key)
+        if n is not None and d and out_key not in metrics:
+            metrics[out_key] = n / d
+
+    cycles = g("cycles")
+    instructions = g("instructions")
+    if cycles and instructions and "IPC" not in metrics:
+        metrics["IPC"] = instructions / cycles
+    ratio("cache-misses", "cache-references", "cache-miss-rate")
+    ratio("branch-misses", "branch-instructions", "branch-miss-rate")
+    ratio("L1-dcache-load-misses", "L1-dcache-loads", "L1-dcache-miss-rate")
+    ratio("dTLB-load-misses", "dTLB-loads", "dTLB-miss-rate")
+    ratio("iTLB-load-misses", "iTLB-loads", "iTLB-miss-rate")
+    if cycles:
+        fe = g("stalled-cycles-frontend")
+        be = g("stalled-cycles-backend")
+        if fe is not None and "frontend-stall-rate" not in metrics:
+            metrics["frontend-stall-rate"] = fe / cycles
+        if be is not None and "backend-stall-rate" not in metrics:
+            metrics["backend-stall-rate"] = be / cycles
+
+
 def enrich_run(run: dict) -> bool:
     """Enrich a single run in place. Returns True if anything changed."""
     label = run.get("label")
@@ -412,11 +459,20 @@ def enrich_run(run: dict) -> bool:
 
     if meta:
         profile = dict(run.get("profile") or {})
-        # profile_meta.json structure: {env, perf_stat{metrics, raw_events},
-        # samples{...}, ...}
-        perf_stat = meta.get("perf_stat") or {}
+        # profile_meta.json may use one of two layouts:
+        #   old: {perf_stat: {metrics, raw_events}, ...}
+        #   new (run_mega_profile.sh): {profile: {metrics, perf_cmd,
+        #                               peak_rss_kb, memory_timeseries, ...}}
+        perf_stat = meta.get("perf_stat") or meta.get("profile") or {}
         metrics = perf_stat.get("metrics") or meta.get("metrics") or {}
         raw_events = perf_stat.get("raw_events") or meta.get("raw_events") or {}
+        # perf uses a ':u' suffix for user-only counting. Strip it so the
+        # dashboard schema keys line up with the earlier runs.
+        metrics = _normalise_metric_keys(metrics)
+        raw_events = _normalise_metric_keys(raw_events)
+        # Compute derived rates (IPC, miss-rates, stall-rates) from the raw
+        # counters, matching what run_profiling.sh wrote for the older runs.
+        _derive_rates(metrics)
         if metrics:
             merged = dict(profile.get("metrics") or {})
             merged.update(metrics)
@@ -426,6 +482,12 @@ def enrich_run(run: dict) -> bool:
         if raw_events and profile.get("raw_events") != raw_events:
             profile["raw_events"] = raw_events
             changed = True
+        # perf_cmd / peak_rss_kb may live directly under meta['profile']
+        for key in ("perf_cmd", "peak_rss_kb"):
+            val = perf_stat.get(key)
+            if val and profile.get(key) != val:
+                profile[key] = val
+                changed = True
         run["profile"] = profile
 
     if samples_summary:
