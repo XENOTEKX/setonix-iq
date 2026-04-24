@@ -394,6 +394,64 @@
 }
 .ds-card--gadi { border-left: 3px solid rgba(251, 146, 60, 0.55); }
 .ds-card--setonix { border-left: 3px solid rgba(139, 92, 246, 0.55); }
+/* Cross-platform card: gradient stripe combining both colours. */
+.ds-card--cross {
+  border-left: 3px solid transparent;
+  border-image: linear-gradient(180deg, rgba(139,92,246,0.6) 0%, rgba(251,146,60,0.6) 100%) 1;
+  border-image-slice: 1;
+}
+.ds-card .ds-head {
+  flex-wrap: wrap;
+}
+.ds-card .ds-head .ds-tag + .ds-tag {
+  margin-left: 4px;
+}
+/* Per-platform comparison block at the bottom of each dataset card */
+.ds-plat-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.ds-plat {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.015);
+  border: 1px solid var(--border);
+}
+.ds-plat--setonix { border-color: rgba(139, 92, 246, 0.25); }
+.ds-plat--gadi    { border-color: rgba(251, 146, 60, 0.25); }
+.ds-plat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.ds-plat-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ds-plat--setonix .ds-plat-label { color: #c4b5fd; }
+.ds-plat--gadi    .ds-plat-label { color: #fdba74; }
+.ds-plat--setonix .ds-section-dot { background: #a78bfa; box-shadow: 0 0 8px rgba(167,139,250,0.5); }
+.ds-plat--gadi    .ds-section-dot { background: #fb923c; box-shadow: 0 0 8px rgba(251,146,60,0.5); }
+.ds-plat-count {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+.ds-plat .ds-row {
+  font-size: 0.74rem;
+  padding: 2px 0;
+}
 .ds-card .ds-dim {
   font-size: 0.8rem;
   color: var(--text2);
