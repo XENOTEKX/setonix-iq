@@ -106,7 +106,7 @@ IQRC="${IQRC:-0}"
 END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
 
-# Collect hardware counters in a second pass (won't affect primary timing).
+# Pass 2: perf stat — hardware counters (IPC, cache, branch, TMA topdown).
 if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
     perf stat -e "${PERF_EVENTS}" -o "${WORK_DIR}/perf_stat.txt" \
         "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
@@ -114,8 +114,31 @@ if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
         > /dev/null 2>&1 || true
 fi
 
-# Optional bounded VTune pass (skip for 1T to save SU).
-if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 && "${THREADS}" -ge 13 ]]; then
+# Pass 3: perf record — callgraph for flamegraph (all thread counts, capped 20 min).
+# -F 99: 99 Hz sampling. -g: frame pointers (binary built with -fno-omit-frame-pointer).
+# Output: perf.data → perf_callgraph.txt (folded stack format for flamegraph tools).
+if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
+    timeout --preserve-status 1200 \
+        perf record -g -F 99 -o "${WORK_DIR}/perf.data" \
+            "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
+                        --prefix "${WORK_DIR}/iqtree_perf_record" \
+        > "${WORK_DIR}/perf_record.log" 2>&1 || true
+    # Collapse stacks to folded format (compatible with FlameGraph perl scripts).
+    if [[ -f "${WORK_DIR}/perf.data" ]]; then
+        perf script -i "${WORK_DIR}/perf.data" \
+            > "${WORK_DIR}/perf_script.txt" 2>/dev/null || true
+        # Produce a simple hotspot summary (top 30 symbols by self time).
+        perf report -i "${WORK_DIR}/perf.data" --stdio --no-children \
+            -n --percent-limit 0.1 \
+            > "${WORK_DIR}/perf_report.txt" 2>/dev/null || true
+    fi
+fi
+
+# Pass 4: VTune hotspots + microarchitecture exploration (all thread counts,
+# capped 30 min). Previously skipped 1T/4T/8T — now runs on all to get
+# single-thread hotspot data which is the most valuable for GPU offload analysis.
+if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 ]]; then
+    # Hotspots with call stacks.
     timeout --preserve-status 1800 \
         vtune -collect hotspots -knob sampling-mode=hw \
               -knob enable-stack-collection=true \
@@ -123,9 +146,34 @@ if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 && "${THREADS}" -ge 13
               -- "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
                  --prefix "${WORK_DIR}/iqtree_vtune" \
               > "${WORK_DIR}/vtune_collect.log" 2>&1 || true
-    [[ -d "${WORK_DIR}/vtune_hotspots" ]] && \
+    if [[ -d "${WORK_DIR}/vtune_hotspots" ]]; then
         vtune -report summary -r "${WORK_DIR}/vtune_hotspots" \
               -format text > "${WORK_DIR}/vtune_summary.txt" 2>/dev/null || true
+        # Hotspot function list with module + source line (for flamegraph overlay).
+        vtune -report hotspots -r "${WORK_DIR}/vtune_hotspots" \
+              -format csv -csv-delimiter tab \
+              > "${WORK_DIR}/vtune_hotspots.tsv" 2>/dev/null || true
+        # Top-Down Microarchitecture Analysis metrics (TMA level 1+2).
+        vtune -report hw-events -r "${WORK_DIR}/vtune_hotspots" \
+              -format text > "${WORK_DIR}/vtune_hw_events.txt" 2>/dev/null || true
+    fi
+    # Microarchitecture exploration pass (adds memory access + uarch breakdown).
+    # Skip for mega_dna × 1T/4T — too slow. Run for ≥8T or small datasets.
+    if [[ "${THREADS}" -ge 8 || "${DATASET_NAME}" == "large_modelfinder" ]]; then
+        timeout --preserve-status 1800 \
+            vtune -collect uarch-exploration \
+                  -knob enable-stack-collection=true \
+                  -r "${WORK_DIR}/vtune_uarch" \
+                  -- "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
+                     --prefix "${WORK_DIR}/iqtree_vtune_uarch" \
+                  > "${WORK_DIR}/vtune_uarch.log" 2>&1 || true
+        if [[ -d "${WORK_DIR}/vtune_uarch" ]]; then
+            vtune -report summary -r "${WORK_DIR}/vtune_uarch" \
+                  -format text > "${WORK_DIR}/vtune_uarch_summary.txt" 2>/dev/null || true
+            vtune -report hw-events -r "${WORK_DIR}/vtune_uarch" \
+                  -format text > "${WORK_DIR}/vtune_uarch_hw.txt" 2>/dev/null || true
+        fi
+    fi
 fi
 
 # Emit the run.schema.json record.
@@ -216,7 +264,7 @@ metrics = {
 }
 metrics = {k: v for k, v in metrics.items() if v is not None}
 
-# VTune summary if present.
+# VTune hotspots summary + uarch-exploration if present.
 vtune = None
 vs = os.path.join(work, "vtune_summary.txt")
 if os.path.isfile(vs):
@@ -233,6 +281,43 @@ if os.path.isfile(vs):
             try: out[k] = float(m.group(1))
             except ValueError: pass
     if out: vtune = out
+
+vtune_uarch = None
+vu = os.path.join(work, "vtune_uarch_summary.txt")
+if os.path.isfile(vu):
+    txt = open(vu, errors="replace").read()
+    out = {}
+    for k, pat in [
+        ("elapsed_time_s",           r"Elapsed Time:\s+([\d.]+)"),
+        ("effective_cpu_util",        r"Effective CPU Utilization:\s+([\d.]+)%"),
+        ("memory_bound_pct",          r"Memory Bound:\s+([\d.]+)"),
+        ("backend_bound_pct",         r"Backend Bound:\s+([\d.]+)"),
+        ("frontend_bound_pct",        r"Front-End Bound:\s+([\d.]+)"),
+        ("retiring_pct",              r"Retiring:\s+([\d.]+)"),
+    ]:
+        m = re.search(pat, txt)
+        if m:
+            try: out[k] = float(m.group(1))
+            except ValueError: pass
+    if out: vtune_uarch = out
+
+# Record which artefact files were produced (paths on scratch).
+artefacts = {}
+for fname, key in [
+    ("perf_stat.txt",          "perf_stat"),
+    ("perf_script.txt",        "perf_callgraph"),
+    ("perf_report.txt",        "perf_hotspot_report"),
+    ("perf.data",              "perf_data"),
+    ("vtune_hotspots",         "vtune_hotspots_dir"),
+    ("vtune_hotspots.tsv",     "vtune_hotspots_tsv"),
+    ("vtune_hw_events.txt",    "vtune_hw_events"),
+    ("vtune_uarch",            "vtune_uarch_dir"),
+    ("vtune_uarch_summary.txt","vtune_uarch_summary"),
+    ("vtune_uarch_hw.txt",     "vtune_uarch_hw"),
+]:
+    p = os.path.join(work, fname)
+    if os.path.exists(p):
+        artefacts[key] = p
 
 verify = []
 if rep_ll is not None:
@@ -284,7 +369,9 @@ record = {
     "threads": thr,
     "perf_cmd": perf_cmd,
     "metrics": metrics,
-    "vtune":   vtune,
+    "vtune":       vtune,
+    "vtune_uarch": vtune_uarch,
+    "artefacts":   artefacts,
   },
 }
 out_path = os.path.join(runs, rid + ".json")
