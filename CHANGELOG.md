@@ -2,6 +2,83 @@
 
 ---
 
+## 2026-04-25 (late) — `mega_dna` rerun submitted: existing 2 Gadi records had zero usable data
+
+### What we found
+
+Re-inspecting the two `mega_dna` Gadi records previously considered
+"valid" (because the **file dimensions** matched Setonix):
+
+| File                                   | `pbs_id`    | `all_pass` | `total_time` |
+|----------------------------------------|-------------|:----------:|:------------:|
+| `logs/runs/gadi_mega_dna_13t_sr.json`  | `166967411` | `false`    | **0 s**      |
+| `logs/runs/gadi_mega_dna_26t_sr.json`  | `166967412` | `false`    | **0 s**      |
+
+Both records show zero walltime and a failed run — they are casualties of
+the **same `stalled-cycles-frontend/backend` + NUMA thread-width bugs**
+documented in the 2026-04-24 CHANGELOG entry. The file dimensions were
+coincidentally correct, but the runs themselves captured no IQ-TREE timing
+data, so they cannot contribute to any scaling / IPC / efficiency analysis.
+
+Conclusion: **`mega_dna` on Gadi currently has zero usable data points**,
+despite looking OK in the dataset-dimension audit.
+
+### Action taken
+
+Submitted the `mega_dna` thread sweep using the post-fix worker
+(`gadi-ci/submit_benchmark_matrix.sh mega_dna`, which uses the corrected
+`{16, 32, 64, 104}` thread matrix and the worker that runs IQ-TREE in
+**Pass 1 before `perf stat`**, so timing is recorded regardless of perf
+status). Same 500 × 100 000 alignment on scratch (unchanged, matches
+Setonix bit-for-bit), seed 1.
+
+| Job ID        | Dataset    | Threads | Thread-count rationale |
+|---------------|------------|:-------:|------------------------|
+| `166978498`   | `mega_dna` | 16      | matches Setonix 16T    |
+| `166978499`   | `mega_dna` | 32      | matches Setonix 32T    |
+| `166978500`   | `mega_dna` | 64      | matches Setonix 64T    |
+| `166978501`   | `mega_dna` | 104     | Gadi node cap (Setonix ran 128T — flagged in JSON) |
+
+### Why this one "will work this time"
+
+Three defence-in-depth mechanisms, each verified in
+`gadi-ci/submit_benchmark_matrix.sh` before submission:
+
+1. **IQ-TREE runs first** (line 220 `wait "${IQTREE_PID}" || IQRC=$?`).
+   Its own walltime is extracted from the `Total wall-clock time` line
+   of the IQ-TREE log (line 318), so `iqwall` is populated even if
+   every downstream profiler fails.
+2. **`perf stat` only runs if `IQRC == 0`** (line 231). `stalled-cycles-*`
+   events removed (line 101). All events carry `:u` user-mode suffix
+   (line 109), required because Gadi compute nodes ship with
+   `/proc/sys/kernel/perf_event_paranoid=2`.
+3. **`summary.pass` / `.all_pass`** are driven by `iqrc`, not perf
+   return code (lines 488–489). So a clean IQ-TREE finish produces
+   `pass=1` + real `total_time`, even if the profiler layer errors.
+
+### Queue state after submission
+
+```
+12 jobs from the corrected dataset wave  (166978120 – 166978131)
+ 4 jobs mega_dna rerun wave              (166978498 – 166978501)
+16 jobs total  ·  large_mf R×4/Q×2  ·  xlarge_mf Q×6  ·  mega_dna Q×4
+```
+
+Incremental SU estimate for the `mega_dna` wave: **≈ 0.9 KSU** (worst-case
+1.5 h walltime per job, dominated by the 16T point; extrapolated from
+Setonix baselines scaled ~1.8× for the added 5 profiling passes).
+
+### Follow-up
+
+- When `mega_dna` jobs finish, delete the two zero-data records
+  (`gadi_mega_dna_{13,26}t_sr.json`) — they are superseded by the
+  new matched-thread-count sweep and add no information.
+- Run the standard post-harvest pipeline
+  (`harvest_scratch.py → normalize.py → validate.py → build.py`) and
+  push.
+
+---
+
 ## 2026-04-25 (evening) — Priority rerun **executed**: corrected Gadi datasets + 12 fresh sweep jobs queued
 
 Follow-up to the earlier 2026-04-25 containment entry. Executed the
