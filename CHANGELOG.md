@@ -55,6 +55,26 @@ Submitted: **`166967018.gadi-pbs`** (queue `normalsr-exec`, 104c/500GB/1h,
 state `Q`). Will append runtime + artefact listing once the job
 completes.
 
+**Stage 1 result:** exit 0, walltime **00:00:03**, **0.17 SU** billed (vs
+210 SU estimated — AliSim is wildly fast on Sapphire Rapids for these
+sizes). Artefacts in `/scratch/rc29/as1708/iqtree3/benchmarks/`:
+
+```
+34K   example.phy
+12K   turtle.fa
+2.4M  large_modelfinder.fa  (500 × 5000, seed 101)
+9.6M  xlarge_mf.fa          (1000 × 10000, seed 202)
+48M   mega_dna.fa           (500 × 100000, seed 303)
+```
+
+Minor fix: `turtle.fa` lives at `src/iqtree3/test_scripts/test_data/`
+(not `example_data/`) — added that path to the `generate_datasets.sh`
+candidate list and copied the file manually for this run.
+
+**Cumulative SU burn so far:** ≈ 0.2 SU (out of 25 000 grant).
+
+Proceeding to Stage 2 (CI smoke) next.
+
 ---
 
 ## 2026-04-24 — `gadi-iq`: Sapphire Rapids rerun plan (reproduce Setonix benchmarks)

@@ -49,6 +49,7 @@ for f in turtle.fa example.phy; do
     for candidate in \
         "${SRC_DIR}/example_data/${f}" \
         "${SRC_DIR}/example/${f}" \
+        "${SRC_DIR}/test_scripts/test_data/${f}" \
         "${SRC_DIR}/${f}"; do
         if [[ -f "${candidate}" ]]; then
             cp -f "${candidate}" "${BENCHMARKS}/${f}"
