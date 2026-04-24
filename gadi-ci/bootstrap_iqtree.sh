@@ -48,10 +48,14 @@ echo "║  Repo:          ${IQTREE_REPO} (${IQTREE_REF})"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
 if command -v module >/dev/null 2>&1; then
-    module load cmake/3.31.6            2>/dev/null || true
+    module load cmake/3.31.6                 2>/dev/null || true
     module load intel-compiler-llvm/2024.2.0 2>/dev/null || true
-    module load gcc/14.2.0              2>/dev/null || true
+    module load gcc/14.2.0                   2>/dev/null || true
+    module load eigen/3.3.7                  2>/dev/null || true
 fi
+# Eigen3 include dir — set from module env, or fall back to known Gadi path.
+EIGEN3_INCLUDE_DIR="${EIGEN_ROOT:+${EIGEN_ROOT}/include/eigen3}"
+EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.3.7/include/eigen3}"
 
 mkdir -p "$(dirname "${SRC_DIR}")"
 
@@ -96,6 +100,7 @@ build_variant() {
     cd "${build_dir}"
     CC="${CC}" CXX="${CXX}" cmake "${SRC_DIR}" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DEIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR}" \
         -DCMAKE_C_FLAGS="${ARCH_FLAGS} ${extra}" \
         -DCMAKE_CXX_FLAGS="${ARCH_FLAGS} ${extra}"
     make -j"$(nproc)"
