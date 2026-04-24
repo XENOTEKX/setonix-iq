@@ -1822,7 +1822,10 @@
     "constant_sites": 0,
     "invariant_sites": 0,
     "informative_sites": 99996,
-    "sequence_type": "DNA"
+    "sequence_type": "DNA",
+    "file_size_bytes": 50006000,
+    "sha256": "94d7d38d0cddbb05401dc018d09f28248cf413bc4183a21c70afae5b7a4db083",
+    "path": "/scratch/pawsey1351/asamuel/iqtree3/benchmarks/mega_dna.fa"
   },
   "modelfinder": {
     "best_model_bic": "HKY+F+ASC+R5",

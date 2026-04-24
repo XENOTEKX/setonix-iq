@@ -489,12 +489,26 @@ def enrich_run(run: dict) -> bool:
     dataset_name = (run.get("profile") or {}).get("dataset")
     if dataset_name:
         ds_info = {"file": dataset_name}
+        # Try the BENCHMARKS path first (works when running on Setonix or
+        # with a full scratch mirror). Falls back silently if not present.
         file_info = dataset_file_info(dataset_name)
         ds_info.update(file_info)
+        # Pull parsed fields from the .iqtree report
         for key in ("taxa", "sites", "patterns", "constant_sites",
                     "invariant_sites", "informative_sites", "sequence_type"):
             if key in parsed:
                 ds_info[key] = parsed[key]
+        # Prefer ground-truth size/sha256 from profile_meta.json over the
+        # FASTA character-count estimate in dataset_file_info().
+        meta_now = parse_profile_meta(pdir / "profile_meta.json")
+        meta_ds = (meta_now.get("dataset") or
+                   (meta_now.get("env") or {}).get("dataset") or {})
+        if meta_ds.get("size_bytes"):
+            ds_info["file_size_bytes"] = meta_ds["size_bytes"]
+        if meta_ds.get("sha256"):
+            ds_info["sha256"] = meta_ds["sha256"]
+        if meta_ds.get("path"):
+            ds_info["path"] = meta_ds["path"]
         if ds_info != run.get("dataset_info"):
             run["dataset_info"] = ds_info
             changed = True
