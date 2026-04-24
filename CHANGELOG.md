@@ -2,6 +2,122 @@
 
 ---
 
+## 2026-04-24 — `gadi-iq`: Stage 4 **resubmitted** — full profiling suite + thread sweep aligned to Setonix
+
+Cancelled the first Stage 4 batch (jobs `166967399–414`, initial submission)
+after discovering two silent-failure bugs and a profiling gap versus the Setonix
+corpus. Fixed, committed (`1896deb`), and resubmitted 16 jobs.
+
+### Bug fixes that triggered the resubmission
+
+| # | Bug | Impact | Fix |
+|---|-----|--------|-----|
+| 1 | `stalled-cycles-frontend` and `stalled-cycles-backend` in `PERF_EVENTS` — not available on the Gadi kernel PMU | `perf stat` exited non-zero immediately, aborting the entire worker before IQ-TREE started; every job recorded 0 results in 2–3 s | Removed both events from `PERF_EVENTS`; restructured worker to run IQ-TREE **first** (Pass 1) so timing is captured regardless of perf status |
+| 2 | Thread sweep used NUMA-aligned widths `{1,4,13,26,52,104}` instead of the Setonix sweep `{1,4,8,16,32,64}` | Results would not be directly comparable to Setonix data | Updated matrix to `{1,4,8,16,32,64}` for `large_modelfinder` + `xlarge_mf`; `{16,32,64,104}` for `mega_dna` (Setonix used 128T; Gadi caps at 104T) |
+
+### Profiling gap vs Setonix — what was missing
+
+The original worker only ran `perf stat` + a text VTune summary (and
+only when `THREADS ≥ 13`). Compared to `setonix-ci/run_mega_profile.sh`:
+
+| Setonix had | Gadi had (before this fix) | Gap |
+|---|---|---|
+| `perf stat` (AMD PMU, 27 events) | `perf stat` (Intel PMU) | ✅ covered |
+| `perf record -g -F99` → `perf.data` | ✗ missing | ❌ callgraph absent |
+| `perf report` → `hotspots.txt` | ✗ missing | ❌ |
+| `perf script` → `perf_folded.txt` (stackcollapse for flamegraph) | ✗ missing | ❌ |
+| `vtune` (N/A on AMD) | `vtune hotspots` text summary, THREADS ≥ 13 only | ⚠️ limited |
+| `/proc` time-series sampler → `samples.jsonl` | ✗ missing | ❌ (still outstanding — see below) |
+| `profile_meta.json` (structured JSON) | Emitted as run JSON to `logs/runs/` | ✅ covered (different schema) |
+
+### Full profiling suite added (commit `1896deb`)
+
+Each worker job now runs 5 passes per `(dataset × threads)` point:
+
+| Pass | Tool | Artefacts | Notes |
+|------|------|-----------|-------|
+| 1 | IQ-TREE (direct) | `iqtree_run.log`, `iqtree_run.iqtree`, `iqtree_run.treefile` | Always runs; provides wall time + lnL regardless of profiling |
+| 2 | `perf stat -e ${PERF_EVENTS}` | `perf_stat.txt` | IPC, cache/branch/TLB miss rates, Intel TMA topdown L1 (Retiring, Bad-Spec, FE-Bound, BE-Bound) |
+| 3 | `perf record -g -F99` (capped 20 min) | `perf.data`, `perf_script.txt`, `perf_report.txt` | Callgraph at 99 Hz; `perf_script.txt` is flamegraph-ready (pass through FlameGraph `stackcollapse-perf.pl`); `perf_report.txt` has top-30 symbols by self time |
+| 4a | `vtune -collect hotspots` (all thread counts) | `vtune_hotspots/`, `vtune_summary.txt`, `vtune_hotspots.tsv`, `vtune_hw_events.txt` | Hardware sampling hotspots with callstacks; `.tsv` is function list with module + source line for overlay; previously skipped low-thread jobs |
+| 4b | `vtune -collect uarch-exploration` (≥ 8T or `large_modelfinder`) | `vtune_uarch/`, `vtune_uarch_summary.txt`, `vtune_uarch_hw.txt` | Full TMA L1+L2: Retiring, Bad Speculation, Frontend Bound, Backend Bound, **Memory Bound** — the key metric for GPU offload ROI analysis |
+
+JSON run records (under `logs/runs/`) now include a `vtune_uarch` block with
+`{memory_bound_pct, backend_bound_pct, frontend_bound_pct, retiring_pct}` and
+an `artefacts` dict mapping every key above to its scratch path.
+
+### Gadi vs Setonix profiling parity (post-fix)
+
+| Capability | Setonix (AMD, SLURM) | Gadi (Intel SPR, PBS) |
+|---|---|---|
+| Hardware counters | `perf stat` (AMD PMU, 27 events) | `perf stat` (Intel PMU, 19 events + topdown TMA) |
+| IPC | ✅ | ✅ |
+| Cache / branch / TLB miss rates | ✅ | ✅ |
+| Frontend / backend stall rates | ✅ (stalled-cycles-* available) | ⚠️ derived from TMA topdown slots (kernel PMU does not expose `stalled-cycles-*`) |
+| TMA Level 1 (Retiring, Bad-Spec, FE/BE-Bound) | ✅ AMD via perf stat | ✅ Intel via perf stat + **VTune uarch-exploration** (dual coverage) |
+| TMA Level 2 (Memory Bound) | ✗ | ✅ VTune uarch-exploration |
+| Callgraph (for flamegraph) | ✅ `perf record` → `perf_folded.txt` | ✅ `perf record` → `perf_script.txt` (same data, one stackcollapse step away from flamegraph) |
+| Hotspot function list | ✅ `perf report` → `hotspots.txt` | ✅ `perf report` → `perf_report.txt` **AND** `vtune hotspots` → `vtune_hotspots.tsv` |
+| Function-level CPI / CPU time | ✗ | ✅ VTune hotspots `.tsv` |
+| Per-thread / NUMA RSS + IO time-series | ✅ `/proc` sampler → `samples.jsonl` | ❌ **Not yet ported** |
+| GPU profiling | ✗ (no AMD GPU work on Setonix) | ✗ (`gpuvolta` deferred) |
+
+**Only outstanding gap:** the `/proc` time-series sampler (`samples.jsonl`) that
+records RSS, IO bytes, and per-thread CPU ticks every ~10 s through the run.
+This is valuable for tracking memory growth and NUMA placement drift across
+thread counts. It can be added as a background process in Pass 1 without
+requeuing — see "Outstanding" below.
+
+### Resubmission — job table
+
+All 16 jobs accepted onto `normalsr`, 4 running at time of writing:
+
+| Job ID | Dataset | Threads | State |
+|--------|---------|---------|-------|
+| `166968738.gadi-pbs` | `large_modelfinder` | 1T  | R |
+| `166968739.gadi-pbs` | `large_modelfinder` | 4T  | R |
+| `166968740.gadi-pbs` | `large_modelfinder` | 8T  | R |
+| `166968741.gadi-pbs` | `large_modelfinder` | 16T | R |
+| `166968742.gadi-pbs` | `large_modelfinder` | 32T | Q |
+| `166968743.gadi-pbs` | `large_modelfinder` | 64T | Q |
+| `166968744.gadi-pbs` | `xlarge_mf`         | 1T  | Q |
+| `166968745.gadi-pbs` | `xlarge_mf`         | 4T  | Q |
+| `166968746.gadi-pbs` | `xlarge_mf`         | 8T  | Q |
+| `166968747.gadi-pbs` | `xlarge_mf`         | 16T | Q |
+| `166968748.gadi-pbs` | `xlarge_mf`         | 32T | Q |
+| `166968749.gadi-pbs` | `xlarge_mf`         | 64T | Q |
+| `166968750.gadi-pbs` | `mega_dna`          | 16T | Q |
+| `166968751.gadi-pbs` | `mega_dna`          | 32T | Q |
+| `166968752.gadi-pbs` | `mega_dna`          | 64T | Q |
+| `166968753.gadi-pbs` | `mega_dna`          | 104T| Q |
+
+Thread sweep now matches Setonix exactly (`{1,4,8,16,32,64}` for
+`large_modelfinder` + `xlarge_mf`; `{16,32,64,104}` for `mega_dna` — Setonix
+used 128T but Gadi node caps at 104T).
+
+### Commits in this fix batch
+
+| Hash | Message |
+|------|---------|
+| `59b06bb` | Fix perf events (remove stalled-cycles-*) + fix run_pipeline args parsing |
+| `42146b3` | Align thread sweep to Setonix: {1,4,8,16,32,64} + {16,32,64,104} |
+| `1896deb` | Add full profiling: perf record callgraph, VTune hotspots all threads, uarch-exploration |
+
+### Outstanding
+
+- **`/proc` time-series sampler** — background process during Pass 1 that writes
+  `samples.jsonl` (RSS, IO, per-thread CPU ticks at 10 s intervals). Matches
+  `setonix-ci/run_mega_profile.sh` steps 1–2. Low risk to add; requires one more
+  worker edit and a matrix requeue.
+- **Stage 2 CI pipeline** — job `166967398.gadi-pbs` was cancelled with the first
+  batch; not resubmitted. Should be requeued once Stage 4 first jobs confirm
+  the worker is healthy.
+- **Flamegraph rendering** — `perf_script.txt` → `stackcollapse-perf.pl` →
+  `flamegraph.pl` requires the FlameGraph perl scripts on a login node
+  (no compute-node internet). Can be done post-hoc once jobs finish.
+
+---
+
 ## 2026-04-24 — `gadi-iq`: Stage 0 bootstrap **done** (verified end-to-end)
 
 After 7 failed PBS bootstrap submissions burning ≈ 0 SU each (all died in
