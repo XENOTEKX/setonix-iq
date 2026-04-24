@@ -164,10 +164,13 @@ def summarize_run(run: dict) -> dict:
     dataset = p.get("dataset") or hints.get("dataset")
 
     # Prefer harvested ground truth over the heuristic lookup.
+    # Gadi sparse records only carry fasta_taxa/fasta_sites (no alisim-parsed
+    # counts) — fall back to those before the curated lookup.
     ds_gt = run.get("dataset_info") or {}
     fallback = dataset_lookup(dataset) or {}
-    taxa = ds_gt.get("taxa") or fallback.get("taxa")
-    sites = ds_gt.get("sites") or fallback.get("sites")
+    taxa = ds_gt.get("taxa") or ds_gt.get("fasta_taxa") or fallback.get("taxa")
+    sites = ds_gt.get("sites") or ds_gt.get("fasta_sites") or fallback.get("sites")
+    patterns = ds_gt.get("patterns") or ds_gt.get("fasta_patterns")
     if ds_gt.get("file_size_bytes"):
         size_mb = round(ds_gt["file_size_bytes"] / 1_000_000, 2)
         size_estimated = False
@@ -187,7 +190,7 @@ def summarize_run(run: dict) -> dict:
         "dataset_short": os.path.basename(dataset) if dataset else None,
         "taxa": taxa,
         "sites": sites,
-        "patterns": ds_gt.get("patterns"),
+        "patterns": patterns,
         "informative_sites": ds_gt.get("informative_sites"),
         "constant_sites": ds_gt.get("constant_sites"),
         "sequence_type": ds_gt.get("sequence_type"),
@@ -218,19 +221,30 @@ def summarize_run(run: dict) -> dict:
 
 
 def enrich_index_with_speedup(index: list[dict]) -> None:
-    """Add `speedup` and `efficiency` per entry using 1-thread baseline of the
-    same dataset. Mutates the entries in place."""
-    baseline: dict[str, float] = {}
+    """Add ``speedup`` and ``efficiency`` per entry using the 1-thread baseline
+    for the *same dataset on the same platform*.
+
+    Keying by ``(dataset_short, platform)`` prevents cross-platform contamination
+    where, for example, a Setonix 1T baseline for ``large_modelfinder.fa`` would
+    inflate a Gadi 16T run's speedup (the two platforms regenerate datasets with
+    different dimensions).
+    """
+    baseline: dict[tuple[str | None, str | None], float] = {}
     for r in index:
         ds = r.get("dataset_short")
-        if ds and r.get("threads") == 1 and r.get("wall_s"):
-            baseline.setdefault(ds, r["wall_s"])
+        plat = r.get("platform")
+        # Ignore failed / stub runs when choosing a baseline.
+        if (ds and r.get("threads") == 1
+                and r.get("wall_s")
+                and r.get("all_pass")):
+            baseline.setdefault((ds, plat), r["wall_s"])
     for r in index:
         ds = r.get("dataset_short")
+        plat = r.get("platform")
         t = r.get("threads") or 0
         w = r.get("wall_s") or 0
-        base = baseline.get(ds)
-        if base and w:
+        base = baseline.get((ds, plat))
+        if base and w and r.get("all_pass"):
             r["speedup"] = round(base / w, 3)
             r["efficiency"] = round((base / w) / t, 4) if t else None
         else:

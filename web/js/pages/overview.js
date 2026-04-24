@@ -11,6 +11,27 @@ import * as ipcScaling from '../charts/ipc-scaling.js';
 import * as perfMatrix from '../charts/performance-matrix.js';
 import { escHtml, fmtTime, fmtNum } from '../utils.js';
 
+/* --------------------------- Platform helpers --------------------------- */
+function platformOf(r) {
+  return r?.platform || (r?.pbs_id ? 'gadi' : (r?.slurm_id ? 'setonix' : null));
+}
+function platformBadge(p, { compact = false } = {}) {
+  if (p === 'gadi') return `<span class="badge badge-platform-gadi" title="Gadi · NCI · Intel Sapphire Rapids">${compact ? 'Gadi' : 'Gadi · NCI'}</span>`;
+  if (p === 'setonix') return `<span class="badge badge-platform-setonix" title="Setonix · Pawsey · AMD EPYC">${compact ? 'Setonix' : 'Setonix · Pawsey'}</span>`;
+  return '';
+}
+function platformLabel(p) {
+  if (p === 'gadi') return 'Gadi';
+  if (p === 'setonix') return 'Setonix';
+  return '—';
+}
+// A run is eligible for leaderboards / charts only if it actually produced
+// timing data and its verify phase passed. This filters out the stub records
+// that harvesters emit for cancelled / failed jobs.
+function isValidRun(r) {
+  return r && r.all_pass && Number(r.wall_s) > 0;
+}
+
 const TMPL = `
   <div class="page-header">
     <div>
@@ -106,8 +127,10 @@ export async function mount(root) {
     });
   }
 
-  // Default: fastest run
-  const defaultRun = [...idx].sort((a, b) => (a.wall_s ?? 1e12) - (b.wall_s ?? 1e12))[0];
+  // Default: fastest *valid* run so Gadi stub records don't hijack the picker.
+  const defaultRun = [...idx]
+    .filter(isValidRun)
+    .sort((a, b) => a.wall_s - b.wall_s)[0] || idx[0];
   mountRunPicker(document.getElementById('ovRunPicker'), idx, {
     selectedId: defaultRun?.run_id,
     onChange: (r) => loadRun(r.run_id).then((full) => updateRunSections(full)),
@@ -123,30 +146,40 @@ export async function mount(root) {
 /* --------------------------- Stats --------------------------- */
 function renderStats(idx) {
   const total = idx.length;
-  const allPass = idx.every((r) => r.all_pass);
-  const bestIPC = idx.reduce((a, b) => (Number(b.IPC || 0) > Number(a?.IPC || 0) ? b : a), null);
-  const bestSpeedup = idx.reduce((a, b) => (Number(b.speedup || 0) > Number(a?.speedup || 0) ? b : a), null);
+  const valid = idx.filter(isValidRun);
+  const failedCount = idx.length - valid.length;
+  const platforms = new Set(idx.map(platformOf).filter(Boolean));
+  const platformLine = [...platforms].map(platformLabel).join(' · ') || 'no platform';
+
+  const bestIPC = valid.reduce((a, b) => (Number(b.IPC || 0) > Number(a?.IPC || 0) ? b : a), null);
+  const bestSpeedup = valid.reduce((a, b) => (Number(b.speedup || 0) > Number(a?.speedup || 0) ? b : a), null);
+  // Dataset count is scoped to (dataset, platform) so Setonix's xlarge_dna.fa
+  // and Gadi's xlarge_mf.fa (different taxa×sites despite similar names) count
+  // as distinct profiles.
+  const dsKeys = new Set(
+    idx.filter(r => r.dataset_short).map(r => `${r.dataset_short}|${platformOf(r) || '?'}`)
+  );
 
   document.getElementById('ovStats').innerHTML = `
     <div class="stat-card">
       <div class="label">Total runs</div>
       <div class="value">${total}</div>
-      <div class="change">${allPass ? 'All tests passing' : 'Some failures'}</div>
+      <div class="change">${failedCount ? `${valid.length} valid · ${failedCount} stub/failed` : 'All tests passing'}</div>
     </div>
     <div class="stat-card">
       <div class="label">Datasets</div>
-      <div class="value">${new Set(idx.map(r => r.dataset_short).filter(Boolean)).size}</div>
-      <div class="change">${[...new Set(idx.map(r => r.threads).filter(Boolean))].length} thread configs</div>
+      <div class="value">${dsKeys.size}</div>
+      <div class="change">${platformLine}</div>
     </div>
     <div class="stat-card">
       <div class="label">Best speedup</div>
       <div class="value">${bestSpeedup?.speedup ? bestSpeedup.speedup.toFixed(2) + '×' : '—'}</div>
-      <div class="change">${escHtml(bestSpeedup?.dataset_short || '—')} @ ${bestSpeedup?.threads || '—'}T</div>
+      <div class="change">${escHtml(bestSpeedup?.dataset_short || '—')} · ${platformLabel(platformOf(bestSpeedup))} @ ${bestSpeedup?.threads || '—'}T</div>
     </div>
     <div class="stat-card">
       <div class="label">Peak IPC</div>
       <div class="value">${bestIPC?.IPC ? bestIPC.IPC.toFixed(2) : '—'}</div>
-      <div class="change">${escHtml(bestIPC?.dataset_short || '—')} @ ${bestIPC?.threads || '—'}T</div>
+      <div class="change">${bestIPC ? `${escHtml(bestIPC.dataset_short || '—')} · ${platformLabel(platformOf(bestIPC))} @ ${bestIPC.threads || '—'}T` : 'CPU counters pending'}</div>
     </div>
   `;
 }
@@ -154,66 +187,94 @@ function renderStats(idx) {
 /* --------------------------- Best runs (clickable) --------------------------- */
 function renderBestRuns(idx) {
   if (!idx.length) return;
-  const fastest = [...idx].sort((a, b) => (a.wall_s ?? 1e12) - (b.wall_s ?? 1e12))[0];
-  const bestSpeedup = [...idx].sort((a, b) => (b.speedup ?? 0) - (a.speedup ?? 0))[0];
-  const bestIPC = [...idx].sort((a, b) => (b.IPC ?? 0) - (a.IPC ?? 0))[0];
+  const valid = idx.filter(isValidRun);
+  if (!valid.length) {
+    document.getElementById('ovBestRuns').innerHTML =
+      '<div class="empty">No successful runs with timing data yet.</div>';
+    return;
+  }
+  const fastest = [...valid].sort((a, b) => a.wall_s - b.wall_s)[0];
+  const withSpeedup = valid.filter(r => r.speedup != null);
+  const bestSpeedup = withSpeedup.length
+    ? [...withSpeedup].sort((a, b) => (b.speedup ?? 0) - (a.speedup ?? 0))[0]
+    : fastest;
+  const withIPC = valid.filter(r => r.IPC != null);
+  const bestIPC = withIPC.length
+    ? [...withIPC].sort((a, b) => (b.IPC ?? 0) - (a.IPC ?? 0))[0]
+    : null;
 
-  const card = (kind, valueHtml, run, subHtml) => `
+  const card = (kind, valueHtml, run, subHtml) => run ? `
     <a class="best-run-card" href="#/runs?open=${encodeURIComponent(run.run_id)}" aria-label="Open ${escHtml(run.run_id)} in All Runs">
       <span class="br-cta">Details
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </span>
-      <div class="br-kind">${kind}</div>
+      <div class="br-kind">${kind} ${platformBadge(platformOf(run), { compact: true })}</div>
       <div class="br-value">${valueHtml}</div>
       <div class="br-meta">${escHtml(run.run_id)}</div>
       <div class="br-sub">${subHtml}</div>
     </a>
+  ` : `
+    <div class="best-run-card best-run-card--empty">
+      <div class="br-kind">${kind}</div>
+      <div class="br-value" style="color:var(--text3);">—</div>
+      <div class="br-sub">CPU counters pending</div>
+    </div>
   `;
 
   document.getElementById('ovBestRuns').innerHTML = [
-    card('Fastest run',   fmtTime(fastest.wall_s),                      fastest,     `${escHtml(fastest.dataset_short || '—')} · ${fastest.threads}T`),
-    card('Best speedup',  (bestSpeedup.speedup || 0).toFixed(2) + '×',  bestSpeedup, `${escHtml(bestSpeedup.dataset_short || '—')} · ${bestSpeedup.threads}T (${((bestSpeedup.efficiency || 0) * 100).toFixed(0)}% eff)`),
-    card('Peak IPC',      (bestIPC.IPC || 0).toFixed(3),                bestIPC,     `${escHtml(bestIPC.dataset_short || '—')} · ${bestIPC.threads}T`),
+    card('Fastest run',  fmtTime(fastest.wall_s),                      fastest,     `${escHtml(fastest.dataset_short || '—')} · ${fastest.threads}T`),
+    card('Best speedup', (bestSpeedup.speedup || 0).toFixed(2) + '×', bestSpeedup, `${escHtml(bestSpeedup.dataset_short || '—')} · ${bestSpeedup.threads}T (${((bestSpeedup.efficiency || 0) * 100).toFixed(0)}% eff)`),
+    card('Peak IPC',     bestIPC ? (bestIPC.IPC || 0).toFixed(3) : '—', bestIPC, bestIPC ? `${escHtml(bestIPC.dataset_short || '—')} · ${bestIPC.threads}T` : ''),
   ].join('');
 }
 
 /* --------------------------- Dataset profile cards --------------------------- */
 function renderDatasets(idx) {
-  const byDs = new Map();
+  // Group by (dataset, platform) — Setonix and Gadi regenerate datasets with
+  // different taxa×sites dimensions, so a combined card would be misleading.
+  const byKey = new Map();
   for (const r of idx) {
     const ds = r.dataset_short;
     if (!ds) continue;
-    if (!byDs.has(ds)) byDs.set(ds, []);
-    byDs.get(ds).push(r);
+    const plat = platformOf(r) || 'unknown';
+    const key = `${ds}|${plat}`;
+    if (!byKey.has(key)) byKey.set(key, { ds, platform: plat, runs: [] });
+    byKey.get(key).runs.push(r);
   }
-  if (!byDs.size) {
+  if (!byKey.size) {
     document.getElementById('ovDatasets').innerHTML = '<div class="empty">No dataset metadata available.</div>';
     return;
   }
   const cards = [];
-  for (const [ds, runs] of [...byDs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    const first = runs[0];
-    const best = runs.reduce((a, b) => (b.wall_s < (a?.wall_s ?? Infinity) ? b : a), null);
-    const threads = [...new Set(runs.map(r => r.threads).filter(Boolean))].sort((a, b) => a - b);
-    // Site compression: distinct patterns / sites · lower == more redundancy,
-    // which IQ-TREE exploits to skip work.
-    const patterns = first.patterns;
-    const sites = first.sites;
+  const sortedGroups = [...byKey.values()].sort((a, b) =>
+    a.ds.localeCompare(b.ds) || a.platform.localeCompare(b.platform));
+  for (const { ds, platform, runs } of sortedGroups) {
+    // Pick a representative (prefer a run with taxa/sites populated).
+    const rep = runs.find(r => r.taxa && r.sites) || runs[0];
+    const validRuns = runs.filter(isValidRun);
+    const best = validRuns.reduce((a, b) => (b.wall_s < (a?.wall_s ?? Infinity) ? b : a), null);
+    const threads = [...new Set(validRuns.map(r => r.threads).filter(Boolean))].sort((a, b) => a - b);
+    const stubs = runs.length - validRuns.length;
+    const patterns = rep.patterns;
+    const sites = rep.sites;
     const compression = (patterns && sites)
       ? `${patterns.toLocaleString()} · ${((patterns / sites) * 100).toFixed(1)}% unique`
       : null;
     cards.push(`
       <div class="ds-card">
-        <span class="ds-tag">Dataset</span>
+        <div class="ds-head">
+          <span class="ds-tag">Dataset</span>
+          ${platformBadge(platform, { compact: true })}
+        </div>
         <h3>${escHtml(ds)}</h3>
-        <div class="ds-row"><span>Taxa</span><strong>${first.taxa ?? '—'}</strong></div>
-        <div class="ds-row"><span>Sites</span><strong>${first.sites?.toLocaleString?.() ?? '—'}</strong></div>
+        <div class="ds-row"><span>Taxa</span><strong>${rep.taxa ?? '—'}</strong></div>
+        <div class="ds-row"><span>Sites</span><strong>${rep.sites?.toLocaleString?.() ?? '—'}</strong></div>
         ${compression ? `<div class="ds-row"><span>Patterns</span><strong>${compression}</strong></div>` : ''}
-        <div class="ds-row"><span>File size</span><strong>${first.size_mb != null ? (first.size_estimated ? '~' : '') + first.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
-        <div class="ds-row"><span>Runs</span><strong>${runs.length}</strong></div>
+        <div class="ds-row"><span>File size</span><strong>${rep.size_mb != null ? (rep.size_estimated ? '~' : '') + rep.size_mb.toFixed(2) + ' MB' : '—'}</strong></div>
+        <div class="ds-row"><span>Runs</span><strong>${runs.length}${stubs ? ` <span style="color:var(--text3); font-weight:400;">(${stubs} stub)</span>` : ''}</strong></div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
         <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>
-        ${first.size_estimated ? '<div class="ds-note">~ size estimated from alignment dimensions</div>' : ''}
+        ${rep.size_estimated ? '<div class="ds-note">~ size estimated from alignment dimensions</div>' : ''}
       </div>
     `);
   }
@@ -225,7 +286,7 @@ function updateRunSections(run) {
   if (!run) return;
 
   document.getElementById('ovSubtitle').textContent =
-    `Run ${run.run_id} · ${run.env?.date || 'n/a'} · ${run.env?.hostname || 'n/a'}`;
+    `Run ${run.run_id} · ${platformLabel(platformOf(run))} · ${run.env?.date || 'n/a'} · ${run.env?.hostname || 'n/a'}`;
   document.getElementById('ovConfigRunId').textContent = run.run_id;
 
   const badge = document.getElementById('ovBadge');
@@ -413,11 +474,12 @@ function renderActivity(idx) {
         const ds = r.dataset_short || r.dataset || '—';
         const dims = (r.taxa && r.sites) ? ` · ${r.taxa}×${r.sites}` : '';
         const model = r.model || (r.run_type === 'modelfinder' ? 'ModelFinder' : '');
+        const plat = platformOf(r);
         return `
           <a class="activity-row" href="#/runs?open=${encodeURIComponent(r.run_id)}">
             <span class="activity-dot ${r.all_pass ? '' : 'fail'}"></span>
             <div class="activity-main">
-              <div class="activity-title">${escHtml(r.label || r.run_id)}</div>
+              <div class="activity-title">${escHtml(r.label || r.run_id)} ${platformBadge(plat, { compact: true })}</div>
               <div class="activity-sub">${escHtml(ds)}${dims}${model ? ' · ' + escHtml(model) : ''} · ${escHtml(r.date || 'no date')}</div>
             </div>
             <span class="activity-threads">T=${r.threads ?? '—'}</span>

@@ -1,28 +1,53 @@
-// web/js/charts/ipc-scaling.js — IPC vs threads, one line per dataset
+// web/js/charts/ipc-scaling.js — IPC vs threads, one line per (dataset, platform).
+// NOTE: Gadi runs currently do not populate profile.metrics (perf_stat.txt
+// harvesting pending), so they will be absent from this view — that is expected
+// and an empty-state hint is rendered when no IPC points exist.
 
 import { hashColour } from '../utils.js';
+
+function platformOf(r) {
+  return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
+}
 
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
   if (existing) existing.destroy();
-  const byDataset = new Map();
+  const byKey = new Map();
   for (const r of runsIndex) {
     if (!r.dataset_short || r.threads == null || r.IPC == null) continue;
-    if (!byDataset.has(r.dataset_short)) byDataset.set(r.dataset_short, []);
-    byDataset.get(r.dataset_short).push({ x: Number(r.threads), y: r.IPC });
+    const plat = platformOf(r);
+    const key = `${r.dataset_short} · ${plat}`;
+    if (!byKey.has(key)) byKey.set(key, { plat, points: [] });
+    byKey.get(key).points.push({ x: Number(r.threads), y: r.IPC });
   }
   const datasets = [];
-  for (const [ds, pts] of byDataset) {
-    pts.sort((a, b) => a.x - b.x);
+  for (const [label, { plat, points }] of byKey) {
+    points.sort((a, b) => a.x - b.x);
     datasets.push({
-      label: ds,
-      data: pts,
-      borderColor: hashColour(ds, 0.95),
-      backgroundColor: hashColour(ds, 0.2),
+      label,
+      data: points,
+      borderColor: hashColour(label, 0.95),
+      backgroundColor: hashColour(label, 0.2),
+      borderDash: plat === 'gadi' ? [6, 4] : [],
+      pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
       tension: 0.25,
       pointRadius: 4,
       borderWidth: 2,
     });
+  }
+
+  if (!datasets.length) {
+    // Leave canvas blank but annotate so Gadi-only views don't look broken.
+    const ctx = canvas.getContext?.('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#8b97ad';
+      ctx.font = '12px -apple-system, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CPU counters not yet harvested for any run.',
+        canvas.width / 2, canvas.height / 2);
+    }
+    return;
   }
 
   new Chart(canvas, {

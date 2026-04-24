@@ -1,7 +1,13 @@
 // web/js/charts/performance-matrix.js — bubble plot:
-//   x = threads (log), y = wall time (log), bubble size = sites, colour = dataset
+//   x = threads (log), y = wall time (log), bubble size = sites,
+//   colour = (dataset, platform). Gadi is drawn with triangle markers so the
+//   two platforms can be distinguished at a glance.
 
 import { hashColour } from '../utils.js';
+
+function platformOf(r) {
+  return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
+}
 
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
@@ -17,11 +23,13 @@ export function render(canvas, runsIndex) {
     return 6 + t * 18; // 6..24
   };
 
-  const byDataset = new Map();
+  const byKey = new Map();
   for (const r of runsIndex) {
-    if (!r.dataset_short || r.threads == null || r.wall_s == null) continue;
-    if (!byDataset.has(r.dataset_short)) byDataset.set(r.dataset_short, []);
-    byDataset.get(r.dataset_short).push({
+    if (!r.dataset_short || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
+    const plat = platformOf(r);
+    const key = `${r.dataset_short} · ${plat}`;
+    if (!byKey.has(key)) byKey.set(key, { plat, points: [] });
+    byKey.get(key).points.push({
       x: Number(r.threads),
       y: r.wall_s,
       r: sizeFor(r.sites),
@@ -29,17 +37,19 @@ export function render(canvas, runsIndex) {
       taxa: r.taxa,
       sites: r.sites,
       size_mb: r.size_mb,
+      platform: plat,
     });
   }
 
   const datasets = [];
-  for (const [ds, pts] of byDataset) {
+  for (const [label, { plat, points }] of byKey) {
     datasets.push({
-      label: ds,
-      data: pts,
-      backgroundColor: hashColour(ds, 0.55),
-      borderColor: hashColour(ds, 0.95),
+      label,
+      data: points,
+      backgroundColor: hashColour(label, 0.55),
+      borderColor: hashColour(label, 0.95),
       borderWidth: 1.5,
+      pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
     });
   }
 

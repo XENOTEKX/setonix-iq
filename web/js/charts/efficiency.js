@@ -1,24 +1,33 @@
-// web/js/charts/efficiency.js — parallel efficiency (speedup/threads) vs threads
+// web/js/charts/efficiency.js — parallel efficiency (speedup/threads) vs threads,
+// grouped per (dataset, platform) so the Gadi and Setonix curves stay distinct.
 
 import { hashColour } from '../utils.js';
+
+function platformOf(r) {
+  return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
+}
 
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
   if (existing) existing.destroy();
-  const byDataset = new Map();
+  const byKey = new Map();
   for (const r of runsIndex) {
     if (!r.dataset_short || r.threads == null || r.efficiency == null) continue;
-    if (!byDataset.has(r.dataset_short)) byDataset.set(r.dataset_short, []);
-    byDataset.get(r.dataset_short).push({ x: Number(r.threads), y: r.efficiency });
+    const plat = platformOf(r);
+    const key = `${r.dataset_short} · ${plat}`;
+    if (!byKey.has(key)) byKey.set(key, { plat, points: [] });
+    byKey.get(key).points.push({ x: Number(r.threads), y: r.efficiency });
   }
   const datasets = [];
-  for (const [ds, pts] of byDataset) {
-    pts.sort((a, b) => a.x - b.x);
+  for (const [label, { plat, points }] of byKey) {
+    points.sort((a, b) => a.x - b.x);
     datasets.push({
-      label: ds,
-      data: pts,
-      borderColor: hashColour(ds, 0.95),
-      backgroundColor: hashColour(ds, 0.2),
+      label,
+      data: points,
+      borderColor: hashColour(label, 0.95),
+      backgroundColor: hashColour(label, 0.2),
+      borderDash: plat === 'gadi' ? [6, 4] : [],
+      pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
       tension: 0.25,
       pointRadius: 4,
       borderWidth: 2,

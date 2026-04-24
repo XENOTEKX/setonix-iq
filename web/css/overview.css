@@ -276,10 +276,24 @@
   border-radius: 5px;
   background: var(--accent-glow);
   color: var(--accent);
-  margin-bottom: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+.ds-card .ds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ds-card .ds-head .badge { font-size: 0.64rem; padding: 2px 7px; }
+.best-run-card--empty {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--card-2);
+  opacity: 0.6;
 }
 .ds-card .ds-row {
   display: flex;
