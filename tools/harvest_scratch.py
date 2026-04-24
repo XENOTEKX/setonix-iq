@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Harvest additional per-run data from the Setonix scratch profile directories
-and merge it into the existing ``logs/runs/*.json`` files.
+Harvest additional per-run data from the HPC scratch profile directories
+(Gadi /scratch/$PROJECT or Setonix /scratch/$PAWSEY_PROJECT) and merge it
+into the existing ``logs/runs/*.json`` files.
 
 Fills the following fields (all optional, schema-compliant):
 
@@ -30,18 +31,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "logs" / "runs"
-# Where the run_mega_profile.sh outputs live. Defaults to Setonix scratch;
-# override with SCRATCH_DIR= (e.g. a local rsync mirror) when harvesting
-# off-cluster. Individual paths can still be overridden with PROFILE_ROOT/
-# BENCHMARKS_DIR if the mirror has a different layout.
-SCRATCH = Path(os.environ.get("SCRATCH_DIR", "/scratch/pawsey1351/asamuel/iqtree3"))
-PROFILE_ROOT = Path(os.environ.get("PROFILE_ROOT", str(SCRATCH / "setonix-ci" / "profiles")))
+# Where the run_mega_profile.sh outputs live. Defaults are chosen for Gadi:
+#   /scratch/$PROJECT/$USER/iqtree3/gadi-ci/profiles
+# but the tool is fully env-driven. Override with:
+#   SCRATCH_DIR=/path/to/iqtree3          (root of the project workspace)
+#   PROFILE_ROOT=/path/to/profiles        (where <label>_<jobid>/ dirs live)
+#   BENCHMARKS_DIR=/path/to/benchmarks    (raw .fa files)
+# When harvesting Setonix data, set SCRATCH_DIR=/scratch/pawseyXXXX/$USER/iqtree3
+# and PROFILE_ROOT=$SCRATCH_DIR/setonix-ci/profiles.
+_PROJECT_ENV = os.environ.get("PROJECT") or os.environ.get("PAWSEY_PROJECT") or "rc29"
+_USER = os.environ.get("USER", "")
+_DEFAULT_SCRATCH = f"/scratch/{_PROJECT_ENV}/{_USER}/iqtree3"
+SCRATCH = Path(os.environ.get("SCRATCH_DIR", _DEFAULT_SCRATCH))
+# Try gadi-ci first, then fall back to setonix-ci.
+_default_profile_root = SCRATCH / "gadi-ci" / "profiles"
+if not _default_profile_root.is_dir() and (SCRATCH / "setonix-ci" / "profiles").is_dir():
+    _default_profile_root = SCRATCH / "setonix-ci" / "profiles"
+PROFILE_ROOT = Path(os.environ.get("PROFILE_ROOT", str(_default_profile_root)))
 BENCHMARKS = Path(os.environ.get("BENCHMARKS_DIR", str(SCRATCH / "benchmarks")))
 
-# Map the run labels we have in logs/runs to scratch profile directory names.
-# Scratch dirs are suffixed with the SLURM ID of the parent job; since mega/
-# subsequent jobs have different IDs we fall back to glob-matching.
-SLURM_ID = "41703864"
+# Legacy Setonix fallback SLURM job id used when no canonical <label>_<id>
+# directory matches. Gadi jobs are glob-matched by label alone so this is
+# only used for historical Setonix data.
+SLURM_ID = os.environ.get("SLURM_ID", "41703864")
 
 
 def profile_dir_for(label: str) -> Path:

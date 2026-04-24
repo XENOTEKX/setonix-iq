@@ -1,4 +1,4 @@
-// web/js/pages/gpu.js — rocm-smi metrics aggregated across profiles
+// web/js/pages/gpu.js — GPU telemetry aggregated across deep profiles (NVIDIA V100 on Gadi gpuvolta / AMD MI250X on Setonix)
 
 import { store } from '../state.js';
 import { loadProfile } from '../data.js';
@@ -7,13 +7,13 @@ import { escHtml } from '../utils.js';
 export async function mount(root) {
   root.innerHTML = `
     <div class="page-header"><div><h1>GPU</h1>
-    <div class="subtitle">AMD Instinct MI250X metrics from deep profiles</div></div></div>
+    <div class="subtitle">GPU telemetry from deep profiles (NVIDIA V100 on Gadi <code>gpuvolta</code> / AMD MI250X on Setonix)</div></div></div>
     <div class="card"><div class="card-body" id="gpuBody">Loading…</div></div>
   `;
   const body = document.getElementById('gpuBody');
   const idx = store.get('profilesIndex').filter((p) => p.has_gpu);
   if (!idx.length) {
-    body.innerHTML = '<div class="empty">No GPU profiles available yet. Run <code>./start.sh deepprofile</code> on Setonix to populate.</div>';
+    body.innerHTML = '<div class="empty">No GPU profiles available yet. Run <code>./start.sh deepprofile</code> on Gadi (or Setonix) to populate.</div>';
     return;
   }
   const profiles = await Promise.all(idx.map((p) => loadProfile(p.profile_id)));

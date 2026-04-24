@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build the Setonix-IQ dashboard.
+Build the Gadi-IQ / Setonix-IQ dashboard.
 
 Steps:
   1. Normalize logs/ → web/data/ (runs, profiles, indexes, manifest).

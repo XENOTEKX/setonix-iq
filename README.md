@@ -10,6 +10,22 @@ deploys to GitHub Pages.
 
 ---
 
+## Branches
+
+| Branch | Target system | Scheduler | CPU | Profiler |
+|---|---|---|---|---|
+| `main`    | **Setonix** (Pawsey) | SLURM | AMD EPYC 7A53 / MI250X | ROCm `rocprof`, `perf` |
+| `gadi-iq` | **Gadi** (NCI)       | PBS Pro | Intel Xeon Platinum 8268 | Intel **VTune 2024.2**, `perf` |
+
+Both branches share the same web front-end, data schema, and Python tooling.
+Only the job-submission scripts (`setonix-ci/` vs `gadi-ci/`), default paths,
+and platform-specific performance counters differ. Records from either system
+validate against the unified schema — a single dashboard can ingest mixed
+Setonix + Gadi runs. See [CHANGELOG.md](CHANGELOG.md) for the `gadi-iq`
+refactor details.
+
+---
+
 ## Architecture
 
 ```

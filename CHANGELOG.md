@@ -2,6 +2,147 @@
 
 ---
 
+## 2026-04-24 — `gadi-iq` branch: Gadi / NCI / Intel / PBS port
+
+Forked `main` (wave-4 Setonix data complete) into a new branch, `gadi-iq`,
+targeted at the NCI Gadi supercomputer. The dashboard front-end and data
+pipeline are unchanged — the refactor is entirely in the data-producing
+scripts and the schema that binds them to the web UI.
+
+### Target system
+
+| Component | Spec |
+|---|---|
+| Machine   | Gadi (NCI, Canberra) |
+| CPU       | Intel Xeon Platinum 8268 "Cascade Lake", 48c/node, 2 sockets, 4 NUMA |
+| Memory    | 192 GB/node (`mem=190GB` leaves scheduler headroom) |
+| Scheduler | PBS Professional 2024.1 (`qsub`, `qstat`, `qdel`, `nqstat`) |
+| Queues    | `normal`, `normalbw`, `express`, `hugemem`, `gpuvolta` (V100), `copyq`, `megamem` |
+| Profiler  | Intel VTune 2024.2.0 (`module load intel-vtune/2024.2.0`) + `perf` |
+| Project   | `rc29`; scratch `/scratch/rc29`; home 10 GB quota |
+
+### New `gadi-ci/` scripts (PBS / Intel / VTune)
+
+- `gadi-ci/run_mega_profile.sh` — PBS job script mirroring the Setonix
+  mega profiler. Key changes:
+  - `#SBATCH` directives → `#PBS -N / -P rc29 / -q normal /
+    -l ncpus=48,mem=190GB,walltime=24:00:00,wd,storage=scratch/rc29 / -j oe`.
+  - SLURM env vars → PBS env vars (`PBS_JOBID`, `PBS_JOBNAME`,
+    `PBS_QUEUE`, `PBS_NCPUS`, `PBS_NODEFILE`, `PBS_O_HOST`,
+    `PBS_O_WORKDIR`). `env.json` now records them under `env.pbs.*`.
+  - AMD Zen 3 raw events (`ex_ret_*`, `ls_l1_d_tlb_miss.*`,
+    `bp_l1_tlb_miss_l2_tlb_*`, `ls_dispatch.*`, `ls_tablewalker.*`)
+    replaced with Intel Cascade Lake Top-down TMA slot events
+    (`topdown-{total-slots,slots-issued,slots-retired,fetch-bubbles,
+    recovery-bubbles}`) plus `LLC-loads`/`LLC-load-misses`.
+  - Derived TMA Level-1 categories emitted as
+    `intel-tma-{retiring,bad-spec,frontend-bound,backend-bound}-pct` in
+    `profile_meta.json`.
+  - New **step 4 VTune pass** — bounded to 30 min (`VTUNE_MAX_S`),
+    `vtune -collect hotspots -knob sampling-mode=hw
+    -knob enable-stack-collection=true`. Report is extracted to
+    `vtune_summary.txt` + CSV → `vtune_hotspots.json`. Parsed into
+    `profile.vtune.{elapsed_time_s, cpu_time_s, effective_cpu_util,
+    avg_cpu_freq_ghz, hotspots[]}`.
+  - `RUN_ID="${PBS_JOBID%%.*}"` strips the `.gadi-pbs` suffix.
+- `gadi-ci/submit_mega_batch.sh` — `sbatch --parsable` loop rewritten as
+  `qsub` loop. Default thread sweep adjusted to `4 8 16 24 48` to match
+  Gadi's per-node ceiling (no 128T here; use `gpuvolta` / `hugemem` for
+  higher). Each job gets an explicit `-P $PROJECT -q normal -l
+  ncpus=48,mem=190GB,walltime=24:00:00,storage=scratch/$PROJECT,wd`.
+- `gadi-ci/run_pipeline.sh` — small deterministic CI pipeline runnable on
+  a login node. Emits `logs/runs/<YYYY-MM-DD_HHMMSS>.json` in the exact
+  shape of the Setonix records but with `pbs_id` + `env.pbs.*` populated.
+- `gadi-ci/run_profiling.sh` — quick perf-stat wrapper for interactive
+  `qsub -I` sessions.
+- `gadi-ci/README.md` — documents the script set and lists every semantic
+  diff vs `setonix-ci/`.
+
+### `start.sh` + `Makefile` rewritten for Gadi
+
+- `start.sh`: SLURM/Pawsey references removed. `PROJECT=rc29` default,
+  `qstat -u $USER` replaces `squeue`, `nci_account` replaces
+  `pawseyAccountBalance`. New `./start.sh batch` command fans out the
+  mega-profile sweep via `submit_mega_batch.sh`. `./start.sh deepprofile`
+  now `qsub`s the deep profile script.
+- `Makefile`: `PAWSEY_PROJECT` → `PROJECT`, `IQTREE_DIR =
+  /scratch/$(PROJECT)/$(USER)/iqtree3`. `make deep-profile` uses `qsub`;
+  `make status` calls `qstat` + `nci_account`. Added auto `module load
+  intel-vtune/2024.2.0 intel-compiler/2024.2.1` in build targets.
+
+### Schema extensions — additive, no breaking changes
+
+`tools/schemas/run.schema.json` updated so both Setonix-era and
+Gadi-era records validate against a single schema:
+
+- `pbs_id: string|null` alongside `slurm_id: string|null`.
+- `env.pbs` object (`job_id, job_name, queue, project, ncpus, nnodes,
+  mem, nodes[], nodefile, submit_host, submit_dir, o_queue, scheduler`)
+  alongside the existing `env.slurm`.
+- `env.icc`, `env.icx`, `env.vtune_version`.
+- `profile.metrics`: added `LLC-miss-rate`,
+  `intel-tma-retiring-pct`, `intel-tma-bad-spec-pct`,
+  `intel-tma-frontend-bound-pct`, `intel-tma-backend-bound-pct`. The
+  existing AMD `amd-*` properties remain optional.
+- `profile.vtune` object capturing VTune headline metrics + top-50
+  VTune hotspots.
+- `gpu_info` now accepts `string | object` (forward-compat for
+  structured NVIDIA V100 telemetry from Gadi's `gpuvolta` queue).
+
+All 18 existing Setonix runs re-validate against the extended schema.
+New pytest suite (`tests/test_gadi_schema.py`) verifies three scenarios:
+a minimal PBS record, a PBS record with Intel TMA + VTune data, and a
+legacy SLURM/AMD record — all must remain valid. **17 passed, 1 xpassed**.
+
+### Dashboard rebrand (web/)
+
+- `web/index.html`: title `Setonix-IQ Dashboard` → `Gadi-IQ Dashboard`;
+  sidebar/topbar logo text `Setonix-IQ` → `Gadi-IQ`; meta description
+  updated to reference Gadi (NCI).
+- `web/js/pages/overview.js`: subtitle reads "Insight dashboard for
+  IQ-TREE runs on Gadi (NCI)". System-info KV cells surface VTune version
+  (falling back to `env.rocm` when rendering archived Setonix data).
+- `web/js/pages/runs.js`: `SLURM:` column label → `Job:`; value prefers
+  `run.pbs_id`, falls back to `run.slurm_id`.
+- `web/js/pages/gpu.js`: subtitle and empty-state strings now describe
+  both platforms (NVIDIA V100 on `gpuvolta` / AMD MI250X on Setonix).
+
+### `tools/harvest_scratch.py` — env-driven defaults
+
+- Defaults to `/scratch/${PROJECT:-rc29}/${USER}/iqtree3` and auto-detects
+  `gadi-ci/profiles` first, falling back to `setonix-ci/profiles` if only
+  the Setonix tree is present on-disk. All paths remain overridable via
+  `SCRATCH_DIR`, `PROFILE_ROOT`, `BENCHMARKS_DIR`, and now `SLURM_ID`.
+- `tools/normalize.py`: run + profile index entries now carry both
+  `slurm_id` and `pbs_id` so the runs page renders the right job id per
+  record.
+- `tools/build.py`: docstring + build banner updated.
+
+### Disk / quota sanity check
+
+On the Gadi login node where this work was performed:
+
+- `/home/272/as1708` usage 516 MB / 10 GB quota (the repo itself is ~1 MB).
+- `/scratch/rc29`: 108 KiB / 1 TiB used.
+- SU grant: 25 KSU (none consumed yet) on project `rc29` for 2026.q2.
+
+Enough headroom for the repo, a full IQ-TREE build tree, and multiple
+mega-profile runs.
+
+### Outstanding (not done on this branch yet)
+
+- **Not executed on Gadi** — scripts are verified `bash -n` clean and the
+  schema accepts their output shape, but no real PBS run has been
+  submitted yet. First smoke test: `./start.sh pipeline` on a login node
+  after rsyncing `gadi-ci/` into `/scratch/rc29/$USER/iqtree3/gadi-ci/`.
+- `gpuvolta`-specific deep-profile script (NVIDIA V100, `nvidia-smi`,
+  `nsys`, `ncu`) — intentionally deferred; the CPU path is the priority.
+- Schema: no Intel TMA Level-2 events yet (need `topdown-l2-*` aliases
+  available on the kernel in use); Level-1 is enough for the overview
+  page today.
+
+---
+
 ## 2026-04-24 — Wave 4 completed + off-cluster harvest path
 
 All four wave-4 mega jobs finished cleanly. The pipefail/timeout hardening

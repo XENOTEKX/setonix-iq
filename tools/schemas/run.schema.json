@@ -1,12 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://setonix-iq/schemas/run.json",
-  "title": "Setonix-IQ Run",
+  "$id": "https://gadi-iq/schemas/run.json",
+  "title": "Gadi-IQ / Setonix-IQ Run",
+  "description": "Unified run record for IQ-TREE benchmark runs on Gadi (NCI/Intel/PBS) or Setonix (Pawsey/AMD/SLURM). All scheduler-specific fields are optional so records from either platform validate against this schema.",
   "type": "object",
   "required": ["run_id", "timing", "env", "summary"],
   "properties": {
     "run_id": { "type": "string", "minLength": 1 },
     "slurm_id": { "type": ["string", "null"] },
+    "pbs_id":   { "type": ["string", "null"] },
     "label": { "type": "string" },
     "description": { "type": "string" },
     "run_type": {
@@ -48,6 +50,9 @@
         "cores": { "type": ["string", "number"] },
         "gcc": { "type": "string" },
         "rocm": { "type": "string" },
+        "icc":  { "type": "string" },
+        "icx":  { "type": "string" },
+        "vtune_version": { "type": "string" },
         "kernel": { "type": "string" },
         "os": { "type": "string" },
         "glibc": { "type": "string" },
@@ -78,10 +83,29 @@
             "submit_host": { "type": "string" },
             "submit_dir": { "type": "string" }
           }
+        },
+        "pbs": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "job_id":      { "type": ["string", "integer", "null"] },
+            "job_name":    { "type": ["string", "null"] },
+            "queue":       { "type": ["string", "null"] },
+            "project":     { "type": ["string", "null"] },
+            "ncpus":       { "type": ["integer", "string", "null"] },
+            "nnodes":      { "type": ["integer", "string", "null"] },
+            "mem":         { "type": ["string", "integer", "null"] },
+            "nodes":       { "type": "array", "items": { "type": "string" } },
+            "nodefile":    { "type": ["string", "null"] },
+            "submit_host": { "type": ["string", "null"] },
+            "submit_dir":  { "type": ["string", "null"] },
+            "o_queue":     { "type": ["string", "null"] },
+            "scheduler":   { "type": ["string", "null"] }
+          }
         }
       }
     },
-    "gpu_info": { "type": "string" },
+    "gpu_info": { "type": ["string", "object"] },
     "dataset_info": {
       "type": "object",
       "properties": {
@@ -149,7 +173,12 @@
             "iTLB-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "amd-branch-mispred-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "amd-l1-dtlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
-            "amd-l2-tlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 }
+            "amd-l2-tlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "LLC-miss-rate":                  { "type": "number", "minimum": 0, "maximum": 100 },
+            "intel-tma-retiring-pct":         { "type": "number", "minimum": 0, "maximum": 100 },
+            "intel-tma-bad-spec-pct":         { "type": "number", "minimum": 0, "maximum": 100 },
+            "intel-tma-frontend-bound-pct":   { "type": "number", "minimum": 0, "maximum": 100 },
+            "intel-tma-backend-bound-pct":    { "type": "number", "minimum": 0, "maximum": 100 }
           },
           "additionalProperties": true
         },
@@ -223,7 +252,28 @@
             "type": "object",
             "required": ["stack", "count"],
             "properties": {
-              "stack": { "type": "string" },
+              "stack": { "type": "string" ,
+        "vtune": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "elapsed_time_s":     { "type": "number", "minimum": 0 },
+            "cpu_time_s":         { "type": "number", "minimum": 0 },
+            "effective_cpu_util": { "type": "number", "minimum": 0, "maximum": 100 },
+            "avg_cpu_freq_ghz":   { "type": "number", "minimum": 0 },
+            "hotspots": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "function":   { "type": "string" },
+                  "module":     { "type": "string" },
+                  "cpu_time_s": { "type": "number", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }},
               "count": { "type": "number", "minimum": 0 }
             }
           }

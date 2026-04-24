@@ -172,7 +172,7 @@ function renderDetail(run) {
     Host: env.hostname,
     CPU: env.cpu,
     Date: env.date,
-    SLURM: run.slurm_id,
+    Job: run.pbs_id || run.slurm_id,
   }).filter(([, v]) => v != null && v !== '')
     .map(([k, v]) => `<div class="kv-item"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(String(v))}</div></div>`)
     .join('');

@@ -171,6 +171,7 @@ def summarize_run(run: dict) -> dict:
     return {
         "run_id": run.get("run_id"),
         "slurm_id": run.get("slurm_id"),
+        "pbs_id": run.get("pbs_id"),
         "label": run.get("label") or run.get("run_id"),
         "description": run.get("description", ""),
         "run_type": run.get("run_type", "pipeline"),
@@ -235,6 +236,7 @@ def summarize_profile(prof: dict) -> dict:
     return {
         "profile_id": prof.get("profile_id"),
         "slurm_id": prof.get("slurm_id"),
+        "pbs_id": prof.get("pbs_id"),
         "date": prof.get("date"),
         "dataset": prof.get("dataset"),
         "threads": prof.get("threads"),

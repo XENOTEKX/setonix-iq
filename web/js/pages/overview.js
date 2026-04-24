@@ -15,7 +15,7 @@ const TMPL = `
   <div class="page-header">
     <div>
       <h1>Pipeline Overview</h1>
-      <div class="subtitle" id="ovSubtitle">Insight dashboard for IQ-TREE runs on Setonix</div>
+      <div class="subtitle" id="ovSubtitle">Insight dashboard for IQ-TREE runs on Gadi (NCI)</div>
     </div>
     <span class="badge badge-info" id="ovBadge">—</span>
   </div>
@@ -286,7 +286,7 @@ function renderConfig(run) {
     ['CPU', env.cpu],
     ['Cores', env.cores],
     ['GCC', env.gcc],
-    ['ROCm', env.rocm],
+    ['VTune', env.vtune_version || env.rocm],
     ['IPC', m.IPC],
     ['FE-stall %', m['frontend-stall-rate']],
   ]);
@@ -331,7 +331,7 @@ function renderConfig(run) {
       ['Wall', fmtTime(run.summary?.total_time)],
       ['Pass', run.summary?.pass], ['Fail', run.summary?.fail],
     ]),
-    toText('System', [['Host', env.hostname], ['CPU', env.cpu], ['Cores', env.cores], ['GCC', env.gcc], ['ROCm', env.rocm], ['IPC', m.IPC]]),
+    toText('System', [['Host', env.hostname], ['CPU', env.cpu], ['Cores', env.cores], ['GCC', env.gcc], ['VTune', env.vtune_version || env.rocm], ['IPC', m.IPC]]),
     p.perf_cmd ? `# Perf command\n${p.perf_cmd}` : null,
   ].filter(Boolean).join('\n\n');
 }
