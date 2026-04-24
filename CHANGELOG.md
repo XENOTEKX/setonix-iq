@@ -27,7 +27,7 @@ only when `THREADS ≥ 13`). Compared to `setonix-ci/run_mega_profile.sh`:
 | `perf report` → `hotspots.txt` | ✗ missing | ❌ |
 | `perf script` → `perf_folded.txt` (stackcollapse for flamegraph) | ✗ missing | ❌ |
 | `vtune` (N/A on AMD) | `vtune hotspots` text summary, THREADS ≥ 13 only | ⚠️ limited |
-| `/proc` time-series sampler → `samples.jsonl` | ✗ missing | ❌ (still outstanding — see below) |
+| `/proc` time-series sampler → `samples.jsonl` | ✗ missing | ✅ added (commit `c23ac7c`) |
 | `profile_meta.json` (structured JSON) | Emitted as run JSON to `logs/runs/` | ✅ covered (different schema) |
 
 ### Full profiling suite added (commit `1896deb`)
@@ -59,14 +59,11 @@ an `artefacts` dict mapping every key above to its scratch path.
 | Callgraph (for flamegraph) | ✅ `perf record` → `perf_folded.txt` | ✅ `perf record` → `perf_script.txt` (same data, one stackcollapse step away from flamegraph) |
 | Hotspot function list | ✅ `perf report` → `hotspots.txt` | ✅ `perf report` → `perf_report.txt` **AND** `vtune hotspots` → `vtune_hotspots.tsv` |
 | Function-level CPI / CPU time | ✗ | ✅ VTune hotspots `.tsv` |
-| Per-thread / NUMA RSS + IO time-series | ✅ `/proc` sampler → `samples.jsonl` | ❌ **Not yet ported** |
+| Per-thread / NUMA RSS + IO time-series | ✅ `/proc` sampler → `samples.jsonl` | ✅ `/proc` sampler → `samples.jsonl` (commit `c23ac7c`) |
 | GPU profiling | ✗ (no AMD GPU work on Setonix) | ✗ (`gpuvolta` deferred) |
 
-**Only outstanding gap:** the `/proc` time-series sampler (`samples.jsonl`) that
-records RSS, IO bytes, and per-thread CPU ticks every ~10 s through the run.
-This is valuable for tracking memory growth and NUMA placement drift across
-thread counts. It can be added as a background process in Pass 1 without
-requeuing — see "Outstanding" below.
+**Full parity achieved** — every signal captured on Setonix is now captured on Gadi.
+The only differences are platform-specific (Intel PMU vs AMD PMU, VTune vs rocprofv3).
 
 ### Resubmission — job table
 
@@ -102,19 +99,17 @@ used 128T but Gadi node caps at 104T).
 | `59b06bb` | Fix perf events (remove stalled-cycles-*) + fix run_pipeline args parsing |
 | `42146b3` | Align thread sweep to Setonix: {1,4,8,16,32,64} + {16,32,64,104} |
 | `1896deb` | Add full profiling: perf record callgraph, VTune hotspots all threads, uarch-exploration |
+| `c23ac7c` | Add /proc time-series sampler (samples.jsonl) — full Setonix parity |
 
 ### Outstanding
 
-- **`/proc` time-series sampler** — background process during Pass 1 that writes
-  `samples.jsonl` (RSS, IO, per-thread CPU ticks at 10 s intervals). Matches
-  `setonix-ci/run_mega_profile.sh` steps 1–2. Low risk to add; requires one more
-  worker edit and a matrix requeue.
 - **Stage 2 CI pipeline** — job `166967398.gadi-pbs` was cancelled with the first
   batch; not resubmitted. Should be requeued once Stage 4 first jobs confirm
   the worker is healthy.
 - **Flamegraph rendering** — `perf_script.txt` → `stackcollapse-perf.pl` →
   `flamegraph.pl` requires the FlameGraph perl scripts on a login node
   (no compute-node internet). Can be done post-hoc once jobs finish.
+- **Active jobs** — `166969038–166969055` (16 jobs, submitted 2026-04-24).
 
 ---
 
