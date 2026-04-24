@@ -59,15 +59,6 @@ EIGEN3_INCLUDE_DIR="${EIGEN_ROOT:+${EIGEN_ROOT}/include/eigen3}"
 EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.3.7/include/eigen3}"
 # Boost root — set from module env, or fall back to known Gadi path.
 BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.84.0}"
-# GoogleTest — cmaple's CMakeLists unconditionally calls FetchContent_Declare
-# with a github.com URL, which fails on compute nodes (no outbound internet).
-# Pre-download on the login node:
-#   mkdir -p /scratch/rc29/<user>/iqtree3/deps
-#   cd /scratch/rc29/<user>/iqtree3/deps
-#   curl -L -o googletest.zip https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
-#   unzip -q googletest.zip && mv googletest-*/ googletest
-# Then cmake is told to use that local copy via FETCHCONTENT_SOURCE_DIR_googletest.
-GTEST_LOCAL="${PROJECT_DIR}/deps/googletest"
 
 mkdir -p "$(dirname "${SRC_DIR}")"
 
@@ -100,16 +91,40 @@ for sub in cmaple lsd2; do
 done
 echo "[bootstrap] submodules OK: cmaple, lsd2"
 
-# GoogleTest pre-flight: must be present before cmake runs.
-if [[ ! -f "${GTEST_LOCAL}/CMakeLists.txt" ]]; then
-    echo "ERROR: googletest not found at ${GTEST_LOCAL}." >&2
-    echo "       On a login node run:" >&2
-    echo "         mkdir -p ${PROJECT_DIR}/deps && cd ${PROJECT_DIR}/deps" >&2
-    echo "         curl -L -o googletest.zip https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip" >&2
-    echo "         unzip -q googletest.zip && mv googletest-*/ googletest" >&2
-    exit 1
+# IPO/LTO patch: cmaple's CMakeLists.txt unconditionally enables
+# CMAKE_INTERPROCEDURAL_OPTIMIZATION on x86_64 Linux, which makes icx emit
+# LLVM IR bitcode into static libraries. The system `ld` on Gadi cannot
+# link LLVM IR archives ("File format not recognized"), and `lld` is not
+# available. Disable IPO in-place (idempotent — only patches once).
+CMAPLE_CML="${SRC_DIR}/cmaple/CMakeLists.txt"
+if grep -q 'set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)' "${CMAPLE_CML}"; then
+    echo "[bootstrap] patching ${CMAPLE_CML} to disable IPO (Gadi ld cannot link LLVM IR)"
+    sed -i 's|set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE) # Enable IPO (LTO) by default|set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE) # Gadi: system ld cannot link LLVM IR bitcode|' "${CMAPLE_CML}"
 fi
-echo "[bootstrap] googletest OK: ${GTEST_LOCAL}"
+if ! grep -q 'Gadi: system ld cannot link LLVM IR bitcode' "${CMAPLE_CML}"; then
+    echo "ERROR: failed to patch IPO in ${CMAPLE_CML}" >&2
+    exit 3
+fi
+echo "[bootstrap] IPO disabled in cmaple"
+
+# Unittest patch: cmaple/unittest needs GoogleTest via FetchContent (download
+# at configure time). We don't run tests in this build, so just skip the
+# whole subdirectory. Idempotent.
+if grep -qE '^[[:space:]]*add_subdirectory\(unittest\)' "${CMAPLE_CML}"; then
+    echo "[bootstrap] disabling cmaple/unittest subdirectory (not needed for build)"
+    sed -i 's|^\([[:space:]]*\)add_subdirectory(unittest)|\1# add_subdirectory(unittest) # Gadi: disabled — avoids GoogleTest FetchContent|' "${CMAPLE_CML}"
+fi
+echo "[bootstrap] cmaple unittest disabled"
+
+# FetchContent_Declare(googletest URL ...) + FetchContent_MakeAvailable(googletest)
+# run unconditionally in cmaple/CMakeLists.txt and require internet (which
+# compute nodes do not have). Comment them out — we only need the googletest
+# for the unittest subdir which is already disabled above.
+if grep -qE 'FetchContent_MakeAvailable\(googletest\)' "${CMAPLE_CML}"; then
+    echo "[bootstrap] disabling cmaple googletest FetchContent calls"
+    sed -i '/^include(FetchContent)$/,/^FetchContent_MakeAvailable(googletest)$/ s|^|# GADI-DISABLED: |' "${CMAPLE_CML}"
+fi
+echo "[bootstrap] cmaple FetchContent disabled"
 
 # Compiler selection: prefer icx (Intel LLVM) for -xSAPPHIRERAPIDS. Fall back
 # to gcc with -march=sapphirerapids if icx is not on PATH.
@@ -141,11 +156,12 @@ build_variant() {
         -DEIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR}" \
         -DBOOST_ROOT="${BOOST_ROOT}" \
         -DBoost_NO_SYSTEM_PATHS=ON \
-        -DFETCHCONTENT_SOURCE_DIR_googletest="${GTEST_LOCAL}" \
-        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
         -DCMAKE_C_FLAGS="${ARCH_FLAGS} ${extra}" \
         -DCMAKE_CXX_FLAGS="${ARCH_FLAGS} ${extra}"
-    make -j"$(nproc)"
+    # IQTREE_BUILD_JOBS overrides nproc — needed on login nodes where cgroups
+    # report nproc=1 but we still want parallel compile for verification runs.
+    local jobs="${IQTREE_BUILD_JOBS:-$(nproc)}"
+    make -j"${jobs}"
     if [[ ! -x "${build_dir}/iqtree3" ]]; then
         # Some IQ-TREE CMake configs put the binary in a subdir.
         mv -f "${build_dir}"/iqtree3*/iqtree3 "${build_dir}/iqtree3" 2>/dev/null || true
