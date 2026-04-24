@@ -95,13 +95,19 @@ normalsr has 720 nodes so queuing should be short. Expected clock
    > -DBOOST_ROOT=/apps/boost/1.84.0
    > -DBoost_NO_SYSTEM_PATHS=ON
    > ```
-   > **Compute nodes have no outbound internet** — clone the source on a login
-   > node first, then submit the build job:
+   > **Compute nodes have no outbound internet** — clone the source AND its
+   > submodules (`cmaple`, `lsd2`) on a login node first, then submit the
+   > build job:
    > ```bash
-   > git clone --depth=1 https://github.com/iqtree/iqtree3.git \
+   > git clone https://github.com/iqtree/iqtree3.git \
    >     /scratch/rc29/<user>/iqtree3/src/iqtree3
+   > cd /scratch/rc29/<user>/iqtree3/src/iqtree3
+   > git submodule update --init --recursive   # fetches cmaple + lsd2
    > qsub gadi-ci/bootstrap_iqtree.sh
    > ```
+   > The bootstrap script pre-flight checks for `cmaple/CMakeLists.txt` and
+   > `lsd2/CMakeLists.txt` and errors out with a clear message if either is
+   > missing, so you never waste SUs on a build that cannot configure.
 2. **No benchmark alignments on Gadi** (they live on Setonix scratch and
    can't be rsynced cross-site from a login node) →
    `gadi-ci/generate_datasets.sh` regenerates equivalent workloads

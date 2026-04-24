@@ -36,7 +36,7 @@ SRC_DIR="${SRC_DIR:-${PROJECT_DIR}/src/iqtree3}"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build}"
 BUILD_PROFILING="${BUILD_PROFILING:-${PROJECT_DIR}/build-profiling}"
 IQTREE_REPO="${IQTREE_REPO:-https://github.com/iqtree/iqtree3.git}"
-IQTREE_REF="${IQTREE_REF:-main}"
+IQTREE_REF="${IQTREE_REF:-master}"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  IQ-TREE 3 bootstrap on Gadi (Sapphire Rapids)"
@@ -65,8 +65,10 @@ mkdir -p "$(dirname "${SRC_DIR}")"
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
     # Compute nodes have no outbound internet — clone must be done on a login
     # node before submitting this job:
-    #   git clone --depth=1 https://github.com/iqtree/iqtree3.git \
+    #   git clone https://github.com/iqtree/iqtree3.git \
     #       /scratch/rc29/<user>/iqtree3/src/iqtree3
+    #   cd /scratch/rc29/<user>/iqtree3/src/iqtree3
+    #   git submodule update --init --recursive
     echo "ERROR: ${SRC_DIR} not found." >&2
     echo "       Clone on a login node first, then resubmit." >&2
     exit 1
@@ -75,6 +77,19 @@ else
     cd "${SRC_DIR}"
     git submodule update --init --recursive 2>/dev/null || true
 fi
+
+# Submodules are REQUIRED — IQ-TREE3 CMake will fail without cmaple/ and lsd2/.
+# Submodules cannot be fetched from compute nodes (no internet), so they must
+# already be initialised on the login node before submitting this job.
+for sub in cmaple lsd2; do
+    if [[ ! -f "${SRC_DIR}/${sub}/CMakeLists.txt" ]]; then
+        echo "ERROR: submodule ${SRC_DIR}/${sub} not initialised." >&2
+        echo "       On a login node run:" >&2
+        echo "         cd ${SRC_DIR} && git submodule update --init --recursive" >&2
+        exit 1
+    fi
+done
+echo "[bootstrap] submodules OK: cmaple, lsd2"
 
 # Compiler selection: prefer icx (Intel LLVM) for -xSAPPHIRERAPIDS. Fall back
 # to gcc with -march=sapphirerapids if icx is not on PATH.
