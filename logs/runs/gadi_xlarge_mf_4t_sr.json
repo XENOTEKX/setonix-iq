@@ -49,7 +49,7 @@
     "all_pass": true
   },
   "profile": {
-    "dataset": "xlarge_mf.fa",
+    "dataset": "xlarge_mf_gadi_pilot.fa",
     "threads": 4,
     "perf_cmd": null,
     "metrics": {},
@@ -2499,7 +2499,7 @@
     }
   },
   "dataset_info": {
-    "file": "xlarge_mf.fa",
+    "file": "xlarge_mf_gadi_pilot.fa",
     "file_size_bytes": 10012000,
     "fasta_taxa": 1000,
     "fasta_sites": 10000,
@@ -2624,5 +2624,8 @@
       }
     ]
   },
-  "platform": "gadi"
+  "platform": "gadi",
+  "notes": [
+    "Gadi pilot run used simulated alignment with different dimensions than Setonix (different taxa x sites); renamed to *_gadi_pilot to avoid cross-platform comparison contamination. Rerun with matched Setonix dimensions is pending."
+  ]
 }

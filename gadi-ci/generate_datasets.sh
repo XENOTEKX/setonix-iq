@@ -10,9 +10,13 @@
 # Output:
 #   ${PROJECT_DIR}/benchmarks/
 #     ├── turtle.fa               (copied from upstream iqtree3 examples)
-#     ├── large_modelfinder.fa    ( 500 taxa ×   5 000 bp, GTR+G4)
-#     ├── xlarge_mf.fa            (1000 taxa ×  10 000 bp, GTR+G4)
-#     └── mega_dna.fa             ( 500 taxa × 100 000 bp, GTR+G4)
+#     ├── large_modelfinder.fa    ( 100 taxa ×  50 000 bp, GTR+G4)  — matches Setonix
+#     ├── xlarge_mf.fa            ( 200 taxa × 100 000 bp, GTR+G4)  — matches Setonix xlarge_dna.fa
+#     └── mega_dna.fa             ( 500 taxa × 100 000 bp, GTR+G4)  — matches Setonix
+#
+# Dimensions are pinned to the Setonix corpus so that wall-time /
+# IPC / speedup comparisons across platforms are meaningful. Do NOT
+# change these without also re-running the full Setonix matrix.
 #
 # Usage (submit):
 #   qsub gadi-ci/generate_datasets.sh
@@ -93,9 +97,9 @@ simulate() {
     ls -lh "${out}"
 }
 
-simulate "large_modelfinder.fa"  500   5000   101
-simulate "xlarge_mf.fa"          1000 10000   202
-simulate "mega_dna.fa"            500 100000  303
+simulate "large_modelfinder.fa"  100  50000   101
+simulate "xlarge_mf.fa"          200 100000   202
+simulate "mega_dna.fa"           500 100000   303
 
 echo ""
 echo "[datagen] benchmarks in ${BENCHMARKS}:"

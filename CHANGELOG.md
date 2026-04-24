@@ -2,6 +2,106 @@
 
 ---
 
+## 2026-04-25 — **PRIORITY**: Gadi pilot datasets had wrong dimensions vs Setonix — rerun required
+
+While reviewing the multi-platform dashboard we caught a data-validity
+regression: the AliSim-generated benchmark alignments on Gadi were
+**not dimensionally matched** to the Setonix corpus, so any cross-platform
+wall-time / IPC / speedup comparison against those series is invalid.
+
+### Evidence (from `web/data/runs.index.json` before the fix)
+
+| Dataset label          | Setonix (taxa × sites) | Gadi (taxa × sites) | Match? |
+|------------------------|:---------------------:|:-------------------:|:-----:|
+| `large_modelfinder.fa` | **100 × 50 000**  (5.00 MB) | 500 × 5 000  (2.51 MB) | ❌ transposed |
+| `xlarge_mf.fa`         | 200 × 100 000 (20 MB, labelled `xlarge_dna.fa` in JSON) | 1000 × 10 000 (10 MB) | ❌ different workload |
+| `mega_dna.fa`          | 500 × 100 000 (50.01 MB) | 500 × 100 000 (50.01 MB) | ✅ identical |
+
+Root cause: `gadi-ci/generate_datasets.sh` hard-coded the wrong
+`(taxa, sites)` tuples for `large_modelfinder` and `xlarge_mf`. The
+`mega_dna` simulation was correct by coincidence (same 500 × 100 000,
+same seed 303).
+
+### Containment (done today, commit pending)
+
+1. **Generator corrected** — `gadi-ci/generate_datasets.sh` now reads:
+   ```
+   simulate "large_modelfinder.fa"  100  50000   101
+   simulate "xlarge_mf.fa"          200 100000   202
+   simulate "mega_dna.fa"           500 100000   303
+   ```
+   Dimensions pinned to the Setonix corpus. A header comment warns
+   future maintainers not to change them without re-running Setonix.
+2. **Existing 12 invalid Gadi runs isolated** — instead of deleting
+   the SU spend (≈ 3 KSU of real IQ-TREE work on wrong-shape input),
+   the `profile.dataset` and `dataset_info.file` fields were renamed
+   in place:
+   - `large_modelfinder.fa` → `large_modelfinder_gadi_pilot.fa` (6 runs)
+   - `xlarge_mf.fa` → `xlarge_mf_gadi_pilot.fa` (6 runs)
+   Each record gained a `notes` entry explaining the pilot/rerun-pending
+   status. The dashboard now surfaces them as **separate series** from
+   the Setonix corpus — no silent cross-platform contamination.
+3. **`mega_dna` Gadi runs are valid** — identical dimensions, identical
+   seed, 50.01 MB file size matches Setonix exactly. Those 2 data points
+   (13T, 26T — Intel Sapphire Rapids vs AMD Milan) remain the only
+   currently trustworthy cross-platform comparison.
+
+### Verified post-fix index state
+
+```
+('turtle.fa',                       'setonix') 0.33 MB   16 × 20 820  × 1 run
+('large_modelfinder.fa',            'setonix') 5.00 MB  100 × 50 000  × 6 runs   ← baseline
+('xlarge_dna.fa',                   'setonix') 20.0 MB  200 × 100 000 × 7 runs   ← baseline
+('mega_dna.fa',                     'setonix') 50.0 MB  500 × 100 000 × 4 runs   ← baseline
+('mega_dna.fa',                     'gadi')    50.0 MB  500 × 100 000 × 2 runs   ✅ comparable
+('large_modelfinder_gadi_pilot.fa', 'gadi')    2.51 MB  500 × 5 000   × 6 runs   ⚠ pilot only
+('xlarge_mf_gadi_pilot.fa',         'gadi')    10.0 MB 1000 × 10 000  × 6 runs   ⚠ pilot only
+```
+
+### Priority rerun plan (blocking before any further analysis)
+
+**Target**: on Gadi (`normalsr`, SPR 8470Q), rebuild the alignments with
+the corrected generator and rerun the full thread sweep so the three
+dataset series exactly match the Setonix workload.
+
+Priority-ordered execution plan:
+
+| # | Task | Queue time | SU estimate |
+|---|------|-----------|-------------|
+| 1 | `rm -f /scratch/rc29/$USER/iqtree3/benchmarks/{large_modelfinder,xlarge_mf}.fa` on a login node | instant | 0 |
+| 2 | `qsub gadi-ci/generate_datasets.sh` (regenerate with 100 × 50 000 + 200 × 100 000 + 500 × 100 000) | ≤ 1 min wall | ≈ 1 SU |
+| 3 | Sanity-check file sizes match Setonix (5 000 000 / 20 000 000 / 50 000 000 bytes ± 6 kB) | instant | 0 |
+| 4 | **Priority A — `large_modelfinder.fa`** sweep `{1, 4, 8, 16, 32, 64}` threads → 6 jobs | parallel | ≈ 900 SU |
+| 5 | **Priority B — `xlarge_mf.fa`** sweep `{1, 4, 8, 16, 32, 64, 128}` threads (128 capped to 104 on SPR node; flag in JSON) → 7 jobs | parallel | ≈ 1 800 SU |
+| 6 | **Priority C — `mega_dna.fa`** sweep `{16, 32, 64, 128}` (already partial) — fill in 64T and 104T (Setonix ran 128T; Gadi node caps 104) → 2 jobs | parallel | ≈ 1 400 SU |
+| 7 | Ingest JSONs via `python3 tools/harvest_scratch.py`, then `python3 tools/normalize.py && python3 tools/validate.py && python3 tools/build.py && git push` | ≤ 5 min | 0 |
+| 8 | Once authentic Gadi `large_modelfinder.fa` + `xlarge_mf.fa` series land, archive `*_gadi_pilot.fa` records (move under `logs/runs/_archive/` and exclude from normalize) | 1 min | 0 |
+
+**Total SU estimate for the rerun**: ≈ 4.1 KSU (well within the
+remaining grant; current burn ≈ 3 KSU on the pilot = ≈ 28 % of 25 KSU
+used so far).
+
+**Priority ordering rationale**: `large_modelfinder` is the fastest
+(low thread-count baseline in minutes), so it validates the corrected
+generator with the shortest feedback loop. `xlarge_mf` is where the
+most interesting cross-platform speedup and efficiency comparisons
+will sit (largest thread sweep). `mega_dna` already has 2 valid points
+so only needs fill-in.
+
+**Do not interpret `*_gadi_pilot.fa` curves as "Gadi vs Setonix"** —
+they are only valid as internal Gadi thread-scaling curves on a
+different, smaller workload. The dashboard colour-codes them as Gadi
+(orange / triangle) but their legend label now reads
+`Gadi · large_modelfinder_gadi_pilot.fa`, making the caveat visible.
+
+### Commits in this containment wave
+
+| Hash (to be filled) | Message |
+|--------------------|---------|
+| `<pending>` | `fix(gadi): generator dims match Setonix; isolate pilot runs as *_gadi_pilot.fa` |
+
+---
+
 ## 2026-04-24 — `gadi-iq`: Stage 4 **resubmitted** — full profiling suite + thread sweep aligned to Setonix
 
 Cancelled the first Stage 4 batch (jobs `166967399–414`, initial submission)
