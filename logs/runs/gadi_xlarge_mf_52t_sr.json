@@ -48,10 +48,7 @@
     "vtune": null
   },
   "dataset_info": {
-    "file": "xlarge_mf_gadi_pilot.fa",
-    "file_size_bytes": 10012000,
-    "fasta_taxa": 1000,
-    "fasta_sites": 10000
+    "file": "xlarge_mf_gadi_pilot.fa"
   },
   "platform": "gadi",
   "notes": [
