@@ -286,6 +286,96 @@ def parse_hotspots(hotspots_txt: Path, limit: int = 15) -> list[dict]:
     return out
 
 
+def _clean_frame(name: str) -> str:
+    """Shorten a C++ or runtime frame name for display in flamegraph/callstack."""
+    name = name.strip()
+    name = re.sub(r"\s*\[clone [^\]]+\]", "", name)  # remove [clone ._omp_fn.0] etc.
+    if re.fullmatch(r"0x[0-9a-f]+", name):
+        return "[runtime]"
+    if name == "0":
+        return "[runtime]"
+    return name
+
+
+def parse_hotspots_to_folded(hotspots_txt: Path, limit: int = 500) -> list[dict]:
+    """Synthesize folded-stack entries from the call-tree in a perf report
+    ``--children`` output (hotspots.txt).
+
+    ``perf_folded.txt`` is the ideal source, but when it is empty (e.g. the
+    stackcollapse pipe was killed) this function reconstructs approximate stacks
+    from the hierarchical tree that perf report --children embeds under each
+    top-level function.  Counts are derived from the reported percentages and
+    the total sample count in the header line.
+
+    The output format is identical to ``parse_folded()``:
+        [{"stack": "funcA;funcB;funcC", "count": N}, ...]
+    sorted by count descending.
+    """
+    if not hotspots_txt.is_file():
+        return []
+    text = hotspots_txt.read_text(errors="replace")
+
+    # Total samples from the perf header ("# Samples: 10M of event")
+    total_samples = 0
+    m = re.search(r"#\s+Samples:\s+([0-9.]+)([MK]?)\s+of event", text)
+    if m:
+        val = float(m.group(1))
+        unit = m.group(2)
+        if unit == "M":
+            val *= 1_000_000
+        elif unit == "K":
+            val *= 1_000
+        total_samples = int(val)
+    if not total_samples:
+        return []
+
+    # A top-level function entry starts with exactly 4 spaces + percentage
+    header_re = re.compile(
+        r"^\s{4}([0-9.]+)%\s+([0-9]+)\s+\S+\s+\S+\s+\[\.\]\s+(.+?)\s*$"
+    )
+    # A child tree entry: leading whitespace + optional "|" + "--XX.XX%--FuncName"
+    entry_re = re.compile(r"^( +)(?:\|)?--([0-9.]+)%--(.+?)\s*$")
+
+    stacks: dict[str, int] = {}
+
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        hm = header_re.match(lines[i])
+        if hm:
+            root_samples = int(hm.group(2))
+            root_fn = _clean_frame(hm.group(3))
+            key = root_fn
+            stacks[key] = stacks.get(key, 0) + root_samples
+
+            # Track (indent_column, fn) pairs for building nested paths
+            depth_stack: list[tuple[int, str]] = []
+            i += 1
+            while i < len(lines) and not header_re.match(lines[i]):
+                em = entry_re.match(lines[i])
+                if em:
+                    indent = len(em.group(1))
+                    child_pct = float(em.group(2))
+                    child_fn = _clean_frame(em.group(3))
+                    child_count = max(1, int(total_samples * child_pct / 100))
+
+                    # Pop back so we're at the correct parent depth
+                    while depth_stack and depth_stack[-1][0] >= indent:
+                        depth_stack.pop()
+
+                    ancestors = [root_fn] + [fn for _, fn in depth_stack]
+                    path = ";".join(ancestors + [child_fn])
+                    stacks[path] = stacks.get(path, 0) + child_count
+                    depth_stack.append((indent, child_fn))
+                i += 1
+            continue
+        i += 1
+
+    result = [{"stack": k, "count": v} for k, v in stacks.items()]
+    result.sort(key=lambda s: s["count"], reverse=True)
+    return result[:limit]
+
+
 def parse_folded(folded_txt: Path, limit: int | None = None) -> list[dict]:
     if not folded_txt.is_file():
         return []
@@ -434,6 +524,13 @@ def enrich_run(run: dict) -> bool:
         profile["hotspots"] = hs
         changed = True
     fs = parse_folded(pdir / "perf_folded.txt")
+    if not fs:
+        # perf_folded.txt is empty (stackcollapse pipe was killed after recording).
+        # Synthesize approximate folded stacks from the call-tree embedded in the
+        # perf report --children output (hotspots.txt).  These are derived from %
+        # values so counts are estimates, but they give the flamegraph and callstack
+        # visualisations enough data to render.
+        fs = parse_hotspots_to_folded(pdir / "hotspots.txt")
     if fs and profile.get("folded_stacks") != fs:
         profile["folded_stacks"] = fs
         changed = True

@@ -19312,7 +19312,61 @@
       "dTLB-miss-rate": 0.12343368697114353,
       "iTLB-miss-rate": 1.5327052656877171,
       "frontend-stall-rate": 0.009449559912379696
-    }
+    },
+    "folded_stacks": [
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int)",
+        "count": 17435917
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool)",
+        "count": 8891400
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool);void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int)",
+        "count": 8009400
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool);void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);[runtime]",
+        "count": 7929600
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*)",
+        "count": 7662381
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime]",
+        "count": 7396200
+      },
+      {
+        "stack": "[runtime]",
+        "count": 6910645
+      },
+      {
+        "stack": "[runtime];[runtime]",
+        "count": 6728400
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int)",
+        "count": 5640238
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*)",
+        "count": 5506200
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime]",
+        "count": 5422200
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);[runtime]",
+        "count": 3498599
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);[runtime];[runtime]",
+        "count": 634200
+      }
+    ]
   },
   "summary": {
     "pass": 0,

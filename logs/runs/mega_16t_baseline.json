@@ -15786,7 +15786,69 @@
       "dTLB-miss-rate": 0.21375378035794634,
       "iTLB-miss-rate": 1.2188342174175626,
       "frontend-stall-rate": 0.007289578395364446
-    }
+    },
+    "folded_stacks": [
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int)",
+        "count": 4914518
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool)",
+        "count": 2406000
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool);void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int)",
+        "count": 2156000
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool);void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);[runtime]",
+        "count": 2019000
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int)",
+        "count": 1700638
+      },
+      {
+        "stack": "[runtime]",
+        "count": 1615027
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime]",
+        "count": 1594000
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*)",
+        "count": 1586000
+      },
+      {
+        "stack": "[runtime];[runtime]",
+        "count": 1506000
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime]",
+        "count": 1486000
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*)",
+        "count": 1387243
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime];[runtime]",
+        "count": 239000
+      },
+      {
+        "stack": "void PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>(TraversalInfo&, unsigned long, unsigned long, int);double PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, bool);void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);[runtime];GOMP_parallel",
+        "count": 137999
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime];GOMP_parallel",
+        "count": 101000
+      },
+      {
+        "stack": "void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime];GOMP_parallel",
+        "count": 86000
+      }
+    ]
   },
   "summary": {
     "pass": 0,
