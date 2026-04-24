@@ -60,14 +60,19 @@ def profile_dir_for(label: str) -> Path:
     """Locate the profile directory for ``label``.
 
     Tries the canonical ``<label>_<SLURM_ID>`` first, then falls back to the
-    newest ``<label>_*`` directory (so new mega-batch SLURM IDs are picked up
-    automatically).
+    newest ``<label>_<id>`` directory where ``<id>`` is a purely numeric job
+    ID.  The strict numeric-suffix requirement prevents a label such as
+    ``xlarge_mf_4t`` from accidentally matching ``xlarge_mf_4t_sr_166978127``
+    (which belongs to a different label that happens to share a prefix).
     """
     primary = PROFILE_ROOT / f"{label}_{SLURM_ID}"
     if primary.is_dir():
         return primary
     candidates = sorted(
-        (p for p in PROFILE_ROOT.glob(f"{label}_*") if p.is_dir()),
+        (
+            p for p in PROFILE_ROOT.glob(f"{label}_*")
+            if p.is_dir() and p.name[len(label) + 1:].isdigit()
+        ),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
