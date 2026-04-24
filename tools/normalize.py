@@ -135,6 +135,13 @@ def normalize_run(run: dict) -> dict:
         run["summary"] = {**derive_summary(run), **run["summary"]}
         run["summary"]["all_pass"] = run["summary"].get("fail", 0) == 0
 
+    # Platform detection: explicit field wins, otherwise infer from scheduler id.
+    if not run.get("platform"):
+        if run.get("pbs_id"):
+            run["platform"] = "gadi"
+        elif run.get("slurm_id"):
+            run["platform"] = "setonix"
+
     hints = infer_from_commands(run)
     profile = run.get("profile") or {}
     if not profile.get("dataset") and hints["dataset"]:
@@ -172,6 +179,7 @@ def summarize_run(run: dict) -> dict:
         "run_id": run.get("run_id"),
         "slurm_id": run.get("slurm_id"),
         "pbs_id": run.get("pbs_id"),
+        "platform": run.get("platform"),
         "label": run.get("label") or run.get("run_id"),
         "description": run.get("description", ""),
         "run_type": run.get("run_type", "pipeline"),

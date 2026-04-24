@@ -1,48 +1,78 @@
 {
-  "run_id": "xlarge_mf_4t_baseline",
-  "slurm_id": "41703864",
-  "label": "xlarge_mf_4t",
-  "description": "CPU baseline: xlarge_dna.fa @ 4T, ModelFinder \u2192 TPM3u+F+G4 chosen according to BIC, MF=3489s",
-  "run_type": "cpu_baseline",
+  "run_id": "gadi_xlarge_mf_4t_sr",
+  "pbs_id": "166969046",
+  "run_type": "profile",
+  "label": "xlarge_mf_4t_sr",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix xlarge_mf @ 4T",
   "timing": [
     {
-      "command": "iqtree3 -s xlarge_dna.fa -T 4 -seed 1",
-      "time_s": 9146,
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s xlarge_mf.fa -T 4 -seed 1",
+      "time_s": 2025.944,
       "memory_kb": 0
     }
   ],
-  "verify": [],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -5286806.51,
+      "reported": -5286806.51,
+      "diff": 0.0
+    }
+  ],
   "env": {
-    "hostname": "setonix-node",
-    "date": "2026-04-20T11:32:44+08:00",
-    "run_id": "41703864",
-    "cpu": "AMD EPYC 7763 64-Core Processor",
-    "cores": "4",
-    "gcc": "gcc (SUSE Linux) 14.3.0",
-    "rocm": "N/A (CPU-only baseline)"
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "166969046.gadi-pbs",
+      "job_name": "iq-xlarge_mf-4t",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "submit_host": "gadi-login-03.gadi.nci.org.au",
+      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "scheduler": "pbs_pro"
+    }
   },
-  "gpu_info": "",
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 2025.944,
+    "all_pass": true
+  },
   "profile": {
-    "run_id": "41703864",
-    "dataset": "xlarge_dna.fa",
+    "dataset": "xlarge_mf.fa",
     "threads": 4,
-    "metrics": {
-      "cycles": 125145755130639,
-      "instructions": 155535700281208,
-      "cache-references": 10344888711148,
-      "cache-misses": 796321575550,
-      "branch-instructions": 15208845463663,
-      "branch-misses": 8059169049,
-      "L1-dcache-loads": 70411456748155,
-      "L1-dcache-load-misses": 5340004291764,
-      "stalled-cycles-frontend": 1470957421177,
-      "IPC": 1.243,
-      "cache-miss-rate": 7.7,
-      "branch-miss-rate": 0.053,
-      "L1-dcache-miss-rate": 7.58,
-      "frontend-stall-rate": 1.18
+    "perf_cmd": null,
+    "metrics": {},
+    "vtune": null,
+    "vtune_uarch": null,
+    "proc_summary": {
+      "sample_count": 203,
+      "duration_s": 2022.03,
+      "peak_rss_kb": 2266012,
+      "peak_vms_kb": 2799924,
+      "max_threads": 5,
+      "read_bytes": 10014720,
+      "write_bytes": 28860416
     },
-    "perf_cmd": "/scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/xlarge_dna.fa -T 4 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/xlarge_mf_4t_41703864/iqtree_run",
+    "artefacts": {
+      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/samples.jsonl",
+      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/perf_script.txt",
+      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/perf_report.txt",
+      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/perf.data",
+      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/vtune_hotspots",
+      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/vtune_hotspots.tsv",
+      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_166969046/vtune_hw_events.txt"
+    },
     "hotspots": [
       {
         "percent": 47.23,
@@ -2468,10 +2498,22 @@
       "cancelled_write_bytes": 1626112
     }
   },
+  "dataset_info": {
+    "file": "xlarge_mf.fa",
+    "file_size_bytes": 10012000,
+    "fasta_taxa": 1000,
+    "fasta_sites": 10000,
+    "taxa": 1000,
+    "sites": 10000,
+    "patterns": 10000,
+    "constant_sites": 0,
+    "invariant_sites": 0,
+    "informative_sites": 10000,
+    "sequence_type": "DNA"
+  },
   "modelfinder": {
-    "model_selected": "GTR+F+ASC+G4",
-    "wall_time_s": 3488.961,
     "best_model_bic": "GTR+ASC+G4",
+    "model_selected": "GTR+F+ASC+G4",
     "log_likelihood": -5286806.51,
     "unconstrained_log_likelihood": -92103.4037,
     "gamma_alpha": 0.8038,
@@ -2582,21 +2624,5 @@
       }
     ]
   },
-  "summary": {
-    "pass": 0,
-    "fail": 0,
-    "total_time": 9146,
-    "all_pass": true,
-    "wall_time": "2h32m26s"
-  },
-  "dataset_info": {
-    "file": "xlarge_dna.fa",
-    "taxa": 1000,
-    "sites": 10000,
-    "patterns": 10000,
-    "constant_sites": 0,
-    "invariant_sites": 0,
-    "informative_sites": 10000,
-    "sequence_type": "DNA"
-  }
+  "platform": "gadi"
 }

@@ -1,0 +1,57 @@
+{
+  "run_id": "gadi_mega_dna_13t_sr",
+  "pbs_id": "166967411",
+  "run_type": "profile",
+  "label": "mega_dna_13t_sr",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix mega_dna @ 13T",
+  "timing": [
+    {
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s mega_dna.fa -T 13 -seed 1",
+      "time_s": 0,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [],
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "166967411.gadi-pbs",
+      "job_name": "iq-mega_dna-13t",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "submit_host": "gadi-login-03.gadi.nci.org.au",
+      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 0,
+    "fail": 1,
+    "total_time": 0,
+    "all_pass": false
+  },
+  "profile": {
+    "dataset": "mega_dna.fa",
+    "threads": 13,
+    "perf_cmd": null,
+    "metrics": {},
+    "vtune": null
+  },
+  "dataset_info": {
+    "file": "mega_dna.fa",
+    "file_size_bytes": 50006000,
+    "fasta_taxa": 500,
+    "fasta_sites": 100000
+  },
+  "platform": "gadi"
+}

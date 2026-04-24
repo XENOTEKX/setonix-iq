@@ -81,21 +81,32 @@ fi
 
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"
 PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
-RUN_ID="$(date +%Y-%m-%d_%H%M%S)_${LABEL}"
+# Embed 'gadi' in the run id so dashboard filenames (logs/runs/<rid>.json) are
+# unambiguous alongside Setonix runs.  No timestamp prefix — the pbs_id field
+# inside the record carries the unique ordering and the label is unique per
+# (dataset, threads) pair.
+RUN_ID="gadi_${LABEL}"
 WORK_DIR="${PROFILES_DIR}/${LABEL}_${PBS_ID_SHORT}"
 mkdir -p "${WORK_DIR}" "${RUNS_DIR}"
 cd "${WORK_DIR}"
 
 echo "[matrix] run_id=${RUN_ID} dataset=${DATA_PATH} threads=${THREADS}"
 
-# stalled-cycles-frontend/backend not available on Gadi Sapphire Rapids kernel PMU.
-# Removed to prevent perf stat aborting before IQ-TREE starts.
-PERF_EVENTS="cycles,instructions,branch-instructions,branch-misses,\
+# Gadi normalsr compute nodes run with /proc/sys/kernel/perf_event_paranoid=2.
+# That blocks all kernel-mode perf sampling and makes `perf stat` fail SILENTLY
+# when any requested event can't be opened — it writes no output file at all,
+# leaving profile.metrics empty in the run record.
+# Fix: suffix every event with ':u' so perf counts them in user-mode only,
+# which is allowed at paranoid=2.
+# Also: stalled-cycles-frontend/backend and most topdown-* pseudo-events are
+# not available on SPR with kernel 4.18.0 perf-tool — omitted to keep the
+# event group self-consistent.
+_PERF_EVENTS_BASE="cycles,instructions,branch-instructions,branch-misses,\
 cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,\
 LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,\
-iTLB-loads,iTLB-load-misses,\
-topdown-total-slots,topdown-slots-issued,topdown-slots-retired,\
-topdown-fetch-bubbles,topdown-recovery-bubbles"
+iTLB-loads,iTLB-load-misses"
+# Build the ':u'-suffixed event list.
+PERF_EVENTS="$(echo "${_PERF_EVENTS_BASE}" | tr ',' '\n' | sed 's/$/:u/' | paste -sd,)"
 
 # Pass 1: IQ-TREE direct run with /proc time-series sampler in background.
 # The sampler polls RSS, IO, NUMA placement, and per-thread CPU ticks at 10 s
@@ -215,12 +226,13 @@ WALL=$(( END_EPOCH - START_EPOCH ))
 kill "${SAMPLER_PID}" 2>/dev/null || true
 wait "${SAMPLER_PID}" 2>/dev/null || true
 
-# Pass 2: perf stat — hardware counters (IPC, cache, branch, TMA topdown).
+# Pass 2: perf stat — hardware counters (IPC, cache, branch).
+# Stderr is captured to perf_stat.err so silent failures are visible.
 if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
     perf stat -e "${PERF_EVENTS}" -o "${WORK_DIR}/perf_stat.txt" \
         "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
                     --prefix "${WORK_DIR}/iqtree_perf" \
-        > /dev/null 2>&1 || true
+        >"${WORK_DIR}/iqtree_perf.log" 2>"${WORK_DIR}/perf_stat.err" || true
 fi
 
 # Pass 3: perf record — callgraph for flamegraph (all thread counts, capped 20 min).
@@ -244,12 +256,15 @@ if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
 fi
 
 # Pass 4: VTune hotspots + microarchitecture exploration (all thread counts,
-# capped 30 min). Previously skipped 1T/4T/8T — now runs on all to get
-# single-thread hotspot data which is the most valuable for GPU offload analysis.
+# capped 30 min).
+# Gadi normalsr has perf_event_paranoid=2, which blocks hardware sampling mode
+# and any system-wide collection.  Use sampling-mode=sw (user-mode stack
+# unwinding via signals) so VTune can still collect hotspots from the target
+# process.  Stack collection is left enabled — it works in sw-mode.
 if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 ]]; then
-    # Hotspots with call stacks.
+    # Hotspots with call stacks (software sampling — compatible with paranoid≥1).
     timeout --preserve-status 1800 \
-        vtune -collect hotspots -knob sampling-mode=hw \
+        vtune -collect hotspots -knob sampling-mode=sw \
               -knob enable-stack-collection=true \
               -r "${WORK_DIR}/vtune_hotspots" \
               -- "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
@@ -262,27 +277,12 @@ if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 ]]; then
         vtune -report hotspots -r "${WORK_DIR}/vtune_hotspots" \
               -format csv -csv-delimiter tab \
               > "${WORK_DIR}/vtune_hotspots.tsv" 2>/dev/null || true
-        # Top-Down Microarchitecture Analysis metrics (TMA level 1+2).
         vtune -report hw-events -r "${WORK_DIR}/vtune_hotspots" \
               -format text > "${WORK_DIR}/vtune_hw_events.txt" 2>/dev/null || true
     fi
-    # Microarchitecture exploration pass (adds memory access + uarch breakdown).
-    # Skip for mega_dna × 1T/4T — too slow. Run for ≥8T or small datasets.
-    if [[ "${THREADS}" -ge 8 || "${DATASET_NAME}" == "large_modelfinder" ]]; then
-        timeout --preserve-status 1800 \
-            vtune -collect uarch-exploration \
-                  -knob enable-stack-collection=true \
-                  -r "${WORK_DIR}/vtune_uarch" \
-                  -- "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
-                     --prefix "${WORK_DIR}/iqtree_vtune_uarch" \
-                  > "${WORK_DIR}/vtune_uarch.log" 2>&1 || true
-        if [[ -d "${WORK_DIR}/vtune_uarch" ]]; then
-            vtune -report summary -r "${WORK_DIR}/vtune_uarch" \
-                  -format text > "${WORK_DIR}/vtune_uarch_summary.txt" 2>/dev/null || true
-            vtune -report hw-events -r "${WORK_DIR}/vtune_uarch" \
-                  -format text > "${WORK_DIR}/vtune_uarch_hw.txt" 2>/dev/null || true
-        fi
-    fi
+    # uarch-exploration REQUIRES hardware sampling (hence kernel-mode PMU),
+    # which is blocked by paranoid=2 on Gadi normalsr.  Skip it entirely here
+    # — the perf record callgraph (Pass 3) provides equivalent coverage.
 fi
 
 # Emit the run.schema.json record.
@@ -318,6 +318,9 @@ if os.path.isfile(log):
         if m: iqwall = float(m.group(1))
 
 # perf counters → derived metrics (shared logic with run_mega_profile.sh).
+# perf stat emits counts with the ':u' suffix (user-mode only, required at
+# paranoid=2 on Gadi normalsr).  Strip the suffix so the dashboard schema
+# keys line up with the Setonix baselines.
 pm = {}; perf_cmd = None
 pp = os.path.join(work, "perf_stat.txt")
 if os.path.isfile(pp):
@@ -326,7 +329,9 @@ if os.path.isfile(pp):
         if m: perf_cmd = m.group(1); continue
         m = re.match(r"\s*([\d,]+|<not supported>|<not counted>)\s+([\w\.\-:/]+)", line)
         if m and not m.group(1).startswith("<"):
-            try: pm[m.group(2)] = int(m.group(1).replace(",", ""))
+            try:
+                key = m.group(2).split(":", 1)[0]  # drop ':u' suffix
+                pm[key] = int(m.group(1).replace(",", ""))
             except ValueError: pass
 
 def g(*keys):
@@ -339,25 +344,6 @@ def rate(n, d):
     return round(100.0 * n / d, 4)
 
 cyc, ins = g("cycles"), g("instructions")
-slots    = g("topdown-total-slots")
-issued   = g("topdown-slots-issued")
-retired  = g("topdown-slots-retired")
-fetchb   = g("topdown-fetch-bubbles")
-recovb   = g("topdown-recovery-bubbles")
-
-tma = {}
-if slots:
-    if retired is not None:
-        tma["intel-tma-retiring-pct"]        = round(100.0 * retired / slots, 4)
-    if issued is not None and retired is not None and recovb is not None:
-        tma["intel-tma-bad-spec-pct"]        = round(100.0 * (issued - retired + recovb) / slots, 4)
-    if fetchb is not None:
-        tma["intel-tma-frontend-bound-pct"]  = round(100.0 * fetchb / slots, 4)
-    if all(k in tma for k in ("intel-tma-retiring-pct","intel-tma-bad-spec-pct","intel-tma-frontend-bound-pct")):
-        tma["intel-tma-backend-bound-pct"]   = round(
-            max(0.0, 100.0 - tma["intel-tma-retiring-pct"]
-                           - tma["intel-tma-bad-spec-pct"]
-                           - tma["intel-tma-frontend-bound-pct"]), 4)
 
 metrics = {
   "IPC": round(ins / cyc, 4) if cyc and ins else None,
@@ -367,10 +353,16 @@ metrics = {
   "LLC-miss-rate":       rate(g("LLC-load-misses"), g("LLC-loads")),
   "dTLB-miss-rate":      rate(g("dTLB-load-misses"), g("dTLB-loads")),
   "iTLB-miss-rate":      rate(g("iTLB-load-misses"), g("iTLB-loads")),
-  "frontend-stall-rate": rate(g("stalled-cycles-frontend"), cyc),
-  "backend-stall-rate":  rate(g("stalled-cycles-backend"),  cyc),
-  **tma,
 }
+# Keep raw counters too so the dashboard can display absolute values.
+for k in ("cycles", "instructions", "cache-references", "cache-misses",
+         "branch-instructions", "branch-misses",
+         "L1-dcache-loads", "L1-dcache-load-misses",
+         "LLC-loads", "LLC-load-misses",
+         "dTLB-loads", "dTLB-load-misses",
+         "iTLB-loads", "iTLB-load-misses"):
+    if k in pm:
+        metrics[k] = pm[k]
 metrics = {k: v for k, v in metrics.items() if v is not None}
 
 # VTune hotspots summary + uarch-exploration if present.
@@ -460,6 +452,7 @@ if rep_ll is not None:
 record = {
   "run_id": rid,
   "pbs_id": pbs,
+  "platform": "gadi",
   "run_type": "profile",
   "label": label,
   "description": f"Gadi Sapphire Rapids reproduction of Setonix {ds} @ {thr}T",

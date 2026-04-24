@@ -1,0 +1,1808 @@
+{
+  "run_id": "gadi_large_modelfinder_1t_sr",
+  "pbs_id": "166969038",
+  "run_type": "profile",
+  "label": "large_modelfinder_1t_sr",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix large_modelfinder @ 1T",
+  "timing": [
+    {
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s large_modelfinder.fa -T 1 -seed 1",
+      "time_s": 1223.735,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "large_modelfinder.fa",
+      "status": "pass",
+      "expected": -1303518.586,
+      "reported": -1303518.586,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "166969038.gadi-pbs",
+      "job_name": "iq-large_modelfinder-1t",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "submit_host": "gadi-login-03.gadi.nci.org.au",
+      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 1223.735,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "large_modelfinder.fa",
+    "threads": 1,
+    "perf_cmd": null,
+    "metrics": {},
+    "vtune": null,
+    "vtune_uarch": null,
+    "proc_summary": {
+      "sample_count": 123,
+      "duration_s": 1221.23,
+      "peak_rss_kb": 603536,
+      "peak_vms_kb": 710856,
+      "max_threads": 2,
+      "read_bytes": 0,
+      "write_bytes": 7159808
+    },
+    "artefacts": {
+      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/samples.jsonl",
+      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/perf_script.txt",
+      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/perf_report.txt",
+      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/perf.data",
+      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/vtune_hotspots",
+      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/vtune_hotspots.tsv",
+      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_1t_sr_166969038/vtune_hw_events.txt"
+    },
+    "hotspots": [
+      {
+        "percent": 66.42,
+        "samples": 78960,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 13.94,
+        "samples": 16424,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 11.23,
+        "samples": 13277,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 2.43,
+        "samples": 2881,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "Node::findNeighbor"
+      },
+      {
+        "percent": 1.08,
+        "samples": 1235,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "newviewParsimonyIterativeFast"
+      },
+      {
+        "percent": 0.61,
+        "samples": 719,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "__svml_ldexp4_l9"
+      },
+      {
+        "percent": 0.45,
+        "samples": 528,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodFromBufferSIMD<Vec4d, 4, true, false>"
+      },
+      {
+        "percent": 0.38,
+        "samples": 446,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloNode::clearReversePartialLh"
+      },
+      {
+        "percent": 0.31,
+        "samples": 354,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "allocateParsimonyDataStructures"
+      },
+      {
+        "percent": 0.29,
+        "samples": 346,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computePartialInfo<Vec4d, 4>"
+      },
+      {
+        "percent": 0.25,
+        "samples": 295,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "__intel_avx_rep_memcpy"
+      },
+      {
+        "percent": 0.17,
+        "samples": 200,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "__intel_avx_rep_memset"
+      },
+      {
+        "percent": 0.17,
+        "samples": 190,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computePartialParsimonyFast"
+      },
+      {
+        "percent": 0.15,
+        "samples": 175,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::setParsimonyBranchLengths"
+      },
+      {
+        "percent": 0.14,
+        "samples": 163,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>"
+      }
+    ],
+    "folded_stacks": [
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
+        "count": 78960
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
+        "count": 78837
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
+        "count": 16564
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
+        "count": 16424
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
+        "count": 13339
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
+        "count": 13339
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
+        "count": 13277
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran",
+        "count": 11864
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran",
+        "count": 7032
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches",
+        "count": 6307
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches",
+        "count": 4712
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;ModelFactory::optimizeParameters",
+        "count": 3034
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor",
+        "count": 2856
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh",
+        "count": 2737
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2713
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2701
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;IQTree::optimizeNNI",
+        "count": 2689
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2665
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2641
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2606
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2570
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2522
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2451
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2368
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;IQTree::optimizeNNI",
+        "count": 2344
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2261
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 2130
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;ModelFactory::optimizeParameters",
+        "count": 1618
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast",
+        "count": 1285
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast;evaluateParsimonyIterativeFast",
+        "count": 833
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;ModelFactory::optimizeParameters;IQTree::optimizeBranches[abi:cxx11]",
+        "count": 749
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;ModelFactory::optimizeParameters;IQTree::optimizeBranches[abi:cxx11];IQTree::initCandidateTreeSet",
+        "count": 725
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9",
+        "count": 690
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
+        "count": 690
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
+        "count": 606
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;IQTree::optimizeNNI;IQTree::optimizeBranches[abi:cxx11]",
+        "count": 583
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches;IQTree::optimizeNNI;IQTree::optimizeBranches[abi:cxx11];IQTree::initCandidateTreeSet",
+        "count": 547
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9;PhyloTree::getBestNNIForBran",
+        "count": 535
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9;PhyloTree::getBestNNIForBran;IQTree::doTreeSearch",
+        "count": 476
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran",
+        "count": 452
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast;evaluateParsimonyIterativeFast;addTraverseParsimony",
+        "count": 428
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast;evaluateParsimonyIterativeFast;addTraverseParsimony;addTraverseParsimony",
+        "count": 416
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh",
+        "count": 416
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 416
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 404
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 404
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 404
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 392
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 392
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 380
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 380
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 368
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;allocateParsimonyDataStructures",
+        "count": 357
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;allocateParsimonyDataStructures;IQTree::initCandidateTreeSet",
+        "count": 357
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast;evaluateParsimonyIterativeFast;addTraverseParsimony;addTraverseParsimony;addTraverseParsimony",
+        "count": 333
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 333
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialInfo<Vec4d, 4>",
+        "count": 333
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 321
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 285
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast;evaluateParsimonyIterativeFast;addTraverseParsimony;addTraverseParsimony;addTraverseParsimony;addTraverseParsimony",
+        "count": 273
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 249
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 226
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialInfo<Vec4d, 4>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 226
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialInfo<Vec4d, 4>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihood",
+        "count": 214
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;newviewParsimonyIterativeFast;evaluateParsimonyIterativeFast;addTraverseParsimony;addTraverseParsimony;addTraverseParsimony;addTraverseParsimony;addTraverseParsimony",
+        "count": 202
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__intel_avx_rep_memset",
+        "count": 202
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast",
+        "count": 202
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 190
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialInfo<Vec4d, 4>;__kmp_invoke_microtask",
+        "count": 190
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 190
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 190
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 190
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 190
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 178
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 178
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;IQTree::initCandidateTreeSet",
+        "count": 178
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__svml_ldexp4_l9;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::getBestNNIForBran;PhyloTree::optimizeAllBranches",
+        "count": 166
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 166
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 166
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 154
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialInfo<Vec4d, 4>;__kmp_invoke_microtask;PhyloTree::computeTraversalInfo<Vec4d, 4>",
+        "count": 154
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__intel_avx_rep_memset;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 154
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;__intel_avx_rep_memset;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihood",
+        "count": 154
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 154
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 142
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;[runtime]",
+        "count": 130
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;Node::findNeighbor;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloTree::optimizeOneBranch",
+        "count": 130
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh;PhyloNode::clearReversePartialLh",
+        "count": 130
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
+        "count": 130
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;non-virtual thunk to PhyloTree::computeFuncDerv(double, double&, double&)",
+        "count": 130
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;[runtime];PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 119
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialInfo<Vec4d, 4>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihood;non-virtual thunk to PhyloTree::computeFunction(double)",
+        "count": 119
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast;PhyloTree::computePartialParsimonyFast",
+        "count": 119
+      },
+      {
+        "stack": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;evaluateParsimonyIterativeFast",
+        "count": 119
+      }
+    ],
+    "memory_timeseries": [
+      {
+        "t_s": 0.01,
+        "rss_kb": 44184,
+        "peak_kb": 46300,
+        "vms_kb": 111116,
+        "threads_now": 1,
+        "voluntary_cs": 157,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 10.02,
+        "rss_kb": 423964,
+        "peak_kb": 423964,
+        "vms_kb": 503720,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 20.03,
+        "rss_kb": 385980,
+        "peak_kb": 425188,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 30.04,
+        "rss_kb": 432280,
+        "peak_kb": 432280,
+        "vms_kb": 545376,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 40.05,
+        "rss_kb": 515200,
+        "peak_kb": 515200,
+        "vms_kb": 628112,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 50.06,
+        "rss_kb": 515212,
+        "peak_kb": 515212,
+        "vms_kb": 628112,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 60.07,
+        "rss_kb": 437336,
+        "peak_kb": 515212,
+        "vms_kb": 511256,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 70.08,
+        "rss_kb": 437336,
+        "peak_kb": 515212,
+        "vms_kb": 511256,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 80.09,
+        "rss_kb": 515212,
+        "peak_kb": 515212,
+        "vms_kb": 628112,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 90.1,
+        "rss_kb": 515212,
+        "peak_kb": 515212,
+        "vms_kb": 628112,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 100.11,
+        "rss_kb": 515212,
+        "peak_kb": 515212,
+        "vms_kb": 628112,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 110.12,
+        "rss_kb": 437336,
+        "peak_kb": 515212,
+        "vms_kb": 511256,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 120.13,
+        "rss_kb": 437336,
+        "peak_kb": 515212,
+        "vms_kb": 511256,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 130.14,
+        "rss_kb": 437336,
+        "peak_kb": 515212,
+        "vms_kb": 511256,
+        "threads_now": 1,
+        "voluntary_cs": 166,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 140.15,
+        "rss_kb": 513440,
+        "peak_kb": 515212,
+        "vms_kb": 589132,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 150.16,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 160.17,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 170.18,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 180.19,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 190.2,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 200.21,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 210.22,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 220.23,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 230.24,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 240.25,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 250.26,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 260.27,
+        "rss_kb": 520792,
+        "peak_kb": 598672,
+        "vms_kb": 594000,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 270.28,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 280.29,
+        "rss_kb": 598668,
+        "peak_kb": 598672,
+        "vms_kb": 710856,
+        "threads_now": 1,
+        "voluntary_cs": 176,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 290.3,
+        "rss_kb": 603536,
+        "peak_kb": 681416,
+        "vms_kb": 676744,
+        "threads_now": 1,
+        "voluntary_cs": 185,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 300.31,
+        "rss_kb": 428784,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 185,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 310.32,
+        "rss_kb": 428784,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 185,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 320.33,
+        "rss_kb": 513404,
+        "peak_kb": 681416,
+        "vms_kb": 603424,
+        "threads_now": 1,
+        "voluntary_cs": 185,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 330.34,
+        "rss_kb": 421020,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 185,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 340.35,
+        "rss_kb": 428676,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 185,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 350.36,
+        "rss_kb": 428676,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 196,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 360.37,
+        "rss_kb": 428672,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 196,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 370.38,
+        "rss_kb": 428676,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 196,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 380.39,
+        "rss_kb": 428672,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 196,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 390.4,
+        "rss_kb": 428672,
+        "peak_kb": 681416,
+        "vms_kb": 501212,
+        "threads_now": 1,
+        "voluntary_cs": 196,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 400.41,
+        "rss_kb": 428680,
+        "peak_kb": 681416,
+        "vms_kb": 506392,
+        "threads_now": 1,
+        "voluntary_cs": 196,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 410.42,
+        "rss_kb": 248632,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 420.43,
+        "rss_kb": 141696,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 430.44,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 440.45,
+        "rss_kb": 196604,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 450.46,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 460.47,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 470.48,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 204,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 480.49,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 214,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 490.5,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 214,
+        "involuntary_cs": 2
+      },
+      {
+        "t_s": 500.51,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 214,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 510.52,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 214,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 520.53,
+        "rss_kb": 435524,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 214,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 530.54,
+        "rss_kb": 410976,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 214,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 540.55,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 222,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 550.56,
+        "rss_kb": 435648,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 222,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 560.57,
+        "rss_kb": 435504,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 222,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 570.58,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 222,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 580.59,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 222,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 590.6,
+        "rss_kb": 435528,
+        "peak_kb": 681416,
+        "vms_kb": 520680,
+        "threads_now": 1,
+        "voluntary_cs": 222,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 600.61,
+        "rss_kb": 444544,
+        "peak_kb": 681416,
+        "vms_kb": 589064,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 610.62,
+        "rss_kb": 445332,
+        "peak_kb": 681416,
+        "vms_kb": 589748,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 620.63,
+        "rss_kb": 445860,
+        "peak_kb": 681416,
+        "vms_kb": 590296,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 630.64,
+        "rss_kb": 445860,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 640.65,
+        "rss_kb": 445860,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 650.66,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 660.67,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 670.68,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 680.69,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 690.7,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 700.71,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 710.72,
+        "rss_kb": 446044,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 254,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 720.73,
+        "rss_kb": 446048,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 267,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 730.74,
+        "rss_kb": 446048,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 267,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 740.75,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 267,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 750.76,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 267,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 760.77,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 267,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 770.78,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 267,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 780.79,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 275,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 790.8,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 275,
+        "involuntary_cs": 3
+      },
+      {
+        "t_s": 800.81,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 275,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 810.82,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 275,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 820.83,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 275,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 830.84,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 275,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 840.85,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 285,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 850.86,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 285,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 860.87,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 285,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 870.88,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 285,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 880.89,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 285,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 890.9,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 285,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 900.91,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 910.92,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 920.93,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 930.94,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 940.95,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 950.96,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 960.97,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 293,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 970.98,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 302,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 980.99,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 302,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 991.0,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 302,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1001.01,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 302,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1011.02,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 302,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1021.03,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 302,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1031.04,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 311,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1041.05,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 311,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1051.06,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 311,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1061.07,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 311,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1071.08,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 311,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1081.09,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 311,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1091.1,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 320,
+        "involuntary_cs": 4
+      },
+      {
+        "t_s": 1101.11,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 320,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1111.12,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 320,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1121.13,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 320,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1131.14,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 320,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1141.15,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 320,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1151.16,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 330,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1161.17,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 330,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1171.18,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 330,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1181.19,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 330,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1191.2,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 330,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1201.21,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 330,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1211.22,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 339,
+        "involuntary_cs": 5
+      },
+      {
+        "t_s": 1221.23,
+        "rss_kb": 446052,
+        "peak_kb": 681416,
+        "vms_kb": 590436,
+        "threads_now": 2,
+        "voluntary_cs": 339,
+        "involuntary_cs": 5
+      }
+    ],
+    "peak_rss_kb": 681416,
+    "io": {
+      "rchar": 2574403,
+      "wchar": 6909110,
+      "syscr": 208,
+      "syscw": 2618,
+      "read_bytes": 0,
+      "write_bytes": 7159808,
+      "cancelled_write_bytes": 2506752
+    }
+  },
+  "dataset_info": {
+    "file": "large_modelfinder.fa",
+    "file_size_bytes": 2506000,
+    "fasta_taxa": 500,
+    "fasta_sites": 5000,
+    "taxa": 500,
+    "sites": 5000,
+    "patterns": 5000,
+    "constant_sites": 0,
+    "invariant_sites": 0,
+    "informative_sites": 4996,
+    "sequence_type": "DNA"
+  },
+  "modelfinder": {
+    "best_model_bic": "GTR+ASC+G4",
+    "model_selected": "GTR+F+ASC+G4",
+    "log_likelihood": -1303518.5862,
+    "unconstrained_log_likelihood": -42585.966,
+    "gamma_alpha": 0.8044,
+    "tree_length": 94.3896,
+    "bic": 2615605.4687,
+    "aic": 2609049.1723,
+    "aicc": 2609556.5813,
+    "candidates": [
+      {
+        "model": "GTR+ASC+G4",
+        "log_likelihood": -1303495.709,
+        "aic": 2608997.418,
+        "aic_weight": 0.181,
+        "aicc": 2609501.428,
+        "aicc_weight": 0.181,
+        "bic": 2615534.163,
+        "bic_weight": 0.181
+      },
+      {
+        "model": "SYM+ASC+G4",
+        "log_likelihood": -1303495.709,
+        "aic": 2608997.418,
+        "aic_weight": 0.181,
+        "aicc": 2609501.428,
+        "aicc_weight": 0.181,
+        "bic": 2615534.163,
+        "bic_weight": 0.181
+      },
+      {
+        "model": "SYM+ASC+G4",
+        "log_likelihood": -1303495.709,
+        "aic": 2608997.418,
+        "aic_weight": 0.181,
+        "aicc": 2609501.428,
+        "aicc_weight": 0.181,
+        "bic": 2615534.163,
+        "bic_weight": 0.181
+      },
+      {
+        "model": "GTR+G4",
+        "log_likelihood": -1303495.885,
+        "aic": 2608997.77,
+        "aic_weight": 0.152,
+        "aicc": 2609501.78,
+        "aicc_weight": 0.152,
+        "bic": 2615534.515,
+        "bic_weight": 0.152
+      },
+      {
+        "model": "SYM+G4",
+        "log_likelihood": -1303495.886,
+        "aic": 2608997.772,
+        "aic_weight": 0.152,
+        "aicc": 2609501.782,
+        "aicc_weight": 0.152,
+        "bic": 2615534.517,
+        "bic_weight": 0.152
+      },
+      {
+        "model": "SYM+G4",
+        "log_likelihood": -1303495.886,
+        "aic": 2608997.772,
+        "aic_weight": 0.152,
+        "aicc": 2609501.782,
+        "aicc_weight": 0.152,
+        "bic": 2615534.517,
+        "bic_weight": 0.152
+      },
+      {
+        "model": "GTR+F+ASC+G4",
+        "log_likelihood": -1303518.589,
+        "aic": 2609049.178,
+        "aic_weight": 1.04e-12,
+        "aicc": 2609556.587,
+        "aicc_weight": 1.91e-13,
+        "bic": 2615605.474,
+        "bic_weight": 5.93e-17
+      },
+      {
+        "model": "GTR+F+G4",
+        "log_likelihood": -1303518.757,
+        "aic": 2609049.514,
+        "aic_weight": 8.83e-13,
+        "aicc": 2609556.923,
+        "aicc_weight": 1.61e-13,
+        "bic": 2615605.81,
+        "bic_weight": 5.02e-17
+      },
+      {
+        "model": "TVM+F+ASC+G4",
+        "log_likelihood": -1303584.462,
+        "aic": 2609178.924,
+        "aic_weight": 7e-41,
+        "aicc": 2609685.198,
+        "aicc_weight": 2.26e-41,
+        "bic": 2615728.703,
+        "bic_weight": 1.03e-43
+      },
+      {
+        "model": "TVM+F+G4",
+        "log_likelihood": -1303584.623,
+        "aic": 2609179.246,
+        "aic_weight": 5.96e-41,
+        "aicc": 2609685.52,
+        "aicc_weight": 1.92e-41,
+        "bic": 2615729.025,
+        "bic_weight": 8.8e-44
+      }
+    ]
+  },
+  "platform": "gadi"
+}

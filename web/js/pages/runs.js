@@ -99,6 +99,12 @@ function renderRow(r) {
   const statusBadge = r.all_pass
     ? '<span class="badge badge-pass">✓</span>'
     : '<span class="badge badge-fail">✗</span>';
+  const platform = r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : null));
+  const platformBadge = platform === 'gadi'
+    ? '<span class="badge badge-platform-gadi" title="Run on NCI Gadi (Intel Sapphire Rapids)">Gadi · NCI</span>'
+    : platform === 'setonix'
+      ? '<span class="badge badge-platform-setonix" title="Run on Pawsey Setonix (AMD EPYC)">Setonix · Pawsey</span>'
+      : '';
   const ds = r.dataset_short || r.dataset || 'n/a';
   const modelLabel = r.model || (r.run_type === 'modelfinder' ? 'ModelFinder' : (r.description || r.run_type || '—'));
   const dims = (r.taxa && r.sites) ? `${r.taxa}×${r.sites}` : null;
@@ -109,7 +115,7 @@ function renderRow(r) {
       <div class="run-row-summary" role="button" tabindex="0">
         <div class="run-status">${statusBadge}</div>
         <div>
-          <div class="run-id">${escHtml(r.label || r.run_id)}</div>
+          <div class="run-id">${escHtml(r.label || r.run_id)} ${platformBadge}</div>
           <div class="run-meta">${escHtml(metaBits)}</div>
         </div>
         <div class="run-time" title="Wall time">${fmtTime(r.wall_s)}</div>
@@ -163,6 +169,10 @@ function renderDetail(run) {
   const env = run.env || {};
 
   const kv = Object.entries({
+    Platform: run.platform === 'gadi' ? 'Gadi (NCI · Intel Sapphire Rapids)'
+            : run.platform === 'setonix' ? 'Setonix (Pawsey · AMD EPYC)'
+            : (run.pbs_id ? 'Gadi (NCI · Intel Sapphire Rapids)'
+               : run.slurm_id ? 'Setonix (Pawsey · AMD EPYC)' : null),
     Dataset: p.dataset || run.hints?.dataset,
     Threads: p.threads ?? run.hints?.threads,
     Model: run.hints?.model,

@@ -545,18 +545,23 @@ def enrich_run(run: dict) -> bool:
         changed = True
 
     # ── profile.hotspots / folded_stacks (only if raw data exists) ────────
-    hs = parse_hotspots(pdir / "hotspots.txt")
+    # Gadi's matrix worker writes perf_report.txt (same format as Setonix's
+    # hotspots.txt but --no-children).  Use whichever is available.
+    hotspots_src = pdir / "hotspots.txt"
+    if not hotspots_src.is_file():
+        hotspots_src = pdir / "perf_report.txt"
+    hs = parse_hotspots(hotspots_src)
     if hs and profile.get("hotspots") != hs:
         profile["hotspots"] = hs
         changed = True
     fs = parse_folded(pdir / "perf_folded.txt")
     if not fs:
-        # perf_folded.txt is empty (stackcollapse pipe was killed after recording).
-        # Synthesize approximate folded stacks from the call-tree embedded in the
-        # perf report --children output (hotspots.txt).  These are derived from %
-        # values so counts are estimates, but they give the flamegraph and callstack
+        # perf_folded.txt is absent (Gadi) or empty (Setonix w/ killed pipe).
+        # Synthesize approximate folded stacks from the call-tree embedded in
+        # the perf report --children output.  These are derived from % values
+        # so counts are estimates, but they give the flamegraph and callstack
         # visualisations enough data to render.
-        fs = parse_hotspots_to_folded(pdir / "hotspots.txt")
+        fs = parse_hotspots_to_folded(hotspots_src)
     if fs and profile.get("folded_stacks") != fs:
         profile["folded_stacks"] = fs
         changed = True

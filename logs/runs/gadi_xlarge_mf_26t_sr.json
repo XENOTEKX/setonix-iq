@@ -1,0 +1,57 @@
+{
+  "run_id": "gadi_xlarge_mf_26t_sr",
+  "pbs_id": "166967408",
+  "run_type": "profile",
+  "label": "xlarge_mf_26t_sr",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix xlarge_mf @ 26T",
+  "timing": [
+    {
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s xlarge_mf.fa -T 26 -seed 1",
+      "time_s": 0,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [],
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "166967408.gadi-pbs",
+      "job_name": "iq-xlarge_mf-26t",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "submit_host": "gadi-login-03.gadi.nci.org.au",
+      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 0,
+    "fail": 1,
+    "total_time": 0,
+    "all_pass": false
+  },
+  "profile": {
+    "dataset": "xlarge_mf.fa",
+    "threads": 26,
+    "perf_cmd": null,
+    "metrics": {},
+    "vtune": null
+  },
+  "dataset_info": {
+    "file": "xlarge_mf.fa",
+    "file_size_bytes": 10012000,
+    "fasta_taxa": 1000,
+    "fasta_sites": 10000
+  },
+  "platform": "gadi"
+}
