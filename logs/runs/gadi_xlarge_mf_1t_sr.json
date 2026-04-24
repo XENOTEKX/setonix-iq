@@ -1,0 +1,78 @@
+{
+  "run_id": "gadi_xlarge_mf_1t_sr",
+  "pbs_id": "166969044",
+  "run_type": "profile",
+  "label": "xlarge_mf_1t_sr",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix xlarge_mf @ 1T",
+  "timing": [
+    {
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s xlarge_mf.fa -T 1 -seed 1",
+      "time_s": 4676.825,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf_gadi_pilot.fa",
+      "status": "pass",
+      "expected": -5286806.51,
+      "reported": -5286806.51,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "166969044.gadi-pbs",
+      "job_name": "iq-xlarge_mf-1t",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "submit_host": "gadi-login-03.gadi.nci.org.au",
+      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 4676.825,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf_gadi_pilot.fa",
+    "threads": 1,
+    "perf_cmd": null,
+    "metrics": {},
+    "vtune": null,
+    "vtune_uarch": null,
+    "proc_summary": {
+      "sample_count": 468,
+      "duration_s": 4674.66,
+      "peak_rss_kb": 2255164,
+      "peak_vms_kb": 2591356,
+      "max_threads": 2,
+      "read_bytes": 10014720,
+      "write_bytes": 38539264
+    },
+    "artefacts": {
+      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/samples.jsonl",
+      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/perf_script.txt",
+      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/perf_report.txt",
+      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/perf.data",
+      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/vtune_hotspots",
+      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/vtune_hotspots.tsv",
+      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_1t_sr_166969044/vtune_hw_events.txt"
+    }
+  },
+  "notes": "Gadi pilot run used simulated alignment with different dimensions than Setonix (different taxa x sites); renamed to *_gadi_pilot to avoid cross-platform comparison contamination. Rerun with matched Setonix dimensions is pending."
+}

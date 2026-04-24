@@ -2,6 +2,100 @@
 
 ---
 
+## 2026-04-25 (evening) — Priority rerun **executed**: corrected Gadi datasets + 12 fresh sweep jobs queued
+
+Follow-up to the earlier 2026-04-25 containment entry. Executed the
+priority rerun plan on `gadi-login-05` after pulling `main` (19eebdb
+→ 4282f0f, stash/pop — no conflicts).
+
+### Actions taken
+
+1. **Removed wrong-dimension alignments** from
+   `/scratch/rc29/as1708/iqtree3/benchmarks/`:
+   - `large_modelfinder.fa` (was 2 506 000 B · 500 × 5 000 — transposed)
+   - `xlarge_mf.fa`         (was 10 012 000 B · 1 000 × 10 000 — half workload)
+
+   `mega_dna.fa` (50 006 000 B · 500 × 100 000) was **kept** — it already
+   matched the Setonix corpus bit-for-bit (same seed 303), so no
+   regeneration or rerun was needed for that dataset.
+
+2. **Regenerated via `qsub gadi-ci/generate_datasets.sh`** (job
+   `166978119`). Post-run sizes on scratch now match Setonix exactly:
+
+   | File                    | Size (bytes) | Taxa × sites    | Setonix target |
+   |-------------------------|-------------:|:----------------|:---------------|
+   | `large_modelfinder.fa`  |    5 001 200 | 100 × 50 000    | 5 000 000 ± 6 kB ✅ |
+   | `xlarge_mf.fa`          |   20 002 400 | 200 × 100 000   | 20 000 000 ± 6 kB ✅ |
+   | `mega_dna.fa`           |   50 006 000 | 500 × 100 000   | unchanged ✅ |
+
+3. **Added PBS dependency support to `gadi-ci/submit_benchmark_matrix.sh`**
+   — a two-line patch honouring an optional `DEPEND_JOBID` env var so
+   sweep jobs are submitted with `-W depend=afterok:<gen_jid>` and sit
+   in **H** (held) state until the generator finishes. This prevents
+   any job from starting on a partially-written alignment.
+
+4. **Cancelled all in-flight / queued work on the old (wrong-dim)
+   pilot datasets** so that no more SU are spent on invalid inputs.
+   Six jobs killed via `qdel`:
+
+   | Job ID           | State at kill | Dataset           | Why cancelled |
+   |------------------|:-------------:|-------------------|---------------|
+   | `166969053`      | R (00:58)     | `mega_dna` pilot  | pre-fix run, superseded |
+   | `166969054`      | R (00:56)     | `mega_dna` pilot  | pre-fix run, superseded |
+   | `166969055`      | Q             | `mega_dna` pilot  | pre-fix run, superseded |
+   | `166976124`      | R (00:56)     | `xlarge_mf` pilot | wrong dims (10 MB file) |
+   | `166976125`      | R (00:56)     | `xlarge_mf` pilot | wrong dims (10 MB file) |
+   | `166976126`      | Q             | `mega_dna` pilot  | pre-fix run, superseded |
+
+   (The `mega_dna` running jobs were on the dimensionally-correct file
+   but were part of the pre-fix submission wave; cancelling keeps the
+   run history coherent. `mega_dna` will **not** be re-submitted in
+   this wave — the two existing valid records
+   `gadi_mega_dna_{13,26}t_sr.json` already provide the matched
+   cross-platform data points and additional thread sweeps are out of
+   scope for today.)
+
+5. **Cancelled the 4 `mega_dna` jobs accidentally queued by the
+   default matrix** (`166978132`–`166978135`). The submit script's
+   default matrix includes `mega_dna: {16,32,64,104}` but — per the
+   containment decision — `mega_dna` is already valid and must not be
+   rerun in this wave.
+
+### Final job set (12 held → now queued, `afterok:166978119` satisfied)
+
+All on `normalsr` (Sapphire Rapids), `ncpus=104`, `mem=500GB`,
+`walltime=24:00:00`, writing JSON run records to `logs/runs/`:
+
+| Job ID        | Dataset              | Threads |
+|---------------|----------------------|:-------:|
+| `166978120`   | `large_modelfinder`  | 1       |
+| `166978121`   | `large_modelfinder`  | 4       |
+| `166978122`   | `large_modelfinder`  | 8       |
+| `166978123`   | `large_modelfinder`  | 16      |
+| `166978124`   | `large_modelfinder`  | 32      |
+| `166978125`   | `large_modelfinder`  | 64      |
+| `166978126`   | `xlarge_mf`          | 1       |
+| `166978127`   | `xlarge_mf`          | 4       |
+| `166978128`   | `xlarge_mf`          | 8       |
+| `166978129`   | `xlarge_mf`          | 16      |
+| `166978130`   | `xlarge_mf`          | 32      |
+| `166978131`   | `xlarge_mf`          | 64      |
+
+Revised SU estimate for this rerun wave (mega_dna dropped):
+**≈ 2.7 KSU** (was ~4.1 KSU with mega_dna included).
+
+### Follow-up still pending
+
+- When all 12 run JSONs have landed in `logs/runs/`, execute
+  `python3 tools/harvest_scratch.py && python3 tools/normalize.py &&
+  python3 tools/validate.py && python3 tools/build.py`, then commit
+  and push.
+- Archive the 12 `*_gadi_pilot.fa` records (move to
+  `logs/runs/_archive/` and exclude from normalize) once the matched
+  Gadi `large_modelfinder.fa` + `xlarge_mf.fa` series are in.
+
+---
+
 ## 2026-04-25 — **PRIORITY**: Gadi pilot datasets had wrong dimensions vs Setonix — rerun required
 
 While reviewing the multi-platform dashboard we caught a data-validity

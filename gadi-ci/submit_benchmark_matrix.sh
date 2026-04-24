@@ -518,6 +518,10 @@ for dataset in "${!MATRIX[@]}"; do
     fi
     for t in "${threads[@]}"; do
         label="${dataset}_${t}t_sr"
+        DEPEND_ARGS=()
+        if [[ -n "${DEPEND_JOBID:-}" ]]; then
+            DEPEND_ARGS=(-W "depend=afterok:${DEPEND_JOBID}")
+        fi
         jid=$(qsub -N "iq-${dataset}-${t}t" \
                    -P "${PROJECT}" \
                    -q normalsr \
@@ -525,6 +529,7 @@ for dataset in "${!MATRIX[@]}"; do
                    -j oe \
                    -o "${LOGS_DIR}/${label}_\${PBS_JOBID}.log" \
                    -v "DATASET=${dataset},THREADS=${t},LABEL=${label},PROJECT=${PROJECT},REPO_DIR=${REPO_DIR}" \
+                   "${DEPEND_ARGS[@]}" \
                    "${WORKER}")
         echo "  → ${dataset} / ${t}T  → ${jid}"
         submitted=$((submitted + 1))
