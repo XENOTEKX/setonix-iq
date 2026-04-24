@@ -21,10 +21,10 @@
     }
   ],
   "env": {
-    "hostname": "",
-    "date": "",
-    "cpu": "",
-    "cores": 0,
+    "hostname": "gadi-cpu-spr-0108.gadi.nci.org.au",
+    "date": "Fri Apr 24 20:46:47 2026",
+    "cpu": "AVX512, FMA3, 503 GB RAM",
+    "cores": 104,
     "gcc": "",
     "icc": "",
     "icx": "",

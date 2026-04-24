@@ -93,6 +93,52 @@ def parse_env_json(path: Path) -> dict:
         return {}
 
 
+def parse_iqtree_log_env(log_path: Path) -> dict:
+    """Extract hostname, cpu, date, and thread info from an iqtree *.log file.
+
+    IQ-TREE prints a header like::
+
+        Host:    gadi-cpu-spr-0143.gadi.nci.org.au (AVX512, FMA3, 503 GB RAM)
+        Command: ...
+        Time:    Fri Apr 24 20:46:46 2026
+        Kernel:  AVX+FMA - 1 threads (104 CPU cores detected)
+
+    This is the only reliable source of hostname/cpu for Gadi runs where the
+    shell env-capture in the PBS worker silently returned empty strings.
+    """
+    if not log_path.is_file():
+        return {}
+    out: dict = {}
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Host:") and not out.get("hostname"):
+            # "Host:    hostname.domain (CPU flags, N GB RAM)"
+            m = re.match(r"Host:\s+(\S+)", stripped)
+            if m:
+                out["hostname"] = m.group(1)
+            # Extract CPU flag summary from parentheses
+            m2 = re.search(r"\(([^)]+)\)", stripped)
+            if m2 and not out.get("cpu_flags"):
+                out["cpu_flags"] = m2.group(1)
+        elif stripped.startswith("Time:") and not out.get("date"):
+            m = re.match(r"Time:\s+(.+)", stripped)
+            if m:
+                out["date"] = m.group(1).strip()
+        elif stripped.startswith("Kernel:") and not out.get("cpu"):
+            # "Kernel:  AVX+FMA - 1 threads (104 CPU cores detected)"
+            m = re.search(r"\((\d+)\s+CPU cores detected\)", stripped)
+            if m:
+                out["cores"] = int(m.group(1))
+            m2 = re.match(r"Kernel:\s+(\S.*?)\s+-\s+\d+\s+thread", stripped)
+            if m2:
+                out["cpu_flags_iqtree"] = m2.group(1).strip()
+    return out
+
+
 def parse_samples_jsonl(path: Path) -> dict:
     """Summarize samples.jsonl into timeseries + peak + io + numa + per-thread."""
     if not path.is_file():
@@ -572,6 +618,26 @@ def enrich_run(run: dict) -> bool:
     # ── mega-profile extras (profile_meta.json / env.json / samples.jsonl) ─
     meta = parse_profile_meta(pdir / "profile_meta.json")
     env_extra = parse_env_json(pdir / "env.json")
+    # Gadi: env fields are empty because the PBS worker's sh() calls silently
+    # failed (PATH issues on compute nodes). Recover from iqtree_run.log header.
+    iqtree_env = parse_iqtree_log_env(pdir / "iqtree_run.log")
+    if iqtree_env:
+        env = dict(run.get("env") or {})
+        if not env.get("hostname") and iqtree_env.get("hostname"):
+            env["hostname"] = iqtree_env["hostname"]
+            changed = True
+        if not env.get("date") and iqtree_env.get("date"):
+            env["date"] = iqtree_env["date"]
+            changed = True
+        if not env.get("cores") and iqtree_env.get("cores"):
+            env["cores"] = iqtree_env["cores"]
+            changed = True
+        if iqtree_env.get("cpu_flags") and env.get("cpu") != iqtree_env["cpu_flags"]:
+            # Use the IQ-TREE header flags as cpu when lscpu is unavailable.
+            if not env.get("cpu"):
+                env["cpu"] = iqtree_env["cpu_flags"]
+                changed = True
+        run["env"] = env
     samples_summary = parse_samples_jsonl(pdir / "samples.jsonl")
 
     if env_extra:
