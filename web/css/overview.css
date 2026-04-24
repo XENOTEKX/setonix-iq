@@ -237,6 +237,73 @@
   gap: 14px;
   margin-bottom: 24px;
 }
+
+/* Platform-grouped sections */
+.ds-section { margin-bottom: 22px; }
+.ds-section-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 2px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.ds-section-head h4 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.ds-section-count {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+.ds-section-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.04);
+}
+.ds-section--setonix .ds-section-dot { background: #a78bfa; box-shadow: 0 0 10px rgba(167,139,250,0.6); }
+.ds-section--gadi .ds-section-dot    { background: #fb923c; box-shadow: 0 0 10px rgba(251,146,60,0.6); }
+.ds-section--unknown .ds-section-dot { background: var(--text3); }
+.ds-section--setonix .ds-section-head h4 { color: #c4b5fd; }
+.ds-section--gadi    .ds-section-head h4 { color: #fdba74; }
+.ds-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+/* Pilot-run badge and card treatment */
+.ds-card--pilot { opacity: 0.78; }
+.ds-card--pilot h3::after {
+  content: ' (pilot)';
+  font-size: 0.8rem;
+  color: var(--text3);
+  font-weight: 400;
+}
+.ds-pilot-badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(250, 204, 21, 0.14);
+  color: #fde047;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+}
+.ds-note--warn {
+  color: #fde047 !important;
+  font-style: normal !important;
+  background: rgba(250, 204, 21, 0.06);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(250, 204, 21, 0.2);
+  margin-top: 8px;
+  font-size: 0.72rem !important;
+}
 .ds-card {
   position: relative;
   padding: 18px 20px;
@@ -644,6 +711,7 @@
 @media (max-width: 900px) {
   .charts-row { grid-template-columns: 1fr; }
   .ds-grid { grid-template-columns: 1fr; }
+  .ds-section-grid { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 560px) {

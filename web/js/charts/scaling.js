@@ -11,6 +11,9 @@ function platformOf(r) {
 function platformLabel(p) {
   return p === 'gadi' ? 'Gadi' : p === 'setonix' ? 'Setonix' : p;
 }
+function isPilot(name) {
+  return typeof name === 'string' && /(_gadi_pilot|_setonix_pilot)\.fa$/.test(name);
+}
 
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
@@ -19,6 +22,7 @@ export function render(canvas, runsIndex) {
   const byKey = new Map();
   for (const r of runsIndex) {
     if (!r.dataset || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
+    if (isPilot(r.dataset_short) || isPilot(r.dataset)) continue;
     const plat = platformOf(r);
     const ds = r.dataset_short || r.dataset;
     // Platform goes first in the label so legend entries group by platform.

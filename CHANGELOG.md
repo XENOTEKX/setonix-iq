@@ -98,7 +98,36 @@ different, smaller workload. The dashboard colour-codes them as Gadi
 
 | Hash (to be filled) | Message |
 |--------------------|---------|
-| `<pending>` | `fix(gadi): generator dims match Setonix; isolate pilot runs as *_gadi_pilot.fa` |
+| `c08234e` | `fix(gadi): generator dims match Setonix; isolate pilot runs as *_gadi_pilot.fa` |
+| `<pending>` | `feat(dashboard): group dataset cards by supercomputer; auto-exclude pilot workloads from comparison charts` |
+
+### Dashboard hardening (2026-04-25, follow-up)
+
+To prevent the pilot workloads from visually contaminating any
+cross-platform analysis, the overview UI was adjusted:
+
+- **Dataset cards are now grouped by supercomputer.** Each platform
+  (`Setonix · Pawsey (AMD Milan)`, then `Gadi · NCI (Intel Sapphire
+  Rapids)`) has its own section header, a coloured status dot, and a
+  dataset count. Within a section, real workloads sort first, pilot
+  workloads last, then alphabetical by filename.
+- **Pilot workloads get a bright `PILOT` badge + yellow warning banner**
+  ("different dimensions to Setonix baseline; excluded from comparison
+  charts until a matched rerun lands") and an inline `(pilot)` suffix on
+  the filename heading.
+- **Comparison charts auto-exclude any dataset whose name ends in
+  `_gadi_pilot.fa` or `_setonix_pilot.fa`.** All four charts
+  (`scaling`, `efficiency`, `ipc-scaling`, `performance-matrix`) now
+  carry a shared `isPilot(name)` predicate and skip matching records
+  before grouping. The records are still in the index for
+  /All Runs/ inspection and per-dataset drill-downs — they just no
+  longer appear on the four cross-platform comparison charts.
+- Net effect on today's data: Thread Scaling / Efficiency / IPC /
+  Perf-Matrix charts show only the dimensionally-matched series
+  (`large_modelfinder.fa`, `xlarge_dna.fa`, `mega_dna.fa`, `turtle.fa`
+  from Setonix; `mega_dna.fa` from Gadi). Twelve pilot records remain
+  visible in the All Runs table and in a dedicated Gadi section of the
+  Datasets strip.
 
 ---
 

@@ -11,6 +11,9 @@ function platformOf(r) {
 function platformLabel(p) {
   return p === 'gadi' ? 'Gadi' : p === 'setonix' ? 'Setonix' : p;
 }
+function isPilot(name) {
+  return typeof name === 'string' && /(_gadi_pilot|_setonix_pilot)\.fa$/.test(name);
+}
 
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
@@ -29,6 +32,7 @@ export function render(canvas, runsIndex) {
   const byKey = new Map();
   for (const r of runsIndex) {
     if (!r.dataset_short || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
+    if (isPilot(r.dataset_short)) continue;
     const plat = platformOf(r);
     const key = `${platformLabel(plat)} · ${r.dataset_short}`;
     if (!byKey.has(key)) byKey.set(key, { plat, ds: r.dataset_short, points: [] });

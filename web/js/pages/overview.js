@@ -261,11 +261,24 @@ function renderDatasets(idx) {
     document.getElementById('ovDatasets').innerHTML = '<div class="empty">No dataset metadata available.</div>';
     return;
   }
-  const cards = [];
-  const sortedGroups = [...byKey.values()].sort((a, b) =>
-    a.ds.localeCompare(b.ds) || a.platform.localeCompare(b.platform));
+  // Order: Setonix → Gadi → unknown. Within each platform: real workloads
+  // first, pilot/placeholder workloads last, then alphabetical.
+  const platRank = { setonix: 0, gadi: 1, unknown: 2 };
+  const isPilot = (name) => /(_gadi_pilot|_setonix_pilot)\.fa$/.test(name);
+  const sortedGroups = [...byKey.values()].sort((a, b) => {
+    const pa = platRank[a.platform] ?? 99;
+    const pb = platRank[b.platform] ?? 99;
+    if (pa !== pb) return pa - pb;
+    const ap = isPilot(a.ds) ? 1 : 0;
+    const bp = isPilot(b.ds) ? 1 : 0;
+    if (ap !== bp) return ap - bp;
+    return a.ds.localeCompare(b.ds);
+  });
+
+  // Build section headers per platform transition so the cards are visually
+  // grouped by supercomputer.
+  const sections = new Map(); // platform -> cards[]
   for (const { ds, platform, runs } of sortedGroups) {
-    // Pick a representative (prefer a run with taxa/sites populated).
     const rep = runs.find(r => r.taxa && r.sites) || runs[0];
     const validRuns = runs.filter(isValidRun);
     const best = validRuns.reduce((a, b) => (b.wall_s < (a?.wall_s ?? Infinity) ? b : a), null);
@@ -277,10 +290,15 @@ function renderDatasets(idx) {
       ? `${patterns.toLocaleString()} · ${((patterns / sites) * 100).toFixed(1)}% unique`
       : null;
     const platClass = platform === 'gadi' ? 'ds-card--gadi' : platform === 'setonix' ? 'ds-card--setonix' : '';
-    cards.push(`
-      <div class="ds-card ${platClass}">
+    const pilot = isPilot(ds);
+    const pilotBadge = pilot
+      ? `<span class="ds-pilot-badge" title="Pilot run — dimensions do not match cross-platform baseline. Not used in comparison charts.">PILOT</span>`
+      : '';
+    const card = `
+      <div class="ds-card ${platClass}${pilot ? ' ds-card--pilot' : ''}">
         <div class="ds-head">
           <span class="ds-tag ds-tag--${platform}">${platformLabel(platform)} dataset</span>
+          ${pilotBadge}
         </div>
         <h3>${escHtml(ds)}</h3>
         <div class="ds-dim">${rep.taxa ?? '?'} taxa × ${rep.sites?.toLocaleString?.() ?? '?'} sites</div>
@@ -291,11 +309,28 @@ function renderDatasets(idx) {
         <div class="ds-row"><span>Runs</span><strong>${runs.length}${stubs ? ` <span style="color:var(--text3); font-weight:400;">(${stubs} stub)</span>` : ''}</strong></div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
         <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>
+        ${pilot ? '<div class="ds-note ds-note--warn">⚠ pilot workload — different dimensions to Setonix baseline; excluded from comparison charts until a matched rerun lands.</div>' : ''}
         ${rep.size_estimated ? '<div class="ds-note">~ size estimated from alignment dimensions</div>' : ''}
+      </div>
+    `;
+    if (!sections.has(platform)) sections.set(platform, []);
+    sections.get(platform).push(card);
+  }
+
+  const html = [];
+  for (const [platform, cards] of sections) {
+    html.push(`
+      <div class="ds-section ds-section--${platform}">
+        <div class="ds-section-head">
+          <span class="ds-section-dot"></span>
+          <h4>${platformLabel(platform)}${platform === 'setonix' ? ' · Pawsey (AMD Milan)' : platform === 'gadi' ? ' · NCI (Intel Sapphire Rapids)' : ''}</h4>
+          <span class="ds-section-count">${cards.length} dataset${cards.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="ds-section-grid">${cards.join('')}</div>
       </div>
     `);
   }
-  document.getElementById('ovDatasets').innerHTML = cards.join('');
+  document.getElementById('ovDatasets').innerHTML = html.join('');
 }
 
 /* --------------------------- Selected-run sections --------------------------- */
