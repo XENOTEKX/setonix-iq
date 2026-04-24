@@ -159,7 +159,7 @@
       "properties": {
         "dataset": { "type": "string" },
         "threads": { "type": ["integer", "string"] },
-        "perf_cmd": { "type": "string" },
+        "perf_cmd": { "type": ["string", "null"] },
         "metrics": {
           "type": "object",
           "properties": {
