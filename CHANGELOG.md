@@ -2,6 +2,157 @@
 
 ---
 
+## 2026-04-24 — `gadi-iq`: Stage 4 **third resubmission** — perf_event_paranoid fix, backfill, dashboard badges, job triage
+
+All 13 completed Gadi runs were found to have empty `profile.metrics` (IPC,
+cache/LLC/branch/TLB rates all `null`). Root cause confirmed as
+`/proc/sys/kernel/perf_event_paranoid=2` on Gadi `normalsr` compute nodes,
+which silently kills `perf stat` when any event requires kernel-mode access.
+VTune hardware sampling was also blocked. Fixed, backfilled, dashboard updated,
+and live jobs triaged.
+
+### Root cause — `perf_event_paranoid=2`
+
+At paranoid level 2 the kernel refuses to count any event that touches
+kernel-mode PMU state. `perf stat` produces **no output file** (exits 0 or 1
+with no data) when even one event in the `-e` list fails to open. Because the
+original worker used unqualified event names (e.g. `cycles`, `instructions`,
+`cache-misses`), every perf stat invocation produced an empty/missing
+`perf_stat.txt`. VTune's default `hw-sampling` collection mode also requires
+`paranoid ≤ 1` and silently skipped the callstack collection.
+
+The same mechanism applies to all previously-submitted Gadi jobs — every run
+in `logs/runs/` has `profile.metrics = {}` and `vtune = null` / `vtune_uarch = null`.
+
+### Worker fix (commits `0c20484`, `4ae23d0`)
+
+| Component | Before | After |
+|-----------|--------|-------|
+| `PERF_EVENTS` | bare event names (`cycles`, `instructions`, …) | `:u` suffix on every event via `sed 's/$/:u/'` — user-mode only, allowed at paranoid=2 |
+| `perf stat` stderr | discarded | captured to `perf_stat.err` for diagnosis |
+| VTune collection mode | `hw-sampling` (blocked at paranoid=2) | `sampling-mode=sw` (software sampling, works at paranoid=2) |
+| `uarch-exploration` pass | included | **dropped** — uarch-exploration requires hardware sampling, fundamentally blocked; TMA coverage relies on `perf stat` topdown events |
+| `RUN_ID` | `${LABEL}` | `gadi_${LABEL}` — matches target filename in `logs/runs/` |
+| JSON `platform` field | absent | `"platform": "gadi"` emitted by worker Python block |
+
+Worker deployed to `/scratch/rc29/as1708/iqtree3/gadi-ci/_run_matrix_job.sh`.
+**PBS reads the script from disk at job start time** (confirmed via
+`qstat -f` `Submit_arguments` — all jobs reference the file path, not a
+spooled copy), so already-queued jobs pick up the fix automatically.
+
+### Backfill of 13 completed Gadi runs
+
+Since `profile.metrics` cannot be recovered without a fresh `perf stat` run,
+the focus was on recovering everything else from existing scratch artefacts.
+
+#### `tools/harvest_scratch.py` additions
+
+| Addition | Detail |
+|----------|--------|
+| `perf_report.txt` hotspot fallback | If `hotspots.txt` is absent (older jobs), parse `perf_report.txt` for the top-N symbol table — same data, different filename |
+| `parse_iqtree_log_env()` | Parses `iqtree_run.log` header lines (`Host:`, `Time:`, `Kernel:`) to recover `hostname`, `date`, `cpu_flags` (from parentheses), `cores` (from `Kernel:` MPI line) |
+
+#### `tools/normalize.py` additions
+
+| Addition | Detail |
+|----------|--------|
+| Platform inference | If run JSON has `pbs_id` → `platform="gadi"`; if `slurm_id` → `platform="setonix"` |
+| Runs index | `summarize_run()` now emits `platform` field in `logs/runs/index.json` |
+
+#### Run file renames and cleanup
+
+- All 13 Gadi run files renamed from `<timestamp>_<label>.json` → `gadi_<label>.json`
+  (no timestamp prefix, consistent with `RUN_ID` emitted by fixed worker)
+- 2 corrupt JSONs deleted: `2026-04-24_201900.json`, `2026-04-24_202450.json`
+
+#### Backfill results across all 13 runs
+
+| Field | Status |
+|-------|--------|
+| `hotspots` / `folded_stacks` | ✅ recovered from `perf_report.txt` (8 runs) or already present |
+| `dataset_info` | ✅ recovered |
+| `modelfinder.candidates` | ✅ recovered |
+| `memory_timeseries` | ✅ recovered |
+| `env.hostname` / `env.date` / `env.cores` | ✅ recovered from `iqtree_run.log` for 8 runs; 5 early-batch runs missing scratch dirs |
+| `profile.metrics` (IPC, cache/LLC/branch/TLB) | ❌ permanently missing — requires fresh `perf stat` run |
+
+5 runs have no scratch directory (early batch): `gadi_mega_dna_13t_sr`,
+`gadi_mega_dna_26t_sr`, `gadi_xlarge_mf_104t_sr`, `gadi_xlarge_mf_26t_sr`,
+`gadi_xlarge_mf_52t_sr`.
+
+### `gadi-ci/rerun_perf_stat.sh` (new script)
+
+Lightweight PBS script that scans `gadi_*.json` for runs with `IPC=None`,
+then submits a perf-stat-only job per label. Each job:
+
+1. Runs IQ-TREE on the original dataset with the same `-T` setting
+2. Runs `perf stat -e ${PERF_EVENTS}` (with `:u` suffix) in parallel
+3. Parses `perf_stat.txt` and patches `profile.metrics` in the existing JSON in place
+
+Run after all primary jobs complete:
+
+```bash
+cd /home/272/as1708/setonix-iq
+bash gadi-ci/rerun_perf_stat.sh
+```
+
+### Web dashboard — platform badges
+
+Added per-run platform badges to the runs list and run detail view.
+
+| File | Change |
+|------|--------|
+| `web/js/pages/runs.js` | `renderRow()` appends platform badge next to label; `renderDetail()` kv grid includes Platform row |
+| `web/css/components.css` | `.badge-platform-gadi` (Intel blue `#4aa8ff`) and `.badge-platform-setonix` (AMD red `#ff6b6b`) |
+
+### PBS job triage
+
+At the time of the fix, jobs from the second Stage 4 resubmission were in queue:
+
+| Job ID | Label | Elapsed at discovery | Action |
+|--------|-------|---------------------|--------|
+| `166969044` | `xlarge_mf_1t_sr` | 2 h 04 m | Left to finish — too far in. Cover with `rerun_perf_stat.sh`. |
+| `166969049` | `xlarge_mf_32t_sr` | 22 m | **Cancelled + resubmitted** (`166976124`) |
+| `166969051` | `xlarge_mf_64t_sr` | 13 m | **Cancelled + resubmitted** (`166976125`) |
+| `166969052` | `mega_dna_16t_sr` | 7 m | **Cancelled + resubmitted** (`166976126`) |
+| `166969053` | `mega_dna_32t_sr` | Q | Queued — picks up fixed worker automatically (PBS reads script at start) |
+| `166969054` | `mega_dna_64t_sr` | Q | Queued — as above |
+| `166969055` | `mega_dna_104t_sr` | Q | Queued — as above |
+
+PBS behaviour confirmed: the `Submit_arguments` field of queued jobs shows the
+worker path as a **file path** (not an embedded script), so PBS re-reads
+`_run_matrix_job.sh` from disk when the job starts — no cancel/resubmit needed
+for queued jobs.
+
+### Active queue (post-triage)
+
+| Job ID | Label | State |
+|--------|-------|-------|
+| `166969053` | `mega_dna_32t_sr` | R |
+| `166969054` | `mega_dna_64t_sr` | R |
+| `166976124` | `xlarge_mf_32t_sr` | R (resubmitted) |
+| `166976125` | `xlarge_mf_64t_sr` | R (resubmitted) |
+| `166969055` | `mega_dna_104t_sr` | Q |
+| `166976126` | `mega_dna_16t_sr` | Q (resubmitted) |
+
+All active jobs use the fixed worker (`_run_matrix_job.sh` with `:u` event
+suffix, `sampling-mode=sw`, `gadi_${LABEL}` RUN_ID, `"platform": "gadi"`).
+
+### Commits in this fix batch
+
+| Hash | Message |
+|------|---------|
+| `0c20484` | Fix perf_event_paranoid=2: add :u suffix to perf events, vtune sw-mode, gadi_ RUN_ID, platform field |
+| `4ae23d0` | Backfill completed runs: harvest_scratch perf_report fallback + iqtree_log env parsing; normalize platform; rename gadi_*.json; platform badges |
+
+### Outstanding
+
+- **`profile.metrics` (IPC, cache/LLC/branch/TLB) empty for all 13 completed runs** — run `bash gadi-ci/rerun_perf_stat.sh` after active jobs finish
+- **`xlarge_mf_1t_sr` (`166969044`)** — completed with old worker; will have empty metrics until rerun_perf_stat.sh covers it
+- **5 early-batch runs** with missing scratch dirs — hotspots/env not recoverable; only IQ-TREE timing is present
+
+---
+
 ## 2026-04-24 — `gadi-iq`: Stage 4 **resubmitted** — full profiling suite + thread sweep aligned to Setonix
 
 Cancelled the first Stage 4 batch (jobs `166967399–414`, initial submission)
