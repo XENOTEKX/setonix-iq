@@ -43,20 +43,20 @@ jobs:
           cache-dependency-glob: tools/requirements.txt
 
       - name: Install dependencies
-        run: uv pip install --system -r tools/requirements.txt
+        run: uv venv && uv pip install -r tools/requirements.txt
 
       - name: Validate data (gate)
-        run: python3 tools/validate.py
+        run: uv run python3 tools/validate.py
 
       - name: Build dashboard
-        run: python3 tools/build.py
+        run: uv run python3 tools/build.py
 
       - name: Sanity-check output
         run: |
-          test -f docs/index.html        || { echo "::error::docs/index.html missing";       exit 1; }
+          test -f docs/index.html           || { echo "::error::docs/index.html missing";    exit 1; }
           test -f docs/data/runs.index.json || { echo "::error::runs.index.json missing";    exit 1; }
           test -f docs/data/manifest.json   || { echo "::error::manifest.json missing";      exit 1; }
-          runs_count=$(python3 -c "import json; print(len(json.load(open('docs/data/runs.index.json'))))")
+          runs_count=$(uv run python3 -c "import json; print(len(json.load(open('docs/data/runs.index.json'))))")
           echo "Dashboard built with $runs_count runs"
 
       - name: Upload Pages artifact
