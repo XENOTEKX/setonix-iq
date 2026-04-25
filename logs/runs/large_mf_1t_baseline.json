@@ -8831,6 +8831,8 @@
     "constant_sites": 679,
     "invariant_sites": 679,
     "informative_sites": 47776,
-    "sequence_type": "DNA"
+    "sequence_type": "DNA",
+    "dataset_canonical": false,
+    "dataset_canonical_note": "Dataset was generated with a different IQ-TREE version or seed than the canonical Gadi benchmark (large_modelfinder.fa). patterns=48293 vs canonical 45386. This run should be re-executed against the canonical file for cross-platform comparisons to be valid."
   }
 }

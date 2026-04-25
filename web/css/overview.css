@@ -557,6 +557,19 @@
   font-size: 0.74rem;
   padding: 2px 0;
 }
+.ds-noncanon-badge {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  cursor: help;
+}
 .ds-card .ds-dim {
   font-size: 0.8rem;
   color: var(--text2);

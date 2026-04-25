@@ -275,6 +275,11 @@ function renderDatasets(idx) {
     const threads = [...new Set(validRuns.map(r => r.threads).filter(Boolean))]
       .sort((a, b) => a - b);
     const stubs = runs.length - validRuns.length;
+    // Check if ANY run in this platform block used a non-canonical dataset.
+    const nonCanonical = runs.some(r => r.dataset_canonical === false);
+    const nonCanonicalBadge = nonCanonical
+      ? `<span class="ds-noncanon-badge" title="These runs used a dataset file that does not match the canonical sha256. Re-run with the canonical benchmark files for valid cross-platform comparison.">⚠ non-canonical file</span>`
+      : '';
     return `
       <div class="ds-plat ds-plat--${platform}">
         <div class="ds-plat-head">
@@ -284,6 +289,7 @@ function renderDatasets(idx) {
         </div>
         <div class="ds-row"><span>Thread configs</span><strong>${threads.join(', ') || '—'}</strong></div>
         <div class="ds-row"><span>Best wall</span><strong class="accent">${best ? fmtTime(best.wall_s) : '—'}</strong></div>
+        ${nonCanonicalBadge}
       </div>
     `;
   }

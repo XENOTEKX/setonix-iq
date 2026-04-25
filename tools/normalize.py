@@ -217,6 +217,8 @@ def summarize_run(run: dict) -> dict:
         "has_stacks": bool(p.get("folded_stacks") or p.get("callstacks")),
         "has_candidates": bool(mf.get("candidates")),
         "has_perf_cmd": bool(p.get("perf_cmd")),
+        "dataset_canonical": ds_gt.get("dataset_canonical"),
+        "dataset_canonical_note": ds_gt.get("dataset_canonical_note"),
     }
 
 

@@ -104,3 +104,30 @@ simulate "mega_dna.fa"           500 100000   303
 echo ""
 echo "[datagen] benchmarks in ${BENCHMARKS}:"
 ls -lh "${BENCHMARKS}/" || true
+
+# ── Emit / verify canonical sha256 lockfile ───────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHA256_LOCKFILE="${SCRIPT_DIR}/../benchmarks/sha256sums.txt"
+
+echo ""
+echo "[datagen] verifying sha256 checksums against ${SHA256_LOCKFILE} ..."
+FAIL=0
+while read -r expected_hash filename; do
+    [[ -z "${expected_hash}" || "${expected_hash}" == \#* ]] && continue
+    actual_hash="$(sha256sum "${BENCHMARKS}/${filename}" | awk '{print $1}')"
+    if [[ "${actual_hash}" == "${expected_hash}" ]]; then
+        echo "  OK  ${filename}"
+    else
+        echo "  FAIL ${filename}"
+        echo "       expected: ${expected_hash}"
+        echo "       got:      ${actual_hash}"
+        FAIL=1
+    fi
+done < "${SHA256_LOCKFILE}"
+
+if [[ "${FAIL}" -ne 0 ]]; then
+    echo ""
+    echo "WARNING: sha256 mismatch(es). Update benchmarks/sha256sums.txt if you"
+    echo "intentionally regenerated with a new IQ-TREE version, and re-run the"
+    echo "full benchmark matrix on BOTH platforms." >&2
+fi
