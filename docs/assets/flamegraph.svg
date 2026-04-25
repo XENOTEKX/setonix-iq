@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="700" style="background:#161b22">
+<text x="10" y="18" fill="#58a6ff" font-size="13" font-family="monospace">CPU Hotspots (top 30 stacks, 128 total samples)</text>
+<rect x="10" y="28" width="295" height="20" fill="#f85149" opacity="0.7" rx="2"/><text x="14" y="42" fill="#c9d1d9" font-size="11" font-family="monospace">void (33.6%, 43)</text>
+<rect x="10" y="50" width="268" height="20" fill="#d29922" opacity="0.7" rx="2"/><text x="14" y="64" fill="#c9d1d9" font-size="11" font-family="monospace">void (30.5%, 39)</text>
+<rect x="10" y="72" width="68" height="20" fill="#3fb950" opacity="0.7" rx="2"/><text x="14" y="86" fill="#c9d1d9" font-size="11" font-family="monospace">void (7.8%, 10)</text>
+<rect x="10" y="94" width="41" height="20" fill="#58a6ff" opacity="0.7" rx="2"/><text x="14" y="108" fill="#c9d1d9" font-size="11" font-family="monospace">void (4.7%, 6)</text>
+<rect x="10" y="116" width="20" height="20" fill="#bc8cff" opacity="0.7" rx="2"/><text x="14" y="130" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (2.3%, 3)</text>
+<rect x="10" y="138" width="6" height="20" fill="#f778ba" opacity="0.7" rx="2"/><text x="14" y="152" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="160" width="6" height="20" fill="#f85149" opacity="0.7" rx="2"/><text x="14" y="174" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="182" width="6" height="20" fill="#d29922" opacity="0.7" rx="2"/><text x="14" y="196" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="204" width="6" height="20" fill="#3fb950" opacity="0.7" rx="2"/><text x="14" y="218" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="226" width="6" height="20" fill="#58a6ff" opacity="0.7" rx="2"/><text x="14" y="240" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="248" width="6" height="20" fill="#bc8cff" opacity="0.7" rx="2"/><text x="14" y="262" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="270" width="6" height="20" fill="#f778ba" opacity="0.7" rx="2"/><text x="14" y="284" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="292" width="6" height="20" fill="#f85149" opacity="0.7" rx="2"/><text x="14" y="306" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="314" width="6" height="20" fill="#d29922" opacity="0.7" rx="2"/><text x="14" y="328" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="336" width="6" height="20" fill="#3fb950" opacity="0.7" rx="2"/><text x="14" y="350" fill="#c9d1d9" font-size="11" font-family="monospace">omp_get_thread_num (0.8%, 1)</text>
+<rect x="10" y="358" width="6" height="20" fill="#58a6ff" opacity="0.7" rx="2"/><text x="14" y="372" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="380" width="6" height="20" fill="#bc8cff" opacity="0.7" rx="2"/><text x="14" y="394" fill="#c9d1d9" font-size="11" font-family="monospace">newviewParsimonyIterativeFast (0.8%, 1)</text>
+<rect x="10" y="402" width="6" height="20" fill="#f778ba" opacity="0.7" rx="2"/><text x="14" y="416" fill="#c9d1d9" font-size="11" font-family="monospace">void (0.8%, 1)</text>
+<rect x="10" y="424" width="6" height="20" fill="#f85149" opacity="0.7" rx="2"/><text x="14" y="438" fill="#c9d1d9" font-size="11" font-family="monospace">std::__detail::_Map_base<std::__cxx11::basic_strin (0.8%, 1)</text>
+<rect x="10" y="446" width="6" height="20" fill="#d29922" opacity="0.7" rx="2"/><text x="14" y="460" fill="#c9d1d9" font-size="11" font-family="monospace">void (0.8%, 1)</text>
+<rect x="10" y="468" width="6" height="20" fill="#3fb950" opacity="0.7" rx="2"/><text x="14" y="482" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="490" width="6" height="20" fill="#58a6ff" opacity="0.7" rx="2"/><text x="14" y="504" fill="#c9d1d9" font-size="11" font-family="monospace">non-virtual (0.8%, 1)</text>
+<rect x="10" y="512" width="6" height="20" fill="#bc8cff" opacity="0.7" rx="2"/><text x="14" y="526" fill="#c9d1d9" font-size="11" font-family="monospace">double (0.8%, 1)</text>
+<rect x="10" y="534" width="6" height="20" fill="#f778ba" opacity="0.7" rx="2"/><text x="14" y="548" fill="#c9d1d9" font-size="11" font-family="monospace">[unknown] (0.8%, 1)</text>
+<rect x="10" y="556" width="6" height="20" fill="#f85149" opacity="0.7" rx="2"/><text x="14" y="570" fill="#c9d1d9" font-size="11" font-family="monospace">_int_free_create_chunk (0.8%, 1)</text>
+<rect x="10" y="578" width="6" height="20" fill="#d29922" opacity="0.7" rx="2"/><text x="14" y="592" fill="#c9d1d9" font-size="11" font-family="monospace">unlink_chunk.isra.0 (0.8%, 1)</text>
+<rect x="10" y="600" width="6" height="20" fill="#3fb950" opacity="0.7" rx="2"/><text x="14" y="614" fill="#c9d1d9" font-size="11" font-family="monospace">PhyloTree::getBestNNIForBran(PhyloNode*, (0.8%, 1)</text>
+<rect x="10" y="622" width="6" height="20" fill="#58a6ff" opacity="0.7" rx="2"/><text x="14" y="636" fill="#c9d1d9" font-size="11" font-family="monospace">__mpn_mul_1 (0.8%, 1)</text>
+<rect x="10" y="644" width="6" height="20" fill="#bc8cff" opacity="0.7" rx="2"/><text x="14" y="658" fill="#c9d1d9" font-size="11" font-family="monospace">_int_free (0.8%, 1)</text>
+<rect x="10" y="666" width="6" height="20" fill="#f778ba" opacity="0.7" rx="2"/><text x="14" y="680" fill="#c9d1d9" font-size="11" font-family="monospace">void (0.8%, 1)</text>
+</svg>

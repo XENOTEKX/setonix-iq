@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-04-25 (evening) — Gadi xlarge_mf 32T/64T + mega_dna 32T complete; data pushed
+
+### 3 Gadi runs harvested and committed
+
+New run records added to `logs/runs/`:
+
+- `gadi_xlarge_mf_32t_sr.json` — pass=True, 1036s (0.29h)
+- `gadi_xlarge_mf_64t_sr.json` — pass=True, 897s (0.25h)
+- `gadi_mega_dna_32t_sr.json` — pass=True, 2711s (0.75h)
+
+Dashboard rebuilt (`normalize.py` → `build.py`). 4 jobs still running/queued:
+`mega_dna` 64T + 104T, `large_modelfinder` 64T, `xlarge_mf` 104T.
+
+---
+
 ## 2026-04-25 (late night) — 2 missing Gadi thread configs submitted; config panel default-closed
 
 ### IQ-TREE Configuration panel now collapsed by default

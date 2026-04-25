@@ -1,0 +1,179 @@
+/* ------------- Run selector ------------- */
+.run-selector-bar {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 18px;
+}
+.run-selector-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.run-selector-top label {
+  font-size: 0.72rem;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.run-selector-top select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-family: inherit;
+  min-width: 260px;
+}
+.run-selector-info {
+  display: flex;
+  gap: 14px;
+  font-size: 0.75rem;
+  color: var(--text3);
+  flex-wrap: wrap;
+}
+.run-selector-info .rsi-value {
+  font-weight: 600;
+  color: var(--text);
+}
+.run-selector-info .rsi-accent {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ------------- Leaderboard row ------------- */
+.lb-rank { font-weight: 700; text-align: center; }
+.lb-rank.gold { color: #fbbf24; }
+.lb-rank.silver { color: #cbd5e1; }
+.lb-rank.bronze { color: #d97706; }
+.lb-dataset { font-family: var(--font-mono); font-weight: 600; }
+.lb-model { font-family: var(--font-mono); color: var(--accent2); font-size: 0.72rem; }
+
+/* ------------- Config card ------------- */
+.config-section h3 {
+  font-size: 0.72rem;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+.config-items {
+  display: flex;
+  flex-direction: column;
+}
+.config-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(30, 42, 62, 0.4);
+  font-size: 0.78rem;
+}
+.config-item:last-child { border-bottom: none; }
+.config-item .ci-label {
+  color: var(--text3);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.config-item .ci-value {
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
+}
+.config-cmd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text2);
+  word-break: break-all;
+  margin-top: 12px;
+}
+
+/* ------------- Run detail ------------- */
+.run-detail {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 18px 16px;
+}
+.run-detail.open { display: block; }
+.run-row {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  transition: all 0.15s;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.run-row:hover { border-color: var(--border-hover); }
+.run-row.open { border-color: var(--accent); }
+.run-row-summary {
+  display: grid;
+  grid-template-columns: 48px 1fr 120px 90px 88px 72px 88px;
+  align-items: center;
+  padding: 12px 16px;
+  gap: 10px;
+  cursor: pointer;
+}
+.run-row-summary .run-id {
+  font-weight: 600;
+  font-size: 0.88rem;
+  font-family: var(--font-mono);
+}
+.run-row-summary .run-meta {
+  font-size: 0.72rem;
+  color: var(--text3);
+  margin-top: 2px;
+}
+.run-row-summary .run-time {
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-align: right;
+}
+.run-row-summary .run-ipc { text-align: center; font-weight: 600; color: var(--accent); }
+.run-row-summary .run-threads { text-align: center; color: var(--text2); }
+.run-row-summary .run-status { text-align: center; }
+.run-row-summary .run-expand {
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: center;
+}
+
+@media (max-width: 1200px) {
+  .run-row-summary {
+    grid-template-columns: 40px 1fr 100px 80px 80px;
+  }
+  .run-row-summary .run-ipc,
+  .run-row-summary .run-threads { display: none; }
+}
+
+@media (max-width: 640px) {
+  .run-row-summary {
+    grid-template-columns: 32px 1fr auto;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .run-row-summary .run-time { font-size: 0.82rem; }
+  .run-row-summary > div:nth-child(5),
+  .run-row-summary > div:nth-child(6),
+  .run-row-summary .run-expand { display: none; }
+  .run-row-summary .run-meta { white-space: normal; }
+  .page-header h1 { font-size: 1.4rem; }
+  .filter-bar { flex-wrap: wrap; gap: 6px; }
+  .filter-bar input[type="search"] { width: 100%; min-width: 0; }
+}
