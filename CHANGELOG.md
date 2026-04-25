@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-04-26 — All remaining Gadi thread sweeps complete; full Gadi coverage achieved
+
+### 4 final Gadi runs harvested
+
+All 4 queued/running jobs from the previous session completed overnight with Exit
+Status 0. Run records added to `logs/runs/`:
+
+- `gadi_mega_dna_64t_sr.json` — pass=True, 2346s (0.65h)
+- `gadi_mega_dna_104t_sr.json` — pass=True, 2990s (0.83h)
+- `gadi_large_modelfinder_64t_sr.json` — pass=True, 245s (0.07h)
+- `gadi_xlarge_mf_104t_sr.json` — pass=True, 1112s (0.31h)
+
+### Gadi thread coverage now complete
+
+| Dataset | Gadi threads (complete) |
+|---|---|
+| `large_modelfinder.fa` | 1, 4, 8, 16, 32, **64** ✅ |
+| `xlarge_mf.fa` | 1, 4, 8, 16, 32, 64, **104** ✅ |
+| `mega_dna.fa` | 16, 32, **64, 104** ✅ |
+
+Dashboard rebuilt (`normalize.py` → `build.py`), 33 runs total.
+
+**Outstanding:** Setonix `xlarge_mf.fa` harvest (jobs 41931855–41931861) still
+pending — requires `harvest_scratch.py` run on Setonix to pull canonical
+`xlarge_mf.fa` baseline runs (1–128T) into the repo.
+
+---
+
 ## 2026-04-25 (evening) — Gadi xlarge_mf 32T/64T + mega_dna 32T complete; data pushed
 
 ### 3 Gadi runs harvested and committed
