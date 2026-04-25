@@ -60,10 +60,10 @@ const TMPL = `
     <div class="card-header"><h2>IQ-TREE Configuration · <span style="color:var(--text3); font-weight:500; font-size:0.78rem;" id="ovConfigRunId">—</span></h2>
       <div class="actions">
         <button class="copy-btn" data-copy="#ovConfigText">Copy config</button>
-        <button class="btn-sm" id="ovConfigToggle" aria-expanded="true" aria-controls="ovConfig">Hide</button>
+        <button class="btn-sm" id="ovConfigToggle" aria-expanded="false" aria-controls="ovConfig">Show</button>
       </div>
     </div>
-    <div class="card-body" id="ovConfig"></div>
+    <div class="card-body card-body--collapsed" id="ovConfig"></div>
     <pre id="ovConfigText" class="sr-only"></pre>
   </div>
 
