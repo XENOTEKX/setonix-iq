@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-04-25 (late night) — 2 missing Gadi thread configs submitted; config panel default-closed
+
+### IQ-TREE Configuration panel now collapsed by default
+
+Dashboard change: the "IQ-TREE Configuration" card on the Overview page now
+loads **collapsed**. Click "Show" to expand. Reduces visual noise on first
+load.
+
+### Two missing Gadi thread configs submitted
+
+Gap analysis against the full matrix revealed two thread configs that were
+never submitted or were missed in the resubmit wave:
+
+| Job ID        | Dataset              | T   | Reason not yet submitted |
+|---------------|----------------------|:---:|--------------------------|
+| `167004589`   | `large_modelfinder`  | 64  | Original job killed by jobfs quota; not included in resubmit wave |
+| `167004590`   | `xlarge_mf`          | 104 | Never submitted (Setonix goes to 128T; Gadi cap is 104T) |
+
+Both submitted with `jobfs=2gb` + `TMPDIR` redirect fix in place.
+
+### Current Gadi queue (7 jobs)
+
+| Job ID        | Dataset             | T   | State |
+|---------------|---------------------|:---:|:-----:|
+| `167001081`   | `xlarge_mf`         | 32  | R     |
+| `167001085`   | `xlarge_mf`         | 64  | R     |
+| `167001093`   | `mega_dna`          | 32  | Q     |
+| `167001098`   | `mega_dna`          | 64  | Q     |
+| `167001099`   | `mega_dna`          | 104 | Q     |
+| `167004589`   | `large_modelfinder` | 64  | Q     |
+| `167004590`   | `xlarge_mf`         | 104 | Q     |
+
+### Expected Gadi coverage after all 7 complete
+
+| Dataset              | Thread configs on Gadi              |
+|----------------------|-------------------------------------|
+| `large_modelfinder`  | 1, 4, 8, 16, 32, **64** ← new      |
+| `xlarge_mf`          | 1, 4, 8, 16, 32, 64, **104** ← new |
+| `mega_dna`           | 16, **32, 64, 104** ← new          |
+
+---
+
 ## 2026-04-25 (late night) — `xlarge_mf` Setonix series restored; CI workflow optimised
 
 ### `xlarge_mf` archive regression fixed (`663916d`)
