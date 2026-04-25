@@ -2,7 +2,75 @@
 
 ---
 
-# IQ-TREE GPU Offload — Development Progress
+## 2026-04-25 (night) — Setonix canonical rerun **completed**; results harvested
+
+All 13 matrix jobs from the earlier evening submission completed successfully.
+Results harvested, normalised, validated (0 errors), and dashboard rebuilt.
+
+### Job completion summary
+
+| Job ID     | Dataset              | Threads | Elapsed    | Exit |
+|------------|----------------------|:-------:|:----------:|:----:|
+| `41931848` | `generate_datasets.sh` (datagen) | — | 00:00:09 | 0 |
+| `41931849` | `large_modelfinder`  | 1T      | 01:03:31   | 0    |
+| `41931850` | `large_modelfinder`  | 4T      | 01:02:29   | 0    |
+| `41931851` | `large_modelfinder`  | 8T      | 00:57:58   | 0    |
+| `41931852` | `large_modelfinder`  | 16T     | 00:49:36   | 0    |
+| `41931853` | `large_modelfinder`  | 32T     | 00:44:04   | 0    |
+| `41931854` | `large_modelfinder`  | 64T     | 00:45:43   | 0    |
+| `41931855` | `xlarge_mf`          | 1T      | 02:56:05   | 0    |
+| `41931856` | `xlarge_mf`          | 4T      | 02:31:23   | 0    |
+| `41931857` | `xlarge_mf`          | 8T      | 02:53:51   | 0    |
+| `41931858` | `xlarge_mf`          | 16T     | 02:49:55   | 0    |
+| `41931859` | `xlarge_mf`          | 32T     | 02:31:02   | 0    |
+| `41931860` | `xlarge_mf`          | 64T     | 02:20:12   | 0    |
+| `41931861` | `xlarge_mf`          | 128T    | 02:20:07   | 0    |
+
+### Run metrics (Setonix · Pawsey · AMD Milan, canonical files)
+
+| Dataset               | Threads | Wall (s) | IPC   | Peak RSS |
+|-----------------------|:-------:|---------:|:-----:|:--------:|
+| `large_modelfinder.fa`|  1T     |    3 801 | 2.890 |  1 150 MB |
+| `large_modelfinder.fa`|  4T     |    1 938 | 1.429 |  1 141 MB |
+| `large_modelfinder.fa`|  8T     |    1 670 | 0.851 |  1 173 MB |
+| `large_modelfinder.fa`| 16T     |    1 384 | 0.537 |  1 145 MB |
+| `large_modelfinder.fa`| 32T     |    1 295 | 0.328 |  1 144 MB |
+| `large_modelfinder.fa`| 64T     |    1 293 | 0.181 |  1 139 MB |
+| `xlarge_mf.fa`        |  1T     |   16 982 | 2.624 |  2 203 MB |
+| `xlarge_mf.fa`        |  4T     |    9 146 | 1.243 |  2 213 MB |
+| `xlarge_mf.fa`        |  8T     |    9 078 | 0.642 |  2 215 MB |
+| `xlarge_mf.fa`        | 16T     |    8 938 | 0.344 |  2 216 MB |
+| `xlarge_mf.fa`        | 32T     |    8 070 | 0.225 |  2 217 MB |
+| `xlarge_mf.fa`        | 64T     |    7 220 | 0.136 |  2 214 MB |
+| `xlarge_mf.fa`        | 128T    |    7 194 | 0.082 |     —     |
+
+Notable: IPC drops steeply with thread count on both datasets (3× at 1T → 0.1–0.2 at
+64–128T), consistent with memory-bandwidth saturation at high parallelism on Zen 3/Milan.
+`xlarge_mf` 64T vs 128T wall time is essentially flat (7 220 vs 7 194 s), confirming
+saturation beyond ≈ 64 threads for this workload.
+
+### Harvest pipeline run
+
+```
+python3.11 tools/harvest_scratch.py   # 23 files updated; 6 new large_modelfinder_*t_baseline.json created
+python3.11 tools/normalize.py         # wrote 40 runs, 2 profiles → web/data
+python3.11 tools/validate.py          # 40 runs, 0 errors; 2 profiles, 0 errors
+python3.11 tools/build.py             # mirrored web/ → docs/  (v=20260425061444)
+```
+
+### New files in `logs/runs/`
+
+Six new canonical Setonix run records (from the `large_modelfinder_<T>t` profile dirs):
+`large_modelfinder_{1,4,8,16,32,64}t_baseline.json`
+
+The seven `xlarge_mf_*t_baseline.json` files were updated in-place with enriched
+harvest data (hotspots, modelfinder candidates, io totals).
+
+### Dashboard status
+
+Non-canonical `⚠ non-canonical file` badges will disappear for `large_modelfinder.fa`
+and `xlarge_mf.fa` Setonix series once `normalize.py` propagates
+`dataset_canonical: true` from the new run records. `mega_dna.fa` was already clean.
 
 ---
 

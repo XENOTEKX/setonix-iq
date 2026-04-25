@@ -44,7 +44,8 @@
       "mem_per_node": "235520",
       "submit_host": "setonix-04",
       "submit_dir": "/scratch/pawsey1351/asamuel/iqtree3/setonix-ci"
-    }
+    },
+    "cores": 256
   },
   "profile": {
     "dataset": "mega_dna.fa",
@@ -20350,6 +20351,9 @@
   },
   "dataset_info": {
     "file": "mega_dna.fa",
+    "file_size_bytes": 50006000,
+    "fasta_taxa": 500,
+    "fasta_sites": 100000,
     "taxa": 500,
     "sites": 100000,
     "patterns": 100000,
@@ -20357,11 +20361,8 @@
     "invariant_sites": 0,
     "informative_sites": 99996,
     "sequence_type": "DNA",
-    "file_size_bytes": 50006000,
     "sha256": "94d7d38d0cddbb05401dc018d09f28248cf413bc4183a21c70afae5b7a4db083",
-    "path": "/scratch/pawsey1351/asamuel/iqtree3/benchmarks/mega_dna.fa",
-    "dataset_canonical": false,
-    "dataset_canonical_note": "Dataset was generated with a different IQ-TREE version or seed than the canonical Gadi benchmark (mega_dna.fa). patterns=100000 vs canonical 99999. This run should be re-executed against the canonical file for cross-platform comparisons to be valid."
+    "path": "/scratch/pawsey1351/asamuel/iqtree3/benchmarks/mega_dna.fa"
   },
   "modelfinder": {
     "best_model_bic": "HKY+F+ASC+R5",

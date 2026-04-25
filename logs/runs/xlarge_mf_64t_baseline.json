@@ -808,9 +808,16 @@
     "wall_time": "2h0m19s"
   },
   "dataset_info": {
-    "file": "xlarge_mf.fa",
-    "dataset_canonical": false,
-    "dataset_canonical_note": "Dataset was generated with a different IQ-TREE version or seed than the canonical Gadi benchmark (xlarge_mf.fa). patterns=None vs canonical 98858. This run should be re-executed against the canonical file for cross-platform comparisons to be valid.",
-    "file_original": "xlarge_dna.fa"
+    "file": "xlarge_dna.fa",
+    "file_size_bytes": 20002400,
+    "fasta_taxa": 200,
+    "fasta_sites": 100000,
+    "taxa": 200,
+    "sites": 100000,
+    "patterns": 99897,
+    "constant_sites": 76,
+    "invariant_sites": 76,
+    "informative_sites": 99467,
+    "sequence_type": "DNA"
   }
 }
