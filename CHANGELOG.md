@@ -2,7 +2,150 @@
 
 ---
 
-## 2026-04-25 (late) — `mega_dna` rerun submitted: existing 2 Gadi records had zero usable data
+## 2026-04-25 — Non-canonical Setonix benchmark files discovered; re-run required
+
+### Problem
+
+All **17 Setonix baseline runs** in `logs/runs/` were executed against
+alignment files that differ from the canonical Gadi benchmarks.
+Cross-platform wall-time / IPC / speedup comparisons using non-identical
+inputs are **not scientifically valid**.
+
+**Pattern-count divergence (patterns ≠ means different file):**
+
+| Dataset | Setonix file patterns | Gadi canonical patterns | Match? |
+|---|---:|---:|:---:|
+| `large_modelfinder.fa` | 48,293 | 45,386 | ❌ |
+| `xlarge_mf.fa` (was `xlarge_dna.fa`) | 99,897 | 98,858 | ❌ |
+| `mega_dna.fa` | 100,000 | 99,999 | ❌ |
+
+Additionally, some older Setonix runs used a completely wrong size:
+`xlarge_dna.fa` at **1,000 taxa × 10,000 sites** instead of the intended
+200 × 100,000.
+
+**Root cause:** The Setonix benchmarks were pre-existing files on
+`/scratch/pawsey1351/asamuel/iqtree3/benchmarks/` — never explicitly
+generated. The Gadi benchmarks were regenerated with IQ-TREE 3.1.1's
+built-in AliSim simulator using fixed seeds (101 / 202 / 303). Even with
+the same seed, a different IQ-TREE build produces different AliSim output
+because the PRNG initialization changed between versions.
+
+**Gadi canonical sha256 hashes** (from `benchmarks/sha256sums.txt`):
+```
+73908728537994a4...  large_modelfinder.fa   (100 taxa × 50,000 bp)
+66eaf64b9b7e561f...  xlarge_mf.fa           (200 taxa × 100,000 bp)
+0c8af2d62e214be8...  mega_dna.fa            (500 taxa × 100,000 bp)
+```
+
+### Changes made (commit `b48973f`)
+
+1. **`benchmarks/sha256sums.txt`** — canonical sha256 lockfile committed
+   to the repo for all three benchmark files.
+
+2. **`setonix-ci/generate_datasets.sh`** — new script (mirrors
+   `gadi-ci/generate_datasets.sh` exactly: GTR+G4 model, same AliSim
+   parameters, seeds 101 / 202 / 303). Verifies sha256 against the
+   lockfile at the end and **exits non-zero** if any checksum fails,
+   blocking accidental use of wrong files.
+
+3. **`gadi-ci/generate_datasets.sh`** — added sha256 verification block
+   at the end to catch accidental regeneration with a new IQ-TREE build.
+
+4. **All 17 Setonix run JSONs** — `dataset_info.dataset_canonical: false`
+   with an explanatory note. `xlarge_dna.fa` normalised to `xlarge_mf.fa`
+   (original name preserved in `file_original`) so the dashboard groups
+   them correctly.
+
+5. **Dashboard** — carousel dataset cards show a red **⚠ non-canonical
+   file** badge on any platform block whose runs used the wrong file.
+
+### Action required on Setonix
+
+> **These steps must be completed before any cross-platform comparison
+> is valid.**
+
+**Step 1 — Regenerate benchmark files with IQ-TREE 3.1.1**
+
+```bash
+# On Setonix login node
+cd ~/setonix-iq   # or wherever the repo is checked out
+sbatch setonix-ci/generate_datasets.sh
+```
+
+The script will simulate `large_modelfinder.fa`, `xlarge_mf.fa`, and
+`mega_dna.fa` using the same AliSim parameters and seeds as Gadi, then
+verify sha256 against `benchmarks/sha256sums.txt`.
+
+- If the job log ends with **`all checksums OK`** — the files are
+  bit-identical to Gadi's. Proceed to Step 2.
+- If it ends with **`sha256 mismatch`** — the IQ-TREE version on Setonix
+  is not 3.1.1. Check `${BUILD_DIR}/iqtree3 --version` and rebuild from
+  the `v3.1.1` tag. Do **not** use the mismatched files for benchmarks.
+
+Required env overrides (if non-default paths):
+```bash
+PROJECT_DIR=/scratch/pawsey1351/asamuel/iqtree3 \
+BUILD_DIR=/scratch/pawsey1351/asamuel/iqtree3/build-profiling \
+sbatch setonix-ci/generate_datasets.sh
+```
+
+**Step 2 — Verify the generated files (manual double-check)**
+
+```bash
+cd /scratch/pawsey1351/asamuel/iqtree3/benchmarks
+sha256sum -c ~/setonix-iq/benchmarks/sha256sums.txt
+```
+
+All three lines must print `OK`.
+
+**Step 3 — Re-run the full Setonix benchmark matrix**
+
+```bash
+cd ~/setonix-iq/setonix-ci
+# Re-submit all datasets & thread counts using the updated benchmark files.
+sbatch --export=ALL,DATASET=large_modelfinder.fa,THREADS=1  run_mega_profile.sh
+sbatch --export=ALL,DATASET=large_modelfinder.fa,THREADS=4  run_mega_profile.sh
+sbatch --export=ALL,DATASET=large_modelfinder.fa,THREADS=8  run_mega_profile.sh
+sbatch --export=ALL,DATASET=large_modelfinder.fa,THREADS=16 run_mega_profile.sh
+sbatch --export=ALL,DATASET=large_modelfinder.fa,THREADS=32 run_mega_profile.sh
+sbatch --export=ALL,DATASET=large_modelfinder.fa,THREADS=64 run_mega_profile.sh
+
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=1   run_mega_profile.sh
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=4   run_mega_profile.sh
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=8   run_mega_profile.sh
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=16  run_mega_profile.sh
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=32  run_mega_profile.sh
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=64  run_mega_profile.sh
+sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=128 run_mega_profile.sh
+
+sbatch --export=ALL,DATASET=mega_dna.fa,THREADS=16  run_mega_profile.sh
+sbatch --export=ALL,DATASET=mega_dna.fa,THREADS=32  run_mega_profile.sh
+sbatch --export=ALL,DATASET=mega_dna.fa,THREADS=64  run_mega_profile.sh
+sbatch --export=ALL,DATASET=mega_dna.fa,THREADS=128 run_mega_profile.sh
+```
+
+Alternatively use `submit_mega_batch.sh` if it supports `--dataset` flag.
+
+**Step 4 — Harvest and push new results**
+
+After jobs complete:
+```bash
+cd ~/setonix-iq
+/bin/python3.11 tools/harvest_scratch.py   # or equivalent on Setonix
+/bin/python3.11 tools/normalize.py
+git add logs/runs/ web/data/
+git commit -m "data(setonix): re-run against canonical benchmark files"
+git push
+```
+
+The dashboard `⚠ non-canonical file` badges will disappear once the
+old non-canonical run JSONs are replaced with runs that have
+`dataset_canonical: true` (or no flag, once harvest re-populates from
+the correct files).
+
+---
+
+
 
 ### What we found
 
