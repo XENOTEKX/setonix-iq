@@ -349,3 +349,8 @@
   font-size: 0.68rem;
   color: var(--text3);
 }
+
+/* Collapsible card body (used for config section toggle) */
+.card-body--collapsed {
+  display: none;
+}

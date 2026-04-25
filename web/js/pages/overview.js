@@ -56,9 +56,12 @@ const TMPL = `
   <div style="font-size:0.72rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.12em; font-weight:700; margin:8px 0 10px;">Datasets</div>
   <section id="ovDatasets" aria-label="Dataset profiles"></section>
 
-  <div class="card">
+  <div class="card" id="ovConfigCard">
     <div class="card-header"><h2>IQ-TREE Configuration · <span style="color:var(--text3); font-weight:500; font-size:0.78rem;" id="ovConfigRunId">—</span></h2>
-      <div class="actions"><button class="copy-btn" data-copy="#ovConfigText">Copy config</button></div>
+      <div class="actions">
+        <button class="copy-btn" data-copy="#ovConfigText">Copy config</button>
+        <button class="btn-sm" id="ovConfigToggle" aria-expanded="true" aria-controls="ovConfig">Hide</button>
+      </div>
     </div>
     <div class="card-body" id="ovConfig"></div>
     <pre id="ovConfigText" class="sr-only"></pre>
@@ -157,6 +160,18 @@ export async function mount(root) {
   }
 
   bindCopyButtons(root);
+
+  // Collapsible IQ-TREE Configuration section
+  const configToggle = document.getElementById('ovConfigToggle');
+  const configBody   = document.getElementById('ovConfig');
+  if (configToggle && configBody) {
+    configToggle.addEventListener('click', () => {
+      const expanded = configToggle.getAttribute('aria-expanded') === 'true';
+      configToggle.setAttribute('aria-expanded', String(!expanded));
+      configToggle.textContent = expanded ? 'Show' : 'Hide';
+      configBody.classList.toggle('card-body--collapsed', expanded);
+    });
+  }
 }
 
 /* --------------------------- Stats --------------------------- */

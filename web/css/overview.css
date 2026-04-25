@@ -479,8 +479,8 @@
 .ds-card .ds-tag {
   display: inline-block;
   font-size: 0.66rem;
-  padding: 3px 8px;
-  border-radius: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
   background: var(--accent-glow);
   color: var(--accent);
   font-weight: 600;
@@ -490,20 +490,30 @@
 .ds-card .ds-tag--gadi {
   background: rgba(251, 146, 60, 0.12);
   color: #fb923c;
-  border: 1px solid rgba(251, 146, 60, 0.25);
+  border: 1px solid rgba(251, 146, 60, 0.3);
 }
 .ds-card .ds-tag--setonix {
   background: rgba(139, 92, 246, 0.12);
   color: #a78bfa;
-  border: 1px solid rgba(139, 92, 246, 0.25);
+  border: 1px solid rgba(139, 92, 246, 0.3);
 }
 .ds-card--gadi { border-left: 3px solid rgba(251, 146, 60, 0.55); }
 .ds-card--setonix { border-left: 3px solid rgba(139, 92, 246, 0.55); }
-/* Cross-platform card: gradient stripe combining both colours. */
+/* Cross-platform card: gradient stripe via ::after so border-radius is preserved.
+   border-image overrides border-radius, hence the pseudo-element approach. */
 .ds-card--cross {
-  border-left: 3px solid transparent;
-  border-image: linear-gradient(180deg, rgba(139,92,246,0.6) 0%, rgba(251,146,60,0.6) 100%) 1;
-  border-image-slice: 1;
+  border-left: 1px solid var(--border);
+}
+.ds-card--cross::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, rgba(139,92,246,0.6) 0%, rgba(251,146,60,0.6) 100%);
+  pointer-events: none;
+  border-radius: var(--radius) 0 0 var(--radius);
 }
 .ds-card .ds-head {
   flex-wrap: wrap;
@@ -522,9 +532,9 @@
 }
 .ds-plat {
   min-width: 0;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: rgba(255,255,255,0.015);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
   border: 1px solid var(--border);
 }
 .ds-plat--setonix { border-color: rgba(139, 92, 246, 0.25); }
