@@ -56,15 +56,21 @@ BENCHMARKS = Path(os.environ.get("BENCHMARKS_DIR", str(SCRATCH / "benchmarks")))
 SLURM_ID = os.environ.get("SLURM_ID", "41703864")
 
 
-def profile_dir_for(label: str) -> Path:
+def profile_dir_for(label: str, slurm_id: str | None = None) -> Path:
     """Locate the profile directory for ``label``.
 
-    Tries the canonical ``<label>_<SLURM_ID>`` first, then falls back to the
-    newest ``<label>_<id>`` directory where ``<id>`` is a purely numeric job
-    ID.  The strict numeric-suffix requirement prevents a label such as
-    ``xlarge_mf_4t`` from accidentally matching ``xlarge_mf_4t_sr_166978127``
-    (which belongs to a different label that happens to share a prefix).
+    Resolution order:
+    1. ``<label>_<slurm_id>`` if *slurm_id* is provided and the dir exists.
+    2. ``<label>_<SLURM_ID>`` (env-var / module-level default) if it exists.
+    3. Newest ``<label>_<N>`` dir where ``<N>`` is a purely numeric job ID
+       (sorted by mtime desc).  The strict numeric-suffix requirement prevents
+       a label such as ``xlarge_mf_4t`` from accidentally matching
+       ``xlarge_mf_4t_sr_166978127`` (a different label sharing a prefix).
     """
+    if slurm_id:
+        candidate = PROFILE_ROOT / f"{label}_{slurm_id}"
+        if candidate.is_dir():
+            return candidate
     primary = PROFILE_ROOT / f"{label}_{SLURM_ID}"
     if primary.is_dir():
         return primary
@@ -541,7 +547,7 @@ def enrich_run(run: dict) -> bool:
         return False
 
     changed = False
-    pdir = profile_dir_for(label)
+    pdir = profile_dir_for(label, slurm_id=run.get("slurm_id"))
     if not pdir.is_dir():
         return False
 

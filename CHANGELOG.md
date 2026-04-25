@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-25 (night, corrected) — `xlarge_mf.fa` canonical harvest fixed; all 13 runs now valid
+
+A post-harvest audit on Gadi revealed that all 7 `xlarge_mf_*t_baseline.json`
+files still carried `dataset=xlarge_dna.fa` / `slurm_id=41703864` (the old
+non-canonical run) despite the previous harvest reporting them as "updated".
+
+### Root cause
+
+`harvest_scratch.py` resolved profile directories via a module-level
+`SLURM_ID = "41703864"` env-var default. The update pass called
+`profile_dir_for(label)` without consulting the run JSON's own `slurm_id`
+field, so the old `41703864` dir was found first and the canonical
+`41931855–41931861` data was never pulled in.
+
+### Fix applied (`tools/harvest_scratch.py`)
+
+`profile_dir_for()` now accepts an explicit `slurm_id` argument.
+`enrich_run()` passes `slurm_id=run.get("slurm_id")`, which resolves the
+correct `<label>_<slurm_id>` directory before falling back to the env-var
+default or mtime sorting. This makes the harvester immune to stale
+`SLURM_ID` defaults for any future re-runs.
+
+### Corrected dataset spec (all 7 files verified canonical)
+
+| File                        | SLURM ID   | T    | Dataset        | Taxa | Sites    | sha256 | IPC   | Wall (s) |
+|-----------------------------|:----------:|:----:|----------------|:----:|:--------:|:------:|:-----:|:--------:|
+| `xlarge_mf_1t_baseline.json`   | `41931855` | 1    | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 2.730 | 10 555   |
+| `xlarge_mf_4t_baseline.json`   | `41931856` | 4    | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 1.018 |  7 271   |
+| `xlarge_mf_8t_baseline.json`   | `41931857` | 8    | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 0.449 |  8 618   |
+| `xlarge_mf_16t_baseline.json`  | `41931858` | 16   | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 0.251 |  8 378   |
+| `xlarge_mf_32t_baseline.json`  | `41931859` | 32   | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 0.174 |  7 237   |
+| `xlarge_mf_64t_baseline.json`  | `41931860` | 64   | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 0.097 |  6 568   |
+| `xlarge_mf_128t_baseline.json` | `41931861` | 128  | `xlarge_mf.fa` | 200  | 100 000  | ✅ OK  | 0.067 |  6 516   |
+
+sha256 `66eaf64b9b7e…` — matches `benchmarks/sha256sums.txt` lockfile exactly
+(same canonical file, bit-identical to Gadi, seed 202, GTR+G4, 200 × 100 000).
+
+IPC decreases monotonically from 2.73 (1T) to 0.07 (128T) — consistent with
+memory-bandwidth saturation at high parallelism on AMD Milan (same pattern
+observed in `large_modelfinder.fa` and `mega_dna.fa`). Wall time saturates
+between 64T and 128T (6 568 vs 6 516 s, < 1 % difference).
+
+### Pipeline rerun
+
+```
+harvest_scratch.py   →  17 files updated (all 7 xlarge_mf + 6 large_mf + 4 mega)
+normalize.py         →  40 runs, 2 profiles written
+validate.py          →  40 runs, 0 errors; 2 profiles, 0 errors
+build.py             →  docs/ rebuilt (v=20260425070600)
+```
+
+---
+
 ## 2026-04-25 (night) — Pilot/stub runs archived; dashboard cleaned
 
 15 run records moved to `logs/runs/_archive/` to remove confusing or
