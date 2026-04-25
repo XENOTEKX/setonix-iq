@@ -1,15 +1,15 @@
 // web/js/pages/overview.js — v2 (insight-oriented)
 
-import { store } from '../state.js?v=20260425232033';
-import { loadRun } from '../data.js?v=20260425232033';
-import { mountRunPicker } from '../components/run-picker.js?v=20260425232033';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260425232033';
-import { attachExpand } from '../components/chart-expand.js?v=20260425232033';
-import * as scaling from '../charts/scaling.js?v=20260425232033';
-import * as efficiency from '../charts/efficiency.js?v=20260425232033';
-import * as ipcScaling from '../charts/ipc-scaling.js?v=20260425232033';
-import * as perfMatrix from '../charts/performance-matrix.js?v=20260425232033';
-import { escHtml, fmtTime, fmtNum } from '../utils.js?v=20260425232033';
+import { store } from '../state.js?v=20260425232753';
+import { loadRun } from '../data.js?v=20260425232753';
+import { mountRunPicker } from '../components/run-picker.js?v=20260425232753';
+import { bindCopyButtons } from '../components/copy-button.js?v=20260425232753';
+import { attachExpand } from '../components/chart-expand.js?v=20260425232753';
+import * as scaling from '../charts/scaling.js?v=20260425232753';
+import * as efficiency from '../charts/efficiency.js?v=20260425232753';
+import * as ipcScaling from '../charts/ipc-scaling.js?v=20260425232753';
+import * as perfMatrix from '../charts/performance-matrix.js?v=20260425232753';
+import { escHtml, fmtTime, fmtNum } from '../utils.js?v=20260425232753';
 
 /* --------------------------- Platform helpers --------------------------- */
 function platformOf(r) {

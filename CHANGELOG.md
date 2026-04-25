@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-04-26 (evening) — Setonix `xlarge_mf.fa` canonical runs confirmed; full cross-platform coverage
+
+### Setonix xlarge_mf.fa — 7-point baseline series verified canonical
+
+Audit of `logs/runs/` confirmed all 7 Setonix `xlarge_mf.fa` baseline records are
+present, have correct SLURM IDs (41931855–41931861), and carry `dataset=xlarge_mf.fa`
+with timing consistent with the values recorded during the 2026-04-25 harvest.
+
+| File                          | SLURM ID   | Threads | Wall (s) |
+|-------------------------------|:----------:|:-------:|---------:|
+| `xlarge_mf_1t_baseline.json`  | `41931855` |   1     |   10 555 |
+| `xlarge_mf_4t_baseline.json`  | `41931856` |   4     |    7 271 |
+| `xlarge_mf_8t_baseline.json`  | `41931857` |   8     |    8 618 |
+| `xlarge_mf_16t_baseline.json` | `41931858` |  16     |    8 378 |
+| `xlarge_mf_32t_baseline.json` | `41931859` |  32     |    7 237 |
+| `xlarge_mf_64t_baseline.json` | `41931860` |  64     |    6 568 |
+| `xlarge_mf_128t_baseline.json`| `41931861` | 128     |    6 516 |
+
+### Pipeline result
+
+```
+normalize.py  →  33 runs, 2 profiles written → web/data/
+validate.py   →  33 runs, 0 errors; 2 profiles, 0 errors
+build.py      →  docs/ rebuilt
+```
+
+### Full cross-platform coverage
+
+| Dataset               | Setonix threads                        | Gadi threads                     |
+|-----------------------|----------------------------------------|----------------------------------|
+| `large_modelfinder.fa`| 1, 4, 8, 16, 32, 64 ✅                 | 1, 4, 8, 16, 32, 64 ✅           |
+| `xlarge_mf.fa`        | 1, 4, 8, 16, 32, 64, **128** ✅        | 1, 4, 8, 32, 64, **104** ✅      |
+| `mega_dna.fa`         | 16, 32, 64, 128 ✅                     | 16, 32, 64, 104 ✅               |
+
+---
+
 ## 2026-04-26 — All remaining Gadi thread sweeps complete; full Gadi coverage achieved
 
 ### 4 final Gadi runs harvested
@@ -23,22 +59,6 @@ Status 0. Run records added to `logs/runs/`:
 | `mega_dna.fa` | 16, 32, **64, 104** ✅ |
 
 Dashboard rebuilt (`normalize.py` → `build.py`), 33 runs total.
-
-**Next action — Setonix `xlarge_mf.fa` harvest (pending):**
-Jobs 41931855–41931861 completed on Setonix but results were never pulled into
-the repo. Run the following on Setonix (`setonix.pawsey.org.au`) to restore the
-7-point `xlarge_mf.fa` baseline series (1, 4, 8, 16, 32, 64, 128T):
-
-```bash
-cd ~/setonix-iq
-/bin/python3.11 tools/harvest_scratch.py
-/bin/python3.11 tools/normalize.py
-/bin/python3.11 tools/validate.py
-/bin/python3.11 tools/build.py
-git add logs/runs/ web/data/ docs/
-git commit -m "data(setonix): harvest xlarge_mf.fa canonical runs (41931855-41931861)"
-git push
-```
 
 ---
 

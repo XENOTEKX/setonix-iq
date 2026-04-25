@@ -1,6 +1,6 @@
 // web/js/charts/hotspot.js — per-run hotspot bar list (top N functions)
 
-import { escHtml, fmtPercent, shortFn } from '../utils.js?v=20260425232033';
+import { escHtml, fmtPercent, shortFn } from '../utils.js?v=20260425232753';
 
 export function render(container, hotspots, { limit = 10 } = {}) {
   if (!hotspots || !hotspots.length) {
