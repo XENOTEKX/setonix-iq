@@ -2,6 +2,85 @@
 
 ---
 
+## 2026-04-25 (afternoon) — 5 jobs killed by jobfs quota; fix applied; resubmitted
+
+### What happened
+
+All jobs that succeeded overnight used relatively short VTune collection
+times (low thread counts → less data). Five jobs were killed mid-run by
+PBS because they exceeded the default **jobfs quota of 100 MB**:
+
+| Job ID      | Dataset       | T   | Wall used | JobFS used | Exit |
+|-------------|---------------|:---:|:---------:|:----------:|:----:|
+| `166978130` | `xlarge_mf`   | 32  | 1h 02m    | 102 MB     | SIGTERM 271 |
+| `166978131` | `xlarge_mf`   | 64  | 0h 54m    | 125 MB     | SIGTERM 271 |
+| `166978499` | `mega_dna`    | 32  | 2h 14m    | 106 MB     | SIGTERM 271 |
+| `166978500` | `mega_dna`    | 64  | 1h 59m    | 124 MB     | SIGTERM 271 |
+| `166978501` | `mega_dna`    | 104 | 2h 09m    | 104 MB     | SIGTERM 271 |
+
+**Root cause**: VTune's hotspot collection pass writes driver/temp artefacts
+to `$TMPDIR`. On Gadi, `$TMPDIR` defaults to `/jobfs/$PBS_JOBID/`, which
+is bounded by the per-job `jobfs=` resource. The worker did not request a
+`jobfs` allocation (falling back to the PBS default of 100 MB), and VTune
+overflowed it at higher thread counts where more stack frames are sampled.
+
+### Fix applied to `gadi-ci/submit_benchmark_matrix.sh`
+
+Two changes:
+
+1. **`jobfs=2gb` added to the qsub `-l` resource string** — provides 2 GB
+   of jobfs headroom (well above the observed 125 MB peak).
+2. **`export TMPDIR="${PROJECT_DIR}/tmp"`** added to the worker, immediately
+   after the module loads, redirecting VTune temp I/O entirely to scratch as
+   belt-and-suspenders. The directory is created with `mkdir -p`.
+
+### Completed runs (successful, valid data)
+
+| File                                   | T   | `pass` | `time_s` | lnL approx        |
+|----------------------------------------|:---:|:------:|:--------:|:-----------------:|
+| `gadi_large_modelfinder_1t_sr.json`    | 1   | ✅     | 2 168 s  | −2 690 513.34     |
+| `gadi_large_modelfinder_4t_sr.json`    | 4   | ✅     | 805 s    | −2 690 513.34     |
+| `gadi_large_modelfinder_8t_sr.json`    | 8   | ✅     | 461 s    | −2 690 513.34     |
+| `gadi_large_modelfinder_16t_sr.json`   | 16  | ✅     | 294 s    | −2 690 513.34     |
+| `gadi_large_modelfinder_32t_sr.json`   | 32  | ✅     | 220 s    | −2 690 513.34     |
+| `gadi_large_modelfinder_64t_sr.json`   | 64  | ✅     | 771 s    | −1 303 518.59 ⚠   |
+| `gadi_xlarge_mf_1t_sr.json`            | 1   | ✅     | 11 915 s | −10 956 936.61    |
+| `gadi_xlarge_mf_4t_sr.json`            | 4   | ✅     | 4 244 s  | −10 956 936.61    |
+| `gadi_xlarge_mf_8t_sr.json`            | 8   | ✅     | 2 440 s  | −10 956 936.61    |
+| `gadi_xlarge_mf_16t_sr.json`           | 16  | ✅     | 1 048 s  | −5 286 806.51 ⚠   |
+| `gadi_mega_dna_16t_sr.json`            | 16  | ✅     | 3 973 s  | −27 328 165.86    |
+
+⚠ Two lnL values differ from the rest of their series — flag for checking
+topology convergence / seed variance before analysis. Not a blocker for
+timing/IPC comparisons.
+
+### Resubmitted jobs (5 — with fixed jobfs + TMPDIR)
+
+| Job ID      | Dataset     | T   |
+|-------------|-------------|:---:|
+| `167001081` | `xlarge_mf` | 32  |
+| `167001085` | `xlarge_mf` | 64  |
+| `167001093` | `mega_dna`  | 32  |
+| `167001098` | `mega_dna`  | 64  |
+| `167001099` | `mega_dna`  | 104 |
+
+SU charged by the 5 killed jobs (real SU billed even on kill):
+**216 + 188 + 465 + 415 + 448 = 1 732 SU = ~1.73 KSU**
+
+### Updated grant picture
+
+| | KSU |
+|---|---:|
+| Grant (Q2 2026) | 25.00 |
+| Used before today | 3.78 |
+| Successful runs overnight | ~2.56 |
+| JobFS kill waste | ~1.73 |
+| Resubmit wave (5 jobs, est.) | ~1.40 |
+| **Projected total after resubmit** | **~9.47** |
+| **Remaining** | **~15.53** |
+
+---
+
 ## 2026-04-25 — Non-canonical Setonix benchmark files discovered; re-run required
 
 ### Problem

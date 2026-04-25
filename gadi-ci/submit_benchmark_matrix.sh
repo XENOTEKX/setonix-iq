@@ -79,6 +79,13 @@ if command -v module >/dev/null 2>&1; then
     module load intel-compiler-llvm/2024.2.0 2>/dev/null || true
 fi
 
+# VTune writes driver/temp files to TMPDIR.  On Gadi normalsr the default
+# TMPDIR is /jobfs (quota 100 MB by default, overrideable via jobfs=Xgb).
+# Redirect to scratch to avoid jobfs pressure from VTune temp data even
+# when jobfs=2gb is requested (belt-and-suspenders).
+export TMPDIR="${PROJECT_DIR}/tmp"
+mkdir -p "${TMPDIR}"
+
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"
 PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
 # Embed 'gadi' in the run id so dashboard filenames (logs/runs/<rid>.json) are
@@ -525,7 +532,7 @@ for dataset in "${!MATRIX[@]}"; do
         jid=$(qsub -N "iq-${dataset}-${t}t" \
                    -P "${PROJECT}" \
                    -q normalsr \
-                   -l "ncpus=104,mem=500GB,walltime=24:00:00,storage=scratch/${PROJECT},wd" \
+                   -l "ncpus=104,mem=500GB,walltime=24:00:00,jobfs=2gb,storage=scratch/${PROJECT},wd" \
                    -j oe \
                    -o "${LOGS_DIR}/${label}_\${PBS_JOBID}.log" \
                    -v "DATASET=${dataset},THREADS=${t},LABEL=${label},PROJECT=${PROJECT},REPO_DIR=${REPO_DIR}" \
