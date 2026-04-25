@@ -2,6 +2,108 @@
 
 ---
 
+## 2026-04-25 (evening) — Setonix canonical rerun submitted; profiling hardened
+
+Follow-up to the earlier 2026-04-25 non-canonical-file containment entry.
+13 benchmark jobs + 1 generator job queued on Setonix (`pawsey1351`).
+
+### Scope
+
+`mega_dna.fa` **excluded** from this rerun — it was already canonical on
+Setonix (500 × 100 000, seed 303, sha256 verified). Only the two
+non-canonical datasets are being re-run:
+
+| Dataset               | Thread sweep                  | Jobs |
+|-----------------------|-------------------------------|:----:|
+| `large_modelfinder.fa`| 1, 4, 8, 16, 32, 64           |  6   |
+| `xlarge_mf.fa`        | 1, 4, 8, 16, 32, 64, 128      |  7   |
+
+### Job table
+
+| Job ID     | Role                   | State at submission | Dependency            |
+|------------|------------------------|:-------------------:|-----------------------|
+| `41931848` | `generate_datasets.sh` | PD (Priority)       | —                     |
+| `41931849` | `large_modelfinder` 1T | PD (Dependency)     | afterok:41931848      |
+| `41931850` | `large_modelfinder` 4T | PD (Dependency)     | afterok:41931848      |
+| `41931851` | `large_modelfinder` 8T | PD (Dependency)     | afterok:41931848      |
+| `41931852` | `large_modelfinder` 16T| PD (Dependency)     | afterok:41931848      |
+| `41931853` | `large_modelfinder` 32T| PD (Dependency)     | afterok:41931848      |
+| `41931854` | `large_modelfinder` 64T| PD (Dependency)     | afterok:41931848      |
+| `41931855` | `xlarge_mf` 1T         | PD (Dependency)     | afterok:41931848      |
+| `41931856` | `xlarge_mf` 4T         | PD (Dependency)     | afterok:41931848      |
+| `41931857` | `xlarge_mf` 8T         | PD (Dependency)     | afterok:41931848      |
+| `41931858` | `xlarge_mf` 16T        | PD (Dependency)     | afterok:41931848      |
+| `41931859` | `xlarge_mf` 32T        | PD (Dependency)     | afterok:41931848      |
+| `41931860` | `xlarge_mf` 64T        | PD (Dependency)     | afterok:41931848      |
+| `41931861` | `xlarge_mf` 128T       | PD (Dependency)     | afterok:41931848      |
+
+All 13 matrix jobs are held in **Dependency** state until `41931848`
+completes successfully (SLURM `--dependency=afterok`). If the generator
+exits non-zero (sha256 mismatch) the matrix jobs will never start.
+
+### SU estimate
+
+| Scenario | Estimate |
+|---|---:|
+| Previous status-quo (7200 s perf record cap, 1T included) | ~6.1 kSU |
+| **This rerun (1800 s cap, 1T skips perf record)** | **~3.0 kSU** |
+
+Savings from two profiling improvements applied before submission (see below).
+
+### Profiling improvements applied (`setonix-ci/`)
+
+**`run_mega_profile.sh`**
+
+| Change | Detail |
+|---|---|
+| Generalised dataset input | Removed `mega_dna.fa` hard-code; honours `DATASET=` env var; label/work-dir derive from dataset stem |
+| **sha256 pre-flight gate** | Job exits 3 if the alignment is not listed in `benchmarks/sha256sums.txt` or its hash mismatches. Prevents repeating the 2026-04-25 non-canonical regression |
+| `perf record` cap 7200 s → **1800 s** | 30 min at 99 Hz ≈ 178 k stacks — sufficient for hotspot ranking; overridable via `PERF_RECORD_MAX_S` |
+| **Auto-skip pass 5 on 1T** | Single-thread hotspot data is uninteresting; saves the full second IQ-TREE run on the longest-wall job. `SKIP_PERF_RECORD=0` to force-on |
+| `--call-graph fp` | Uses frame pointers (already compiled with `-fno-omit-frame-pointer`) instead of dwarf; ~5–10× cheaper unwinding |
+
+**`submit_matrix.sh`** (new file)
+
+| Feature | Detail |
+|---|---|
+| Login-node sha256 verify | Checks all present alignments before submitting any sbatch |
+| `--regen` flag | Submits `generate_datasets.sh` first and gates the matrix on `--dependency=afterok:<gen_jid>` |
+| `--dataset` / `--threads` | Restrict to a subset without editing the script |
+| `--dry-run` | Print sbatch invocations without submitting |
+| Default matrix | `large_modelfinder × {1,4,8,16,32,64}` + `xlarge_mf × {1,4,8,16,32,64,128}`; `mega_dna` explicitly excluded |
+
+Invocation used:
+```bash
+cd ~/setonix-iq/setonix-ci
+./submit_matrix.sh --regen
+```
+
+### Defence-in-depth (three layers)
+
+1. **`submit_matrix.sh`** — verifies sha256 on the login node before any
+   `sbatch`; `--regen` chains generator via `afterok` dependency.
+2. **`run_mega_profile.sh` pre-flight** — job exits 3 inside the compute
+   node if the alignment hash doesn't match the lockfile.
+3. **`generate_datasets.sh`** — already exits non-zero on sha256 mismatch
+   (added in the containment commit `b48973f`).
+
+### Follow-up
+
+- When all 13 run JSONs land in `logs/runs/`, run:
+  ```bash
+  python3 tools/harvest_scratch.py
+  python3 tools/normalize.py
+  python3 tools/validate.py
+  python3 tools/build.py
+  git add logs/runs/ web/data/
+  git commit -m "data(setonix): re-run against canonical benchmark files"
+  git push
+  ```
+- The dashboard `⚠ non-canonical file` badges will disappear once the
+  old non-canonical JSONs are replaced by runs with `dataset_canonical: true`.
+
+---
+
 ## 2026-04-25 — Non-canonical Setonix benchmark files discovered; re-run required
 
 ### Problem

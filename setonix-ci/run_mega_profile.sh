@@ -1,12 +1,23 @@
 #!/bin/bash
-# run_mega_profile.sh — Enhanced profiling of IQ-TREE on mega_dna.fa (500×100k, 48 MB).
+# run_mega_profile.sh — Enhanced profiling of IQ-TREE on Setonix.
 #
-# Designed for SLURM. One job per thread count. Captures CPU counters
-# (Zen 3 core-level), software-polled RSS/NUMA/IO/per-thread timeseries,
-# perf record call stacks, and a rich environment snapshot.
+# Designed for SLURM. One job per (dataset × thread-count). Captures CPU
+# counters (Zen 3 core-level), software-polled RSS/NUMA/IO/per-thread
+# timeseries, perf record call stacks, and a rich environment snapshot.
+#
+# Inputs (env vars, all overridable on the sbatch line):
+#   DATASET                — basename under ${BENCHMARKS}, e.g. xlarge_mf.fa
+#                            (default: mega_dna.fa for backward-compat)
+#   THREADS                — IQ-TREE -T argument (default: 128)
+#   PERF_RECORD_MAX_S      — cap on the perf-record second pass (default: 1800)
+#   SKIP_PERF_RECORD       — set to 1 to skip pass 5 entirely (auto-on for THREADS=1)
+#   SHA256_LOCKFILE        — defaults to ../benchmarks/sha256sums.txt;
+#                            if the dataset is listed there, its hash MUST match
+#                            or the job aborts (correctness gate against the
+#                            2026-04-25 non-canonical-file regression)
 #
 # Usage (sbatch):
-#   sbatch --export=ALL,THREADS=128 run_mega_profile.sh
+#   sbatch --export=ALL,DATASET=xlarge_mf.fa,THREADS=64 run_mega_profile.sh
 #
 # Or use submit_mega_batch.sh.
 #
@@ -24,20 +35,61 @@
 set -euo pipefail
 
 THREADS="${THREADS:-${1:-128}}"
-PROJECT_DIR="/scratch/pawsey1351/asamuel/iqtree3"
-BENCHMARKS="${PROJECT_DIR}/benchmarks"
-BUILD_DIR="${PROJECT_DIR}/build-profiling"
-PROFILE_ROOT="${PROJECT_DIR}/setonix-ci/profiles"
-DATASET="${BENCHMARKS}/mega_dna.fa"
+PROJECT_DIR="${PROJECT_DIR:-/scratch/pawsey1351/asamuel/iqtree3}"
+BENCHMARKS="${BENCHMARKS:-${PROJECT_DIR}/benchmarks}"
+BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build-profiling}"
+PROFILE_ROOT="${PROFILE_ROOT:-${PROJECT_DIR}/setonix-ci/profiles}"
+
+# Dataset selection — basename only (no path); resolved against ${BENCHMARKS}.
+# Default kept as mega_dna.fa for backward-compat with the original script name.
+DATASET_NAME="${DATASET:-mega_dna.fa}"
+DATASET="${BENCHMARKS}/${DATASET_NAME}"
+
 RUN_ID="${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
-LABEL="mega_${THREADS}t"
+# Label: stem of the dataset filename + thread count (e.g. xlarge_mf_64t).
+DATASET_STEM="${DATASET_NAME%.fa}"
+LABEL="${DATASET_STEM}_${THREADS}t"
 WORK_DIR="${PROFILE_ROOT}/${LABEL}_${RUN_ID}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. Pre-flight: dataset must exist AND its sha256 must match the canonical
+#    lockfile (if listed). This is the correctness gate that prevents a
+#    repeat of the 2026-04-25 non-canonical-file rerun.
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ ! -s "${DATASET}" ]]; then
+    echo "ERROR: dataset ${DATASET} not found or empty." >&2
+    echo "       Run setonix-ci/generate_datasets.sh first." >&2
+    exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHA256_LOCKFILE="${SHA256_LOCKFILE:-${SCRIPT_DIR}/../benchmarks/sha256sums.txt}"
+if [[ -s "${SHA256_LOCKFILE}" ]]; then
+    expected="$(awk -v f="${DATASET_NAME}" '$2==f {print $1}' "${SHA256_LOCKFILE}")"
+    if [[ -n "${expected}" ]]; then
+        actual="$(sha256sum "${DATASET}" | awk '{print $1}')"
+        if [[ "${actual}" != "${expected}" ]]; then
+            echo "ERROR: sha256 mismatch for ${DATASET_NAME}" >&2
+            echo "       expected: ${expected}" >&2
+            echo "       actual:   ${actual}"   >&2
+            echo "       Refusing to run on a non-canonical alignment." >&2
+            echo "       Regenerate via setonix-ci/generate_datasets.sh." >&2
+            exit 3
+        fi
+        echo "[preflight] ${DATASET_NAME} sha256 OK (canonical)."
+    else
+        echo "[preflight] ${DATASET_NAME} not in lockfile — proceeding without hash gate."
+    fi
+else
+    echo "[preflight] WARNING: no sha256 lockfile at ${SHA256_LOCKFILE}; skipping hash gate."
+fi
 
 mkdir -p "${WORK_DIR}"
 cd "${WORK_DIR}"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Enhanced mega_dna.fa profiling"
+echo "║  IQ-TREE profiling (Setonix)"
+echo "║  Dataset:   ${DATASET_NAME}"
 echo "║  Threads:   ${THREADS}"
 echo "║  Run ID:    ${RUN_ID}"
 echo "║  Work dir:  ${WORK_DIR}"
@@ -305,17 +357,28 @@ echo "========================"
 # Skipped — the counter events above already include cache + branch data.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. perf record for hotspots + folded stacks
+# 5. perf record for hotspots + folded stacks (skipped on 1T runs by default —
+#    single-thread hotspot data is uninteresting and the second IQ-TREE pass
+#    dominates SU spend on 1T jobs).
 # ─────────────────────────────────────────────────────────────────────────────
-if [[ "${IQTREE_RC}" -eq 0 ]]; then
-    echo "[$(date +%H:%M:%S)] Starting perf record (call-graph)..."
+if [[ "${SKIP_PERF_RECORD:-0}" != "1" && "${THREADS}" -eq 1 ]]; then
+    echo "[$(date +%H:%M:%S)] Skipping perf record on 1T job (auto; set SKIP_PERF_RECORD=0 force-on with caution)."
+    SKIP_PERF_RECORD=1
+fi
+
+if [[ "${IQTREE_RC}" -eq 0 && "${SKIP_PERF_RECORD:-0}" != "1" ]]; then
+    echo "[$(date +%H:%M:%S)] Starting perf record (call-graph fp)..."
     PERF_DATA="${WORK_DIR}/perf.data"
     # Bound the perf-record re-run so it cannot consume the remaining SLURM
-    # wall-time and starve step 6 (profile_meta.json). At 99 Hz, 2 h of
-    # samples is > 700 k stacks — more than enough for hotspot ranking.
-    PERF_RECORD_MAX_S="${PERF_RECORD_MAX_S:-7200}"
+    # wall-time and starve step 6 (profile_meta.json). At 99 Hz, 30 min ≈
+    # 178 k stacks — ample for hotspot ranking. (Was 7200s; cut to 1800s
+    # 2026-04-25 to halve rerun SU spend.)
+    PERF_RECORD_MAX_S="${PERF_RECORD_MAX_S:-1800}"
+    # --call-graph fp uses frame pointers (built in via -fno-omit-frame-pointer)
+    # which is ~5–10× cheaper than dwarf unwinding and matches how the binary
+    # was compiled.
     timeout --preserve-status "${PERF_RECORD_MAX_S}" \
-        perf record -g -F 99 -o "${PERF_DATA}" \
+        perf record --call-graph fp -F 99 -o "${PERF_DATA}" \
         "${BUILD_DIR}/iqtree3" -s "${DATASET}" -T "${THREADS}" -seed 1 \
         -mset GTR,HKY,K80 \
         --prefix "${WORK_DIR}/iqtree_flame" > "${WORK_DIR}/iqtree_flame.log" 2>&1 || true
