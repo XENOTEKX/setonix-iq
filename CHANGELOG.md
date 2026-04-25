@@ -24,9 +24,21 @@ Status 0. Run records added to `logs/runs/`:
 
 Dashboard rebuilt (`normalize.py` → `build.py`), 33 runs total.
 
-**Outstanding:** Setonix `xlarge_mf.fa` harvest (jobs 41931855–41931861) still
-pending — requires `harvest_scratch.py` run on Setonix to pull canonical
-`xlarge_mf.fa` baseline runs (1–128T) into the repo.
+**Next action — Setonix `xlarge_mf.fa` harvest (pending):**
+Jobs 41931855–41931861 completed on Setonix but results were never pulled into
+the repo. Run the following on Setonix (`setonix.pawsey.org.au`) to restore the
+7-point `xlarge_mf.fa` baseline series (1, 4, 8, 16, 32, 64, 128T):
+
+```bash
+cd ~/setonix-iq
+/bin/python3.11 tools/harvest_scratch.py
+/bin/python3.11 tools/normalize.py
+/bin/python3.11 tools/validate.py
+/bin/python3.11 tools/build.py
+git add logs/runs/ web/data/ docs/
+git commit -m "data(setonix): harvest xlarge_mf.fa canonical runs (41931855-41931861)"
+git push
+```
 
 ---
 
