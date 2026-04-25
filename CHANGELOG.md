@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-04-25 (night) — Pilot/stub runs archived; dashboard cleaned
+
+15 run records moved to `logs/runs/_archive/` to remove confusing or
+invalid data from metric cards. These files are preserved for audit but no
+longer rendered by the dashboard.
+
+### What was archived and why
+
+| Group | Files | Reason |
+|---|---|---|
+| Gadi pilot (wrong-dimension dataset) | `gadi_large_modelfinder_64t_sr`, `gadi_xlarge_mf_{16,26,52,104}t_sr` | Dataset field = `*_gadi_pilot.fa` — different dimensions from Setonix; no valid cross-platform comparison |
+| Gadi zero-data stubs | `gadi_mega_dna_{13,26}t_sr` | `pass=False`, `total_time=0` — IQ-TREE never ran (old PMU bug era; non-standard thread counts 13T/26T) |
+| Setonix-only unmatched | `xlarge_mf_{1,4,8,16,32,64,128}t_baseline` | Dataset = `xlarge_dna.fa` — no Gadi counterpart; different file from canonical `xlarge_mf.fa` |
+| Setonix-only unmatched | `2026-04-18_201515` | Dataset = `turtle.fa` — smoke-test run only; no Gadi counterpart |
+
+**Total archived: 15 files.**
+
+### Remaining active runs (25 files, 0 errors)
+
+| Dataset | Platform | Thread configs | Status |
+|---|---|---|---|
+| `large_modelfinder.fa` | Setonix | 1, 4, 8, 16, 32, 64 × 2 run types | ✅ valid |
+| `mega_dna.fa` | Setonix | 16, 32, 64, 128 | ✅ valid |
+| `large_modelfinder.fa` | Gadi | 1, 4, 8, 16, 32 | ✅ valid (64T in-queue) |
+| `xlarge_mf.fa` | Gadi | 1, 4, 8 | ✅ valid (32T/64T running) |
+| `mega_dna.fa` | Gadi | 16 | ✅ valid (32T/64T/104T queued) |
+
+`_archive/` is tracked in git but excluded from `normalize.py` (non-recursive `glob("*.json")` only reads the parent directory).
+
+---
+
 ## 2026-04-25 (night) — Setonix canonical rerun **completed**; results harvested
 
 All 13 matrix jobs from the earlier evening submission completed successfully.
