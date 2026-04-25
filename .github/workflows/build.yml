@@ -10,14 +10,12 @@ on:
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
+# Minimal top-level permissions; job overrides as needed.
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 concurrency:
-  # Cancel any in-flight build when a newer commit lands so deploys aren't
-  # queued behind a stale build. Deploy step itself guards the live site.
+  # Cancel any in-flight run when a newer commit lands — no stale deploys.
   group: pages-${{ github.ref }}
   cancel-in-progress: true
 
@@ -25,21 +23,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    outputs:
-      docs-dir: docs
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: tools/requirements.txt
+          fetch-depth: 1   # shallow clone — history not needed for build
+
+      # uv is ~10–100× faster than pip; caches the uv package store.
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r tools/requirements.txt
+        run: uv pip install --system -r tools/requirements.txt
 
       - name: Validate data (gate)
         run: python3 tools/validate.py
@@ -49,9 +53,9 @@ jobs:
 
       - name: Sanity-check output
         run: |
-          test -f docs/index.html || { echo "::error::docs/index.html missing"; exit 1; }
-          test -f docs/data/runs.index.json || { echo "::error::runs.index.json missing"; exit 1; }
-          test -f docs/data/manifest.json || { echo "::error::manifest.json missing"; exit 1; }
+          test -f docs/index.html        || { echo "::error::docs/index.html missing";       exit 1; }
+          test -f docs/data/runs.index.json || { echo "::error::runs.index.json missing";    exit 1; }
+          test -f docs/data/manifest.json   || { echo "::error::manifest.json missing";      exit 1; }
           runs_count=$(python3 -c "import json; print(len(json.load(open('docs/data/runs.index.json'))))")
           echo "Dashboard built with $runs_count runs"
 
@@ -60,13 +64,6 @@ jobs:
         with:
           path: docs
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
