@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-04-25 (late night) — `xlarge_mf` Setonix series restored; CI workflow optimised
+
+### `xlarge_mf` archive regression fixed (`663916d`)
+
+The Gadi archive commit (`4bd3c35`) moved all 7 `xlarge_mf_*t_baseline.json`
+files to `logs/runs/_archive/` when they still carried the non-canonical
+`xlarge_dna.fa` identity. The subsequent harvest fix (`d259a46`) correctly
+rewrote those files with canonical data — but wrote them back into `_archive/`
+(the directory they lived in). `normalize.py` uses a non-recursive glob
+(`logs/runs/*.json`) and never reads `_archive/`, so the series was silently
+absent from every dashboard build.
+
+**Fix**: moved the 7 files from `_archive/` → `logs/runs/` (they are now
+canonical — `dataset=xlarge_mf.fa`, sha256 OK, SLURM 41931855–41931861).
+Pipeline rebuilt: **26 runs, 0 errors**. `Setonix · xlarge_mf.fa` now
+renders in Thread Scaling, Parallel Efficiency, IPC vs Threads, and
+Performance Matrix charts.
+
+### CI workflow optimised (`.github/workflows/build.yml`, `0a90682`, `1481f1c`)
+
+| Change | Benefit |
+|---|---|
+| Merged two-job `build` + `deploy` into single job | ~25 s saved (eliminates second runner startup) |
+| Replaced `pip` with `uv` (`astral-sh/setup-uv@v4`, venv + `uv run`) | 10–100× faster dep install; store cached across runs |
+| `fetch-depth: 1` shallow clone | Saves checkout time on long history |
+| Job-level `pages: write` + `id-token: write` only | Least-privilege; removed unused `contents: write` |
+
+`--system` flag removed after Debian 3.12's externally-managed-environment
+guard rejected it; switched to `uv venv` + `uv pip install` + `uv run`.
+
+---
+
 ## 2026-04-25 (night, corrected) — `xlarge_mf.fa` canonical harvest fixed; all 13 runs now valid
 
 A post-harvest audit on Gadi revealed that all 7 `xlarge_mf_*t_baseline.json`
