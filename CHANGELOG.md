@@ -2,6 +2,126 @@
 
 ---
 
+## 2026-04-26 (methodology audit) — ModelFinder scope discrepancy identified; report corrected
+
+### Finding: Setonix and Gadi did not run equivalent computational tasks on two of three datasets
+
+Post-collection audit of all 33 run JSON files revealed two compounding issues that invalidate
+the cross-platform log-likelihood comparison for `large_modelfinder.fa` and `mega_dna.fa`:
+
+#### Issue 1 - Restricted ModelFinder on Setonix (`-mset GTR,HKY,K80`)
+All Setonix baseline jobs were submitted with `-mset GTR,HKY,K80` in
+`setonix-ci/submit_matrix.sh`, restricting ModelFinder to 3 base substitution matrices
+(~21 variants with rate categories). Gadi runs had no `-mset` flag and used the full default
+search (~286 DNA model variants). As a result:
+
+| Dataset | Setonix model | Gadi model | lnL gap |
+|---|---|---|---|
+| `large_modelfinder.fa` | HKY+F+G4 | GTR+F+G4 | 306,201 units |
+| `xlarge_mf.fa` | GTR+F+G4 | GTR+F+R4 | ~4 units (acceptable) |
+| `mega_dna.fa` | HKY+F+ASC+R5 | GTR+F+R4 | ~1,180,000 units |
+
+#### Issue 2 - Alignment file sha256 mismatch for two datasets
+The sha256 checksums recorded in the Setonix JSON `dataset_info` fields do not match the
+canonical hashes in `benchmarks/sha256sums.txt`:
+
+| Dataset | Setonix sha256 | Canonical sha256 | Status |
+|---|---|---|---|
+| `large_modelfinder.fa` | `52849f82...` | `73908728...` | **MISMATCH** |
+| `xlarge_mf.fa` | `66eaf64b...` | `66eaf64b...` | OK |
+| `mega_dna.fa` | `94d7d38d...` | `0c8af2d6...` | **MISMATCH** |
+
+The Setonix `mega_dna.fa` has 0 constant sites (variable-sites-only alignment), which causes
+IQ-TREE to correctly apply `+ASC` ascertainment bias correction. The Gadi canonical file
+contains constant sites; the two likelihood functions use different normalisations and are
+mathematically non-comparable.
+
+#### What remains valid
+- **All within-platform scaling analyses** (§5): self-consistent per platform regardless of
+  model choice.
+- **IPC collapse, OpenMP barrier storm, cache findings** (§6, §7, §8): hardware-counter
+  based; independent of model selection.
+- **`xlarge_mf.fa` cross-platform comparison** (§4): same canonical file, both platforms
+  selected GTR, lnL diff <4 units. The confirmed **7.3x Gadi advantage at 64T** stands.
+- **GPU porting motivation** (§9, §10): bottleneck is in SIMD kernel structure, not model
+  choice.
+
+#### What is NOT valid until re-runs complete
+- Cross-platform speed ratios for `large_modelfinder.fa` (Setonix HKY vs Gadi GTR, different
+  files).
+- Cross-platform speed ratios for `mega_dna.fa` (different files, ASC vs non-ASC).
+- The previous §1 claim "log-likelihoods match Setonix <-> Gadi to within FMA-contraction
+  tolerance on every shared dataset" - **corrected** to apply only to `xlarge_mf.fa`.
+
+### Report corrections applied (2026-04-26)
+
+- **§1 status callout**: Removed false lnL-agreement claim; replaced with accurate statement
+  scoping numerical correctness to `xlarge_mf.fa` only.
+- **§2.2 Datasets table**: Restructured to show per-platform model selection (Gadi full MF
+  vs Setonix `-mset`); updated lnL column to show Gadi values; added `†` markers and
+  corrected notes.
+- **§2.4 Platform command-line differences** (new section): Explicit side-by-side table of
+  Setonix vs Gadi IQ-TREE invocations; disclosure of `-mset` asymmetry.
+- **§4 cross-platform table**: Added `†` markers to `large_modelfinder.fa` and `mega_dna.fa`
+  rows; updated caption and added extended footnote explaining the caveat.
+- **§4 Future Work callout** (new): Documents the 3-step correction plan and estimated
+  compute cost (6,500-9,700 additional CPU-hours on Setonix `work` partition).
+- **§12.2 Methodology footnotes**: Added explicit bullet documenting the model scope
+  discrepancy, per-dataset lnL gaps, and the `+ASC` normalisation incompatibility.
+
+### Pending corrected re-runs
+
+The following work is required to make `large_modelfinder.fa` and `mega_dna.fa`
+cross-platform comparisons scientifically valid:
+
+1. Re-generate canonical alignment files on Setonix using `gadi-ci/generate_datasets.sh`
+   (seeds 101 and 303); verify sha256 against `benchmarks/sha256sums.txt`.
+2. Remove `-mset GTR,HKY,K80` from `setonix-ci/submit_matrix.sh`.
+3. Re-submit 10 jobs (6 x `large_modelfinder` 1-64T; 4 x `mega_dna` 16-128T).
+   Estimated cost: **6,500-9,700 CPU-hours** (50-76 node-hours) on the Setonix `work`
+   partition, dominated by `mega_dna` (estimated 10-19 h wall per thread count with
+   full ModelFinder). Resource allocation review recommended before proceeding.
+
+---
+
+## 2026-04-26 (final) — `Profiling_Report.html` finalised against 33-run dataset
+
+### Report rebuilt against complete cross-platform thread sweep
+
+`Profiling_Report.html` refreshed to reflect the full 33-run dataset (Setonix 1–128T,
+Gadi 1–104T, three datasets). Embedded `RUNS = [...]` literal regenerated; all four
+new Gadi runs (`mega_dna` 64T/104T, `large_modelfinder` 64T, `xlarge_mf` 104T) added
+to the appendix table and to the Section 5 scaling analysis.
+
+### Section-level updates
+
+- §1 status callout flipped from "interim — more runs in flight" to "final — 33 runs".
+- §4 cross-platform table extended with Gadi 64T `large_modelfinder`, Gadi 104T
+  `xlarge_mf` + `mega_dna`, Setonix 128T `xlarge_mf`, and Setonix 64T/128T `mega_dna`
+  rows; new note on per-node maximum-thread comparison.
+- §4 visual bar chart extended with Setonix 128T (6 516 s) and Gadi 104T (1 112 s) rows.
+- §5.2 Gadi `large_modelfinder` table extended to 64T (regression: 8.85× vs 32T's 9.86×).
+- §5.2 added Gadi `xlarge_mf` and `mega_dna` scaling tables — both regress past 64T.
+- New §5.3 "Saturation observed on both platforms" callout: minima are now established
+  *below* the per-node maximum on every dataset on both clusters, making the GPU-offload
+  motivation cluster-independent.
+- §6 IPC table expanded to 14 rows: Setonix 64T/128T xlarge + 64T/128T mega; Gadi 32T/64T
+  large_mf, 104T xlarge, 64T/104T mega — covers the full IPC-collapse profile.
+- Appendix and footer counts updated to "33 runs".
+
+### Known issues from previous entry resolved
+
+- **Em dashes**: globally swept (`&mdash;` and U+2014 → `-` with surrounding spaces preserved).
+- **Bar chart colours in print/PDF**: `.fill.setonix`, `.fill.gadi`, `.fill.alt`, `.fill.bad`
+  converted from `linear-gradient` to solid `background-color`. `body`, `.bar .fill`,
+  `.bar .track`, and `.legend .sw` carry `print-color-adjust: exact` /
+  `-webkit-print-color-adjust: exact`. `@media print` block overrides every fill class with
+  `!important` and `background-image:none`. Verified the Setonix-red / Gadi-green
+  distinction reproduces in Chrome "Save as PDF" without requiring the user to enable
+  "Background graphics" in the print dialog.
+
+---
+
 ## 2026-04-26 (evening) — Setonix `xlarge_mf.fa` canonical runs confirmed; full cross-platform coverage
 
 ### Setonix xlarge_mf.fa — 7-point baseline series verified canonical
@@ -59,6 +179,46 @@ Status 0. Run records added to `logs/runs/`:
 | `mega_dna.fa` | 16, 32, **64, 104** ✅ |
 
 Dashboard rebuilt (`normalize.py` → `build.py`), 33 runs total.
+
+---
+
+## 2026-04-26 — Profiling_Report.html committed
+
+### Single-file scientific report drafted
+
+`Profiling_Report.html` produced at the repository root: 12 sections covering executive summary,
+methodology, hotspot anatomy, cross-platform comparison, scaling analysis, IPC collapse, OpenMP
+barrier storm, memory hierarchy, deep-profile gap, and a full GPU porting plan (CUDA on Gadi /
+ROCm on Setonix) with milestones M1–M7, risks, and success criteria. Self-contained HTML
+(Chart.js via CDN; no other deps); embeds all normalised run records as a JSON literal so the
+appendix table renders without the dashboard.
+
+### Status: report ready for finalisation
+
+All previously-pending Gadi jobs have completed and been harvested (see entries above).
+The report was initially written against 29 runs; it must be refreshed against the full
+33-run dataset before being considered final:
+
+**Action:** rerun the data-extraction snippet to refresh the embedded `RUNS = [...]` literal
+in `Profiling_Report.html`, re-render the §5 scaling chart numbers, update the appendix table,
+and remove the Section 1 "Status: interim" callout, replacing it with a "Final — 33 runs" stamp.
+
+### Known issues to fix before final report
+
+- **Em dashes** — replace all `&mdash;` / `—` typography with plain hyphens or en-dashes
+  where appropriate so they render consistently in PDF viewers and across all fonts.
+- **Bar chart colours in print/PDF** — browser print engines strip CSS `background` gradients
+  by default (Chrome's "Background graphics" flag). Convert bar fills to solid
+  `background-color` + add `print-color-adjust: exact` / `-webkit-print-color-adjust: exact`
+  on `.fill`, `.track`, and `.legend .sw` so the Setonix (red) / Gadi (green) distinction
+  visible on screen is faithfully reproduced in the downloaded PDF without requiring the user
+  to enable "Background graphics" in the print dialog.
+
+### Companion artefact
+
+`context.md` at the repository root: evidence notebook backing every claim in
+`Profiling_Report.html`. Kept under version control so the report can be regenerated from the
+same numerical scaffold.
 
 ---
 
