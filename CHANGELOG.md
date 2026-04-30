@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #6) — Setonix `xlarge_mf` `_smtoff_pin` matrix harvested (7 of 8 points)
+
+### What was done
+
+Jobs `42181136`–`42181142` (4T–128T) completed on Setonix. Profiling data was
+harvested into canonical run files named `Setonix_xlarge_mf_{T}T.json` following
+the `{Platform}_{Dataset}_{Threads}` convention established in follow-up #3.
+Job `42181135` (1T, `nid001938`) is still running (~21 h remaining) and will be
+harvested separately once it exits the queue.
+
+### Corpus status
+
+| Threads | SLURM Job  | Host       | Wall time  | IPC    | Status   |
+|--------:|------------|------------|------------|--------|----------|
+|    1T   | 42181135   | nid001938  | —          | —      | **RUNNING** (~21 h left) |
+|    4T   | 42181136   | nid001977  | 1h 13m 55s | 1.8037 | ✅ Done  |
+|    8T   | 42181137   | nid001987  | 1h 04m 14s | 1.0622 | ✅ Done  |
+|   16T   | 42181138   | nid001745  | 0h 59m 40s | 0.6342 | ✅ Done  |
+|   32T   | 42181139   | nid001747  | 0h 55m 01s | 0.3487 | ✅ Done  |
+|   64T   | 42181140   | nid001749  | 0h 59m 07s | 0.1742 | ✅ Done  |
+|  104T   | 42181141   | nid001750  | 1h 54m 06s | 0.0673 | ✅ Done  |
+|  128T   | 42181142   | nid001755  | 2h 01m 01s | 0.0572 | ✅ Done  |
+
+### IPC validity
+
+This is the **first `xlarge_mf` corpus with physically valid perf counter data**.
+The prior two runs (job batches `41703864` and `41931855`–`41931861`) had
+`perf stat` wrapping `srun` on the login node, so counter readings described the
+~ms launcher process rather than the hours-long IQ-TREE worker. The fix applied
+before submission (follow-up #2) places `perf stat` *inside* the `srun` step on
+the compute node. The readings above (task-clock tracked at ~3.1 GHz, billions
+of instructions sampled, sensible stall rates) confirm the fix is working.
+
+### IPC scaling interpretation
+
+IPC drops from **1.80 at 4T → 0.35 at 32T → 0.06 at 128T** — a 30× collapse
+across the thread sweep. This mirrors the `large_modelfinder` corpus and confirms
+the same root cause: at 32T+ all 8 NUMA/CCX domains on the EPYC 7763 are
+active, memory bandwidth saturates, and threads stall waiting for cache lines.
+The best wall time (32T, 55 min) is where latency hides best behind the working
+set that still fits in the aggregate L3 across the first socket's 4 CCX domains.
+At 104T–128T the second socket is drawn in but gains only ~300 MB/s of extra
+bandwidth while adding significant NUMA latency, producing a 2× wall-time
+regression vs the 32T optimum.
+
+### Dashboard rendering
+
+All 7 harvested runs appear in `runs.index.json` and will render on every graph
+card (scaling chart, IPC-scaling chart, performance-matrix, environment page,
+profiling page). The `speedup` field is temporarily computed against the archived
+`xlarge_mf_1t_baseline_smton` run (wall = 10554 s) as a proxy until job 42181135
+completes and provides the canonical 1T baseline. All speedup values will be
+recalculated automatically on the next `build.py` run after harvest.
+
+### Remaining work
+
+- ⏳ **Harvest `Setonix_xlarge_mf_1T`** once job 42181135 exits the queue.
+  Rebuild + validate + push so speedup figures are anchored to the canonical
+  `_smtoff_pin` baseline rather than the archived SMT-on proxy.
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #5b) — Bootstrap assembler fix (binutils 2.30 → 2.44)
 
 ### Symptom
