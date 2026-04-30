@@ -76,12 +76,45 @@ invocation *inside* the srun step (i.e. `srun ... bash -c 'perf stat -o
 will be applied before the Gadi `_sr_gcc_pin` matrix is submitted so
 the two clusters' counter records remain symmetric.
 
-### Parity verification — `xlarge_mf.fa` cross-platform matrix (scheduled)
+### Parity verification — `xlarge_mf.fa` cross-platform matrix (submitted)
 
 Same audit table re-applied to the second canonical dataset. The
-matrix is committed but **not yet submitted** on either cluster (it
-runs after the Setonix `large_modelfinder` corpus is reviewed for
-correctness — current entry).
+Setonix matrix was **submitted on 2026-04-30** as SLURM jobs
+`42181135`–`42181142` (8 jobs: 7 Gadi-overlapping thread points + the
+Setonix-only 128T). The Gadi `_sr_gcc_pin` counterpart is queued for
+submission once Gadi access is available.
+
+| Threads | Setonix jobid | Status (at submit) |
+|--------:|---------------|--------------------|
+|    1    | 42181135      | PENDING            |
+|    4    | 42181136      | PENDING            |
+|    8    | 42181137      | PENDING            |
+|   16    | 42181138      | PENDING            |
+|   32    | 42181139      | PENDING            |
+|   64    | 42181140      | PENDING            |
+|  104    | 42181141      | PENDING            |
+|  128    | 42181142      | PENDING (Setonix-only — excluded from cross-platform deltas) |
+
+Pre-submit sha256 lockfile gate: all three canonical alignments
+verified OK against `benchmarks/sha256sums.txt`
+(`large_modelfinder.fa`, `xlarge_mf.fa`, `mega_dna.fa`).
+
+### perf-stat-wraps-srun fix (applied before xlarge_mf submission)
+
+`setonix-ci/run_mega_profile.sh` previously wrapped `srun` with
+`perf stat`, so the counters described the launcher process (ms of
+task-clock) rather than the IQ-TREE worker (hours of wall-clock).
+Reordered to `srun … bash -c "perf stat … numactl … iqtree3 …"` so
+the counters now run *inside* the step, on the compute node, attached
+to the actual worker. The worker-PID lookup was also rewritten to
+poll `pgrep -f "iqtree3 -s ${DATASET}"` for up to 30 s rather than
+relying on the (now-broken) `pgrep -P ${IQTREE_PID}` parent-relationship
+walk. The xlarge_mf matrix above is the first corpus to use the fix —
+its IPC / cycles / cache-miss rates will be physically valid (no
+schema-cap violation) and directly comparable to the upcoming Gadi
+`_sr_gcc_pin` corpus.
+
+
 
 `xlarge_mf.fa` parameters: 200 taxa × 100 000 bp DNA, GTR+G4 simulated
 with seed 202, sha256 lockfile-pinned in `benchmarks/sha256sums.txt`.

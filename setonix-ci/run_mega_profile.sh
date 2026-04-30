@@ -357,21 +357,35 @@ fi
 # Launch IQ-TREE under perf stat in background so the sampler can attach.
 # 2026-04-30: dropped `-mset GTR,HKY,K80` so ModelFinder runs the full
 # default search — matches Gadi (see 2026-04-26 audit).
-perf stat -e "${PERF_EVENTS}" \
-    -o "${PERF_STAT_TXT}" \
-    "${SRUN[@]}" "${NUMACTL[@]}" \
-    "${BUILD_DIR}/iqtree3" -s "${DATASET}" -T "${THREADS}" -seed 1 \
-    --prefix "${WORK_DIR}/iqtree_run" > "${IQTREE_LOG}" 2>&1 &
+# 2026-04-30 (follow-up #2): perf stat must run *inside* the srun step,
+# wrapping iqtree3 directly on the compute node.  Previously the order
+# was `perf stat … srun … iqtree3`, which made perf measure the srun
+# launcher (~91 ms task-clock vs hours of wall-time), producing
+# physically meaningless IPC/cycles/cache-miss values that violated the
+# run-record schema (`IPC > 10`).  Now the order is `srun … perf stat
+# … iqtree3`, so the counters describe the worker process.
+NUMACTL_INNER=""
+if command -v numactl >/dev/null 2>&1; then
+    NUMACTL_INNER="numactl --localalloc"
+fi
+INNER_CMD="perf stat -e ${PERF_EVENTS} -o ${PERF_STAT_TXT} ${NUMACTL_INNER} ${BUILD_DIR}/iqtree3 -s ${DATASET} -T ${THREADS} -seed 1 --prefix ${WORK_DIR}/iqtree_run"
+"${SRUN[@]}" bash -c "${INNER_CMD}" > "${IQTREE_LOG}" 2>&1 &
 IQTREE_PID=$!
 
-# perf stat wraps iqtree, so the inner PID we want to sample is the perf child.
-# Walk the children to find the iqtree3 PID.
-sleep 5
-INNER_PID=$(pgrep -P "${IQTREE_PID}" -f iqtree3 | head -1 || true)
+# IQTREE_PID is the local srun PID; the actual iqtree3 worker may live on
+# a different node when --nodes>1, but for our 1-node allocations it is
+# co-located.  Poll for the iqtree3 process by name (give it up to 30 s
+# to spawn through srun → bash → perf stat → numactl → iqtree3).
+INNER_PID=""
+for _attempt in $(seq 1 30); do
+    INNER_PID="$(pgrep -f "iqtree3 -s ${DATASET}" | head -1 || true)"
+    [[ -n "${INNER_PID}" ]] && break
+    sleep 1
+done
 if [[ -z "${INNER_PID:-}" ]]; then
     INNER_PID="${IQTREE_PID}"
 fi
-echo "  → perf pid=${IQTREE_PID} inner iqtree pid=${INNER_PID}"
+echo "  → srun pid=${IQTREE_PID} inner iqtree pid=${INNER_PID}"
 
 # Start the sampler (10s interval)
 python3 "${SAMPLER_PY}" "${INNER_PID}" "${SAMPLE_JSONL}" 10 &
