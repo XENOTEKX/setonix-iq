@@ -2,6 +2,35 @@
 
 ---
 
+## Critical & Pending Tasks
+
+### 🔴 Harvest — blocking cross-platform analysis
+
+| Priority | Task | Blocker |
+|----------|------|---------|
+| **CRITICAL** | Harvest Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204–167507210**) once complete → commit JSON to `logs/runs/` | First parity-matched gcc vs gcc Setonix/Gadi comparison |
+| **CRITICAL** | Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures | All `xlarge_mf` speedup ratios are currently anchored to an archived run |
+| **HIGH** | Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104) | Cross-platform comparison on the 200×100k dataset |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
+
+### 🟠 Dashboard fixes — actively misleading metrics
+
+| Priority | Task | Detail |
+|----------|------|--------|
+| **CRITICAL** | Fix `cache-miss-rate` dashboard label/chart — currently shows **L2 miss rate** for Setonix and **LLC miss rate** for Gadi on the same axis | See follow-up #9: `cache-references` is L2-domain on AMD Zen3, L3-domain (LONGEST_LAT_CACHE) on Intel SPR — not comparable |
+| **HIGH** | Add LLC/L3 events to Setonix `PERF_EVENTS` in `setonix-ci/run_mega_profile.sh` | Candidates: `amd_l3/requests/`, `amd_l3/l3_misses/`, or raw events `r4000040`/`r4000041` (Zen3) |
+| **HIGH** | Add `stalled-cycles-backend` to Gadi event list (`gadi-ci/run_profiling.sh`) | Currently absent; needed for frontend vs backend stall comparison |
+| **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
+| **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
+
+### 🟡 Source audit
+
+| Priority | Task | Detail |
+|----------|------|--------|
+| **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
 ## 2026-04-30 (dashboard UX, follow-up #10) — Expanded-chart filter bar; legend legibility fix
 
 ### Expanded chart filters
@@ -92,7 +121,7 @@ matching the build workflow. Reduces validate job time by ~30 s on a cold runner
 
 ---
 
-**Priority investigation before any cross-platform conclusion is drawn.**
+## 2026-04-30 (counter-level audit, follow-up #9) — IPC ceiling mismatch, cache-miss-rate level mismatch, stall-counter semantics
 
 ### IPC — definition and comparability
 
