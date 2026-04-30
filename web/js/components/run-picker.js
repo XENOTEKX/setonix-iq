@@ -32,6 +32,10 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
   let query = '';
   let activeIdx = 0;
   let open = false;
+  // Caret position to restore after each render() (rebuilding innerHTML
+  // destroys the live input element, so we must re-focus + restore caret
+  // on the freshly-rendered input or typing drops every other keystroke).
+  let savedCaret = 0;
 
   const root = document.createElement('div');
   root.className = 'run-picker';
@@ -103,10 +107,26 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
 
     const input = root.querySelector('.rp-search input');
     if (input) {
-      input.addEventListener('input', (e) => { query = e.target.value; activeIdx = 0; render(); input.focus(); });
+      // If the panel is open, restore focus + caret to the search input.
+      // The previous input element is destroyed each time render() rebuilds
+      // root.innerHTML, so without this the user loses focus after every
+      // keystroke ("can only type one character at a time"). We restore the
+      // caret to the end (or to the saved offset, when available) so typing
+      // continues seamlessly.
+      if (open && document.activeElement !== input) {
+        const caret = (typeof savedCaret === 'number') ? savedCaret : query.length;
+        input.focus();
+        try { input.setSelectionRange(caret, caret); } catch (_) { /* readonly types */ }
+      }
+      input.addEventListener('input', (e) => {
+        query = e.target.value;
+        savedCaret = e.target.selectionStart ?? query.length;
+        activeIdx = 0;
+        render();
+      });
       input.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, filtered.length - 1); render(); root.querySelector('.rp-search input')?.focus(); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); render(); root.querySelector('.rp-search input')?.focus(); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, filtered.length - 1); render(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); render(); }
         else if (e.key === 'Enter') { e.preventDefault(); pick(filtered[activeIdx]); }
         else if (e.key === 'Escape') { open = false; render(); }
       });
