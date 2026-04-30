@@ -20,16 +20,23 @@ export function render(canvas, runsIndex) {
   if (existing) existing.destroy();
 
   const byKey = new Map();
+  const byKeyNC = new Map(); // non_canonical reference series
   for (const r of runsIndex) {
     if (!r.dataset || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
     if (isPilot(r.dataset_short) || isPilot(r.dataset)) continue;
     if (r.archived) continue;
     const plat = platformOf(r);
     const ds = r.dataset_short || r.dataset;
-    // Platform goes first in the label so legend entries group by platform.
-    const key = `${platformLabel(plat)} · ${ds}`;
-    if (!byKey.has(key)) byKey.set(key, { plat, ds, points: [] });
-    byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
+    if (r.non_canonical) {
+      const key = `${platformLabel(plat)} · ${ds} · ICX (ref)`;
+      if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds, points: [] });
+      byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
+    } else {
+      // Platform goes first in the label so legend entries group by platform.
+      const key = `${platformLabel(plat)} · ${ds}`;
+      if (!byKey.has(key)) byKey.set(key, { plat, ds, points: [] });
+      byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
+    }
   }
 
   const datasets = [];
@@ -49,6 +56,23 @@ export function render(canvas, runsIndex) {
       tension: 0.2,
       pointRadius: 4,
       pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
+    });
+  }
+  // Non-canonical reference series — shown as faded dotted lines
+  const orderedNC = [...byKeyNC.entries()].sort(([, a], [, b]) =>
+    a.plat.localeCompare(b.plat) || a.ds.localeCompare(b.ds));
+  for (const [label, { plat, ds, points }] of orderedNC) {
+    points.sort((a, b) => a.x - b.x);
+    datasets.push({
+      label,
+      data: points,
+      borderColor: platformColour(plat, ds, 0.45),
+      backgroundColor: platformColour(plat, ds, 0.1),
+      borderDash: [3, 5],
+      tension: 0.2,
+      pointRadius: 3,
+      pointStyle: 'crossRot',
+      borderWidth: 1.5,
     });
   }
 

@@ -1,10 +1,10 @@
 // web/js/pages/runs.js — leaderboard/list with expandable detail
 
-import { store } from '../state.js?v=20260430151648';
-import { loadRun } from '../data.js?v=20260430151648';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260430151648';
-import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430151648';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430151648';
+import { store } from '../state.js?v=20260430152808';
+import { loadRun } from '../data.js?v=20260430152808';
+import { bindCopyButtons } from '../components/copy-button.js?v=20260430152808';
+import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430152808';
+import * as hotspotChart from '../charts/hotspot.js?v=20260430152808';
 
 const TMPL = `
   <div class="page-header">
@@ -28,6 +28,7 @@ const TMPL = `
       <option value="fail">Fail</option>
       <option value="archived">Archived (pre-audit)</option>
       <option value="active">Active (non-archived)</option>
+      <option value="non_canonical">Non-canonical (ICX reference)</option>
     </select>
     <span class="count" id="runsCount"></span>
   </div>
@@ -61,7 +62,8 @@ export function mount(root, ctx = {}) {
       if (st === 'pass' && !r.all_pass) return false;
       if (st === 'fail' && r.all_pass) return false;
       if (st === 'archived' && !r.archived) return false;
-      if (st === 'active' && r.archived) return false;
+      if (st === 'active' && (r.archived || r.non_canonical)) return false;
+      if (st === 'non_canonical' && !r.non_canonical) return false;
       if (!q) return true;
       return [r.run_id, r.dataset, r.model, r.label, r.description].some(
         (f) => f && String(f).toLowerCase().includes(q)
@@ -106,7 +108,9 @@ function renderRow(r) {
   const platform = r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : null));
   const archivedBadge = r.archived
     ? '<span class="badge badge-archived" title="Pre-audit run — collected under non-canonical conditions. Excluded from comparison charts.">ARCHIVED</span>'
-    : '';
+    : r.non_canonical
+      ? '<span class="badge badge-non-canonical" title="Non-canonical: built with ICX compiler (Intel oneAPI) + VTune co-running. Shown as reference on charts — not parity-matched with gcc builds.">NON-CANONICAL · ICX</span>'
+      : '';
   const platformBadge = platform === 'gadi'
     ? '<span class="badge badge-platform-gadi" title="Run on NCI Gadi (Intel Sapphire Rapids)">Gadi · NCI</span>'
     : platform === 'setonix'

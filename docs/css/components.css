@@ -28,6 +28,21 @@
   align-items: center;
   vertical-align: middle;
 }
+.badge-non-canonical {
+  background: rgba(251, 146, 60, 0.10);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.30);
+  padding: 2px 8px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-left: 6px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
 /* Platform badges — Gadi (Intel blue) vs Setonix (AMD red) */
 .badge-platform-gadi {
   background: rgba(0, 113, 197, 0.12);
