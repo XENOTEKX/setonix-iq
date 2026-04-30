@@ -1,7 +1,7 @@
 // web/js/charts/efficiency.js — parallel efficiency (speedup/threads) vs threads,
 // grouped per (dataset, platform) so the Gadi and Setonix curves stay distinct.
 
-import { platformColour, dimLegendHidden } from '../utils.js?v=20260430160708';
+import { platformColour, dimLegendHidden } from '../utils.js?v=20260430162139';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));

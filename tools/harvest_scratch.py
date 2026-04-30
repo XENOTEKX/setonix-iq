@@ -673,6 +673,10 @@ def enrich_run(run: dict) -> bool:
         for k, v in env_extra.items():
             if k == "dataset":
                 continue  # dataset handled separately
+            # Don't overwrite a successfully-recovered value with an empty
+            # placeholder from env.json (PBS worker env capture often fails).
+            if not v and env.get(k):
+                continue
             if env.get(k) != v:
                 env[k] = v
                 changed = True
