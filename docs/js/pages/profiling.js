@@ -1,12 +1,12 @@
 // web/js/pages/profiling.js — deep dive for selected run: hotspots + callstack + flamegraph
 
-import { store } from '../state.js?v=20260430153241';
-import { loadRun } from '../data.js?v=20260430153241';
-import { mountRunPicker } from '../components/run-picker.js?v=20260430153241';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430153241';
-import * as callstack from '../charts/callstack.js?v=20260430153241';
-import * as flamegraph from '../charts/flamegraph.js?v=20260430153241';
-import { escHtml, fmtNum, fmtPercent } from '../utils.js?v=20260430153241';
+import { store } from '../state.js?v=20260430153743';
+import { loadRun } from '../data.js?v=20260430153743';
+import { mountRunPicker } from '../components/run-picker.js?v=20260430153743';
+import * as hotspotChart from '../charts/hotspot.js?v=20260430153743';
+import * as callstack from '../charts/callstack.js?v=20260430153743';
+import * as flamegraph from '../charts/flamegraph.js?v=20260430153743';
+import { escHtml, fmtNum, fmtPercent } from '../utils.js?v=20260430153743';
 
 const TMPL = `
   <div class="page-header"><div><h1>Profiling</h1>

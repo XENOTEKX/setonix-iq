@@ -3964,7 +3964,7 @@
   },
   "notes": "[2026-04-30 round 2 audit] Pre-audit Gadi corpus: built with intel-compiler-llvm/2024.2 (icx + libiomp5), launched without OMP_PROC_BIND/OMP_PLACES, no numactl, no OMP_WAIT_POLICY override. The corrected gcc-built + libgomp + close/cores-pinned + numactl --localalloc + OMP_WAIT_POLICY=PASSIVE corpus lands under labels ending in _sr_gcc_pin.",
   "archived": false,
-  "archived_reason": "pre-canonical: built with ICX compiler (intel-compiler-llvm), not gcc. Not parity-matched with Setonix _smtoff_pin corpus. Superseded by pending _sr_gcc_pin matrix (PBS jobs 167506094-167506100).",
+  "archived_reason": "pre-canonical Gadi run \u2014 not parity-matched with Setonix _smtoff_pin corpus. Issues: (1) ICX compiler (intel-compiler-llvm/2024.2, -xSAPPHIRERAPIDS) \u2014 uses Intel OpenMP runtime libiomp5 instead of libgomp, different vectorisation passes and auto-prefetch; (2) VTune hotspot collection co-running alongside IQ-TREE, adding 6-26%% wall overhead at high thread counts (32T: +6%%, 64T: +15%%, 104T: +26%%). Superseded by pending _sr_gcc_pin matrix (gcc/14.2.0, binutils/2.44, no VTune).",
   "non_canonical": true,
-  "non_canonical_label": "ICX (ref)"
+  "non_canonical_label": "ICX+VTune (ref)"
 }

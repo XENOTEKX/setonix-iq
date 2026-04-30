@@ -2,23 +2,51 @@
 
 ---
 
-## 2026-04-30 (round 2 audit, follow-up #8) — Non-canonical reference series visible on charts (hidden by default)
+## 2026-04-30 (round 2 audit, follow-up #8) — Non-canonical reference series: root causes documented, labels corrected
 
-All 33 non-canonical runs (16 Gadi `_sr_icx` + 17 Setonix `_baseline_smton`)
-now appear on all four dashboard charts as faded, dotted reference series. They
-are **hidden by default** — canonical runs are shown immediately on load, and
-reference series can be toggled on by clicking their legend entry.
+All 33 non-canonical runs now appear on all four dashboard charts as faded
+dotted reference series, **hidden by default** (toggle on via legend click).
+Labels were corrected after auditing the exact run conditions that make each
+group non-canonical.
 
-| Group | Count | Label suffix | Default visibility |
-|-------|------:|--------------|-------------------|
-| Gadi ICX (`_sr_icx`) | 16 | `· ICX (ref)` | Hidden |
-| Setonix SMT-on (`_baseline_smton`) | 17 | `· SMT-on (ref)` | Hidden |
-| Canonical Setonix / Gadi (pending) | 31 | *(none)* | **Visible** |
+### Setonix `_baseline_smton` — label: `· SMT+no-pin (ref)`
 
-Series styling for reference runs: alpha 0.45 border, `borderDash: [3,5]`,
-`crossRot` markers, `hidden: true` in Chart.js dataset. Clicking the legend
-entry toggles them on for direct comparison. The runs page shows an orange
-`NON-CANONICAL · <label>` badge and a dedicated filter option.
+These 17 Setonix runs have **five compounding non-parity issues**:
+
+| # | Issue | Non-canonical | Canonical `_smtoff_pin` |
+|---|-------|---------------|------------------------|
+| 1 | **SMT active** | `cores=256` (128 physical × 2 SMT siblings share L1/L2 and execution units) | `cores=64` (SMT off via `--hint=nomultithread`, only 64 physical cores visible) |
+| 2 | **No `--hint=nomultithread`** | OpenMP threads are allocated to logical (SMT) cores | `--hint=nomultithread` forces thread-to-physical-core assignment |
+| 3 | **No `numactl --localalloc`** | OS can allocate memory pages on any NUMA domain, causing cross-NUMA latency | `numactl --localalloc` pins allocations to the local NUMA node |
+| 4 | **No `--cpu-bind=cores`** | OS scheduler free to migrate threads between cores during the run | `--cpu-bind=cores` prevents inter-core migration |
+| 5 | **Restricted model search** | `-mset GTR,HKY,K80` — only 3 substitution models tested | Full ModelFinder sweep (all DNA models) |
+
+SMT sharing is the dominant factor. With SMT on, a `-T 32` run may land on only
+16 physical cores (each with 2 logical threads contending for shared L1/L2 cache
+and the instruction frontend). This explains why the SMT-on wall times are
+consistently higher than the `_smtoff_pin` canonical series.
+
+### Gadi `_sr_icx` — label: `· ICX+VTune (ref)`
+
+These 16 Gadi runs have **two compounding non-parity issues**:
+
+| # | Issue | Non-canonical | Canonical `_sr_gcc_pin` |
+|---|-------|---------------|------------------------|
+| 1 | **ICX compiler** | `intel-compiler-llvm/2024.2`, flag `-xSAPPHIRERAPIDS` — Intel LLVM with `libiomp5` (Intel OpenMP) | `gcc/14.2.0`, `-march=sapphirerapids`, `libgomp` (GNU OpenMP) |
+| 2 | **VTune co-running** | `vtune -collect hotspots` ran alongside IQ-TREE during the benchmark | `perf stat` only — no sampling overhead |
+
+VTune overhead is thread-count dependent: 32T: +6%, 64T: +15%, 104T: +26%.
+ICX applies automatic vectorisation and prefetch insertion not present in gcc
+at equivalent `-march=` flags, so the wall times and IPC are not directly
+comparable to the gcc Setonix corpus.
+
+### Chart behaviour
+
+| Group | Runs | Label suffix | Default |
+|-------|-----:|--------------|---------|
+| Gadi ICX+VTune | 16 | `· ICX+VTune (ref)` | Hidden |
+| Setonix SMT+no-pin | 17 | `· SMT+no-pin (ref)` | Hidden |
+| Canonical | 31 | *(none)* | **Visible** |
 
 ---
 

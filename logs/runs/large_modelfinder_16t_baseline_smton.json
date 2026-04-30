@@ -1608,5 +1608,6 @@
   "notes": "[2026-04-30 audit] This run was collected with SMT enabled on the Setonix `work` partition (256 logical CPUs, --cpus-per-task=128, no --exclusive, no OMP_PROC_BIND/PLACES, gcc default -O3 without -march=znver3, -mset GTR,HKY,K80). It is preserved here for the before/after comparison; the corrected SMT-off + pinned + full-MF + -march=znver3 corpus lives under labels ending in _smtoff_pin.",
   "archived": false,
   "non_canonical": true,
-  "non_canonical_label": "SMT-on (ref)"
+  "non_canonical_label": "SMT+no-pin (ref)",
+  "archived_reason": "pre-audit Setonix run \u2014 not parity-matched with canonical _smtoff_pin corpus. Issues: (1) SMT active: cores=256 (128 physical x2 SMT siblings contending for shared L1/L2 and execution units); (2) no --hint=nomultithread so OpenMP threads land on logical not physical cores; (3) no numactl --localalloc so memory pages can be allocated on any NUMA domain; (4) no --cpu-bind=cores so OS scheduler can migrate threads; (5) restricted model search (-mset GTR,HKY,K80 not full ModelFinder). SMT sharing is the dominant factor causing higher wall times at all thread counts."
 }

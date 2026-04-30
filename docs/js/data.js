@@ -1,6 +1,6 @@
 // web/js/data.js — fetch + cache
 
-import { store } from './state.js?v=20260430153241';
+import { store } from './state.js?v=20260430153743';
 
 const BASE = 'data';
 
