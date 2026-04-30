@@ -1,0 +1,102 @@
+{
+  "run_id": "gadi_large_modelfinder_104t_sr_gcc_pin",
+  "pbs_id": "167507210",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "large_modelfinder_104t_sr_gcc_pin",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix large_modelfinder @ 104T",
+  "timing": [
+    {
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s large_modelfinder.fa -T 104 -seed 1",
+      "time_s": 515.531,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "large_modelfinder.fa",
+      "status": "pass",
+      "expected": -2690513.343,
+      "reported": -2690513.343,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "167507210.gadi-pbs",
+      "job_name": "iq-large_modelfinder-104t",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "submit_host": "gadi-login-05.gadi.nci.org.au",
+      "submit_dir": "/scratch/rc29/as1708/iqtree3",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 515.531,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "large_modelfinder.fa",
+    "threads": 104,
+    "perf_cmd": "numactl --localalloc /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/large_modelfinder.fa -T 104 -seed 1 --prefix /scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/iqtree_perf",
+    "metrics": {
+      "IPC": 0.1934,
+      "cache-miss-rate": 84.9625,
+      "branch-miss-rate": 0.1039,
+      "L1-dcache-miss-rate": 4.3949,
+      "LLC-miss-rate": 83.5987,
+      "dTLB-miss-rate": 0.0469,
+      "cycles": 156291802856884,
+      "instructions": 30231756473847,
+      "cache-references": 602403718687,
+      "cache-misses": 511817289327,
+      "branch-instructions": 4313841593830,
+      "branch-misses": 4481356437,
+      "L1-dcache-loads": 10753684269936,
+      "L1-dcache-load-misses": 472618367164,
+      "LLC-loads": 118374476451,
+      "LLC-load-misses": 98959509884,
+      "dTLB-loads": 10763007511869,
+      "dTLB-load-misses": 5050592728,
+      "iTLB-load-misses": 74863534
+    },
+    "vtune": {
+      "elapsed_time_s": 1792.715,
+      "cpu_time_s": 52179.112
+    },
+    "vtune_uarch": null,
+    "proc_summary": {
+      "sample_count": 52,
+      "duration_s": 510.5,
+      "peak_rss_kb": 1039500,
+      "peak_vms_kb": 8164004,
+      "max_threads": 104,
+      "read_bytes": 92463104,
+      "write_bytes": 360448
+    },
+    "artefacts": {
+      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/samples.jsonl",
+      "perf_stat": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/perf_stat.txt",
+      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/perf_script.txt",
+      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/perf_report.txt",
+      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/perf.data",
+      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/vtune_hotspots",
+      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/vtune_hotspots.tsv",
+      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/vtune_hw_events.txt"
+    }
+  }
+}
