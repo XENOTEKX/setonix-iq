@@ -60,8 +60,6 @@
     "threads": 32,
     "perf_cmd": "srun --cpus-per-task=32 --cpu-bind=cores --hint=nomultithread --mem=0 numactl --localalloc /scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa -T 32 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/large_modelfinder_32t_smtoff_pin_42179143/iqtree_run",
     "metrics": {
-      "cycles": 0,
-      "instructions": 108625401,
       "branch-instructions": 114410553,
       "branch-misses": 802948,
       "cache-references": 3648796,
@@ -81,12 +79,7 @@
       "ls_l1_d_tlb_miss.all": 169363,
       "bp_l1_tlb_miss_l2_tlb_hit": 22633,
       "bp_l1_tlb_miss_l2_tlb_miss": 14943,
-      "ls_tablewalker.dside": 45722,
-      "cache-miss-rate": 0.08653237944790555,
-      "branch-miss-rate": 0.007018128825930944,
-      "L1-dcache-miss-rate": 0.015575480087784442,
-      "dTLB-miss-rate": 0.03674728261252613,
-      "iTLB-miss-rate": 1.6516428880242109
+      "ls_tablewalker.dside": 45722
     },
     "hotspots": [
       {
@@ -745,7 +738,10 @@
       "read_bytes": 1538048,
       "write_bytes": 4096,
       "cancelled_write_bytes": 0
-    }
+    },
+    "notes": [
+      "perf_stat wrapped srun launcher only (task_clock ~ms vs wall ~s); IPC/cycles/instructions/cache-miss rates dropped as invalid"
+    ]
   },
   "dataset_info": {
     "file": "large_modelfinder.fa",

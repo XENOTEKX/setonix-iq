@@ -2,6 +2,138 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #2) — `large_modelfinder` canonical Setonix matrix completed + ingested; `xlarge_mf` parity matrix scheduled
+
+### Setonix `large_modelfinder.fa` canonical run — completed
+
+All 7 SLURM jobs (`42179139`–`42179145`) finished cleanly on `work` partition,
+SMT-off, full physical node, gcc-native/14.2 (gcc 14.3.0) with
+`-march=znver3 -mtune=znver3 -fno-omit-frame-pointer -g`,
+`OMP_PROC_BIND=close OMP_PLACES=cores OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=10000`,
+`numactl --localalloc`, full ModelFinder (`-mset` dropped), `-seed 1`,
+sha256 `73908728…b01207` (canonical, dimension-verified 100 × 50 000).
+
+Harvested into `logs/runs/large_modelfinder_{1,4,8,16,32,64,104}t_smtoff_pin.json`
+via `tools/harvest_scratch.py`. Each record carries `run_id`,
+`platform=setonix`, full `dataset_info`, `modelfinder` block, and is **not**
+flagged `archived` (these are the new active corpus). The 17 pre-audit
+`*_baseline_smton.json` records remain in-tree but `archived: true` so the
+charts and the overview page hide them while the per-run page still
+exposes them with an `ARCHIVED` badge.
+
+| Threads | Wall (s) | Host       | Selected model | Notes                          |
+|--------:|---------:|------------|----------------|--------------------------------|
+|    1    | 2 190.4  | nid001469  | GTR+F+G4       | single-thread baseline         |
+|    4    |   758.2  | nid002521  | GTR+F+G4       |                                |
+|    8    |   513.1  | nid001149  | GTR+F+G4       | best per-thread efficiency     |
+|   16    |   660.1  | nid001279  | GTR+F+G4       | scaling collapse begins        |
+|   32    |   628.2  | nid001571  | GTR+F+G4       |                                |
+|   64    |   731.4  | nid001543  | GTR+F+G4       |                                |
+|  104    | 1 084.4  | nid001149  | GTR+F+G4       | matches Gadi cap, for overlap  |
+
+Comparison vs Gadi `large_modelfinder` (icx + libiomp5, pre-audit):
+
+| Threads | Setonix smtoff_pin (s) | Gadi sr_icx (s) | Setonix / Gadi |
+|--------:|-----------------------:|----------------:|---------------:|
+|    1    | 2 190.4                | 2 168.2         | 1.01×          |
+|    4    |   758.2                |   805.4         | 0.94×          |
+|    8    |   513.1                |   460.8         | 1.11×          |
+|   16    |   660.1                |   293.7         | 2.25×          |
+|   32    |   628.2                |   219.8         | 2.86×          |
+|   64    |   731.4                |   244.9         | 2.99×          |
+|  104    | 1 084.4                |   —             | —              |
+
+Single-thread parity is now ≈ 1 % — the prior Setonix–Gadi gap at 1T was
+launch-script noise, not microarchitecture. The remaining (and large)
+gap at ≥ 16T is the Setonix scaling collapse the audit was designed to
+expose. Whether that gap is *fundamental* to Trento (NUMA / CCX
+fragmentation on a 2-socket EPYC 7763) or remains an artefact of the
+launcher will be answered once the Gadi `_sr_gcc_pin` corpus lands —
+that is the only run that controls for compiler family at the same time
+as launch hygiene.
+
+### `profile.metrics` caveat — perf wrapped the `srun` launcher
+
+In every `_smtoff_pin` profile_meta.json, `perf_stat.txt` reports a
+`task-clock` of **~91 ms** while wall-clock is **2 190 s** (1T) /
+**1 084 s** (104T). `perf stat` was attached to the `srun` launcher
+process, not to IQ-TREE on the compute node, so all the derived counters
+(cycles, instructions, IPC, cache-miss-rate, branch-miss-rate,
+L1-dcache-miss-rate, dTLB / iTLB miss-rate, frontend / backend stall
+rate) describe the launcher and are physically meaningless for the
+workload. They have been **stripped** from the seven canonical run
+records before commit; a `profile.notes` entry explains why.
+
+`tools/harvest_scratch.py:_derive_rates` now refuses to emit perf-derived
+metrics whenever the computed `IPC > 10` (the schema cap) — that
+threshold catches the launcher-only case unambiguously and prevents
+future canonical runs from re-introducing the schema-invalid record.
+
+The fix in the launcher (so future runs *do* capture node-side counters)
+is to move `perf stat` from wrapping `srun` to wrapping the IQ-TREE
+invocation *inside* the srun step (i.e. `srun ... bash -c 'perf stat -o
+... iqtree3 ...'`). This is queued for the next pipeline revision and
+will be applied before the Gadi `_sr_gcc_pin` matrix is submitted so
+the two clusters' counter records remain symmetric.
+
+### Parity verification — `xlarge_mf.fa` cross-platform matrix (scheduled)
+
+Same audit table re-applied to the second canonical dataset. The
+matrix is committed but **not yet submitted** on either cluster (it
+runs after the Setonix `large_modelfinder` corpus is reviewed for
+correctness — current entry).
+
+`xlarge_mf.fa` parameters: 200 taxa × 100 000 bp DNA, GTR+G4 simulated
+with seed 202, sha256 lockfile-pinned in `benchmarks/sha256sums.txt`.
+
+| #  | Concern                       | Setonix `setonix-ci/run_mega_profile.sh` + `submit_matrix.sh` | Gadi `gadi-ci/submit_benchmark_matrix.sh` (worker `_run_matrix_job.sh`) | Match |
+|----|-------------------------------|---------------------------------------------------------------|-------------------------------------------------------------------------|:-----:|
+| 1  | Dataset file                  | `xlarge_mf.fa`                                                | `xlarge_mf.fa`                                                          |  ✅   |
+| 2  | sha256 lockfile gate          | `benchmarks/sha256sums.txt` enforced in preflight + login-side | same lockfile committed; gate enforced in worker preflight              |  ✅   |
+| 3  | Canonical sha256              | committed in `benchmarks/sha256sums.txt`                      | identical entry in same lockfile (single source of truth)               |  ✅   |
+| 4  | Dimensions                    | 200 taxa × 100 000 sites                                      | identical (file is the same byte sequence)                              |  ✅   |
+| 5  | Thread sweep                  | `1 4 8 16 32 64 104` (+ Setonix-only 128 — see note)          | `1 4 8 16 32 64 104`                                                    |  ✅ (overlap at all 7 Gadi-supported points) |
+| 6  | IQ-TREE seed                  | `-seed 1`                                                     | `-seed 1`                                                               |  ✅   |
+| 7  | ModelFinder scope             | full default search (no `-mset`) — flag dropped 2026-04-30    | full default search (no `-mset`) — was already absent                   |  ✅   |
+| 8  | Compiler family               | gcc                                                           | gcc                                                                     |  ✅   |
+| 9  | Compiler version              | gcc-native/14.2 (Setonix 2025.08 → gcc 14.3.0)                | gcc/14.2.0 (NCI → gcc 14.2.0)                                           |  ✅ (patch-level only) |
+| 10 | Architecture flag             | `-O3 -march=znver3 -mtune=znver3`                             | `-O3 -march=sapphirerapids -mtune=sapphirerapids`                       |  ✅ (intentional) |
+| 11 | Frame-pointer profiling build | `-fno-omit-frame-pointer -g`                                  | `-fno-omit-frame-pointer -g`                                            |  ✅   |
+| 12 | OpenMP runtime                | libgomp                                                       | libgomp                                                                 |  ✅   |
+| 13 | `OMP_NUM_THREADS`             | `${THREADS}`                                                  | `${THREADS}`                                                            |  ✅   |
+| 14 | `OMP_PROC_BIND`               | `close`                                                       | `close`                                                                 |  ✅   |
+| 15 | `OMP_PLACES`                  | `cores`                                                       | `cores`                                                                 |  ✅   |
+| 16 | `OMP_WAIT_POLICY`             | `PASSIVE`                                                     | `PASSIVE`                                                               |  ✅   |
+| 17 | `GOMP_SPINCOUNT`              | `10000`                                                       | `10000`                                                                 |  ✅   |
+| 18 | NUMA / memory locality        | `numactl --localalloc`                                        | `numactl --localalloc`                                                  |  ✅   |
+| 19 | SMT / hyperthreading          | OFF — `#SBATCH --hint=nomultithread`                          | OFF — Hyperthreading disabled in BIOS on `normalsr` nodes               |  ✅   |
+| 20 | Full-node, no co-tenants      | `#SBATCH --exclusive`                                         | `-l ncpus=104` (full normalsr)                                          |  ✅   |
+| 21 | Per-step CPU binding          | `srun --cpus-per-task=${THREADS} --cpu-bind=cores --hint=nomultithread` | PBS Pro cpuset + `OMP_PLACES=cores` libgomp pinning                |  ✅   |
+| 22 | Memory request                | `--mem=230G`                                                  | `mem=500GB`                                                             |  ✅ (per-node max, both ≫ working set) |
+| 23 | Walltime                      | 24 h                                                          | 24 h                                                                    |  ✅   |
+| 24 | Output label                  | `xlarge_mf_<T>t_smtoff_pin`                                   | `xlarge_mf_<T>t_sr_gcc_pin`                                             |  ✅ (distinct from legacy)            |
+| 25 | Eigen version                 | `eigen/3.4.0`                                                 | `eigen/3.4.0`                                                           |  ✅   |
+| 26 | Boost version                 | `boost/1.86.0-c++14-python`                                   | `boost/1.86.0`                                                          |  ✅   |
+
+### Note on Setonix-only 128T point for `xlarge_mf`
+
+Setonix `work` nodes have 128 physical cores (2 × EPYC 7763, 64 cores
+each); Gadi `normalsr` nodes have 104 physical cores. The Setonix
+`submit_matrix.sh` retains a Setonix-only 128T entry on `xlarge_mf`
+*solely* to characterise the Setonix-only second-socket fill. **All
+cross-platform claims are restricted to the seven thread points
+{1, 4, 8, 16, 32, 64, 104}** that both clusters can run; the 128T
+Setonix point is annotated as such in the dashboard and never enters a
+Setonix-vs-Gadi delta plot.
+
+### No ⚠️ rows remain.
+Same as the `large_modelfinder` table immediately below — the only
+intentional difference is row 10 (`-march`), which must stay
+platform-specific so the binaries hit each cluster's hand-vectorised
+SIMD kernel.
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up) — pipeline parity rework + SMT-on corpus archived; corrected `large_modelfinder` matrix scheduled
 
 ### Trigger

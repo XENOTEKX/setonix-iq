@@ -524,8 +524,25 @@ def _derive_rates(metrics: dict) -> None:
 
     cycles = g("cycles")
     instructions = g("instructions")
-    if cycles and instructions and "IPC" not in metrics:
-        metrics["IPC"] = instructions / cycles
+    # Guard against perf wrapping only the srun launcher (counters cover ~ms
+    # while the workload runs for seconds-to-hours). In that case both
+    # cycles and instructions are tiny and the derived IPC is bogus
+    # (often > 10, violating the schema). Detect via implausibly-high IPC.
+    if cycles and instructions:
+        ipc = instructions / cycles
+        if ipc > 10:
+            # Drop ALL perf-stat-derived counters: they describe the
+            # launcher process, not the IQ-TREE worker.
+            for k in ("cycles", "instructions", "cache-misses",
+                      "cache-references", "branch-misses",
+                      "branch-instructions", "L1-dcache-load-misses",
+                      "L1-dcache-loads", "dTLB-load-misses", "dTLB-loads",
+                      "iTLB-load-misses", "iTLB-loads",
+                      "stalled-cycles-frontend", "stalled-cycles-backend"):
+                metrics.pop(k, None)
+            return
+        if "IPC" not in metrics:
+            metrics["IPC"] = ipc
     ratio("cache-misses", "cache-references", "cache-miss-rate")
     ratio("branch-misses", "branch-instructions", "branch-miss-rate")
     ratio("L1-dcache-load-misses", "L1-dcache-loads", "L1-dcache-miss-rate")
