@@ -55,6 +55,13 @@ echo "╚═══════════════════════�
 if command -v module >/dev/null 2>&1; then
     module load cmake/3.31.6  2>/dev/null || true
     module load gcc/14.2.0    2>/dev/null || true
+    # 2026-04-30 (round 2 audit, follow-up #5b): system binutils on Gadi
+    # normalsr is 2.30 (RHEL8) which predates AVX-512-FP16 (added in 2.38).
+    # gcc/14.2.0 with -march=sapphirerapids emits 'vmovw' (an AVX-512-FP16
+    # move) inside main/phylotesting.cpp, which the 2.30 assembler rejects:
+    #     Error: no such instruction: `vmovw %xmm0,264(%rax)'
+    # Fix: load binutils/2.44 so `as` understands the full SPR ISA.
+    module load binutils/2.44 2>/dev/null || true
     # 2026-04-30 (round 2 audit, follow-up #5): Gadi module tree tops out at
     # eigen/3.3.7 and boost/1.84.0 — the 3.4.0 / 1.86.0 entries in the earlier
     # CHANGELOG comment were aspirational and never landed on NCI.  Parity-

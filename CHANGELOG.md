@@ -2,6 +2,69 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #5b) — Bootstrap assembler fix (binutils 2.30 → 2.44)
+
+### Symptom
+
+After fixing the eigen/boost module versions in follow-up #5, bootstrap
+job `167505368` ran for ~9 minutes and reached 79 % of the build before
+failing with:
+
+```
+/jobfs/167505368.gadi-pbs/ccYmyoht.s:162739: Error: no such instruction: `vmovw %xmm0,264(%rax)'
+make[2]: *** main/CMakeFiles/main.dir/phylotesting.cpp.o] Error 1
+```
+
+The seven held matrix jobs (167505369–167505375) were then evicted by
+the `afterok` dependency.
+
+### Root cause
+
+`vmovw` is an AVX-512-FP16 move-word instruction, added to GNU binutils
+in 2.38 (Jan 2022). The Gadi `normalsr` system assembler is RHEL 8's
+`binutils-2.30-128.el8_10` — predates AVX-512-FP16 by 4 years. gcc
+14.2.0 (a much newer compiler) with `-march=sapphirerapids` happily
+emits FP16 instructions inside `main/phylotesting.cpp`, then `cc1` pipes
+the assembly to `/bin/as` which rejects it.
+
+The `gcc/14.2.0` module on Gadi does **not** bundle its own binutils —
+it inherits the system `as` via `gcc -print-prog-name=as = as`, which
+PATH-resolves to `/bin/as` (2.30). Setonix never hits this because
+`-march=znver3` (Zen 3) does not have AVX-512-FP16 in its ISA, so gcc
+14.3.0 there never generates `vmovw`.
+
+### Fix
+
+Added `module load binutils/2.44` to `gadi-ci/bootstrap_iqtree.sh`,
+right after the gcc module load. `binutils/2.44` is already in the NCI
+module tree alongside 2.36.1 and 2.43; the 2.44 version was chosen as
+the newest available so the bootstrap remains forward-compatible if
+gcc/15.x is ever loaded.
+
+`binutils/2.44` exposes `/apps/binutils/2.44/bin/as` ahead of `/bin/as`
+on PATH, which is sufficient because gcc invokes `as` via PATH lookup
+(no special wrapper). Verified on a login node: `as --version` →
+`GNU assembler (GNU Binutils) 2.44`.
+
+### Why not `-mno-avx512fp16`?
+
+Disabling AVX-512-FP16 would also work for `vmovw` specifically, but
+`-march=sapphirerapids` enables several other ISA extensions that
+post-date binutils 2.30 (AMX-INT8, AMX-BF16, AVX-VNNI, CLDEMOTE, …).
+Loading newer binutils fixes the entire class of "compiler newer than
+assembler" errors at once, without stripping legitimate ISA features
+from parity-matrix row 10 (`-march=sapphirerapids`).
+
+### Resubmission
+
+Bootstrap `167506092` queued with the binutils fix; matrix jobs
+`167506094–167506100` held on `afterok:167506092`. Old job IDs from
+follow-up #5 (`167505368` and `167505369–167505375`) are all in state
+`F` (Failed) and replaced by the new IDs above. No other parity-matrix
+rows were touched.
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #5) — Gadi `_sr_gcc_pin` matrix submitted (gcc parity verified), bootstrap module fix, parity audit complete
 
 ### Why this entry exists
