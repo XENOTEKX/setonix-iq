@@ -1,21 +1,21 @@
 {
-  "run_id": "large_modelfinder_16t_smtoff_pin",
-  "slurm_id": "42179142",
+  "run_id": "Setonix_large_modelfinder_4T",
+  "slurm_id": "42179140",
   "platform": "setonix",
   "run_type": "deep_profile",
-  "label": "large_modelfinder_16t_smtoff_pin",
-  "description": "Setonix canonical large_modelfinder @ 16T (SMT-off, pinned, -march=znver3, gcc 14.3.0)",
+  "label": "Setonix_large_modelfinder_4T",
+  "description": "Setonix canonical large_modelfinder @ 4T (SMT-off, pinned, -march=znver3, gcc 14.3.0)",
   "timing": [
     {
       "command": "iqtree3 -s large_modelfinder.fa",
-      "time_s": 660.137
+      "time_s": 758.23
     }
   ],
   "verify": [],
   "env": {
-    "run_id": "42179142",
-    "label": "large_modelfinder_16t_smtoff_pin",
-    "threads": 16,
+    "run_id": "42179140",
+    "label": "large_modelfinder_4t_smtoff_pin",
+    "threads": 4,
     "hostname": "",
     "kernel": "",
     "os": "",
@@ -30,11 +30,11 @@
       "sha256": "73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207"
     },
     "slurm": {
-      "job_id": "42179142",
-      "job_name": "iq-large_modelfinder-16t",
+      "job_id": "42179140",
+      "job_name": "iq-large_modelfinder-4t",
       "partition": "work",
       "account": "pawsey1351",
-      "nodelist": "nid001279",
+      "nodelist": "nid002521",
       "num_nodes": "1",
       "cpus_per_task": "128",
       "ntasks": "1",
@@ -42,7 +42,7 @@
       "submit_host": "nid002808",
       "submit_dir": "/scratch/pawsey1351/asamuel/iqtree3"
     },
-    "cores": 32,
+    "cores": 8,
     "cpu_sockets": 0,
     "cpu_cores_per_socket": 0,
     "cpu_threads_per_core": 0,
@@ -57,110 +57,102 @@
   },
   "profile": {
     "dataset": "large_modelfinder.fa",
-    "threads": 16,
-    "perf_cmd": "srun --cpus-per-task=16 --cpu-bind=cores --hint=nomultithread --mem=0 numactl --localalloc /scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa -T 16 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/large_modelfinder_16t_smtoff_pin_42179142/iqtree_run",
+    "threads": 4,
+    "perf_cmd": "srun --cpus-per-task=4 --cpu-bind=cores --hint=nomultithread --mem=0 numactl --localalloc /scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa -T 4 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/large_modelfinder_4t_smtoff_pin_42179140/iqtree_run",
     "metrics": {
-      "branch-instructions": 107930550,
-      "branch-misses": 766663,
-      "cache-references": 3967959,
-      "cache-misses": 309160,
-      "L1-dcache-loads": 109282486,
-      "L1-dcache-load-misses": 1501486,
-      "dTLB-loads": 549108,
-      "dTLB-load-misses": 27477,
-      "iTLB-loads": 12162,
-      "iTLB-load-misses": 13555,
-      "stalled-cycles-frontend": 17537103,
-      "page-faults": 3997,
+      "branch-instructions": 97590469,
+      "branch-misses": 762841,
+      "cache-references": 4225146,
+      "cache-misses": 332292,
+      "L1-dcache-loads": 103385712,
+      "L1-dcache-load-misses": 1877291,
+      "dTLB-loads": 804474,
+      "dTLB-load-misses": 24811,
+      "iTLB-loads": 14222,
+      "iTLB-load-misses": 14715,
+      "stalled-cycles-frontend": 16668126,
+      "page-faults": 3996,
       "context-switches": 0,
       "cpu-migrations": 0,
-      "ex_ret_ops": 350793035,
-      "ex_ret_brn_misp": 716446,
-      "ls_l1_d_tlb_miss.all": 216363,
-      "bp_l1_tlb_miss_l2_tlb_hit": 12276,
-      "bp_l1_tlb_miss_l2_tlb_miss": 14622
+      "ex_ret_ops": 355788044,
+      "ex_ret_brn_misp": 623177,
+      "ls_l1_d_tlb_miss.all": 174073,
+      "bp_l1_tlb_miss_l2_tlb_hit": 16023,
+      "bp_l1_tlb_miss_l2_tlb_miss": 12139,
+      "ls_tablewalker.dside": 193091
     },
     "hotspots": [
       {
-        "percent": 21.59,
+        "percent": 33.92,
         "samples": 1,
         "command": "srun",
         "module": "libslurmfull.so",
         "function": "_find_name_in_env"
       },
       {
-        "percent": 17.69,
+        "percent": 7.46,
+        "samples": 2,
+        "command": "srun",
+        "module": "ld-linux-x86-64.so.2",
+        "function": "do_lookup_x"
+      },
+      {
+        "percent": 5.87,
+        "samples": 1,
+        "command": "sinfo",
+        "module": "libslurmfull.so",
+        "function": "slurm_unpackstr_xmalloc"
+      },
+      {
+        "percent": 4.76,
+        "samples": 1,
+        "command": "sinfo",
+        "module": "libc.so.6",
+        "function": "_int_free"
+      },
+      {
+        "percent": 2.73,
         "samples": 1,
         "command": "sinfo",
         "module": "libc.so.6",
         "function": "_int_malloc"
       },
       {
-        "percent": 14.78,
+        "percent": 1.68,
         "samples": 2,
         "command": "srun",
-        "module": "libslurmfull.so",
-        "function": "_foreach_helper_setup_pollfds"
-      },
-      {
-        "percent": 10.46,
-        "samples": 1,
-        "command": "srun",
         "module": "ld-linux-x86-64.so.2",
-        "function": "strcmp"
+        "function": "_dl_runtime_resolve_xsavec"
       },
       {
-        "percent": 6.83,
-        "samples": 1,
-        "command": "scontrol",
-        "module": "ld-linux-x86-64.so.2",
-        "function": "dfs_traversal.part.0"
-      },
-      {
-        "percent": 2.07,
-        "samples": 1,
-        "command": "sinfo",
-        "module": "libslurmfull.so",
-        "function": "slurm_list_iterator_destroy"
-      },
-      {
-        "percent": 1.0,
+        "percent": 1.11,
         "samples": 1,
         "command": "sh",
         "module": "bash",
-        "function": "initialize_shell_variables"
+        "function": "maybe_make_export_env"
       },
       {
-        "percent": 0.84,
-        "samples": 3,
+        "percent": 0.54,
+        "samples": 1,
         "command": "srun",
-        "module": "libc.so.6",
-        "function": "_int_malloc"
+        "module": "liblua5.3.so.5.3.0",
+        "function": "0x0000000000017f94"
+      },
+      {
+        "percent": 0.54,
+        "samples": 1,
+        "command": "srun",
+        "module": "libslurmfull.so",
+        "function": "_listening_socket_readable"
       }
     ],
     "folded_stacks": [
       {
-        "stack": "_foreach_helper_setup_pollfds;_io_thr_internal",
-        "count": 14
-      },
-      {
-        "stack": "_foreach_helper_setup_pollfds;_io_thr_internal;_msg_thr_internal",
-        "count": 5
-      },
-      {
-        "stack": "_foreach_helper_setup_pollfds",
+        "stack": "_find_name_in_env;slurm_init",
         "count": 2
       },
       {
         "stack": "_find_name_in_env",
-        "count": 1
-      },
-      {
-        "stack": "_int_malloc",
-        "count": 1
-      },
-      {
-        "stack": "strcmp",
         "count": 1
       }
     ],
@@ -172,7 +164,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -181,7 +173,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -190,7 +182,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -199,7 +191,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -208,7 +200,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -217,7 +209,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -226,7 +218,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -235,7 +227,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -244,7 +236,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -253,7 +245,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -262,7 +254,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -271,7 +263,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -280,7 +272,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -289,7 +281,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -298,16 +290,16 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 150.16,
+        "t_s": 150.17,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -316,7 +308,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -325,7 +317,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -334,7 +326,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -343,7 +335,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -352,7 +344,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -361,7 +353,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -370,7 +362,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -379,7 +371,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -388,7 +380,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -397,7 +389,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -406,7 +398,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -415,7 +407,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -424,7 +416,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -433,7 +425,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -442,7 +434,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -451,7 +443,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -460,7 +452,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -469,7 +461,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -478,7 +470,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -487,7 +479,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -496,7 +488,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -505,7 +497,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -514,7 +506,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -523,7 +515,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -532,97 +524,97 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 410.45,
+        "t_s": 410.44,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 420.46,
+        "t_s": 420.45,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 430.47,
+        "t_s": 430.46,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 440.48,
+        "t_s": 440.47,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 450.49,
+        "t_s": 450.48,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 460.5,
+        "t_s": 460.49,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 470.51,
+        "t_s": 470.5,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 480.52,
+        "t_s": 480.51,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 490.53,
+        "t_s": 490.52,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 500.54,
+        "t_s": 500.53,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -631,7 +623,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -640,7 +632,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -649,7 +641,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -658,7 +650,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -667,70 +659,70 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 560.61,
+        "t_s": 560.6,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 570.62,
+        "t_s": 570.61,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 580.63,
+        "t_s": 580.62,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 590.64,
+        "t_s": 590.63,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 600.65,
+        "t_s": 600.64,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 610.66,
+        "t_s": 610.65,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
-        "t_s": 620.67,
+        "t_s": 620.66,
         "rss_kb": 8192,
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -739,7 +731,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -748,7 +740,7 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       },
       {
@@ -757,13 +749,103 @@
         "peak_kb": 8192,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 94,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 660.7,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 670.71,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 680.72,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 690.73,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 700.74,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 710.75,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 720.76,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 730.77,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 740.79,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 750.8,
+        "rss_kb": 8192,
+        "peak_kb": 8192,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 93,
         "involuntary_cs": 0
       }
     ],
     "io": {
-      "rchar": 271995,
-      "wchar": 59041,
+      "rchar": 271992,
+      "wchar": 59021,
       "syscr": 684,
       "syscw": 269,
       "read_bytes": 1598464,
@@ -792,7 +874,7 @@
   "summary": {
     "pass": 1,
     "fail": 0,
-    "total_time": 660.137,
+    "total_time": 758.23,
     "all_pass": true
   },
   "modelfinder": {

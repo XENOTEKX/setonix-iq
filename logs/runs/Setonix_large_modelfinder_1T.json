@@ -1,9 +1,9 @@
 {
-  "run_id": "large_modelfinder_1t_smtoff_pin",
+  "run_id": "Setonix_large_modelfinder_1T",
   "slurm_id": "42179139",
   "platform": "setonix",
   "run_type": "deep_profile",
-  "label": "large_modelfinder_1t_smtoff_pin",
+  "label": "Setonix_large_modelfinder_1T",
   "description": "Setonix canonical large_modelfinder @ 1T (SMT-off, pinned, -march=znver3, gcc 14.3.0)",
   "timing": [
     {

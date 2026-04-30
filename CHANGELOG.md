@@ -2,6 +2,159 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #4) — Gadi `_sr_gcc_pin` matrix planned, canonical run-id rename, run-picker filter chips
+
+### Why this entry exists
+
+Follow-up #3 closed the "is the >8T Setonix collapse mathematically
+sound?" question (yes — 95 % per-thread utilisation, 2.6× CPU growth at
+the 16T cross-CCX boundary, bit-stable model selection). It also flagged
+**two residual asymmetries** that prevent declaring the comparison fully
+apples-to-apples: (a) the Gadi reference is still icx 2024.2 + libiomp5,
+not the planned gcc/14.2 + libgomp build; and (b)
+`std::thread::hardware_concurrency()` returns 2 × T on Setonix because
+the cpuset includes both SMT siblings of each reserved physical core.
+This entry tracks the queued Gadi compiler-controlled matrix that
+isolates compiler family from microarchitecture, plus two operator-
+quality-of-life changes: a stable cross-platform naming convention for
+canonical runs, and filter chips on the overview run-picker so the
+growing corpus stays navigable.
+
+### Planned Gadi `_sr_gcc_pin` matrix — the only experiment that isolates compiler from architecture
+
+The current Gadi reference corpus is built with **icx 2024.2 + libiomp5**
+on Sapphire Rapids. To attribute the Setonix ≥ 16T collapse purely to
+the AMD Zen 3 microarchitecture (fragmented L3 / cross-CCX coherence),
+we need a Gadi run that holds **everything the same as Setonix except
+the CPU**:
+
+| Knob               | Setonix `_smtoff_pin` | Gadi `_sr_icx` (current) | Gadi `_sr_gcc_pin` (planned) |
+|--------------------|-----------------------|--------------------------|------------------------------|
+| Compiler           | gcc 14.3.0            | icx 2024.2               | **gcc 14.2**                 |
+| OpenMP runtime     | libgomp               | libiomp5                 | **libgomp**                  |
+| `-march`           | znver3                | sapphirerapids           | sapphirerapids               |
+| `OMP_PLACES`       | cores                 | cores                    | cores                        |
+| `OMP_PROC_BIND`    | close                 | close                    | close                        |
+| SMT (BIOS)         | on (gated by cpuset)  | off                      | off                          |
+| `--hint=nomulti…`  | yes                   | n/a (PBS)                | n/a (PBS)                    |
+| Pinning            | numactl --physcpubind | taskset to physical cores| taskset to physical cores    |
+| Dataset SHA-256    | (same)                | (same)                   | (same)                       |
+| IQ-TREE rev        | 3.1.1                 | 3.1.1                    | 3.1.1                        |
+
+If the Gadi `_sr_gcc_pin` corpus reproduces the Gadi `_sr_icx` scaling
+curve within ±5 %, the icx-vs-gcc axis is empirically inert and the
+≥ 16T Setonix gap is **definitively** an AMD Zen 3 microarchitectural
+property. If `_sr_gcc_pin` instead diverges from `_sr_icx` and trends
+toward the Setonix curve, then **a non-trivial fraction** of the gap is
+attributable to libiomp5's task-stealing scheduler (which is known to
+amortise fine-grained reduction overhead better than libgomp's
+work-sharing scheduler, particularly on non-monolithic L3s).
+
+Submission plan (queued, awaits Gadi login):
+
+```bash
+# on gadi-login-NN.gadi.nci.org.au, in $HOME/setonix-iq:
+./gadi-ci/bootstrap_iqtree.sh --compiler gcc --module gcc/14.2.0 \
+    --build-tag sr_gcc_pin
+./gadi-ci/submit_benchmark_matrix.sh \
+    --build-tag sr_gcc_pin large_modelfinder 1 4 8 16 32 64 104
+./gadi-ci/submit_benchmark_matrix.sh \
+    --build-tag sr_gcc_pin xlarge_mf       1 4 8 16 32 64 104
+```
+
+The `xlarge_mf` parity rows are added because that dataset has ~ 4× the
+per-iteration work of `large_modelfinder` and should amortise OpenMP
+fork/join cost — if `_sr_gcc_pin` matches `_sr_icx` on `xlarge_mf` but
+diverges on `large_modelfinder`, the diagnosis ("fine-grained reduction
+overhead crossing a coherence boundary") is reinforced.
+
+### Companion: IQ-TREE source audit for `std::thread::hardware_concurrency()`
+
+Queued alongside the Gadi rebuild — a `grep -RIn 'hardware_concurrency'`
+sweep of the IQ-TREE 3.1.1 sources and any internal pool sized from
+`std::thread::hardware_concurrency()` will be flagged. On Setonix this
+returns 2 × T (the cpuset includes SMT siblings of each reserved
+physical core), so any such pool would over-subscribe by 2× even with
+correct OpenMP pinning. If a problematic call site is found, the fix
+is to clamp the pool size to `omp_get_max_threads()` or
+`sched_getaffinity` cpuset cardinality / 2.
+
+### Canonical run-id rename — `{Platform}_{Dataset}_{T}T`
+
+The growing corpus mixed several naming conventions
+(`large_modelfinder_8t_smtoff_pin`, `gadi_large_modelfinder_8t_sr_icx`,
+`gadi_xlarge_mf_104t_sr_icx`, …), which made cross-platform comparison
+visually noisy and made it impossible for the run-picker to surface
+"Setonix vs Gadi at the same dataset and thread count" at a glance. The
+canonical post-audit corpus is now named:
+
+| Old `run_id`                                | New `run_id`                          |
+|---------------------------------------------|---------------------------------------|
+| `large_modelfinder_8t_smtoff_pin`           | `Setonix_large_modelfinder_8T`        |
+| `large_modelfinder_104t_smtoff_pin`         | `Setonix_large_modelfinder_104T`      |
+| `gadi_large_modelfinder_8t_sr_icx`          | `Gadi_large_modelfinder_8T`           |
+| `gadi_xlarge_mf_104t_sr_icx`                | `Gadi_xlarge_mf_104T`                 |
+| `gadi_mega_dna_64t_sr_icx`                  | `Gadi_mega_dna_64T`                   |
+
+The pre-audit Setonix `_baseline_smton` records keep their old run_ids
+(they are explicitly *not* canonical and exist only for the audit
+narrative — see follow-up #1). Any future Gadi `_sr_gcc_pin` records
+will follow the same pattern but carry a `build_tag` field
+(`sr_gcc_pin`) inside the JSON for disambiguation, so the run_id stays
+short and the build flavour is queryable.
+
+`tools/normalize.py` and `tools/build.py` are unchanged — both already
+treat `run_id` as a free string with the only constraint being
+uniqueness (`tests/test_data_invariants.py::test_run_ids_unique`).
+The rename is purely a presentation improvement.
+
+### Run-picker filter chips — Platform / Dataset / Threads
+
+`web/js/components/run-picker.js` previously offered only a single
+free-text search box. With ~ 40 records, that was already cumbersome;
+once the Gadi `_sr_gcc_pin` corpus lands the picker will hold ~ 55+
+runs across 2 platforms × 4 datasets × up to 8 thread counts. The
+component now renders three rows of filter chips below the search box:
+
+* **Platform** — `All / Setonix / Gadi` (derived from `r.platform`)
+* **Dataset**  — `All / large_modelfinder.fa / xlarge_mf.fa / mega_dna.fa / …` (derived from `r.dataset_short`)
+* **Threads**  — `All / 1T / 4T / 8T / 16T / 32T / 64T / 104T / 128T` (derived from `r.threads`)
+
+The chips compose with the search box (AND semantics) and with each
+other, so e.g. "Setonix + large_modelfinder + 16T" yields exactly one
+record. Clicking the active chip a second time has no effect; clicking
+`All` clears that dimension. Chip values are derived dynamically from
+the loaded corpus, so as new records are added (Gadi `_sr_gcc_pin`,
+Setonix `xlarge_mf` `_smtoff_pin`) they appear automatically without
+code changes.
+
+CSS additions: `.rp-filters`, `.rp-filter-row`, `.rp-filter-k`,
+`.rp-chip-row`, `.rp-chip` (+ `.rp-chip:hover`, `.rp-chip.active`) in
+`web/css/overview.css`. Active-chip styling reuses the existing
+`--accent` token for visual consistency with the run trigger badge.
+
+### Action items queued (carried over from follow-up #3, with status)
+
+- ⏳ **Submit Gadi `large_modelfinder_*t_sr_gcc_pin` matrix** — submission
+  script ready (above); awaits Gadi login. **Highest priority.**
+- ⏳ **Submit Gadi `xlarge_mf_*t_sr_gcc_pin` matrix** — same login
+  session as the above.
+- ⏳ **`grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1** —
+  queued; runs on the next compute session.
+- ⏳ **Harvest Setonix `xlarge_mf` `_smtoff_pin` matrix** (jobs
+  42181135–42181142) once they exit the queue.
+
+### Conclusion
+
+The follow-up #3 verdict ("the >8T Setonix collapse is mathematically
+and physically sound") stands. This entry registers the **only
+remaining experiment** that can promote that verdict from "sound" to
+"definitive" — the Gadi gcc/libgomp rebuild — and ships two
+presentation improvements (canonical naming + filter chips) so the
+expanded corpus that experiment produces stays legible.
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #3) — UI fix, deep analysis of the >8T Setonix scaling collapse, residual-asymmetry checklist
 
 ### UI fix — overview run-picker dropped every other keystroke

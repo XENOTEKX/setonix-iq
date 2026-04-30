@@ -22,7 +22,10 @@ function fmtWall(s) {
 
 export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
   const sorted = [...runs].sort((a, b) => {
-    // group by dataset, then threads ascending
+    // group by platform, then dataset, then threads ascending
+    const pa = (a.platform || 'zzz');
+    const pb = (b.platform || 'zzz');
+    if (pa !== pb) return pa.localeCompare(pb);
     const da = a.dataset_short || a.dataset || '';
     const db = b.dataset_short || b.dataset || '';
     if (da !== db) return da.localeCompare(db);
@@ -36,6 +39,22 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
   // destroys the live input element, so we must re-focus + restore caret
   // on the freshly-rendered input or typing drops every other keystroke).
   let savedCaret = 0;
+  // Filter state. null = "All"; values are matched against r.platform,
+  // r.dataset_short, r.threads respectively.
+  let filterPlatform = null;
+  let filterDataset = null;
+  let filterThreads = null;
+
+  // Build unique sets of filter values from the data.
+  const uniqPlatforms = [...new Set(sorted.map(r => r.platform).filter(Boolean))].sort();
+  const uniqDatasets = [...new Set(sorted.map(r => r.dataset_short).filter(Boolean))].sort();
+  const uniqThreads  = [...new Set(sorted.map(r => r.threads).filter(t => t != null))]
+    .sort((a, b) => a - b);
+
+  const platLabel = (p) => {
+    if (!p) return p;
+    return p.charAt(0).toUpperCase() + p.slice(1);
+  };
 
   const root = document.createElement('div');
   root.className = 'run-picker';
@@ -43,16 +62,38 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
 
   const render = () => {
     const q = query.trim().toLowerCase();
-    const filtered = q
-      ? sorted.filter(r =>
-          (r.run_id || '').toLowerCase().includes(q) ||
-          (r.dataset_short || '').toLowerCase().includes(q) ||
-          (r.label || '').toLowerCase().includes(q) ||
-          (r.description || '').toLowerCase().includes(q) ||
-          String(r.threads || '').includes(q))
-      : sorted;
+    const filtered = sorted.filter(r => {
+      if (filterPlatform && r.platform !== filterPlatform) return false;
+      if (filterDataset && r.dataset_short !== filterDataset) return false;
+      if (filterThreads != null && r.threads !== filterThreads) return false;
+      if (!q) return true;
+      return (
+        (r.run_id || '').toLowerCase().includes(q) ||
+        (r.dataset_short || '').toLowerCase().includes(q) ||
+        (r.label || '').toLowerCase().includes(q) ||
+        (r.description || '').toLowerCase().includes(q) ||
+        (r.platform || '').toLowerCase().includes(q) ||
+        String(r.threads || '').includes(q)
+      );
+    });
 
     if (activeIdx >= filtered.length) activeIdx = Math.max(0, filtered.length - 1);
+
+    const chip = (label, isActive, onClickAttr) =>
+      `<button type="button" class="rp-chip${isActive ? ' active' : ''}" ${onClickAttr}>${label}</button>`;
+
+    const platChips = [chip('All', filterPlatform === null, 'data-filter="platform" data-value=""')]
+      .concat(uniqPlatforms.map(p =>
+        chip(platLabel(p), filterPlatform === p, `data-filter="platform" data-value="${p}"`)))
+      .join('');
+    const dsChips = [chip('All', filterDataset === null, 'data-filter="dataset" data-value=""')]
+      .concat(uniqDatasets.map(d =>
+        chip(d, filterDataset === d, `data-filter="dataset" data-value="${d}"`)))
+      .join('');
+    const thChips = [chip('All', filterThreads === null, 'data-filter="threads" data-value=""')]
+      .concat(uniqThreads.map(t =>
+        chip(`${t}T`, filterThreads === t, `data-filter="threads" data-value="${t}"`)))
+      .join('');
 
     root.classList.toggle('open', open);
     root.innerHTML = `
@@ -74,6 +115,11 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text3);"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="text" placeholder="Search by id, dataset, threads…" value="${query.replace(/"/g, '&quot;')}" autocomplete="off" />
           <span class="rp-hint">${filtered.length} of ${sorted.length}</span>
+        </div>
+        <div class="rp-filters">
+          <div class="rp-filter-row"><span class="rp-filter-k">Platform</span><div class="rp-chip-row">${platChips}</div></div>
+          <div class="rp-filter-row"><span class="rp-filter-k">Dataset</span><div class="rp-chip-row">${dsChips}</div></div>
+          <div class="rp-filter-row"><span class="rp-filter-k">Threads</span><div class="rp-chip-row">${thChips}</div></div>
         </div>
         <div class="rp-list">
           ${filtered.length === 0
@@ -104,6 +150,21 @@ export function mountRunPicker(container, runs, { selectedId, onChange } = {}) {
 
     const panel = root.querySelector('.run-picker-panel');
     panel?.addEventListener('click', (e) => e.stopPropagation());
+
+    root.querySelectorAll('.rp-chip').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const dim = el.dataset.filter;
+        const raw = el.dataset.value;
+        const val = raw === '' ? null : raw;
+        if (dim === 'platform') filterPlatform = val;
+        else if (dim === 'dataset') filterDataset = val;
+        else if (dim === 'threads') filterThreads = (val == null ? null : Number(val));
+        activeIdx = 0;
+        render();
+      });
+    });
 
     const input = root.querySelector('.rp-search input');
     if (input) {
