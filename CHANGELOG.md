@@ -9,7 +9,7 @@
 | Priority | Task | Blocker |
 |----------|------|---------|
 | ~~**CRITICAL**~~ | ~~Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/`~~ | ✅ **Done 2026-05-01** — full 1T–104T matrix harvested |
-| **CRITICAL** | Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures | All `xlarge_mf` speedup ratios are currently anchored to an archived run |
+| ~~**CRITICAL**~~ | ~~Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures~~ | ✅ **Done 2026-05-01** — wall=11077s, IPC=2.72, speedup baseline fixed |
 | **HIGH** | Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104) | Cross-platform comparison on the 200×100k dataset |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
 
@@ -131,7 +131,64 @@ assignment in `enrich_run()`.
 
 ---
 
-## 2026-04-30 (dashboard UX, follow-up #10) — Expanded-chart filter bar; legend legibility fix
+## 2026-05-01 (harvest, follow-up #11) — `Setonix_xlarge_mf_1T` canonical run harvested; speedup baseline corrected
+
+### SLURM job 42181135 completed
+
+The final pending Setonix run (`xlarge_mf.fa`, 1 thread, `_smtoff_pin`) completed
+on node `nid001938` after ~3 h 4 m 37 s. The queue is now empty.
+
+| Field | Value |
+|-------|-------|
+| Run ID | `Setonix_xlarge_mf_1T` |
+| SLURM job | 42181135 |
+| Host | nid001938 (AMD EPYC 7763, Setonix) |
+| Wall time | **11 077.325 s** (3h 4m 37s) |
+| IPC | **2.7216** |
+| Cache-miss-rate (L2) | 3.55% |
+| L1-dcache-miss-rate | 7.53% |
+| Branch-miss-rate | 0.07% |
+| Best model (BIC) | GTR+R4 (BIC 21 918 605.04) |
+
+The 1T IPC of **2.72** is the highest in the xlarge_mf corpus, consistent
+with single-thread behaviour: no cross-CCX coherence traffic, full
+in-order execution bandwidth at 3.49 GHz effective clock.
+
+### Speedup baseline fix (`tools/normalize.py`)
+
+`enrich_index_with_speedup()` previously selected the first available
+1-thread run as the baseline without filtering archived/non-canonical runs.
+With `Setonix_xlarge_mf_1T` now in the corpus alongside the old
+`xlarge_mf_1t_baseline_smton` (archived, SMT-on, wall=10554s), the old run
+was being selected as baseline first (alphabetical sort), giving inflated
+speedup figures. Fixed by adding `not r.get("archived") and not r.get("non_canonical")`
+to the baseline-selection guard.
+
+### Corrected xlarge_mf Setonix speedup table (now anchored to 11077 s)
+
+| Threads | Wall (s) | Speedup | Efficiency |
+|--------:|----------:|--------:|-----------:|
+| 1 | 11 077.3 | 1.000 | 1.0000 |
+| 4 | 4 435.5 | 2.497 | 0.6244 |
+| 8 | 3 854.3 | 2.874 | 0.3593 |
+| 16 | 3 580.0 | 3.094 | 0.1934 |
+| **32** | **3 301.9** | **3.355** | 0.1048 |
+| 64 | 3 547.2 | 3.123 | 0.0488 |
+| 104 | 6 846.1 | 1.618 | 0.0156 |
+| 128 | 7 261.3 | 1.526 | 0.0119 |
+
+Best thread count is **32T** (3.355× speedup). Efficiency drops sharply after
+16T (cross-CCD boundary on EPYC 7763), matching the `large_modelfinder`
+corpus profile (best at 32T, collapse from 64T+ as both sockets are engaged).
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `logs/runs/Setonix_xlarge_mf_1T.json` | New canonical run (added) |
+| `tools/normalize.py` | Skip archived/non_canonical runs in speedup baseline selection |
+
+---
 
 ### Expanded chart filters
 
