@@ -74,6 +74,7 @@ export function render(canvas, runsIndex) {
       pointRadius: 3,
       pointStyle: 'crossRot',
       borderWidth: 1.5,
+      hidden: true,
     });
   }
 

@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #8) — Non-canonical reference series visible on charts (hidden by default)
+
+All 33 non-canonical runs (16 Gadi `_sr_icx` + 17 Setonix `_baseline_smton`)
+now appear on all four dashboard charts as faded, dotted reference series. They
+are **hidden by default** — canonical runs are shown immediately on load, and
+reference series can be toggled on by clicking their legend entry.
+
+| Group | Count | Label suffix | Default visibility |
+|-------|------:|--------------|-------------------|
+| Gadi ICX (`_sr_icx`) | 16 | `· ICX (ref)` | Hidden |
+| Setonix SMT-on (`_baseline_smton`) | 17 | `· SMT-on (ref)` | Hidden |
+| Canonical Setonix / Gadi (pending) | 31 | *(none)* | **Visible** |
+
+Series styling for reference runs: alpha 0.45 border, `borderDash: [3,5]`,
+`crossRot` markers, `hidden: true` in Chart.js dataset. Clicking the legend
+entry toggles them on for direct comparison. The runs page shows an orange
+`NON-CANONICAL · <label>` badge and a dedicated filter option.
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #7) — Gadi `_sr_icx` corpus marked non-canonical; cross-platform comparison blocked pending `_sr_gcc_pin`
 
 ### Finding

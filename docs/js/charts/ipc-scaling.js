@@ -3,7 +3,7 @@
 // harvesting pending), so they will be absent from this view — that is expected
 // and an empty-state hint is rendered when no IPC points exist.
 
-import { platformColour } from '../utils.js?v=20260430153021';
+import { platformColour } from '../utils.js?v=20260430153241';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -67,6 +67,7 @@ export function render(canvas, runsIndex) {
       tension: 0.25,
       pointRadius: 3,
       borderWidth: 1.5,
+      hidden: true,
     });
   }
 

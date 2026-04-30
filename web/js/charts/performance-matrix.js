@@ -89,6 +89,7 @@ export function render(canvas, runsIndex) {
       borderColor: platformColour(plat, ds, 0.45),
       borderWidth: 1,
       pointStyle: 'crossRot',
+      hidden: true,
     });
   }
 

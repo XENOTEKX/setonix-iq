@@ -3,7 +3,7 @@
 // the same named datasets with different dimensions, so they must not share
 // a line.
 
-import { platformColour } from '../utils.js?v=20260430153021';
+import { platformColour } from '../utils.js?v=20260430153241';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -74,6 +74,7 @@ export function render(canvas, runsIndex) {
       pointRadius: 3,
       pointStyle: 'crossRot',
       borderWidth: 1.5,
+      hidden: true,
     });
   }
 

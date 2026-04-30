@@ -1,7 +1,7 @@
 // web/js/charts/efficiency.js — parallel efficiency (speedup/threads) vs threads,
 // grouped per (dataset, platform) so the Gadi and Setonix curves stay distinct.
 
-import { platformColour } from '../utils.js?v=20260430153021';
+import { platformColour } from '../utils.js?v=20260430153241';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -65,6 +65,7 @@ export function render(canvas, runsIndex) {
       tension: 0.25,
       pointRadius: 3,
       borderWidth: 1.5,
+      hidden: true,
     });
   }
   // Ideal efficiency = 1.0 reference

@@ -67,6 +67,7 @@ export function render(canvas, runsIndex) {
       tension: 0.25,
       pointRadius: 3,
       borderWidth: 1.5,
+      hidden: true,
     });
   }
 
