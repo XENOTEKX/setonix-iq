@@ -3,7 +3,7 @@
 // harvesting pending), so they will be absent from this view — that is expected
 // and an empty-state hint is rendered when no IPC points exist.
 
-import { platformColour } from '../utils.js?v=20260430152808';
+import { platformColour } from '../utils.js?v=20260430153021';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -26,7 +26,8 @@ export function render(canvas, runsIndex) {
     if (r.archived) continue;
     const plat = platformOf(r);
     if (r.non_canonical) {
-      const key = `${platformLabel(plat)} · ${r.dataset_short} · ICX (ref)`;
+      const refLabel = r.non_canonical_label || 'ref';
+      const key = `${platformLabel(plat)} · ${r.dataset_short} · ${refLabel}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds: r.dataset_short, points: [] });
       byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.IPC });
     } else {

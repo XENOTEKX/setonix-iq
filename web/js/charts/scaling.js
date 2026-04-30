@@ -28,7 +28,8 @@ export function render(canvas, runsIndex) {
     const plat = platformOf(r);
     const ds = r.dataset_short || r.dataset;
     if (r.non_canonical) {
-      const key = `${platformLabel(plat)} · ${ds} · ICX (ref)`;
+      const refLabel = r.non_canonical_label || 'ref';
+      const key = `${platformLabel(plat)} · ${ds} · ${refLabel}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds, points: [] });
       byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
     } else {

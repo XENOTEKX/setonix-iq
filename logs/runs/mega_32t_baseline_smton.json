@@ -1943,5 +1943,7 @@
     ]
   },
   "notes": "[2026-04-30 audit] This run was collected with SMT enabled on the Setonix `work` partition (256 logical CPUs, --cpus-per-task=128, no --exclusive, no OMP_PROC_BIND/PLACES, gcc default -O3 without -march=znver3, -mset GTR,HKY,K80). It is preserved here for the before/after comparison; the corrected SMT-off + pinned + full-MF + -march=znver3 corpus lives under labels ending in _smtoff_pin.",
-  "archived": true
+  "archived": false,
+  "non_canonical": true,
+  "non_canonical_label": "SMT-on (ref)"
 }

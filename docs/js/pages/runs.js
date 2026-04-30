@@ -1,10 +1,10 @@
 // web/js/pages/runs.js — leaderboard/list with expandable detail
 
-import { store } from '../state.js?v=20260430152808';
-import { loadRun } from '../data.js?v=20260430152808';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260430152808';
-import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430152808';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430152808';
+import { store } from '../state.js?v=20260430153021';
+import { loadRun } from '../data.js?v=20260430153021';
+import { bindCopyButtons } from '../components/copy-button.js?v=20260430153021';
+import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430153021';
+import * as hotspotChart from '../charts/hotspot.js?v=20260430153021';
 
 const TMPL = `
   <div class="page-header">
@@ -28,7 +28,7 @@ const TMPL = `
       <option value="fail">Fail</option>
       <option value="archived">Archived (pre-audit)</option>
       <option value="active">Active (non-archived)</option>
-      <option value="non_canonical">Non-canonical (ICX reference)</option>
+      <option value="non_canonical">Non-canonical (reference runs)</option>
     </select>
     <span class="count" id="runsCount"></span>
   </div>
@@ -109,7 +109,7 @@ function renderRow(r) {
   const archivedBadge = r.archived
     ? '<span class="badge badge-archived" title="Pre-audit run — collected under non-canonical conditions. Excluded from comparison charts.">ARCHIVED</span>'
     : r.non_canonical
-      ? '<span class="badge badge-non-canonical" title="Non-canonical: built with ICX compiler (Intel oneAPI) + VTune co-running. Shown as reference on charts — not parity-matched with gcc builds.">NON-CANONICAL · ICX</span>'
+      ? `<span class="badge badge-non-canonical" title="Non-canonical reference run — shown as reference on charts but not parity-matched with canonical builds.">${escHtml('NON-CANONICAL · ' + (r.non_canonical_label || 'ref'))}</span>`
       : '';
   const platformBadge = platform === 'gadi'
     ? '<span class="badge badge-platform-gadi" title="Run on NCI Gadi (Intel Sapphire Rapids)">Gadi · NCI</span>'

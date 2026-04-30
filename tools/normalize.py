@@ -221,6 +221,7 @@ def summarize_run(run: dict) -> dict:
         "dataset_canonical_note": ds_gt.get("dataset_canonical_note"),
         "archived": run.get("archived", False),
         "non_canonical": run.get("non_canonical", False),
+        "non_canonical_label": run.get("non_canonical_label", None),
     }
 
 
