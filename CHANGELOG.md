@@ -8,7 +8,7 @@
 
 | Priority | Task | Blocker |
 |----------|------|---------|
-| **CRITICAL** | Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/` | First parity-matched gcc vs gcc Setonix/Gadi comparison |
+| ~~**CRITICAL**~~ | ~~Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/`~~ | ✅ **Done 2026-05-01** — full 1T–104T matrix harvested |
 | **CRITICAL** | Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures | All `xlarge_mf` speedup ratios are currently anchored to an archived run |
 | **HIGH** | Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104) | Cross-platform comparison on the 200×100k dataset |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
@@ -28,6 +28,56 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-01 (harvest, follow-up #12) — Gadi `large_modelfinder` 1T, 16T, 32T, 64T, 104T `_sr_gcc_pin` harvested; full matrix complete
+
+### Runs harvested
+
+PBS jobs 167507204 (1T), 167507207 (16T), 167507208 (32T), 167507209 (64T) and
+167507210 (104T) completed and were harvested into `logs/runs/`.
+
+| Threads | PBS Job   | Wall time  | IPC    | LLC-miss | Verify   |
+|--------:|-----------|------------|--------|----------|----------|
+| 1T      | 167507204 | 2 450.5 s  | 2.432  | 37.9 %   | ✅ pass  |
+| 16T     | 167507207 |   347.9 s  | 1.247  | 32.4 %   | ✅ pass  |
+| 32T     | 167507208 |   283.1 s  | 0.857  | 60.6 %   | ✅ pass  |
+| 64T     | 167507209 |   412.6 s  | 0.358  | 78.2 %   | ✅ pass  |
+| 104T    | 167507210 |   515.5 s  | 0.193  | 83.6 %   | ✅ pass  |
+
+All runs report `loglik = -2690513.343` (matches expected) and `best_model = GTR+G4`.
+Dataset: `large_modelfinder.fa` (Gadi Sapphire Rapids, gcc/14.2.0, `normalsr` queue).
+
+The full `large_modelfinder _sr_gcc_pin` thread-scaling matrix (1T – 104T) is now
+complete on Gadi, enabling a parity-matched gcc vs gcc Setonix/Gadi comparison.
+
+### Matrix status after this harvest
+
+| Threads | PBS Job   | Status        |
+|--------:|-----------|-|
+| 1T      | 167507204 | ✅ harvested  |
+| 4T      | 167507205 | ✅ harvested  |
+| 8T      | 167507206 | ✅ harvested  |
+| 16T     | 167507207 | ✅ harvested  |
+| 32T     | 167507208 | ✅ harvested  |
+| 64T     | 167507209 | ✅ harvested  |
+| 104T    | 167507210 | ✅ harvested  |
+
+### Pending tasks updated
+
+`CRITICAL` harvest blocker for `large_modelfinder _sr_gcc_pin` matrix resolved.
+Next priorities: `xlarge_mf _sr_gcc_pin` matrix and `mega_dna _sr_gcc_pin` matrix.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `logs/runs/gadi_large_modelfinder_1t_sr_gcc_pin.json`   | New — 1T gcc/14.2.0 SPR run |
+| `logs/runs/gadi_large_modelfinder_16t_sr_gcc_pin.json`  | New — 16T gcc/14.2.0 SPR run |
+| `logs/runs/gadi_large_modelfinder_32t_sr_gcc_pin.json`  | New — 32T gcc/14.2.0 SPR run |
+| `logs/runs/gadi_large_modelfinder_64t_sr_gcc_pin.json`  | New — 64T gcc/14.2.0 SPR run |
+| `logs/runs/gadi_large_modelfinder_104t_sr_gcc_pin.json` | New — 104T gcc/14.2.0 SPR run |
 
 ---
 
