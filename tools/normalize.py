@@ -238,10 +238,14 @@ def enrich_index_with_speedup(index: list[dict]) -> None:
     for r in index:
         ds = r.get("dataset_short")
         plat = r.get("platform")
-        # Ignore failed / stub runs when choosing a baseline.
+        # Ignore failed / stub runs, archived runs, and non-canonical runs
+        # when choosing a baseline so the SMT-on proxy is never used once
+        # a canonical 1T run is present.
         if (ds and r.get("threads") == 1
                 and r.get("wall_s")
-                and r.get("all_pass")):
+                and r.get("all_pass")
+                and not r.get("archived")
+                and not r.get("non_canonical")):
             baseline.setdefault((ds, plat), r["wall_s"])
     for r in index:
         ds = r.get("dataset_short")
