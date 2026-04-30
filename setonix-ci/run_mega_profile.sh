@@ -27,10 +27,20 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
+#SBATCH --exclusive
+#SBATCH --hint=nomultithread
 #SBATCH --mem=230G
 #SBATCH --time=24:00:00
 #SBATCH --output=/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/logs/mega_%x_%j.out
 #SBATCH --error=/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/logs/mega_%x_%j.err
+
+# 2026-04-30 (methodology audit, round 2): added --exclusive,
+# --hint=nomultithread (SMT off so 128 logical = 128 physical cores), and
+# OMP_PROC_BIND/OMP_PLACES env below.  This brings the Setonix submission
+# to functional parity with the Gadi PBS Pro full-node cpuset.  The label
+# suffix flipped from "" (now treated as SMT-on legacy) to "_smtoff_pin"
+# so the new corpus does not collide with the old _baseline_smton.json
+# series.
 
 set -euo pipefail
 
@@ -46,10 +56,24 @@ DATASET_NAME="${DATASET:-mega_dna.fa}"
 DATASET="${BENCHMARKS}/${DATASET_NAME}"
 
 RUN_ID="${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
-# Label: stem of the dataset filename + thread count (e.g. xlarge_mf_64t).
+# Label: stem of the dataset filename + thread count + binding tag
+# (e.g. xlarge_mf_64t_smtoff_pin).  See 2026-04-30 changelog entry.
 DATASET_STEM="${DATASET_NAME%.fa}"
-LABEL="${DATASET_STEM}_${THREADS}t"
+LABEL_SUFFIX="${LABEL_SUFFIX:-smtoff_pin}"
+LABEL="${DATASET_STEM}_${THREADS}t_${LABEL_SUFFIX}"
 WORK_DIR="${PROFILE_ROOT}/${LABEL}_${RUN_ID}"
+
+# OpenMP pinning — matches Gadi PBS cpuset behaviour and stops Linux from
+# migrating threads across the two NUMA sockets at every barrier.
+export OMP_NUM_THREADS="${THREADS}"
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+# libgomp wait policy — Pawsey libgomp is unconditional spin which is what
+# starves cores at high T.  PASSIVE flips it to a yield-after-spin so threads
+# release their core when blocked at a barrier.  This is the closest match to
+# Gadi libiomp5's default.
+export OMP_WAIT_POLICY=PASSIVE
+export GOMP_SPINCOUNT=10000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. Pre-flight: dataset must exist AND its sha256 must match the canonical
@@ -62,10 +86,13 @@ if [[ ! -s "${DATASET}" ]]; then
     exit 2
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHA256_LOCKFILE="${SHA256_LOCKFILE:-${SCRIPT_DIR}/../benchmarks/sha256sums.txt}"
+# NOTE: Do NOT use BASH_SOURCE[0] / SCRIPT_DIR for path resolution when
+# submitted via sbatch — SLURM copies the script to a temp path before
+# execution, so a SCRIPT_DIR-relative path resolves into the SLURM daemon
+# directory.  Use PROJECT_DIR (hardcoded default) instead.
+SHA256_LOCKFILE="${SHA256_LOCKFILE:-${PROJECT_DIR}/benchmarks/sha256sums.txt}"
 if [[ -s "${SHA256_LOCKFILE}" ]]; then
-    expected="$(awk -v f="${DATASET_NAME}" '$2==f {print $1}' "${SHA256_LOCKFILE}")"
+    expected="$(awk -v f="${DATASET_NAME}" '/^[[:space:]]*#/ {next} $2==f {print $1}' "${SHA256_LOCKFILE}")"
     if [[ -n "${expected}" ]]; then
         actual="$(sha256sum "${DATASET}" | awk '{print $1}')"
         if [[ "${actual}" != "${expected}" ]]; then
@@ -310,11 +337,30 @@ ls_dispatch.ld_dispatch,ls_dispatch.store_dispatch"
 IQTREE_LOG="${WORK_DIR}/iqtree_run.log"
 START_EPOCH=$(date +%s)
 
+# Detect srun availability so the script still works in interactive (salloc)
+# sessions where srun would re-allocate.  Inside an sbatch script `srun` is
+# the supported launcher and takes care of CPU binding via --cpu-bind=cores.
+if [[ -n "${SLURM_JOB_ID:-}" ]] && command -v srun >/dev/null 2>&1; then
+    # --mem=0 tells srun to use the full node allocation memory without
+    # re-specifying a step-level limit.  Without it, SLURM can fail with
+    # "SLURM_MEM_PER_CPU and SLURM_MEM_PER_NODE are mutually exclusive"
+    # when the partition has a default mem-per-cpu and the job also sets --mem.
+    SRUN=( srun --cpus-per-task="${THREADS}" --cpu-bind=cores --hint=nomultithread --mem=0 )
+else
+    SRUN=( )
+fi
+NUMACTL=( )
+if command -v numactl >/dev/null 2>&1; then
+    NUMACTL=( numactl --localalloc )
+fi
+
 # Launch IQ-TREE under perf stat in background so the sampler can attach.
+# 2026-04-30: dropped `-mset GTR,HKY,K80` so ModelFinder runs the full
+# default search — matches Gadi (see 2026-04-26 audit).
 perf stat -e "${PERF_EVENTS}" \
     -o "${PERF_STAT_TXT}" \
+    "${SRUN[@]}" "${NUMACTL[@]}" \
     "${BUILD_DIR}/iqtree3" -s "${DATASET}" -T "${THREADS}" -seed 1 \
-    -mset GTR,HKY,K80 \
     --prefix "${WORK_DIR}/iqtree_run" > "${IQTREE_LOG}" 2>&1 &
 IQTREE_PID=$!
 
@@ -379,8 +425,8 @@ if [[ "${IQTREE_RC}" -eq 0 && "${SKIP_PERF_RECORD:-0}" != "1" ]]; then
     # was compiled.
     timeout --preserve-status "${PERF_RECORD_MAX_S}" \
         perf record --call-graph fp -F 99 -o "${PERF_DATA}" \
+        "${SRUN[@]}" "${NUMACTL[@]}" \
         "${BUILD_DIR}/iqtree3" -s "${DATASET}" -T "${THREADS}" -seed 1 \
-        -mset GTR,HKY,K80 \
         --prefix "${WORK_DIR}/iqtree_flame" > "${WORK_DIR}/iqtree_flame.log" 2>&1 || true
 
     if [[ -s "${PERF_DATA}" ]]; then

@@ -26,12 +26,17 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# NOTE: Do NOT use BASH_SOURCE[0] / SCRIPT_DIR for path resolution when this
+# script is submitted via sbatch.  SLURM copies the script to a temp path
+# (/var/spool/slurmd/job<id>/slurm_script) before execution, so a SCRIPT_DIR-
+# relative path resolves into the SLURM daemon directory, not the project tree.
+# All paths are anchored to PROJECT_DIR instead.
 PROJECT_DIR="${PROJECT_DIR:-/scratch/pawsey1351/asamuel/iqtree3}"
+SETONIX_CI_DIR="${SETONIX_CI_DIR:-${PROJECT_DIR}/setonix-ci}"
 BENCHMARKS="${BENCHMARKS:-${PROJECT_DIR}/benchmarks}"
-SHA256_LOCKFILE="${SHA256_LOCKFILE:-${SCRIPT_DIR}/../benchmarks/sha256sums.txt}"
-WORKER="${SCRIPT_DIR}/run_mega_profile.sh"
-GENERATOR="${SCRIPT_DIR}/generate_datasets.sh"
+SHA256_LOCKFILE="${SHA256_LOCKFILE:-${PROJECT_DIR}/benchmarks/sha256sums.txt}"
+WORKER="${WORKER:-${SETONIX_CI_DIR}/run_mega_profile.sh}"
+GENERATOR="${GENERATOR:-${SETONIX_CI_DIR}/generate_datasets.sh}"
 
 REGEN=0
 DEPEND_JID=""
@@ -54,10 +59,15 @@ done
 [[ -x "${WORKER}" ]] || { echo "ERROR: ${WORKER} missing or not executable" >&2; exit 1; }
 
 # ── matrix definition ────────────────────────────────────────────────────────
+# 2026-04-30 (round 2 audit): added 104T to every Setonix dataset to match
+# the Gadi normalsr per-node maximum, so the cross-platform curves overlap
+# at every thread point Gadi can run.  128T retained on Setonix only (Gadi
+# nodes cap at 104 physical cores).  -mset removed from the worker, so this
+# matrix now runs the *full* ModelFinder on every dataset \u2014 same as Gadi.
 declare -A MATRIX
-MATRIX[large_modelfinder.fa]="1 4 8 16 32 64"
-MATRIX[xlarge_mf.fa]="1 4 8 16 32 64 128"
-# mega_dna.fa intentionally excluded — already canonical (see CHANGELOG 2026-04-25).
+MATRIX[large_modelfinder.fa]="1 4 8 16 32 64 104"
+MATRIX[xlarge_mf.fa]="1 4 8 16 32 64 104 128"
+# mega_dna.fa intentionally excluded \u2014 already canonical (see CHANGELOG 2026-04-25).
 
 # ── (1) optional: submit the regen job first ─────────────────────────────────
 if [[ "${REGEN}" -eq 1 ]]; then

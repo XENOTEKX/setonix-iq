@@ -47,18 +47,26 @@ echo "║  Profiling:     ${BUILD_PROFILING}"
 echo "║  Repo:          ${IQTREE_REPO} (${IQTREE_REF})"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
+# Compiler parity with Setonix (2026-04-30 audit): build with gcc on both
+# clusters so libgomp / OpenMP barrier semantics, ABI, and codegen are the
+# only-vary-by-arch component.  intel-compiler-llvm + intel-vtune are NOT
+# loaded here on purpose — vtune is still loaded by the per-job worker for
+# profiling (it can attach to a gcc-built binary).
 if command -v module >/dev/null 2>&1; then
-    module load cmake/3.31.6                 2>/dev/null || true
-    module load intel-compiler-llvm/2024.2.0 2>/dev/null || true
-    module load gcc/14.2.0                   2>/dev/null || true
-    module load eigen/3.3.7                  2>/dev/null || true
-    module load boost/1.84.0                 2>/dev/null || true
+    module load cmake/3.31.6  2>/dev/null || true
+    module load gcc/14.2.0    2>/dev/null || true
+    # 2026-04-30 (round 2 audit): bumped eigen 3.3.7→3.4.0 and boost
+    # 1.84.0→1.86.0 to match the only versions available in the Setonix
+    # 2025.08 module tree (Setonix is the constrained side).  This
+    # eliminates rows 25/26 from the cross-platform parity matrix.
+    module load eigen/3.4.0   2>/dev/null || true
+    module load boost/1.86.0  2>/dev/null || true
 fi
 # Eigen3 include dir — set from module env, or fall back to known Gadi path.
 EIGEN3_INCLUDE_DIR="${EIGEN_ROOT:+${EIGEN_ROOT}/include/eigen3}"
-EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.3.7/include/eigen3}"
+EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.4.0/include/eigen3}"
 # Boost root — set from module env, or fall back to known Gadi path.
-BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.84.0}"
+BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.86.0}"
 
 mkdir -p "$(dirname "${SRC_DIR}")"
 
@@ -126,22 +134,18 @@ if grep -qE 'FetchContent_MakeAvailable\(googletest\)' "${CMAPLE_CML}"; then
 fi
 echo "[bootstrap] cmaple FetchContent disabled"
 
-# Compiler selection: prefer icx (Intel LLVM) for -xSAPPHIRERAPIDS. Fall back
-# to gcc with -march=sapphirerapids if icx is not on PATH.
-if command -v icx >/dev/null 2>&1; then
-    CC="$(command -v icx)"
-    CXX="$(command -v icpx)"
-    ARCH_FLAGS="-O3 -xSAPPHIRERAPIDS"
-    echo "[bootstrap] using Intel LLVM: $(${CC} --version | head -1)"
-elif command -v gcc >/dev/null 2>&1; then
-    CC="$(command -v gcc)"
-    CXX="$(command -v g++)"
-    ARCH_FLAGS="-O3 -march=sapphirerapids -mtune=sapphirerapids"
-    echo "[bootstrap] falling back to GCC: $(${CC} --version | head -1)"
-else
-    echo "ERROR: no icx or gcc on PATH" >&2
+# Compiler selection: gcc only (parity with Setonix).
+# Was: prefer icx with -xSAPPHIRERAPIDS — switched to gcc 2026-04-30 so
+# both clusters share the same OpenMP runtime (libgomp) and codegen.
+if ! command -v gcc >/dev/null 2>&1; then
+    echo "ERROR: gcc not on PATH (did you 'module load gcc/14.2.0'?)" >&2
     exit 2
 fi
+CC="$(command -v gcc)"
+CXX="$(command -v g++)"
+ARCH_FLAGS="-O3 -march=sapphirerapids -mtune=sapphirerapids"
+echo "[bootstrap] using GCC: $(${CC} --version | head -1)"
+echo "[bootstrap] arch flags: ${ARCH_FLAGS}"
 
 build_variant() {
     local build_dir="$1"

@@ -40,8 +40,8 @@ mkdir -p "${LOGS_DIR}" "${RUNS_DIR}"
 # Setonix used {1,4,8,16,32,64} for large/xlarge and {16,32,64,128} for mega_dna.
 # Gadi caps at 104 cores (no 128T), so mega_dna uses 16,32,64,104.
 declare -A MATRIX=(
-  [large_modelfinder]="1 4 8 16 32 64"
-  [xlarge_mf]="1 4 8 16 32 64"
+  [large_modelfinder]="1 4 8 16 32 64 104"
+  [xlarge_mf]="1 4 8 16 32 64 104"
   [mega_dna]="16 32 64 104"
 )
 
@@ -68,15 +68,19 @@ PROFILES_DIR="${PROJECT_DIR}/gadi-ci/profiles"
 
 DATASET_NAME="${DATASET:?DATASET env var required}"
 THREADS="${THREADS:?THREADS env var required}"
-LABEL="${LABEL:-${DATASET_NAME}_${THREADS}t_sr}"
+LABEL="${LABEL:-${DATASET_NAME}_${THREADS}t_sr_gcc_pin}"
 SEED="${SEED:-1}"
 
 DATA_PATH="${BENCHMARKS}/${DATASET_NAME}.fa"
 [[ -f "${DATA_PATH}" ]] || DATA_PATH="${BENCHMARKS}/${DATASET_NAME}"
 
 if command -v module >/dev/null 2>&1; then
-    module load intel-vtune/2024.2.0         2>/dev/null || true
-    module load intel-compiler-llvm/2024.2.0 2>/dev/null || true
+    # 2026-04-30 (round 2 audit): keep VTune for profiling but drop the Intel
+    # LLVM compiler module — the binary itself is now built with gcc (see
+    # gadi-ci/bootstrap_iqtree.sh).  Loading intel-compiler-llvm here would
+    # shadow the gcc-built libgomp at runtime.
+    module load gcc/14.2.0           2>/dev/null || true
+    module load intel-vtune/2024.2.0 2>/dev/null || true
 fi
 
 # VTune writes driver/temp files to TMPDIR.  On Gadi normalsr the default
@@ -99,6 +103,17 @@ cd "${WORK_DIR}"
 
 echo "[matrix] run_id=${RUN_ID} dataset=${DATA_PATH} threads=${THREADS}"
 
+# OpenMP pinning — mirrors setonix-ci/run_mega_profile.sh exactly so the two
+# clusters use the same thread-placement policy at every thread count.
+export OMP_NUM_THREADS="${THREADS}"
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+export OMP_WAIT_POLICY=PASSIVE
+export GOMP_SPINCOUNT=10000
+NUMACTL=( )
+if command -v numactl >/dev/null 2>&1; then
+    NUMACTL=( numactl --localalloc )
+fi
 # Gadi normalsr compute nodes run with /proc/sys/kernel/perf_event_paranoid=2.
 # That blocks all kernel-mode perf sampling and makes `perf stat` fail SILENTLY
 # when any requested event can't be opened — it writes no output file at all,
@@ -215,7 +230,8 @@ fp.close()
 SAMPLER_EOF
 
 START_EPOCH=$(date +%s)
-"${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
+"${NUMACTL[@]}" \
+    "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
             --prefix "${WORK_DIR}/iqtree_run" \
     > "${WORK_DIR}/iqtree_run.log" 2>&1 &
 IQTREE_PID=$!
@@ -237,6 +253,7 @@ wait "${SAMPLER_PID}" 2>/dev/null || true
 # Stderr is captured to perf_stat.err so silent failures are visible.
 if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
     perf stat -e "${PERF_EVENTS}" -o "${WORK_DIR}/perf_stat.txt" \
+        "${NUMACTL[@]}" \
         "${IQTREE}" -s "${DATA_PATH}" -T "${THREADS}" -seed "${SEED}" \
                     --prefix "${WORK_DIR}/iqtree_perf" \
         >"${WORK_DIR}/iqtree_perf.log" 2>"${WORK_DIR}/perf_stat.err" || true
@@ -524,7 +541,10 @@ for dataset in "${!MATRIX[@]}"; do
         threads=("${SELECT_THREADS[@]}")
     fi
     for t in "${threads[@]}"; do
-        label="${dataset}_${t}t_sr"
+        # 2026-04-30 round 2 audit: tag corrected corpus with _sr_gcc_pin so it
+        # does not collide with the legacy _sr (icx + libiomp5 + no-pin) corpus
+        # archived as *_sr_icx.json under logs/runs/.
+        label="${dataset}_${t}t_sr_gcc_pin"
         DEPEND_ARGS=()
         if [[ -n "${DEPEND_JOBID:-}" ]]; then
             DEPEND_ARGS=(-W "depend=afterok:${DEPEND_JOBID}")

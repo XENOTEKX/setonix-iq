@@ -42,9 +42,12 @@ BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build-profiling}"
 IQTREE="${IQTREE:-${BUILD_DIR}/iqtree3}"
 BENCHMARKS="${BENCHMARKS:-${PROJECT_DIR}/benchmarks}"
 
-# Path to the repo's canonical sha256 lockfile (relative to this script).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHA256_LOCKFILE="${SCRIPT_DIR}/../benchmarks/sha256sums.txt"
+# Path to the canonical sha256 lockfile.
+# NOTE: Do NOT use BASH_SOURCE[0] / SCRIPT_DIR here — SLURM copies the
+# script to /var/spool/slurmd/job<id>/slurm_script before execution, so
+# a SCRIPT_DIR-relative path resolves into the SLURM daemon directory,
+# not the project tree.  Use PROJECT_DIR (hardcoded default above) instead.
+SHA256_LOCKFILE="${SHA256_LOCKFILE:-${PROJECT_DIR}/benchmarks/sha256sums.txt}"
 
 mkdir -p "${BENCHMARKS}"
 
@@ -61,8 +64,19 @@ simulate() {
     local label="$1" taxa="$2" length="$3" seed="$4"
     local out="${BENCHMARKS}/${label}"
     if [[ -s "${out}" ]]; then
-        echo "[datagen] ${label} already present — skipping (delete to regenerate)"
-        return 0
+        # File present: verify hash before deciding to skip.
+        # A non-empty file with a wrong hash must be regenerated — do NOT skip.
+        local actual
+        actual="$(sha256sum "${out}" | awk '{print $1}')"
+        local expected_for_file
+        expected_for_file="$(awk -v f="${label}" '/^[[:space:]]*#/ {next} $2==f {print $1}' "${SHA256_LOCKFILE}" 2>/dev/null || true)"
+        if [[ -n "${expected_for_file}" && "${actual}" == "${expected_for_file}" ]]; then
+            echo "[datagen] ${label} already present and sha256 matches canonical — skipping"
+            return 0
+        else
+            echo "[datagen] ${label} present but sha256 mismatch — removing and regenerating"
+            rm -f "${out}"
+        fi
     fi
     echo "[datagen] simulating ${label}: ${taxa} taxa × ${length} bp, seed ${seed}"
     local work="${BENCHMARKS}/_sim_${label%.fa}"

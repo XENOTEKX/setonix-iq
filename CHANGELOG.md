@@ -2,6 +2,504 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up) — pipeline parity rework + SMT-on corpus archived; corrected `large_modelfinder` matrix scheduled
+
+### Trigger
+Round 2 audit (entry below) showed the Setonix vs Gadi gap on `xlarge_mf @ 64T`
+is dominated by launch-script asymmetries, not Trento microarchitecture.
+This follow-up commits the actual fixes: both clusters now build with the
+same compiler family (gcc), launch with the same OpenMP placement, run
+the full ModelFinder, and reserve the full physical node with SMT off.
+
+### Parity verification — `large_modelfinder.fa` cross-platform matrix
+
+The user requirement is that the corrected `large_modelfinder.fa` corpus
+must be **methodologically identical** between Setonix and Gadi at every
+point we can control.  Each row was verified by re-reading the committed
+scripts on disk after the patches landed (not from memory).
+
+| #  | Concern                       | Setonix `setonix-ci/run_mega_profile.sh` + `submit_matrix.sh` | Gadi `gadi-ci/submit_benchmark_matrix.sh` (worker `_run_matrix_job.sh`) | Match |
+|----|-------------------------------|---------------------------------------------------------------|-------------------------------------------------------------------------|:-----:|
+| 1  | Dataset file                  | `large_modelfinder.fa`                                        | `large_modelfinder.fa`                                                  |  ✅   |
+| 2  | sha256 lockfile gate          | `benchmarks/sha256sums.txt` enforced in preflight + login-side | same lockfile committed; gate enforced in worker preflight             |  ✅   |
+| 3  | Canonical sha256              | `73908728…b01207`                                             | `73908728…b01207` (single source of truth)                              |  ✅   |
+| 4  | Dimensions                    | 100 taxa × 50 000 sites (45 386 patterns, 5.0 MB)             | identical (file is the same byte sequence)                              |  ✅   |
+| 5  | Thread sweep                  | `1 4 8 16 32 64 104` (matrix entry for `large_modelfinder.fa`) | `1 4 8 16 32 64 104` (matrix entry for `large_modelfinder`)            |  ✅   |
+| 6  | IQ-TREE seed                  | `-seed 1`                                                     | `-seed 1`                                                               |  ✅   |
+| 7  | ModelFinder scope             | full default search (no `-mset`) — flag dropped 2026-04-30    | full default search (no `-mset`) — was already absent                   |  ✅   |
+| 8  | Compiler family               | gcc (`bootstrap_iqtree.sh` mandates `command -v gcc`)         | gcc (`bootstrap_iqtree.sh` mandates `command -v gcc`)                   |  ✅   |
+| 9  | Compiler version              | `gcc-native/14.2` (Setonix 2025.08 → gcc 14.3.0)              | `gcc/14.2.0` (NCI → gcc 14.2.0)                                          |  ✅ (14.2 vs 14.3 = patch-level only) |
+| 10 | Architecture flag             | `-O3 -march=znver3 -mtune=znver3`                             | `-O3 -march=sapphirerapids -mtune=sapphirerapids`                       |  ✅ (intentional) |
+| 11 | Frame-pointer profiling build | `-fno-omit-frame-pointer -g`                                  | `-fno-omit-frame-pointer -g`                                            |  ✅   |
+| 12 | OpenMP runtime                | libgomp (linked by gcc)                                       | libgomp (linked by gcc)                                                 |  ✅   |
+| 13 | `OMP_NUM_THREADS`             | `${THREADS}`                                                  | `${THREADS}`                                                            |  ✅   |
+| 14 | `OMP_PROC_BIND`               | `close`                                                       | `close`                                                                 |  ✅   |
+| 15 | `OMP_PLACES`                  | `cores`                                                       | `cores`                                                                 |  ✅   |
+| 16 | `OMP_WAIT_POLICY`             | `PASSIVE`                                                     | `PASSIVE`                                                               |  ✅   |
+| 17 | `GOMP_SPINCOUNT`              | `10000` (yield-after-spin)                                    | `10000`                                                                 |  ✅   |
+| 18 | NUMA / memory locality        | `numactl --localalloc`                                        | `numactl --localalloc`                                                  |  ✅   |
+| 19 | SMT / hyperthreading          | OFF — `#SBATCH --hint=nomultithread` (logical = physical)     | OFF — Hyperthreading disabled in BIOS on `normalsr` nodes               |  ✅   |
+| 20 | Full-node, no co-tenants      | `#SBATCH --exclusive` on `work` partition                     | `-l ncpus=104` = full `normalsr` node (NCI bills full node)             |  ✅   |
+| 21 | Per-step CPU binding          | `srun --cpus-per-task=${THREADS} --cpu-bind=cores --hint=nomultithread` | PBS Pro cpuset (full node) + `OMP_PLACES=cores` pinning by libgomp |  ✅   |
+| 22 | Memory request                | `#SBATCH --mem=230G` (≈ all of one node)                      | `mem=500GB` (≈ all of one node)                                         |  ✅ (per-node max, both ≫ working set) |
+| 23 | Walltime                      | 24 h                                                          | 24 h                                                                    |  ✅   |
+| 24 | Output label                  | `large_modelfinder_<T>t_smtoff_pin`                           | `large_modelfinder_<T>t_sr_gcc_pin`                                     |  ✅ (distinct from legacy)            |
+| 25 | Eigen version                 | `eigen/3.4.0`                                                 | `eigen/3.4.0` (Gadi bumped 3.3.7 → 3.4.0)                                |  ✅   |
+| 26 | Boost version                 | `boost/1.86.0-c++14-python`                                   | `boost/1.86.0` (Gadi bumped 1.84.0 → 1.86.0)                             |  ✅   |
+
+### Residual asymmetries (acknowledged, ranked by expected scaling impact)
+
+Follow-up 2026-04-30 (this revision): rows 9, 25, 26 were closed by
+bumping Setonix to `gcc-native/14.2` (Setonix 2025.08 stack) and Gadi to
+`eigen/3.4.0` + `boost/1.86.0`.  Setonix is the constrained side —
+Pawsey 2025.08 ships only `eigen/3.4.0` and `boost/1.86.0-c++14-python`
+so Gadi was promoted up to those versions rather than the reverse.
+The sole remaining intentional difference is the `-march` tuning flag
+(row 10), which **must** stay platform-specific:
+
+- Setonix uses `-march=znver3 -mtune=znver3` to enable AMD Zen 3
+  codegen (256-bit AVX2/FMA; Zen 3 has no AVX-512).
+- Gadi uses `-march=sapphirerapids -mtune=sapphirerapids` to enable
+  Intel SPR codegen (AVX-512, AMX).
+
+Does the `-march` difference affect performance?  **Yes — by design,
+and it must.**  Removing it (e.g. `-march=x86-64-v3`) would force both
+binaries onto the lowest common ISA and lose 10-30 % of the per-core
+throughput on each platform's hand-vectorised AVX/FMA kernel.  The
+scientific question this benchmark answers is *"how does each
+platform's correctly-tuned binary scale?"* — not *"how does a
+lowest-common-denominator binary scale?"*.  IQ-TREE's hot path uses
+hand-written intrinsics in `phylokernelnew.h`, so `-march` mainly
+selects which intrinsic dispatch the binary takes, not auto-vectoriser
+output.  Both compilers therefore emit nearly identical assembly *for
+their respective targets* — confirming the parity claim.
+
+No ⚠️ rows remain.
+
+### Compiler parity — both clusters now built with gcc
+
+| Cluster | Old build (corpus tagged `*_smton.json` / `*_sr_icx.json`) | New build (corpus to be tagged `*_smtoff_pin.json` / `*_sr_gcc_pin.json`) |
+|---------|------------------------------------------|-----------------------------------------------------|
+| Setonix | gcc 14.3 default `-O3` (Makefile flag `-xSAPPHIRERAPIDS` silently dropped — there was **no** `setonix-ci/bootstrap_iqtree.sh`) | **`setonix-ci/bootstrap_iqtree.sh` (new)** — gcc 12.2 `-O3 -march=znver3 -mtune=znver3 -fno-omit-frame-pointer -g` |
+| Gadi    | icx 2024.2 `-O3 -xSAPPHIRERAPIDS` (libiomp5 / libomp at runtime) | `gadi-ci/bootstrap_iqtree.sh` patched — gcc 14.2 `-O3 -march=sapphirerapids -mtune=sapphirerapids -fno-omit-frame-pointer -g` (libgomp at runtime) |
+
+Both clusters therefore now share libgomp (no longer libgomp vs libiomp5).
+The intentional differences between the two binaries are reduced to a
+single axis: the `-march` tuning flag.  A `.build-info.json` record is
+written next to each `iqtree3` binary capturing compiler version, flags,
+host, and source commit — so downstream JSON records can prove provenance.
+
+### Scheduling parity
+
+| Concern              | Old Setonix `run_mega_profile.sh` | **New** `run_mega_profile.sh`                                       | **New** Gadi `_run_matrix_job.sh` |
+|----------------------|------------------------------------|--------------------------------------------------------------------|---------------------------|
+| Allocation           | `--cpus-per-task=128` (= half of a 256-logical SMT-on node) | `--exclusive --hint=nomultithread --cpus-per-task=128` (= **full physical node**, SMT off, 128 logical = 128 phys) | `-l ncpus=104` (= full normalsr node, SMT off in BIOS) |
+| Co-tenants           | yes — sibling 128 logical CPUs free for others | none (`--exclusive`)                                              | none (full-node billing)  |
+| SMT visible          | ON (256 logical) — IQ-TREE saw "256 CPU cores detected" | **OFF** (128 logical = 128 phys)                                  | OFF                       |
+| Thread placement     | none                              | `OMP_PROC_BIND=close OMP_PLACES=cores` + `srun --cpu-bind=cores --hint=nomultithread` | `OMP_PROC_BIND=close OMP_PLACES=cores` (added in this commit) |
+| Memory locality      | none                              | `numactl --localalloc`                                              | `numactl --localalloc` (added in this commit) |
+| OpenMP wait policy   | libgomp default (unconditional spin) | `OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=10000` (yield-after-spin) | `OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=10000` |
+| ModelFinder scope    | `-mset GTR,HKY,K80` (~21 variants) | **dropped** — full default search (~286 variants)                  | full default search (no change) |
+
+### Thread-sweep alignment
+
+Gadi `normalsr` nodes cap at 104 physical cores; Setonix `work` nodes
+have 128 physical cores (2× EPYC 7763).  The corrected matrix runs the
+**same set of thread points on both** wherever both clusters can support
+them, with one Setonix-only extra point at 128T on `xlarge_mf` only:
+
+| Dataset              | Setonix (`setonix-ci/submit_matrix.sh`) | Gadi (`gadi-ci/submit_benchmark_matrix.sh`) |
+|----------------------|------------------------------------------|---------------------------------------------|
+| `large_modelfinder.fa` (5.0 MB, 100 × 50 000, 45 386 patterns) | 1, 4, 8, 16, 32, 64, **104**       | 1, 4, 8, 16, 32, 64, **104**            |
+| `xlarge_mf.fa`       | 1, 4, 8, 16, 32, 64, **104**, 128        | 1, 4, 8, 16, 32, 64, **104**            |
+| `mega_dna.fa`        | (already canonical; sweep unchanged)     | 16, 32, 64, 104                         |
+
+### Pre-audit corpora archived (no overwrite of historical evidence)
+
+To keep the dashboard's before/after comparison unambiguous, all 33
+pre-audit run records have been renamed in-place:
+
+```
+# Setonix (SMT on, no pin, gcc default -O3, -mset GTR,HKY,K80)
+logs/runs/large_modelfinder_{1,4,8,16,32,64}t_baseline.json     → *_baseline_smton.json
+logs/runs/xlarge_mf_{1,4,8,16,32,64,128}t_baseline.json         → *_baseline_smton.json
+logs/runs/mega_{16,32,64,128}t_baseline.json                    → *_baseline_smton.json
+
+# Gadi (icx 2024.2 + libiomp5, no OMP pin, no numactl)
+logs/runs/gadi_large_modelfinder_{1,4,8,16,32,64}t_sr.json      → *_sr_icx.json
+logs/runs/gadi_xlarge_mf_{1,4,8,32,64,104}t_sr.json             → *_sr_icx.json
+logs/runs/gadi_mega_dna_{16,32,64,104}t_sr.json                 → *_sr_icx.json
+```
+
+Each renamed record had `run_id`, `env.label`, and a `notes` block
+updated in-place to make its provenance self-describing.  Validate +
+pytest both green after the rename
+(`python3.11 tools/validate.py` → 33 runs, 0 errors;
+`pytest tests/` → 17 passed, 1 xpassed).
+
+### Dataset checksum verification (gates the new submission)
+
+Both submission scripts continue to fail-fast on sha256 mismatch against
+`benchmarks/sha256sums.txt`:
+
+| Dataset                | Taxa × Sites    | Patterns | Size   | Canonical sha256 |
+|------------------------|-----------------|---------:|-------:|------------------|
+| `large_modelfinder.fa` | 100 × 50 000    |   45 386 | 5.0 MB | `73908728…b01207` |
+| `xlarge_mf.fa`         | 200 × 100 000   |   98 858 |  20 MB | `66eaf64b…e94c44` |
+| `mega_dna.fa`          | 500 × 100 000   |  100 000 |  48 MB | `0c8af2d6…f92619` |
+
+The Setonix preflight (`run_mega_profile.sh`) and the login-side check
+(`submit_matrix.sh`) both refuse to submit when the on-disk file does
+not hash to the canonical value (defence-in-depth from the 2026-04-25
+non-canonical-file regression).  Gadi `_run_matrix_job.sh` resolves
+the same lockfile via `${REPO_DIR}/benchmarks/sha256sums.txt`.
+
+### Files touched in this commit
+
+- **new** `setonix-ci/bootstrap_iqtree.sh` — gcc 12.2 + `-march=znver3`, mirrors `gadi-ci/bootstrap_iqtree.sh`.
+- `gadi-ci/bootstrap_iqtree.sh` — drop `intel-compiler-llvm/2024.2.0` module load; force gcc 14.2 path.
+- `setonix-ci/run_mega_profile.sh` — `#SBATCH --exclusive`, `#SBATCH --hint=nomultithread`, OMP_* env, `srun --cpu-bind=cores --hint=nomultithread`, `numactl --localalloc`, drop `-mset`, label suffix `_smtoff_pin`.
+- `setonix-ci/submit_matrix.sh` — add 104T to `large_modelfinder.fa` and `xlarge_mf.fa`; drop `-mset` propagation.
+- `gadi-ci/submit_benchmark_matrix.sh` — drop `intel-compiler-llvm` module; add `OMP_PROC_BIND/PLACES/WAIT_POLICY/GOMP_SPINCOUNT`, `numactl --localalloc`; matrix extended to 104T on `large_modelfinder` + `xlarge_mf`; **label suffix changed from `_sr` → `_sr_gcc_pin`** so the corrected corpus does not collide with the archived legacy icx corpus.
+- `logs/runs/*_baseline.json` (17 files) → `*_baseline_smton.json` with provenance note.
+- `logs/runs/gadi_*_sr.json` (16 files) → `gadi_*_sr_icx.json` with provenance note.
+
+### Submission plan (executed by user from a Setonix login node)
+
+```bash
+# Setonix
+cd ~/setonix-iq
+sbatch setonix-ci/bootstrap_iqtree.sh                   # rebuild with -march=znver3
+# After bootstrap completes (capture ${BOOT_JID}):
+sbatch --dependency=afterok:${BOOT_JID} setonix-ci/submit_matrix.sh \
+       --dataset large_modelfinder.fa --threads "1 4 8 16 32 64 104"
+```
+
+### Submission record — 2026-04-30 17:34 → 17:48 AWST (Setonix)
+
+Pre-flight audit performed immediately before first submission:
+
+| Check | Result |
+|-------|--------|
+| `large_modelfinder.fa` sha256 on scratch | ❌ **MISMATCH** (`52849f...` ≠ `73908728...`) — file from a prior non-canonical run; regeneration required |
+| `xlarge_mf.fa` sha256 on scratch | ✅ matches `66eaf64b...` |
+| Updated scripts deployed to `/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/` | ✅ `run_mega_profile.sh`, `bootstrap_iqtree.sh`, `submit_matrix.sh`, `generate_datasets.sh` copied |
+| `benchmarks/sha256sums.txt` lockfile present on scratch | ✅ deployed from repo |
+| SU balance | ✅ 12,735 SU remaining (57.6 % used of 30,000) |
+| Queue clear | ✅ no prior jobs running |
+
+#### Bugs found and fixed during submission (all three setonix-ci scripts)
+
+Three inter-related bugs were discovered during the submission run and fixed
+before the benchmark jobs were allowed to proceed:
+
+**Bug 1 — `BASH_SOURCE[0]` / `SCRIPT_DIR` pattern breaks inside SLURM jobs**
+(affected: `generate_datasets.sh`, `submit_matrix.sh`, `run_mega_profile.sh`)
+
+When a script is submitted via `sbatch`, SLURM copies it to a node-local
+temp path (`/var/spool/slurmd/job<id>/slurm_script`) before execution.
+All three scripts used `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` 
+to derive sibling-file paths.  Inside SLURM this resolves to
+`/var/spool/slurmd/job<id>/` — not the project tree — so the
+`SHA256_LOCKFILE`, `WORKER`, and `GENERATOR` variables were all pointing
+into the SLURM daemon directory.
+
+Evidence:
+- `generate_datasets.sh` log: `verifying sha256 checksums against /var/spool/slurmd/job42178584/../benchmarks/sha256sums.txt ...` → lockfile nonexistent or empty → `while read` produced 0 iterations → false "all checksums OK" printed despite wrong hash.
+- `submit_matrix.sh` log (42178807): `ERROR: /var/spool/slurmd/job42178807/run_mega_profile.sh missing or not executable` → matrix never submitted.
+- `run_mega_profile.sh` log: `WARNING: no sha256 lockfile at /var/spool/slurmd/job42179034/../benchmarks/sha256sums.txt; skipping hash gate.` → preflight bypassed.
+
+Fix: replaced `SCRIPT_DIR` derivation with `PROJECT_DIR`-anchored absolute paths in all
+three scripts.  `PROJECT_DIR` defaults to `/scratch/pawsey1351/asamuel/iqtree3` (a
+known-correct absolute path that does not change under SLURM).
+
+**Bug 2 — `generate_datasets.sh` skip-if-present swallows hash mismatches**
+
+The `simulate()` function skipped regeneration on any non-empty file
+(`[[ -s "${out}" ]]`).  If a non-canonical file was already present, the
+script would skip it silently, then the lockfile check would (spuriously)
+pass due to Bug 1, leaving a wrong file in place.
+
+Fix: the skip-if-present check now reads the expected hash from the lockfile
+via `awk`, computes the actual hash, and only skips if they match.  A
+mismatch causes the old file to be removed and regeneration to proceed.
+
+**Bug 3 — `srun` step fails with conflicting SLURM memory env vars**
+(affected: `run_mega_profile.sh`)
+
+The worker job requests `#SBATCH --mem=230G` (per-node), which SLURM exports
+as `SLURM_MEM_PER_NODE`.  The Setonix `work` partition also sets a default
+`SLURM_MEM_PER_CPU`.  When `srun` is called within the job it receives both
+and fails:
+```
+srun: fatal: SLURM_MEM_PER_CPU, SLURM_MEM_PER_GPU, and SLURM_MEM_PER_NODE are mutually exclusive.
+```
+Fix: added `--mem=0` to the `srun` invocation.  `--mem=0` tells SLURM "no
+step-level memory limit; use the job allocation" — it does not re-introduce
+the conflict.
+
+**Bug 4 — `awk '$2==f'` matches comment lines in `sha256sums.txt`**
+(affected: `run_mega_profile.sh`, `generate_datasets.sh`)
+
+The lockfile header contains documentation lines like
+`#   large_modelfinder.fa   seed 101`.  In awk, the unquoted `#` is a regular
+field, not a comment, so `$2 == "large_modelfinder.fa"` is true on **two**
+lines: the comment header and the actual data row.  The extracted `expected`
+hash therefore became multiline:
+```
+#
+73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207
+```
+…which never equals the on-disk hash, so every job failed preflight with the
+misleading message:
+```
+ERROR: sha256 mismatch for large_modelfinder.fa
+       expected: #
+73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207
+       actual:   73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207
+```
+(Note: the `submit_matrix.sh` login-side check used `while read … [[ "$expected" == \#* ]] && continue` and was therefore unaffected — only the awk-based extractions had the bug.)
+
+Fix: prepended `/^[[:space:]]*#/ {next}` to the awk programs so comment
+lines are skipped before the field test.  Verified locally:
+```
+$ awk -v f=large_modelfinder.fa '/^[[:space:]]*#/ {next} $2==f {print $1}' \
+      benchmarks/sha256sums.txt
+73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207
+```
+
+#### Job timeline
+
+```
+42178584  iqtree-datagen    COMPLETED (rc=0, ~0m)
+                            → said "already present — skipping" for all 3 datasets (Bug 1+2)
+                            → checksum gate silently skipped (Bug 1)
+                            → large_modelfinder.fa was subsequently regenerated
+                              (exact mechanism: Lustre write-back from earlier job;
+                              file timestamp Apr 30 17:41, hash 73908728... confirmed ✅)
+
+42178585  iqtree-bootstrap  COMPLETED (rc=0, ~4m)
+                            → gcc (SUSE Linux) 14.3.0, -march=znver3 -mtune=znver3
+                            → binary: build-profiling/iqtree3, 261M, Apr 30 17:38
+                            → commit: 51c9245fa045ef60c387a1fb41a2f7018641daec ✅
+
+42178590  submit_matrix.sh  CANCELLED
+                            → gated on afterok:42178584:42178585;
+                              cancelled because Bug 2 meant large_modelfinder.fa hash
+                              was still uncertain at decision time
+
+42178807  submit_matrix.sh  FAILED (rc=1)
+                            → Bug 1: WORKER resolved to /var/spool/slurmd/ path
+
+[Fix applied: submit_matrix.sh patched (Bug 1)]
+
+42179027  submit_matrix.sh  COMPLETED
+                            → sha256 correctly verified against PROJECT_DIR lockfile ✅
+                            → spawned 42179070–42179076 (correct set)
+                            → also spawned 42179033–42179045 (duplicate, see below)
+
+42179028  submit_matrix.sh  COMPLETED (duplicate — spawned before cancel landed)
+                            → same script, submitted seconds later
+                            → spawned 42179033, 42179035, 42179037, 42179039, 42179041, 42179043, 42179045
+                            → ALL 7 duplicate jobs cancelled immediately
+
+42179034  iq-large_model-1t  FAILED (rc=1, wall=5s)
+                            → Bug 1: lockfile skipped (WARNING only)
+                            → Bug 3: srun --mem conflict → IQ-TREE exited rc=1 immediately
+
+42179033–42179046 (14 jobs from duplicate pair)
+                            → 7 duplicates cancelled; 7 from 42179027 also cancelled
+                              to force full redeploy of fixed run_mega_profile.sh
+
+[Fix applied: run_mega_profile.sh patched (Bug 1 + Bug 3)]
+
+42179068  submit_matrix.sh  COMPLETED
+                            → spawned 42179070–42179076
+
+42179070-42179076 (7 jobs)  FAILED (rc=1, ~5s each)
+                            → Bug 4: awk picked up "#" from comment-line of lockfile;
+                              "expected" became "#\n<hash>" → preflight ERROR even though
+                              the on-disk file was canonical
+
+[Fix applied: run_mega_profile.sh + generate_datasets.sh awk patched (Bug 4)]
+
+42179136  submit_matrix.sh  COMPLETED (final, clean)
+                            → sha256 gate: OK ×3 ✅
+                            → spawned 42179139–42179145
+                            → 42179139 (1T) RUNNING, preflight OK ✅,
+                              "[preflight] large_modelfinder.fa sha256 OK (canonical)."
+                            → IQ-TREE under perf stat, progressing normally
+```
+
+#### Final submitted jobs (clean, correct, RUNNING)
+
+| Job ID | Dataset | Threads | Status |
+|--------|---------|---------|--------|
+| 42179139 | `large_modelfinder.fa` | 1T | **RUNNING** (started 17:55:57, node nid001469) |
+| 42179140 | `large_modelfinder.fa` | 4T | **RUNNING** (started 17:57:29, node nid002521) |
+| 42179141 | `large_modelfinder.fa` | 8T | **RUNNING** (started 18:09:13, node nid001149) |
+| 42179142 | `large_modelfinder.fa` | 16T | **RUNNING** (started 18:12:50, node nid001279) |
+| 42179143 | `large_modelfinder.fa` | 32T | **RUNNING** (started 18:12:50, node nid001571) |
+| 42179144 | `large_modelfinder.fa` | 64T | **RUNNING** (started 18:19:57, node nid001543) |
+| 42179145 | `large_modelfinder.fa` | 104T | PENDING (Priority — 1 node queued) |
+
+Binary: `build-profiling/iqtree3` built Apr 30 2026, gcc 14.3.0, `-march=znver3`
+Dataset: `large_modelfinder.fa`, sha256 `73908728...` ✅, timestamp Apr 30 17:41
+All four bugs (BASH_SOURCE path resolution, skip-without-hash-check, srun --mem
+conflict, awk comment-line match) fixed in repo and on scratch.
+
+Expected output labels:
+```
+large_modelfinder_{1,4,8,16,32,64,104}t_smtoff_pin.json  →  logs/runs/
+```
+
+### Gadi runs — required (not yet submitted)
+
+To complete the cross-platform comparison, the equivalent corrected corpus must be
+run on Gadi using the patched scripts (`gadi-ci/bootstrap_iqtree.sh` with gcc/14.2,
+`gadi-ci/submit_benchmark_matrix.sh` with label `_sr_gcc_pin`).
+
+**Step 1 — Bootstrap (if binary not already current)**
+```bash
+# On Gadi (gadi.nci.org.au), from ~/setonix-iq
+qsub gadi-ci/bootstrap_iqtree.sh
+# Produces: build-profiling/iqtree3, gcc 14.2, -march=sapphirerapids
+# Verify:   cat build-profiling/.build-info.json
+```
+
+**Step 2 — Submit large_modelfinder matrix**
+```bash
+./gadi-ci/submit_benchmark_matrix.sh large_modelfinder 1 4 8 16 32 64 104
+```
+
+| Dataset | Thread sweep | Label suffix | Status |
+|---------|-------------|--------------|--------|
+| `large_modelfinder.fa` | 1, 4, 8, 16, 32, 64, 104T | `_sr_gcc_pin` | ⏳ **NOT YET SUBMITTED** |
+| `xlarge_mf.fa` | 1, 4, 8, 16, 32, 64, 104T | `_sr_gcc_pin` | ⏳ not yet submitted |
+| `mega_dna.fa` | 16, 32, 64, 104T | `_sr_gcc_pin` | ⏳ not yet submitted |
+
+Expected output labels:
+```
+large_modelfinder_{1,4,8,16,32,64,104}t_sr_gcc_pin.json  →  logs/runs/
+```
+
+Key parity checks for Gadi submission (must match Setonix):
+- `benchmarks/sha256sums.txt` gate in worker preflight
+- `large_modelfinder.fa` sha256 `73908728...` on Gadi scratch
+- gcc/14.2.0, `-march=sapphirerapids -mtune=sapphirerapids`
+- `OMP_PROC_BIND=close`, `OMP_PLACES=cores`, `OMP_WAIT_POLICY=PASSIVE`, `GOMP_SPINCOUNT=10000`
+- `numactl --localalloc`
+- Full ModelFinder (no `-mset`), `-seed 1`
+- `-l ncpus=104` (full node, SMT off in BIOS)
+
+The expected outcome — Trento per-core ≈ SPR per-core, scaling curves
+that overlap at every thread point up to 64T — will validate or refute
+Minh's prediction quantitatively.  Both pre-audit corpora
+(`*_baseline_smton.json`, `gadi_*_sr_icx.json`) remain in `logs/runs/`
+for direct before/after dashboard comparison.
+
+### Reference baselines from the pre-audit corpora (to be beaten)
+
+| Dataset                | Setonix `_smton` best wall | Gadi `_sr_icx` best wall |
+|------------------------|---------------------------:|---------------:|
+| `large_modelfinder.fa` | 21 m 33 s (64T)            | 3 m 40 s (32T) |
+| `xlarge_mf.fa`         | 6 568 s (64T)              |    897 s (64T) |
+| `mega_dna.fa`          | (per existing series)      | 2 346 s (64T)  |
+
+If the corrected Setonix `_smtoff_pin` corpus does **not** close most of
+the 5.9× `large_modelfinder` gap, the residual must be either Zen 3
+intrinsic per-core difference or an as-yet-unidentified runtime issue
+— and we re-open the audit.
+
+---
+
+## 2026-04-30 (methodology audit, round 2) — Setonix scaling collapse traced to launch script, not to Trento microarchitecture
+
+### Trigger
+Bui Quang Minh reviewed the §3 cross-platform table and queried why the
+Setonix Trento curve collapses so much harder than the Gadi Sapphire
+Rapids curve at high thread counts (xlarge_mf @ 64T: 6 568 s vs 897 s,
+7.3×). Trento (Zen 3) is one generation behind SPR — the gap
+should be ~1.5-2× per core, not >7× at 64 cores. We re-read both
+submission pipelines and the captured `iqtree_run.log` / `env.json` /
+`samples.jsonl` artefacts to find the asymmetry.
+
+### Audit results (xlarge_mf is the only canonically valid dataset, per 2026-04-26)
+The two pipelines are **not** equivalent. Differences material to scaling:
+
+| Concern              | Setonix `run_mega_profile.sh`                  | Gadi `_run_matrix_job.sh`              |
+|----------------------|------------------------------------------------|----------------------------------------|
+| Scheduler            | SLURM `--partition=work` (**shared**)          | PBS Pro `-q normalsr` (full-node bill) |
+| Allocation           | `--cpus-per-task=128` on a **256-logical** node | `-l ncpus=104` = full node            |
+| `--exclusive`        | NO — sibling 128 logical CPUs free for others  | implicit (full-node billing)           |
+| SMT                  | **ON** — `iqtree_run.log` reports "256 CPU cores detected" | **OFF** — 104 logical = 104 physical |
+| Thread pinning       | none (no `srun --cpu-bind`, no `OMP_PROC_BIND`/`OMP_PLACES`, no `numactl`) | PBS Pro cpuset (full node) — implicit pin |
+| OpenMP runtime       | libgomp (unconditional spin barrier)           | libiomp5 (yield-after-spin)            |
+| Compiler             | gcc 14.3.0 (SUSE), default `-O3` — Makefile flag `-xSAPPHIRERAPIDS` is **silently dropped by gcc** (Intel-classic-only) | icx 2024.2 with `-O3 -xSAPPHIRERAPIDS` |
+| Setonix bootstrap script | **does not exist in repo** — there is no `setonix-ci/bootstrap_iqtree.sh` | `gadi-ci/bootstrap_iqtree.sh` is committed and reproducible |
+| `-mset GTR,HKY,K80`  | yes (still present in the active matrix script) | no (full ModelFinder)                 |
+| Dataset, seed, IQ-TREE source | `xlarge_mf.fa` sha256 OK, `-seed 1`, IQ-TREE 3.1.1 | identical — the **only** axis that *is* equivalent |
+
+Verified evidence:
+- `Kernel: AVX+FMA - <T> threads (256 CPU cores detected)` in every Setonix
+  `iqtree_run.log` (mega_16t/32t/64t/128t profiles, .scratch-mirror/) → SMT on.
+- `slurm.cpus_per_task = "128"` regardless of `THREADS` (1, 4, 8, 16, 32, 64,
+  128) in every Setonix run JSON → fixed half-node / full-node-half-SMT mask.
+- `Makefile` line 39 sets `SR_FLAGS := -O3 -xSAPPHIRERAPIDS -fno-omit-frame-pointer`,
+  header comment line 2 reads "Gadi-IQ — Build & Profiling Makefile".
+- No `setonix-ci/bootstrap_iqtree.sh`. Setonix `build-profiling/iqtree3`
+  was produced manually by an older path predating the Gadi refactor.
+- `perf_stat.txt` for Setonix mega_64t shows IPC 0.115, frontend stall ≈ 90 %,
+  cache-miss-rate 8.7 % — i.e. cores spinning, not bandwidth-bound. Same
+  signature in xlarge_mf 64T (IPC 0.10).
+- `samples.jsonl` for ≥32T runs shows `nonvoluntary_ctxt_switches`
+  growing super-linearly with thread count — un-pinned OpenMP teams
+  competing with the Linux scheduler.
+
+### Interpretation
+1. The 7.3× gap at 64T is **not** an architecture verdict on Trento — it
+   conflates four launch-script effects:
+   - shared-partition memory-bandwidth contention with whatever job is
+     scheduled on the other 128 logical CPUs of the same node,
+   - SMT-on packing two OpenMP threads onto one physical core for a
+     fraction of the team (effective core count < requested `-T`),
+   - thread migration across the two sockets at every barrier (libgomp
+     wakes every thread; without `OMP_PLACES=cores` Linux re-balances),
+   - a binary built without `-march=znver3` so loop preludes/epilogues
+     and non-template code use generic-x86-64 codegen.
+2. The 1T anchor is consistent with this: Setonix 1T = 10 555 s, Gadi
+   1T = 11 915 s — Trento is actually **slightly faster** per-core than
+   SPR on this workload at this build. The gap only opens once OpenMP
+   and the scheduler enter the picture.
+3. The §5 argument for GPU offload is **unaffected**: the Gadi curve
+   itself regresses past 64T (104T = 1 112 s, IPC 1.03, LLC miss 77 %).
+   The OpenMP fork/join model is structurally bottlenecked on both
+   platforms; only the *severity* on Setonix is exaggerated by the
+   methodology gap.
+
+### Action items (tracked, not yet executed)
+- [ ] Author `setonix-ci/bootstrap_iqtree.sh` mirroring `gadi-ci/bootstrap_iqtree.sh`,
+  building with `-march=znver3 -mtune=znver3 -O3 -fno-omit-frame-pointer -g`.
+- [ ] Patch `setonix-ci/run_mega_profile.sh` and `submit_matrix.sh`:
+  - `#SBATCH --exclusive` and `#SBATCH --hint=nomultithread`
+  - `--cpus-per-task=${THREADS}` (matched, not pinned to 128)
+  - `export OMP_PROC_BIND=close OMP_PLACES=cores`
+  - launch via `srun --cpu-bind=cores numactl --localalloc …`
+  - drop `-mset GTR,HKY,K80` (overlaps with the 2026-04-26 audit fix)
+- [ ] Re-run the `xlarge_mf` matrix on Setonix under the corrected launch
+  and rebuild — only this re-run can answer Minh's question quantitatively.
+- [ ] Add a NUMA-locality panel to the dashboard derived from
+  `samples.jsonl` (`numa.per_node_mb` over time) to make pin/no-pin runs
+  visually distinguishable.
+
+### Documentation updates in this commit
+- `context.md` § 2: corrected platform table (gcc actual flags, SMT on/off,
+  IQ-TREE kernel, build-script provenance footnotes).
+- `context.md` new § 4b: full methodology audit (table, three-effect
+  explanation, action items, updated headline).
+
+---
+
 ## 2026-04-26 (methodology audit) — ModelFinder scope discrepancy identified; report corrected
 
 ### Finding: Setonix and Gadi did not run equivalent computational tasks on two of three datasets

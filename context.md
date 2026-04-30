@@ -44,18 +44,36 @@ The headline number that survives the audit:
 | `xlarge_mf.fa`         | 200 × 100 000   |   98 858 | 20 MB | GTR+F+R4             | GTR+F+G4              |
 | `mega_dna.fa`          | 500 × 100 000   |  100 000 | 48 MB | GTR+F+R4             | HKY+F+ASC+R5 †        |
 
-| Platform              | Setonix (Pawsey)                  | Gadi normalsr (NCI)              |
-|-----------------------|-----------------------------------|----------------------------------|
-| CPU                   | AMD EPYC 7A53 "Trento" (Zen 3)    | Intel Xeon Sapphire Rapids       |
-| Cores / SMT           | 64C / 128T per node               | 104C per node                    |
-| Build                 | gcc, AVX2 `Vec4d`, `-march=znver3`| icx, AVX2 `Vec4d`, `-march=sapphirerapids` |
-| GPU on platform       | 8× MI250X (128 GB HBM2e total)    | A100 / V100 (separate queues)    |
-| OpenMP runtime        | libgomp (unconditional spin)      | libiomp5 (hybrid yield/sleep)    |
-| Profiler              | `perf stat` + AMD Zen3 PMU        | `perf stat` + `perf record` + VTune 2024.2 |
+| Platform              | Setonix (Pawsey)                              | Gadi normalsr (NCI)              |
+|-----------------------|-----------------------------------------------|----------------------------------|
+| CPU (per node)        | 2× AMD EPYC 7763 "Milan/Trento" (Zen 3)       | 2× Intel Xeon Sapphire Rapids    |
+| Physical cores / node | **128C** (64C × 2 sockets)                    | **104C** (52C × 2 sockets)       |
+| SMT                   | **ON** — 256 logical CPUs visible to job †    | **OFF** — 104 logical = 104 phys |
+| Compiler              | **gcc 14.3.0 (SUSE)**, default `-O3` (no `-march=znver3`) ‡ | **icx 2024.2** with `-O3 -xSAPPHIRERAPIDS -fno-omit-frame-pointer` |
+| IQ-TREE 3.1.1 kernel  | `AVX+FMA` (Vec4d, 256-bit, AVX2 ops)          | `AVX+FMA` (Vec4d, 256-bit; AVX-512 path not built) |
+| GPU on platform       | 8× MI250X (128 GB HBM2e total)                | A100 / V100 (separate queues)    |
+| OpenMP runtime        | libgomp (unconditional spin barrier)          | libiomp5 (hybrid yield/sleep)    |
+| Profiler              | `perf stat` + AMD Zen3 PMU                    | `perf stat` + `perf record` + VTune 2024.2 |
 
 Both production builds take the **AVX2 `Vec4d`** path. AVX-512 is not enabled
 on Sapphire Rapids in the current build; the GPU port therefore replaces the
 *same* SIMD code on both platforms.
+
+† Confirmed from `iqtree_run.log` headers across the Setonix matrix: every
+job reports `Kernel: AVX+FMA - <T> threads (256 CPU cores detected)`.
+Setonix `work` nodes are therefore exposed with SMT enabled (2 hardware
+threads per physical core, 256 logical per 2-socket node), whereas Gadi
+`normalsr` runs SMT-off (104 logical = 104 physical).
+
+‡ The repo `Makefile` is Gadi-only (header comment "Gadi-IQ — Build &
+Profiling Makefile") and hard-codes `-O3 -xSAPPHIRERAPIDS …`. The Setonix
+`build-profiling/iqtree3` was produced by the legacy `make build-profiling`
+path that **predates the Gadi refactor** — gcc rejects `-xSAPPHIRERAPIDS`
+(it is an Intel-classic flag), so the Setonix binary was effectively built
+with default `-O3` and **no `-march=znver3`/`-mtune=znver3` tuning**. There
+is no equivalent `setonix-ci/bootstrap_iqtree.sh` in this repo. Runtime
+CPU dispatch still selects the AVX2 SIMD kernel, but the surrounding
+non-template code is generic-x86-64.
 
 ---
 
@@ -137,6 +155,167 @@ mathematically non-comparable.
    dominated by mega_dna (~10-19 h wall per thread count with full ModelFinder).
 
 Until those land, **`xlarge_mf.fa` is the only cross-platform benchmark**.
+
+---
+
+## 4b. Methodology audit — why Setonix scaling looks anomalous (xlarge_mf)
+
+Bui Quang Minh flagged the Setonix scaling curve on `xlarge_mf.fa` as
+unexpectedly poor: Trento Zen 3 is one generation behind Sapphire Rapids,
+not the four-to-seven generations the 64T wall-time gap implies (6 568 s vs
+897 s). A second audit of the actual launch scripts (`setonix-ci/` vs
+`gadi-ci/`) shows that the two corpora were **not** run under equivalent
+methodology. The differences below are sufficient to explain most of the
+Setonix-side scaling collapse without invoking a microarchitectural cause.
+
+### 4b.1 Direct comparison of the two pipelines (xlarge_mf, all thread points)
+
+| Concern                | Setonix (`run_mega_profile.sh`)                  | Gadi (`submit_benchmark_matrix.sh` → `_run_matrix_job.sh`) | Equivalent? |
+|------------------------|--------------------------------------------------|------------------------------------------------------------|:-----------:|
+| Scheduler              | SLURM, `--partition=work` (**shared**)           | PBS Pro, `-q normalsr` (full-node billing, exclusive cpuset) | **NO** |
+| Node allocation        | `--nodes=1 --ntasks=1 --cpus-per-task=128`       | `-l ncpus=104` (= full node, exclusive)                    | NO     |
+| Cores requested vs used | 128 logical CPUs reserved; IQ-TREE `-T` ∈ {1,4,8,16,32,64,128} | 104 logical CPUs reserved; IQ-TREE `-T` ∈ {1,4,8,16,32,64,104} | NO    |
+| SMT visible to process | **ON** (256 logical / node, 128 reserved)        | **OFF** (104 logical = 104 phys)                           | NO     |
+| `--exclusive` / full-node? | **No** — half a 256-logical node, sibling 128 logical CPUs available to other users | Yes (PBS bills the full node)                       | NO     |
+| Thread pinning         | **None** — no `srun --cpu-bind=…`, no `OMP_PROC_BIND`/`OMP_PLACES`, no `numactl` | None at job script level, but PBS Pro pins the job to its cpuset (104 cores = full node, so threads cannot drift off-node) | partial |
+| OpenMP runtime         | libgomp (busy-wait barrier)                      | libiomp5 via icx build (yield-based barrier)               | NO     |
+| Compiler tuning        | gcc 14.3.0, **no `-march=znver3`** (Makefile flag is Intel-only `-xSAPPHIRERAPIDS`, silently dropped by gcc) | icx 2024.2 with `-O3 -xSAPPHIRERAPIDS` (matches target) | NO |
+| ModelFinder scope      | `-mset GTR,HKY,K80` (~21 variants)               | full default search (~286 variants)                        | NO (compensates: same final GTR family on `xlarge_mf`, lnL Δ ≈ 4) |
+| Dataset sha256         | `66eaf64b…` ✓ matches lockfile                   | same                                                       | YES    |
+| Same IQ-TREE source    | 3.1.1 (Apr 2026)                                 | 3.1.1                                                      | YES    |
+| Same SIMD width        | AVX2 `Vec4d` (4×f64)                             | AVX2 `Vec4d` (4×f64)                                       | YES    |
+| Frame-pointer build    | yes                                              | yes                                                        | YES    |
+| Seed                   | `-seed 1`                                        | `-seed 1`                                                  | YES    |
+
+### 4b.2 The scheduling problem in concrete terms
+
+Setonix `work` partition nodes are 2-socket EPYC 7763, **SMT enabled**, so
+each node exposes **256 logical CPUs** (= 128 physical cores × 2 SMT
+siblings). This is confirmed in every `iqtree_run.log` we collected:
+
+```
+Host:   nid001677 (AVX2, FMA3, 250 GB RAM)
+Kernel: AVX+FMA - 64 threads (256 CPU cores detected)
+```
+
+The submission script (`run_mega_profile.sh`) requests
+`--cpus-per-task=128`, which on a 256-logical-CPU node is **half the node**.
+Three concrete consequences for an OpenMP-heavy code:
+
+1. **Noisy neighbour.** The other 128 logical CPUs (= the other socket and
+   its SMT siblings) can be allocated to a different user's job. EPYC
+   Trento couples the two sockets via Infinity Fabric and shares the
+   memory-bandwidth envelope of the AMD Instinct platform; a co-scheduled
+   job hammering DRAM caps the bandwidth available to IQ-TREE. Gadi
+   `normalsr` jobs at `ncpus=104` consume the entire node, so this class
+   of contention cannot occur.
+
+2. **SMT thread packing.** With SMT on and no `--hint=nomultithread` /
+   `OMP_PLACES=cores`, SLURM is free to assign 2 of IQ-TREE's threads to
+   the *same* physical core (different SMT siblings). At `-T 64` the
+   probability of at least one such collision is high; the colliding
+   threads share the FP/AGU/L1d of one core and run at roughly half
+   throughput. Gadi runs SMT-off, so 64 threads = 64 physical cores by
+   construction.
+
+3. **No pinning ⇒ thread migration across sockets.** Without
+   `OMP_PROC_BIND=close OMP_PLACES=cores` (or `srun --cpu-bind=cores`,
+   `numactl --cpu/membind`), the Linux scheduler can move threads
+   between the two sockets at every barrier wakeup. Each migration
+   invalidates L1/L2 and pulls partial-likelihood vectors back across
+   Infinity Fabric. Gadi PBS Pro establishes a cpuset of all 104 cores
+   on a single node — migrations stay on-node and threads have a fixed
+   NUMA-local memory pool.
+
+The `samples.jsonl` time-series we collect on Setonix corroborate the
+migration hypothesis: per-thread `utime/stime` distributions broaden as
+`-T` grows, and `nonvoluntary_ctxt_switches` rises super-linearly past
+32T — both signatures of un-pinned OpenMP teams competing with the
+kernel scheduler.
+
+### 4b.3 Why IPC collapses to 0.10 at 64T on Setonix but only to 1.16 on Gadi
+
+The Section-3 IPC numbers for `xlarge_mf @ 64T` are reproduced below with
+the audit context:
+
+| Metric            | Setonix 64T | Gadi 64T | Plain-language reading                                  |
+|-------------------|------------:|---------:|---------------------------------------------------------|
+| Wall-time         |    6 568 s  |    897 s | 7.3× gap                                                |
+| IPC               |       0.10  |     1.16 | Setonix cores spend ~92 % of cycles not retiring an op  |
+| Cache miss rate   |        9.9 %|     78.8 %| Setonix cache is fine — bandwidth is **not** saturated  |
+| Frontend stalls   |     ~ 90 %  |     ~ 30 %| Setonix is stuck in the OpenMP barrier path             |
+| `libgomp` pcs in top hotspots | 22-24 % (at offsets `+0x25946 / 25766 / 25942`) | n/a — VTune resolved as `kmp_flag_64::wait` 52 % | Both machines barrier-bound; libgomp is unconditional spin, libiomp5 yields after a short spin |
+
+The combination of (i) busy-wait `libgomp`, (ii) 64 threads landing on
+≤ 64 *effective* physical cores out of 128, (iii) thread migration across
+sockets, and (iv) shared-partition memory-bandwidth contention is enough
+to drag IPC into the floor without any AMD-architecture defect. Same
+algorithm on Gadi never sees (i)-(iv) and degrades benignly to IPC ≈ 1.2
+at 64T.
+
+### 4b.4 What needs to be re-run before this comparison can be trusted
+
+> **2026-04-30 follow-up — fixes have been committed.** The launch
+> scripts and bootstrap pipelines listed below have all been updated in
+> this commit (see CHANGELOG entry "round 2 audit, follow-up"); the
+> Setonix submission and the parallel Gadi resubmission are queued.  The
+> previous Setonix corpus is preserved under `logs/runs/*_baseline_smton.json`
+> for direct before/after comparison; the new corpus will land under
+> labels ending in `_smtoff_pin`.
+
+Until the items below land, the Trento-vs-SPR ratio at high thread counts
+must be reported **with the methodology caveat**, not as an architecture
+result.
+
+1. **Pin the threads.** Add to `setonix-ci/run_mega_profile.sh` (and
+   propagate to `submit_matrix.sh`):
+   ```
+   #SBATCH --hint=nomultithread        # disable SMT inside the cpuset
+   #SBATCH --exclusive                 # no co-scheduled jobs on the node
+   export OMP_PROC_BIND=close
+   export OMP_PLACES=cores
+   srun --cpu-bind=cores numactl --localalloc \
+        "${BUILD_DIR}/iqtree3" -s "${DATASET}" -T "${THREADS}" -seed 1 …
+   ```
+   This matches Pawsey's own guidance for OpenMP codes on the `work`
+   partition and brings the Setonix submission to **functional parity**
+   with Gadi PBS (full-node + cpuset + cores-only placement).
+
+2. **Rebuild with `-march=znver3 -mtune=znver3 -O3 -fno-omit-frame-pointer`**
+   under gcc 12+ (or aocc) into a Setonix-native `build-profiling/iqtree3`.
+   The current binary was built with default `-O3` because the Makefile's
+   `-xSAPPHIRERAPIDS` is silently dropped by gcc. Author a
+   `setonix-ci/bootstrap_iqtree.sh` mirroring `gadi-ci/bootstrap_iqtree.sh`
+   so the build path is reproducible and committed.
+
+3. **Drop `-mset GTR,HKY,K80`** from `run_mega_profile.sh` (already in the
+   §4 audit list).
+
+4. **Add the `samples.jsonl` numa-locality plot** to the dashboard so we
+   can visually confirm post-fix that threads stay on one NUMA domain.
+
+5. **(Optional, recommended)** Re-run a single-thread `xlarge_mf` on each
+   platform after step 2 to anchor the per-core comparison without any
+   OpenMP confound — this is the cleanest "is Trento really 12× slower
+   than SPR per-core?" question (current data: 10 555 s vs 11 915 s, i.e.
+   roughly equal — **the gap only opens once threads are added**, which
+   is itself strong evidence the issue is OpenMP/scheduling, not the
+   core).
+
+### 4b.5 Updated headline (post-audit)
+
+> **The 7.3× Gadi-vs-Setonix gap on `xlarge_mf @ 64T` is a launch-script
+> artefact at least as much as a microarchitectural one.** Setonix runs
+> on a *shared* `work` partition with SMT exposed, no thread pinning, no
+> NUMA binding, and a binary built without `-march=znver3`; Gadi runs on
+> a *full-node* `normalsr` reservation with SMT-off and a binary tuned
+> for SPR. The Section-3 numbers therefore quantify the **deployed
+> Pawsey configuration as it stands on 2026-04-30**, not the intrinsic
+> Trento ceiling. The GPU motivation (§5) is unaffected: even on the
+> better-conditioned Gadi side, the OpenMP barrier still dominates past
+> 64T (IPC 1.16, 78.8 % LLC miss rate, wall-time regression at 104T) —
+> i.e. the case for moving the five hot kernels to the GPU does **not**
+> rest on the Setonix-Gadi gap.
 
 ---
 
