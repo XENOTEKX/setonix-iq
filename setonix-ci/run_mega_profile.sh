@@ -323,7 +323,13 @@ PERF_STAT_TXT="${WORK_DIR}/perf_stat.txt"
 # Kernel events + AMD Zen 3 raw events (process-scope only; L3 uncore is
 # admin-locked on Setonix so skipped). Multiplexed — ~35–40% measurement time
 # each, which is plenty given the multi-hour runtime.
-PERF_EVENTS="cycles,instructions,branch-instructions,branch-misses,\
+#
+# cycles:uk / instructions:uk — explicit user+kernel mode required on Setonix.
+# With perf_event_paranoid=2 the generic 'cycles' alias defaults to ':u' and
+# the AMD Zen3 PMU returns 0 for the cycle counter in pure user-mode context;
+# ':uk' requests both domains so at minimum the user-mode count is stored.
+# harvest_scratch.py already strips mode suffixes in _normalise_metric_keys().
+PERF_EVENTS="cycles:uk,instructions:uk,branch-instructions,branch-misses,\
 cache-references,cache-misses,\
 L1-dcache-loads,L1-dcache-load-misses,\
 dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,\
