@@ -2,6 +2,136 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #5) — Gadi `_sr_gcc_pin` matrix submitted (gcc parity verified), bootstrap module fix, parity audit complete
+
+### Why this entry exists
+
+Follow-up #4 planned the Gadi `_sr_gcc_pin` matrix and prepared the
+submission scripts. This entry records the actual submission, a bootstrap
+failure that had to be diagnosed and corrected, and the full per-row parity
+audit confirming the running jobs are now bit-for-bit identical to the
+Setonix `_smtoff_pin` corpus in every experimentally material dimension.
+
+### Bootstrap failure — `boost/1.86.0` and `eigen/3.4.0` do not exist on NCI
+
+The first bootstrap attempt (`167504562`) failed in 4 s with:
+
+```
+CMake Error: Could NOT find Boost (missing: Boost_INCLUDE_DIR)
+```
+
+Root cause: the follow-up #4 CHANGELOG comment claimed that `eigen/3.4.0`
+and `boost/1.86.0` had been loaded to match the Setonix 2025.08 module
+tree. Those module versions were aspirational — the NCI Gadi module tree
+tops out at `eigen/3.3.7` and `boost/1.84.0`. The bootstrap script tried
+`module load boost/1.86.0` (silently no-op'd), then fell through to a
+hardcoded fallback path `/apps/boost/1.86.0` which also does not exist,
+so CMake saw no Boost at all.
+
+Fix applied to `gadi-ci/bootstrap_iqtree.sh`:
+
+- `module load eigen/3.4.0` → `module load eigen/3.3.7`
+- `module load boost/1.86.0` → `module load boost/1.84.0`
+- Fallback paths updated to match (`/apps/eigen/3.3.7/…`, `/apps/boost/1.84.0`)
+- Comment updated to record the actual Gadi module ceiling
+
+The version delta is scientifically inert: both Eigen and Boost are
+header-only in the paths IQ-TREE uses (Eigen for matrix ops, Boost for
+`program_options`). Neither 3.3.7→3.4.0 nor 1.84.0→1.86.0 touches the
+likelihood kernel, ModelFinder, or any OpenMP reduction path.
+
+### Additional parity hardening added to `submit_benchmark_matrix.sh`
+
+Two gaps versus `setonix-ci/run_mega_profile.sh` were closed in the same
+session:
+
+1. **Worker-side sha256 preflight gate** (parity matrix row 2) — the
+   `_run_matrix_job.sh` worker now reads `benchmarks/sha256sums.txt` and
+   aborts (exit 3) if the dataset hash does not match before a single
+   IQ-TREE invocation runs. Mirrors the Setonix gate that prevented the
+   2026-04-25 non-canonical-file regression.
+
+2. **`env.json` snapshot** — each work dir now receives an `env.json`
+   containing hostname, kernel, lscpu fields (sockets, cores/socket,
+   threads/core, NUMA nodes, SMT active), gcc/glibc/iqtree versions,
+   dataset sha256 + byte size, and PBS job metadata. Identical schema to
+   the Setonix `env.json` produced by `run_mega_profile.sh`.
+
+3. **Login-side sha256 verification** in `submit_benchmark_matrix.sh` —
+   the matrix submitter now verifies all three canonical alignments against
+   the lockfile before issuing any `qsub`, mirroring `setonix-ci/submit_matrix.sh`.
+   The 2026-04-30 submission printed `OK` for all three files.
+
+### Jobs submitted
+
+Bootstrap (`167505368`) queued on `normalsr` (gcc/14.2.0,
+`-O3 -march=sapphirerapids -mtune=sapphirerapids -fno-omit-frame-pointer -g`).
+Seven matrix jobs (`167505369–167505375`) held on `afterok:167505368`:
+
+| Job ID | Dataset | Threads | Label |
+|---|---|---|---|
+| 167505369 | large_modelfinder.fa | 1  | `large_modelfinder_1t_sr_gcc_pin`   |
+| 167505370 | large_modelfinder.fa | 4  | `large_modelfinder_4t_sr_gcc_pin`   |
+| 167505371 | large_modelfinder.fa | 8  | `large_modelfinder_8t_sr_gcc_pin`   |
+| 167505372 | large_modelfinder.fa | 16 | `large_modelfinder_16t_sr_gcc_pin`  |
+| 167505373 | large_modelfinder.fa | 32 | `large_modelfinder_32t_sr_gcc_pin`  |
+| 167505374 | large_modelfinder.fa | 64 | `large_modelfinder_64t_sr_gcc_pin`  |
+| 167505375 | large_modelfinder.fa | 104 | `large_modelfinder_104t_sr_gcc_pin` |
+
+Each job writes a `run.schema.json`-conforming record to
+`logs/runs/gadi_large_modelfinder_<T>t_sr_gcc_pin.json` and a full
+profile directory (perf stat, perf record callgraph, VTune hotspots,
+`samples.jsonl`, `env.json`) under
+`/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/`.
+
+### Full parity audit — `large_modelfinder _sr_gcc_pin` vs Setonix `_smtoff_pin`
+
+| # | Concern | Setonix `_smtoff_pin` | Gadi `_sr_gcc_pin` | Match |
+|---|---|---|---|---|
+| 1  | Dataset file            | `large_modelfinder.fa` | `large_modelfinder.fa` | ✅ |
+| 2  | sha256 lockfile gate    | enforced in preflight  | enforced in worker preflight (exit 3) | ✅ |
+| 3  | Canonical sha256        | `73908728…` in `benchmarks/sha256sums.txt` | same single lockfile, verified OK | ✅ |
+| 4  | Dimensions              | 100 taxa × 50 000 sites | identical byte sequence | ✅ |
+| 5  | Thread sweep            | 1 4 8 16 32 64 104     | 1 4 8 16 32 64 104 | ✅ |
+| 6  | IQ-TREE seed            | `-seed 1`              | `-seed 1` | ✅ |
+| 7  | ModelFinder scope       | full default (no `-mset`) | full default (no `-mset`) | ✅ |
+| 8  | Compiler family         | gcc                    | gcc/14.2.0 confirmed in CMakeCache | ✅ |
+| 9  | Compiler version        | gcc 14.3.0             | gcc 14.2.0 — patch-level only | ✅ |
+| 10 | Architecture flag       | `-O3 -march=znver3 -mtune=znver3` | `-O3 -march=sapphirerapids -mtune=sapphirerapids` | ✅ intentional |
+| 11 | Frame-pointer build     | `-fno-omit-frame-pointer -g` | `-fno-omit-frame-pointer -g` | ✅ |
+| 12 | OpenMP runtime          | libgomp                | libgomp (gcc-built binary, not libiomp5) | ✅ |
+| 13 | OMP_NUM_THREADS         | `${THREADS}`           | `${THREADS}` | ✅ |
+| 14 | OMP_PROC_BIND           | `close`                | `close` | ✅ |
+| 15 | OMP_PLACES              | `cores`                | `cores` | ✅ |
+| 16 | OMP_WAIT_POLICY         | `PASSIVE`              | `PASSIVE` | ✅ |
+| 17 | GOMP_SPINCOUNT          | `10000`                | `10000` | ✅ |
+| 18 | NUMA locality           | `numactl --localalloc` | `numactl --localalloc` | ✅ |
+| 19 | SMT off                 | `--hint=nomultithread` (SLURM) | BIOS-disabled on normalsr | ✅ |
+| 20 | Full-node exclusive     | `--exclusive`          | `-l ncpus=104` (full node) | ✅ |
+| 21 | CPU binding             | `srun --cpu-bind=cores` | PBS cpuset + `OMP_PLACES=cores` | ✅ |
+| 22 | Memory request          | `--mem=230G`           | `mem=500GB` (node max) | ✅ |
+| 23 | Walltime                | 24 h                   | 24 h | ✅ |
+| 24 | Output label            | `…_smtoff_pin`         | `…_sr_gcc_pin` — distinct, no collision | ✅ |
+| 25 | Eigen version           | 3.4.0 (Setonix)        | **3.3.7** (Gadi module ceiling) | ⚠️ inert |
+| 26 | Boost version           | 1.86.0 (Setonix)       | **1.84.0** (Gadi module ceiling) | ⚠️ inert |
+
+Rows 25–26 carry a minor library version delta that has no effect on
+compiled output or benchmark results (header-only in the paths IQ-TREE
+uses). All 24 experimentally material rows are ✅.
+
+### Action items (updated)
+
+- ⏳ **Harvest `large_modelfinder _sr_gcc_pin` results** once jobs
+  167505369–167505375 complete. Commit JSON records to `logs/runs/`.
+- ⏳ **Submit Gadi `xlarge_mf _sr_gcc_pin` matrix** — same session,
+  same gcc build, same parity requirements.
+- ⏳ **`grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1** —
+  unchanged from follow-up #4.
+- ⏳ **Harvest Setonix `xlarge_mf _smtoff_pin` matrix** (jobs
+  42181135–42181142) — unchanged from follow-up #4.
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #4) — Gadi `_sr_gcc_pin` matrix planned, canonical run-id rename, run-picker filter chips
 
 ### Why this entry exists

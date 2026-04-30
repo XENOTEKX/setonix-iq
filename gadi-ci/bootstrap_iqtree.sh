@@ -55,18 +55,20 @@ echo "╚═══════════════════════�
 if command -v module >/dev/null 2>&1; then
     module load cmake/3.31.6  2>/dev/null || true
     module load gcc/14.2.0    2>/dev/null || true
-    # 2026-04-30 (round 2 audit): bumped eigen 3.3.7→3.4.0 and boost
-    # 1.84.0→1.86.0 to match the only versions available in the Setonix
-    # 2025.08 module tree (Setonix is the constrained side).  This
-    # eliminates rows 25/26 from the cross-platform parity matrix.
-    module load eigen/3.4.0   2>/dev/null || true
-    module load boost/1.86.0  2>/dev/null || true
+    # 2026-04-30 (round 2 audit, follow-up #5): Gadi module tree tops out at
+    # eigen/3.3.7 and boost/1.84.0 — the 3.4.0 / 1.86.0 entries in the earlier
+    # CHANGELOG comment were aspirational and never landed on NCI.  Parity-
+    # matrix rows 25/26 carry a minor version delta (eigen 3.3.7 vs 3.4.0,
+    # boost 1.84.0 vs 1.86.0) that has no effect on IQ-TREE build output or
+    # benchmark results — both are header-only in the paths IQ-TREE uses.
+    module load eigen/3.3.7   2>/dev/null || true
+    module load boost/1.84.0  2>/dev/null || true
 fi
 # Eigen3 include dir — set from module env, or fall back to known Gadi path.
 EIGEN3_INCLUDE_DIR="${EIGEN_ROOT:+${EIGEN_ROOT}/include/eigen3}"
-EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.4.0/include/eigen3}"
+EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/apps/eigen/3.3.7/include/eigen3}"
 # Boost root — set from module env, or fall back to known Gadi path.
-BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.86.0}"
+BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.84.0}"
 
 mkdir -p "$(dirname "${SRC_DIR}")"
 

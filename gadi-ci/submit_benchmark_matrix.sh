@@ -36,6 +36,39 @@ RUNS_DIR="${REPO_DIR}/logs/runs"
 
 mkdir -p "${LOGS_DIR}" "${RUNS_DIR}"
 
+# 2026-04-30 (round 2 audit, follow-up #5): login-side sha256 verification of
+# benchmark alignments against the canonical lockfile.  Aborts before any
+# qsub if a present alignment doesn't match \u2014 mirrors setonix-ci/submit_matrix.sh.
+SHA256_LOCKFILE="${SHA256_LOCKFILE:-${REPO_DIR}/benchmarks/sha256sums.txt}"
+BENCHMARKS="${BENCHMARKS:-${PROJECT_DIR}/benchmarks}"
+if [[ -s "${SHA256_LOCKFILE}" ]]; then
+    echo "Verifying sha256 of present alignments against ${SHA256_LOCKFILE}..."
+    fail=0
+    while read -r expected fname; do
+        [[ -z "${expected}" || "${expected}" == \#* ]] && continue
+        path="${BENCHMARKS}/${fname}"
+        if [[ ! -s "${path}" ]]; then
+            echo "  MISSING ${fname}"
+            continue
+        fi
+        actual="$(sha256sum "${path}" | awk '{print $1}')"
+        if [[ "${actual}" == "${expected}" ]]; then
+            echo "  OK      ${fname}"
+        else
+            echo "  FAIL    ${fname}"
+            echo "          expected ${expected}"
+            echo "          actual   ${actual}"
+            fail=1
+        fi
+    done < "${SHA256_LOCKFILE}"
+    if [[ "${fail}" -ne 0 ]]; then
+        echo ""
+        echo "ERROR: sha256 mismatch on at least one alignment." >&2
+        echo "       Regenerate via gadi-ci/generate_datasets.sh." >&2
+        exit 4
+    fi
+fi
+
 # Default matrix: matching Setonix thread sweep for direct cross-platform comparison.
 # Setonix used {1,4,8,16,32,64} for large/xlarge and {16,32,64,128} for mega_dna.
 # Gadi caps at 104 cores (no 128T), so mega_dna uses 16,32,64,104.
@@ -73,6 +106,36 @@ SEED="${SEED:-1}"
 
 DATA_PATH="${BENCHMARKS}/${DATASET_NAME}.fa"
 [[ -f "${DATA_PATH}" ]] || DATA_PATH="${BENCHMARKS}/${DATASET_NAME}"
+DATA_BASENAME="$(basename "${DATA_PATH}")"
+
+# 2026-04-30 (round 2 audit, follow-up #5): worker-side sha256 preflight gate.
+# Mirrors setonix-ci/run_mega_profile.sh exactly so the canonical-alignment
+# correctness gate is enforced on BOTH platforms (parity matrix item #2).
+# REPO_DIR points at the committed repo (containing benchmarks/sha256sums.txt).
+SHA256_LOCKFILE="${SHA256_LOCKFILE:-${REPO_DIR}/benchmarks/sha256sums.txt}"
+if [[ ! -s "${DATA_PATH}" ]]; then
+    echo "ERROR: dataset ${DATA_PATH} not found or empty." >&2
+    echo "       Run gadi-ci/generate_datasets.sh first." >&2
+    exit 2
+fi
+if [[ -s "${SHA256_LOCKFILE}" ]]; then
+    expected="$(awk -v f="${DATA_BASENAME}" '/^[[:space:]]*#/ {next} $2==f {print $1}' "${SHA256_LOCKFILE}")"
+    if [[ -n "${expected}" ]]; then
+        actual="$(sha256sum "${DATA_PATH}" | awk '{print $1}')"
+        if [[ "${actual}" != "${expected}" ]]; then
+            echo "ERROR: sha256 mismatch for ${DATA_BASENAME}" >&2
+            echo "       expected: ${expected}" >&2
+            echo "       actual:   ${actual}"   >&2
+            echo "       Refusing to run on a non-canonical alignment." >&2
+            exit 3
+        fi
+        echo "[preflight] ${DATA_BASENAME} sha256 OK (canonical)."
+    else
+        echo "[preflight] ${DATA_BASENAME} not in lockfile \u2014 proceeding without hash gate."
+    fi
+else
+    echo "[preflight] WARNING: no sha256 lockfile at ${SHA256_LOCKFILE}; skipping hash gate."
+fi
 
 if command -v module >/dev/null 2>&1; then
     # 2026-04-30 (round 2 audit): keep VTune for profiling but drop the Intel
@@ -102,6 +165,58 @@ mkdir -p "${WORK_DIR}" "${RUNS_DIR}"
 cd "${WORK_DIR}"
 
 echo "[matrix] run_id=${RUN_ID} dataset=${DATA_PATH} threads=${THREADS}"
+
+# Environment snapshot (env.json) — parity with setonix-ci/run_mega_profile.sh.
+ENV_JSON="${WORK_DIR}/env.json"
+python3 - <<PYENV > "${ENV_JSON}"
+import json, os, subprocess, hashlib
+def sh(c, d=""):
+    try: return subprocess.check_output(c, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception: return d
+def sha256(p):
+    try:
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception: return None
+ds = "${DATA_PATH}"
+env = {
+  "run_id": "${RUN_ID}", "label": "${LABEL}", "threads": ${THREADS},
+  "hostname": sh("hostname"), "kernel": sh("uname -r"),
+  "os": sh("grep PRETTY_NAME /etc/os-release | cut -d= -f2- | tr -d '\"'"),
+  "cpu": sh("lscpu | grep 'Model name' | head -1 | cut -d: -f2- | xargs"),
+  "cpu_sockets": int(sh("lscpu | awk -F: '/Socket\\(s\\)/{print $2}' | xargs", "0") or 0),
+  "cpu_cores_per_socket": int(sh("lscpu | awk -F: '/Core\\(s\\) per socket/{print $2}' | xargs", "0") or 0),
+  "cpu_threads_per_core": int(sh("lscpu | awk -F: '/Thread\\(s\\) per core/{print $2}' | xargs", "0") or 0),
+  "cpu_count_logical": int(sh("nproc", "0") or 0),
+  "numa_nodes": int(sh("lscpu | awk -F: '/NUMA node\\(s\\)/{print $2}' | xargs", "0") or 0),
+  "smt_active": sh("cat /sys/devices/system/cpu/smt/active 2>/dev/null") == "1",
+  "cpu_governor": sh("cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null"),
+  "mem_total_kb": int(sh("awk '/MemTotal/{print $2}' /proc/meminfo", "0") or 0),
+  "glibc": sh("ldd --version | head -1 | awk '{print $NF}'"),
+  "gcc":   sh("gcc --version | head -1"),
+  "iqtree_binary":  "${IQTREE}",
+  "iqtree_version": sh("${IQTREE} --version 2>&1 | head -1"),
+  "date": sh("date -Iseconds"),
+  "dataset": {
+    "path": ds, "file": os.path.basename(ds),
+    "size_bytes": os.path.getsize(ds) if os.path.isfile(ds) else None,
+    "sha256": sha256(ds),
+  },
+  "pbs": {
+    "job_id":      os.environ.get("PBS_JOBID"),
+    "job_name":    os.environ.get("PBS_JOBNAME"),
+    "queue":       os.environ.get("PBS_QUEUE"),
+    "ncpus":       os.environ.get("PBS_NCPUS") or os.environ.get("NCPUS"),
+    "submit_host": os.environ.get("PBS_O_HOST"),
+    "submit_dir":  os.environ.get("PBS_O_WORKDIR"),
+  },
+}
+print(json.dumps(env, indent=2))
+PYENV
+echo "  \u2192 ${ENV_JSON}"
 
 # OpenMP pinning — mirrors setonix-ci/run_mega_profile.sh exactly so the two
 # clusters use the same thread-placement policy at every thread count.
