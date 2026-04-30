@@ -187,15 +187,15 @@ env = {
   "hostname": sh("hostname"), "kernel": sh("uname -r"),
   "os": sh("grep PRETTY_NAME /etc/os-release | cut -d= -f2- | tr -d '\"'"),
   "cpu": sh("lscpu | grep 'Model name' | head -1 | cut -d: -f2- | xargs"),
-  "cpu_sockets": int(sh("lscpu | awk -F: '/Socket\\(s\\)/{print $2}' | xargs", "0") or 0),
-  "cpu_cores_per_socket": int(sh("lscpu | awk -F: '/Core\\(s\\) per socket/{print $2}' | xargs", "0") or 0),
-  "cpu_threads_per_core": int(sh("lscpu | awk -F: '/Thread\\(s\\) per core/{print $2}' | xargs", "0") or 0),
+  "cpu_sockets": int(sh("lscpu | awk -F: '/Socket\\(s\\)/{print \$2}' | xargs", "0") or 0),
+  "cpu_cores_per_socket": int(sh("lscpu | awk -F: '/Core\\(s\\) per socket/{print \$2}' | xargs", "0") or 0),
+  "cpu_threads_per_core": int(sh("lscpu | awk -F: '/Thread\\(s\\) per core/{print \$2}' | xargs", "0") or 0),
   "cpu_count_logical": int(sh("nproc", "0") or 0),
-  "numa_nodes": int(sh("lscpu | awk -F: '/NUMA node\\(s\\)/{print $2}' | xargs", "0") or 0),
+  "numa_nodes": int(sh("lscpu | awk -F: '/NUMA node\\(s\\)/{print \$2}' | xargs", "0") or 0),
   "smt_active": sh("cat /sys/devices/system/cpu/smt/active 2>/dev/null") == "1",
   "cpu_governor": sh("cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null"),
-  "mem_total_kb": int(sh("awk '/MemTotal/{print $2}' /proc/meminfo", "0") or 0),
-  "glibc": sh("ldd --version | head -1 | awk '{print $NF}'"),
+  "mem_total_kb": int(sh("awk '/MemTotal/{print \$2}' /proc/meminfo", "0") or 0),
+  "glibc": sh("ldd --version | head -1 | awk '{print \$NF}'"),
   "gcc":   sh("gcc --version | head -1"),
   "iqtree_binary":  "${IQTREE}",
   "iqtree_version": sh("${IQTREE} --version 2>&1 | head -1"),
@@ -669,7 +669,7 @@ for dataset in "${!MATRIX[@]}"; do
                    -q normalsr \
                    -l "ncpus=104,mem=500GB,walltime=24:00:00,jobfs=2gb,storage=scratch/${PROJECT},wd" \
                    -j oe \
-                   -o "${LOGS_DIR}/${label}_\${PBS_JOBID}.log" \
+                   -o "${LOGS_DIR}/${label}_%j.log" \
                    -v "DATASET=${dataset},THREADS=${t},LABEL=${label},PROJECT=${PROJECT},REPO_DIR=${REPO_DIR}" \
                    "${DEPEND_ARGS[@]}" \
                    "${WORKER}")
