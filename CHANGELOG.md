@@ -8,7 +8,7 @@
 
 | Priority | Task | Blocker |
 |----------|------|---------|
-| **CRITICAL** | Harvest Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204–167507210**) once complete → commit JSON to `logs/runs/` | First parity-matched gcc vs gcc Setonix/Gadi comparison |
+| **CRITICAL** | Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/` | First parity-matched gcc vs gcc Setonix/Gadi comparison |
 | **CRITICAL** | Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures | All `xlarge_mf` speedup ratios are currently anchored to an archived run |
 | **HIGH** | Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104) | Cross-platform comparison on the 200×100k dataset |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
@@ -28,6 +28,56 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-01 (harvest, follow-up #11) — Gadi `large_modelfinder` 4T and 8T `_sr_gcc_pin` harvested; `harvest_scratch.py` env-overwrite fix
+
+### Runs harvested
+
+PBS jobs 167507205 (4T) and 167507206 (8T) completed and were harvested into
+`logs/runs/gadi_large_modelfinder_4t_sr_gcc_pin.json` and
+`logs/runs/gadi_large_modelfinder_8t_sr_gcc_pin.json`.
+
+| Threads | PBS Job   | Host                       | Wall time | IPC    | LLC-miss | Verify |
+|--------:|-----------|----------------------------|-----------|--------|----------|--------|
+| 4T      | 167507205 | gadi-cpu-spr-0463          | 800 s     | 1.943  | 26.3%    | ✅ pass |
+| 8T      | 167507206 | gadi-cpu-spr-0514          | 483 s     | 1.581  | 25.5%    | ✅ pass |
+
+Both runs report `loglik = -2690513.343` (matches expected) and `best_model = GTR+G4`.
+Hotspots (13 entries each) and modelfinder candidates harvested from scratch.
+
+### Bug fix — `harvest_scratch.py` env-overwrite
+
+`parse_iqtree_log_env()` correctly recovers `hostname`, `date`, `cpu` from the
+IQ-TREE log header when the PBS worker's env-capture shell calls return empty
+strings. However, the subsequent `env_extra` merge loop (reading the on-scratch
+`env.json`) was unconditionally overwriting those recovered values back to `""`
+because `env.json` itself is all-empty on these Gadi runs.
+
+Fix: skip writing an `env_extra` field if the new value is empty/falsy and the
+existing field is already populated. One-line guard added before the `env[k] = v`
+assignment in `enrich_run()`.
+
+### Matrix status after this harvest
+
+| Threads | PBS Job   | Status                                  |
+|--------:|-----------|-----------------------------------------|
+| 1T      | 167507204 | **R** (still running at time of harvest) |
+| 4T      | 167507205 | ✅ harvested                             |
+| 8T      | 167507206 | ✅ harvested                             |
+| 16T     | 167507207 | **Q** (queued)                          |
+| 32T     | 167507208 | **Q** (queued)                          |
+| 64T     | 167507209 | **Q** (queued)                          |
+| 104T    | 167507210 | **Q** (queued)                          |
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `logs/runs/gadi_large_modelfinder_4t_sr_gcc_pin.json` | New — 4T gcc/14.2.0 SPR run |
+| `logs/runs/gadi_large_modelfinder_8t_sr_gcc_pin.json` | New — 8T gcc/14.2.0 SPR run |
+| `tools/harvest_scratch.py` | Fix env-overwrite bug in `enrich_run()` |
 
 ---
 
