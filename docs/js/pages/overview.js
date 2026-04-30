@@ -1,15 +1,15 @@
 // web/js/pages/overview.js — v2 (insight-oriented)
 
-import { store } from '../state.js?v=20260430153743';
-import { loadRun } from '../data.js?v=20260430153743';
-import { mountRunPicker } from '../components/run-picker.js?v=20260430153743';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260430153743';
-import { attachExpand } from '../components/chart-expand.js?v=20260430153743';
-import * as scaling from '../charts/scaling.js?v=20260430153743';
-import * as efficiency from '../charts/efficiency.js?v=20260430153743';
-import * as ipcScaling from '../charts/ipc-scaling.js?v=20260430153743';
-import * as perfMatrix from '../charts/performance-matrix.js?v=20260430153743';
-import { escHtml, fmtTime, fmtNum } from '../utils.js?v=20260430153743';
+import { store } from '../state.js';
+import { loadRun } from '../data.js';
+import { mountRunPicker } from '../components/run-picker.js';
+import { bindCopyButtons } from '../components/copy-button.js';
+import { attachExpand } from '../components/chart-expand.js';
+import * as scaling from '../charts/scaling.js';
+import * as efficiency from '../charts/efficiency.js';
+import * as ipcScaling from '../charts/ipc-scaling.js';
+import * as perfMatrix from '../charts/performance-matrix.js';
+import { escHtml, fmtTime, fmtNum } from '../utils.js';
 
 /* --------------------------- Platform helpers --------------------------- */
 function platformOf(r) {
@@ -139,9 +139,10 @@ export async function mount(root) {
     attachExpand(card, {
       title: spec.title,
       badge: spec.badge,
-      renderFn: (body) => {
+      runsIndex: idx,
+      renderFn: (body, filteredIdx) => {
         body.innerHTML = '<div class="chart-wrapper" style="height:100%;"><canvas></canvas></div>';
-        spec.mod.render(body.querySelector('canvas'), idx);
+        spec.mod.render(body.querySelector('canvas'), filteredIdx || idx);
       },
     });
   }

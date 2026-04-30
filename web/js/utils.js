@@ -29,6 +29,23 @@ export function fmtTime(seconds) {
   return `${h}h${m.toString().padStart(2, '0')}m`;
 }
 
+/**
+ * Chart.js generateLabels override — replaces strikethrough on hidden datasets
+ * with dimmed text so legend entries remain readable after toggle.
+ * Usage: plugins.legend.labels.generateLabels = dimLegendHidden
+ */
+export function dimLegendHidden(chart) {
+  const base = window.Chart?.defaults?.plugins?.legend?.labels?.generateLabels;
+  if (!base) return [];
+  return base(chart).map(item => {
+    if (item.hidden) {
+      item.lineThrough = false;
+      item.fontColor = 'rgba(139,151,173,0.3)';
+    }
+    return item;
+  });
+}
+
 export function fmtNum(n, digits = 2) {
   if (n == null || isNaN(n)) return 'N/A';
   return Number(n).toLocaleString(undefined, {

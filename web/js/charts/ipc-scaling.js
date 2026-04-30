@@ -3,7 +3,7 @@
 // harvesting pending), so they will be absent from this view — that is expected
 // and an empty-state hint is rendered when no IPC points exist.
 
-import { platformColour } from '../utils.js';
+import { platformColour, dimLegendHidden } from '../utils.js';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -93,7 +93,7 @@ export function render(canvas, runsIndex) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#a0a7bd', font: { size: 10 } } },
+        legend: { position: 'bottom', labels: { color: '#a0a7bd', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
             label: (ctx) => `${ctx.dataset.label}: IPC ${ctx.parsed.y.toFixed(3)} @ T=${ctx.parsed.x}`,

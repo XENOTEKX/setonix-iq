@@ -3,7 +3,7 @@
 // the same named datasets with different dimensions, so they must not share
 // a line.
 
-import { platformColour } from '../utils.js?v=20260430153743';
+import { platformColour, dimLegendHidden } from '../utils.js';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -86,7 +86,7 @@ export function render(canvas, runsIndex) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 } } },
+        legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
             label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}s @ T=${ctx.parsed.x}`,

@@ -918,6 +918,56 @@
 .chart-modal-body .chart-wrapper { height: 100% !important; }
 .chart-modal-body canvas { max-height: 100% !important; }
 
+/* ── Expanded-chart filter bar ─────────────────────────────── */
+.chart-modal-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-bottom: 12px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.cm-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cm-filter-label {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  color: var(--text3);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cm-filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.cm-chip {
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text3);
+  font-size: 0.69rem;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+.cm-chip--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.cm-chip:not(.cm-chip--on):hover {
+  border-color: var(--accent);
+  color: var(--text1);
+}
+
+
 /* ================================================================
    Runs Activity panel (replaces Commands)
 ================================================================ */

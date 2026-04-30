@@ -1,7 +1,7 @@
 // web/js/charts/efficiency.js — parallel efficiency (speedup/threads) vs threads,
 // grouped per (dataset, platform) so the Gadi and Setonix curves stay distinct.
 
-import { platformColour } from '../utils.js?v=20260430153743';
+import { platformColour, dimLegendHidden } from '../utils.js';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
@@ -87,7 +87,7 @@ export function render(canvas, runsIndex) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#a0a7bd', font: { size: 10 } } },
+        legend: { position: 'bottom', labels: { color: '#a0a7bd', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
             label: (ctx) => `${ctx.dataset.label}: ${(ctx.parsed.y * 100).toFixed(1)}% @ T=${ctx.parsed.x}`,

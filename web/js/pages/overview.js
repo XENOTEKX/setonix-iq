@@ -139,9 +139,10 @@ export async function mount(root) {
     attachExpand(card, {
       title: spec.title,
       badge: spec.badge,
-      renderFn: (body) => {
+      runsIndex: idx,
+      renderFn: (body, filteredIdx) => {
         body.innerHTML = '<div class="chart-wrapper" style="height:100%;"><canvas></canvas></div>';
-        spec.mod.render(body.querySelector('canvas'), idx);
+        spec.mod.render(body.querySelector('canvas'), filteredIdx || idx);
       },
     });
   }
