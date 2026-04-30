@@ -2,6 +2,70 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #7) — Gadi `_sr_icx` corpus marked non-canonical; cross-platform comparison blocked pending `_sr_gcc_pin`
+
+### Finding
+
+All 16 existing `Gadi_*` run files were built with Intel's LLVM-based compiler
+(`intel-compiler-llvm/2024.2`, flag `-xSAPPHIRERAPIDS`), not with `gcc/14.2.0`.
+The label suffix `_sr_icx` encodes this: **ICX = Intel Compiler for Linux
+(LLVM-based, successor to icc)**.
+
+This was discovered during a deep investigation of the Setonix post-64T wall
+time explosion: comparing `Setonix_xlarge_mf_104T` (IPC=0.067, gcc, libgomp,
+`-march=znver3`) against `Gadi_xlarge_mf_104T` (IPC=1.03) was comparing a gcc
+run against an ICX run. ICX uses Intel's own OpenMP runtime (`libiomp5`),
+different vectorisation passes, and the full Intel compiler optimization pipeline
+(`-xSAPPHIRERAPIDS` can apply auto-vectorization, prefetch insertion, and loop
+transformations that gcc/14.2.0 with `-march=sapphirerapids` does not). The 6×
+wall-time difference is therefore a **compiler + toolchain difference, not a
+pure micro-architecture comparison**.
+
+Additionally, the old Gadi runs co-ran VTune alongside the benchmark (the PBS
+worker launched `vtune -collect hotspots` wrapping IQ-TREE). VTune sampling
+adds ~2–15% overhead depending on thread count, and its presence invalidates
+direct wall-time comparison.
+
+### Action taken
+
+All 16 `Gadi_*` run files with `_sr_icx` labels have been set to
+`"archived": true` with `archived_reason` explaining the non-canonical status.
+They remain in the repo for reference but will display as archived in the
+dashboard and are excluded from all cross-platform delta plots.
+
+### What this means for the >64T analysis
+
+The Setonix IPC collapse at >64T (IPC: 1.80 → 0.07 from 4T→104T) is real and
+confirmed by the raw perf counters (cycles grow 3× while instructions grow only
+18% at 64T→104T). However, the **comparison to Gadi is currently invalid**
+because there is no parity-matched gcc Gadi corpus yet. The canonical
+`_sr_gcc_pin` matrix (gcc/14.2.0, `-march=sapphirerapids`, libgomp, no VTune,
+`numactl --localalloc`, `OMP_PROC_BIND=close`) is pending:
+
+| PBS Job    | Status at time of writing |
+|------------|--------------------------|
+| 167506092  | Bootstrap (gcc/14.2.0 + binutils/2.44) — may have completed |
+| 167506094  | `large_modelfinder` 1T   |
+| 167506095  | `large_modelfinder` 4T   |
+| 167506096  | `large_modelfinder` 8T   |
+| 167506097  | `large_modelfinder` 16T  |
+| 167506098  | `large_modelfinder` 32T  |
+| 167506099  | `large_modelfinder` 64T  |
+| 167506100  | `large_modelfinder` 104T |
+
+Once these jobs complete and are harvested into `Gadi_large_modelfinder_{T}T_gcc.json`
+files (or equivalent), the Setonix vs Gadi comparison will be parity-matched for
+the first time and the >64T analysis can be revisited on equal footing.
+
+### Remaining cross-platform work
+
+- ⏳ Check status of PBS jobs 167506092–167506100 on Gadi
+- ⏳ Harvest `_sr_gcc_pin` runs → `Gadi_large_modelfinder_{T}T.json` (overwrite or add `_gcc` suffix)
+- ⏳ Submit `xlarge_mf` and `mega_dna` `_sr_gcc_pin` matrix on Gadi
+- ⏳ Harvest `Setonix_xlarge_mf_1T` (job 42181135, still running)
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #6) — Setonix `xlarge_mf` `_smtoff_pin` matrix harvested (7 of 8 points)
 
 ### What was done
