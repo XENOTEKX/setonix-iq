@@ -29,7 +29,7 @@ function platformLabel(p) {
 // timing data and its verify phase passed. This filters out the stub records
 // that harvesters emit for cancelled / failed jobs.
 function isValidRun(r) {
-  return r && r.all_pass && Number(r.wall_s) > 0;
+  return r && r.all_pass && Number(r.wall_s) > 0 && !r.archived;
 }
 
 const TMPL = `

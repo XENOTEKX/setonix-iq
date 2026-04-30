@@ -13,6 +13,21 @@
 .badge-fail { background: var(--red-bg); color: var(--red); border: 1px solid rgba(248, 113, 113, 0.15); }
 .badge-warn { background: var(--yellow-bg); color: var(--yellow); border: 1px solid rgba(251, 191, 36, 0.15); }
 .badge-info { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(79, 143, 255, 0.2); }
+.badge-archived {
+  background: rgba(120, 120, 140, 0.12);
+  color: #9ca3af;
+  border: 1px solid rgba(120, 120, 140, 0.30);
+  padding: 2px 8px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-left: 6px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
 /* Platform badges — Gadi (Intel blue) vs Setonix (AMD red) */
 .badge-platform-gadi {
   background: rgba(0, 113, 197, 0.12);

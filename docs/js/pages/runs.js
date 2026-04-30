@@ -1,10 +1,10 @@
 // web/js/pages/runs.js — leaderboard/list with expandable detail
 
-import { store } from '../state.js?v=20260430102901';
-import { loadRun } from '../data.js?v=20260430102901';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260430102901';
-import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430102901';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430102901';
+import { store } from '../state.js?v=20260430104021';
+import { loadRun } from '../data.js?v=20260430104021';
+import { bindCopyButtons } from '../components/copy-button.js?v=20260430104021';
+import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430104021';
+import * as hotspotChart from '../charts/hotspot.js?v=20260430104021';
 
 const TMPL = `
   <div class="page-header">
@@ -26,6 +26,8 @@ const TMPL = `
       <option value="">All statuses</option>
       <option value="pass">Pass</option>
       <option value="fail">Fail</option>
+      <option value="archived">Archived (pre-audit)</option>
+      <option value="active">Active (non-archived)</option>
     </select>
     <span class="count" id="runsCount"></span>
   </div>
@@ -58,6 +60,8 @@ export function mount(root, ctx = {}) {
     const runs = store.get('runsIndex').filter((r) => {
       if (st === 'pass' && !r.all_pass) return false;
       if (st === 'fail' && r.all_pass) return false;
+      if (st === 'archived' && !r.archived) return false;
+      if (st === 'active' && r.archived) return false;
       if (!q) return true;
       return [r.run_id, r.dataset, r.model, r.label, r.description].some(
         (f) => f && String(f).toLowerCase().includes(q)
@@ -100,6 +104,9 @@ function renderRow(r) {
     ? '<span class="badge badge-pass">✓</span>'
     : '<span class="badge badge-fail">✗</span>';
   const platform = r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : null));
+  const archivedBadge = r.archived
+    ? '<span class="badge badge-archived" title="Pre-audit run — collected under non-canonical conditions. Excluded from comparison charts.">ARCHIVED</span>'
+    : '';
   const platformBadge = platform === 'gadi'
     ? '<span class="badge badge-platform-gadi" title="Run on NCI Gadi (Intel Sapphire Rapids)">Gadi · NCI</span>'
     : platform === 'setonix'
@@ -115,7 +122,7 @@ function renderRow(r) {
       <div class="run-row-summary" role="button" tabindex="0">
         <div class="run-status">${statusBadge}</div>
         <div>
-          <div class="run-id">${escHtml(r.label || r.run_id)} ${platformBadge}</div>
+          <div class="run-id">${escHtml(r.label || r.run_id)} ${platformBadge}${archivedBadge}</div>
           <div class="run-meta">${escHtml(metaBits)}</div>
         </div>
         <div class="run-time" title="Wall time">${fmtTime(r.wall_s)}</div>

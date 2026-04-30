@@ -11111,5 +11111,6 @@
       }
     ]
   },
-  "notes": "[2026-04-30 round 2 audit] Pre-audit Gadi corpus: built with intel-compiler-llvm/2024.2 (icx + libiomp5), launched without OMP_PROC_BIND/OMP_PLACES, no numactl, no OMP_WAIT_POLICY override. The corrected gcc-built + libgomp + close/cores-pinned + numactl --localalloc + OMP_WAIT_POLICY=PASSIVE corpus lands under labels ending in _sr_gcc_pin."
+  "notes": "[2026-04-30 round 2 audit] Pre-audit Gadi corpus: built with intel-compiler-llvm/2024.2 (icx + libiomp5), launched without OMP_PROC_BIND/OMP_PLACES, no numactl, no OMP_WAIT_POLICY override. The corrected gcc-built + libgomp + close/cores-pinned + numactl --localalloc + OMP_WAIT_POLICY=PASSIVE corpus lands under labels ending in _sr_gcc_pin.",
+  "archived": true
 }

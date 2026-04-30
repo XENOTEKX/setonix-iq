@@ -23,6 +23,7 @@ export function render(canvas, runsIndex) {
   for (const r of runsIndex) {
     if (!r.dataset || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
     if (isPilot(r.dataset_short) || isPilot(r.dataset)) continue;
+    if (r.archived) continue;
     const plat = platformOf(r);
     const ds = r.dataset_short || r.dataset;
     // Platform goes first in the label so legend entries group by platform.

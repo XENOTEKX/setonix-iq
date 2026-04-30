@@ -33,6 +33,7 @@ export function render(canvas, runsIndex) {
   for (const r of runsIndex) {
     if (!r.dataset_short || r.threads == null || r.wall_s == null || !r.all_pass || r.wall_s <= 0) continue;
     if (isPilot(r.dataset_short)) continue;
+    if (r.archived) continue;
     const plat = platformOf(r);
     const key = `${platformLabel(plat)} · ${r.dataset_short}`;
     if (!byKey.has(key)) byKey.set(key, { plat, ds: r.dataset_short, points: [] });
