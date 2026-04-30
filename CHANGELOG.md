@@ -57,12 +57,41 @@ Once these jobs complete and are harvested into `Gadi_large_modelfinder_{T}T_gcc
 files (or equivalent), the Setonix vs Gadi comparison will be parity-matched for
 the first time and the >64T analysis can be revisited on equal footing.
 
+### Update — new `_sr_gcc_pin` matrix re-submitted (follow-up #8)
+
+The first batch (167506092 bootstrap + 167506094–167506100 matrix) was
+superseded. A fresh matrix was submitted as PBS jobs **167507204–167507210** and
+is currently running (checked 2026-04-30 ~46 min elapsed):
+
+| PBS Job   | Threads | Status                                    |
+|-----------|---------|-------------------------------------------|
+| 167507204 | 1T      | **R** ~46 min — `iqtree_run` pass done (wall 2450 s), perf-stat pass still running |
+| 167507205 | 4T      | **R** ~46 min — all three passes done (run 800 s, perf 808 s, record 806 s); VTune collecting |
+| 167507206 | 8T      | **Q** (queued)                            |
+| 167507207 | 16T     | **Q** (queued)                            |
+| 167507208 | 32T     | **Q** (queued)                            |
+| 167507209 | 64T     | **Q** (queued)                            |
+| 167507210 | 104T    | **Q** (queued)                            |
+
+Early perf-stat results from job 167507205 (4T, gcc/14.2.0, `-march=sapphirerapids`):
+
+| Counter         | Value  |
+|-----------------|--------|
+| IPC             | 1.94   |
+| LLC miss rate   | 23.7%  |
+| L1-dcache miss  | 4.93%  |
+| Branch miss     | 0.04%  |
+
+`perf record` hotspot (4T, 313 K samples): `computePartialLikelihoodSIMD`
+dominates at **55.8%**, matching the expected IQ-TREE compute profile. OpenMP
+barrier overhead (`gomp_thread_start`) is already visible at 4T.
+
 ### Remaining cross-platform work
 
-- ⏳ Check status of PBS jobs 167506092–167506100 on Gadi
-- ⏳ Harvest `_sr_gcc_pin` runs → `Gadi_large_modelfinder_{T}T.json` (overwrite or add `_gcc` suffix)
+- ⏳ Wait for PBS jobs 167507204–167507210 to complete on Gadi
+- ⏳ Harvest `_sr_gcc_pin` runs → `Gadi_large_modelfinder_{T}T.json`
 - ⏳ Submit `xlarge_mf` and `mega_dna` `_sr_gcc_pin` matrix on Gadi
-- ⏳ Harvest `Setonix_xlarge_mf_1T` (job 42181135, still running)
+- ⏳ Harvest `Setonix_xlarge_mf_1T` (job 42181135, still running on Setonix)
 
 ---
 
