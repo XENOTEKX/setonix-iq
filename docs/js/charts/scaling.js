@@ -3,7 +3,7 @@
 // the same named datasets with different dimensions, so they must not share
 // a line.
 
-import { platformColour, dimLegendHidden } from '../utils.js';
+import { platformColour, dimLegendHidden } from '../utils.js?v=20260430160708';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));

@@ -1,12 +1,12 @@
 // web/js/pages/profiling.js — deep dive for selected run: hotspots + callstack + flamegraph
 
-import { store } from '../state.js?v=20260430153743';
-import { loadRun } from '../data.js?v=20260430153743';
-import { mountRunPicker } from '../components/run-picker.js?v=20260430153743';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430153743';
-import * as callstack from '../charts/callstack.js?v=20260430153743';
-import * as flamegraph from '../charts/flamegraph.js?v=20260430153743';
-import { escHtml, fmtNum, fmtPercent } from '../utils.js?v=20260430153743';
+import { store } from '../state.js?v=20260430160708';
+import { loadRunProfile } from '../data.js?v=20260430160708';
+import { mountRunPicker } from '../components/run-picker.js?v=20260430160708';
+import * as hotspotChart from '../charts/hotspot.js?v=20260430160708';
+import * as callstack from '../charts/callstack.js?v=20260430160708';
+import * as flamegraph from '../charts/flamegraph.js?v=20260430160708';
+import { escHtml, fmtNum, fmtPercent } from '../utils.js?v=20260430160708';
 
 const TMPL = `
   <div class="page-header"><div><h1>Profiling</h1>
@@ -77,10 +77,10 @@ export async function mount(root) {
 
   mountRunPicker(document.getElementById('profRunPicker'), sorted, {
     selectedId: first?.run_id,
-    onChange: async (r) => updateForRun(await loadRun(r.run_id)),
+    onChange: async (r) => updateForRun(await loadRunProfile(r.run_id)),
   });
 
-  updateForRun(await loadRun(first.run_id));
+  updateForRun(await loadRunProfile(first.run_id));
 }
 
 function updateForRun(run) {

@@ -34,6 +34,34 @@ export async function loadRun(id) {
   return run;
 }
 
+/**
+ * loadRunProfile — lazily fetches the heavy-blob companion file
+ * (docs/data/runs/<id>.profile.json) that build.py splits out from the main
+ * run JSON. Contains folded_stacks and memory_timeseries.
+ *
+ * Merges the blobs into the cached run object so subsequent callers of
+ * loadRun() see them without a second fetch.
+ */
+export async function loadRunProfile(id) {
+  if (!id) return null;
+  const run = await loadRun(id);
+  if (!run) return null;
+  // Already merged (or was never split — development build)
+  if (run.profile && run.profile.folded_stacks !== undefined) return run;
+
+  const profCache = store.get('runProfiles') || new Map();
+  if (!store.get('runProfiles')) store.set({ runProfiles: profCache });
+  if (profCache.has(id)) return profCache.get(id);
+
+  const blobs = await getJson(`runs/${encodeURIComponent(id)}.profile.json`).catch(() => null);
+  if (blobs && run.profile) {
+    Object.assign(run.profile, blobs);
+  }
+  profCache.set(id, run);
+  return run;
+}
+
+
 export async function loadProfile(id) {
   if (!id) return null;
   const cache = store.get('profiles');

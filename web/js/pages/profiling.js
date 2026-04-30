@@ -1,7 +1,7 @@
 // web/js/pages/profiling.js — deep dive for selected run: hotspots + callstack + flamegraph
 
 import { store } from '../state.js';
-import { loadRun } from '../data.js';
+import { loadRunProfile } from '../data.js';
 import { mountRunPicker } from '../components/run-picker.js';
 import * as hotspotChart from '../charts/hotspot.js';
 import * as callstack from '../charts/callstack.js';
@@ -77,10 +77,10 @@ export async function mount(root) {
 
   mountRunPicker(document.getElementById('profRunPicker'), sorted, {
     selectedId: first?.run_id,
-    onChange: async (r) => updateForRun(await loadRun(r.run_id)),
+    onChange: async (r) => updateForRun(await loadRunProfile(r.run_id)),
   });
 
-  updateForRun(await loadRun(first.run_id));
+  updateForRun(await loadRunProfile(first.run_id));
 }
 
 function updateForRun(run) {

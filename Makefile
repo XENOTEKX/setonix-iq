@@ -16,6 +16,12 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
+# ── Python interpreter ────────────────────────────────────────────────────────
+# The default python3 on Setonix login nodes is 3.6, which cannot import
+# `from __future__ import annotations`.  Prefer 3.11 if available, then 3.10,
+# then fall back to whatever python3 resolves to.
+PY := $(shell command -v python3.11 2>/dev/null || command -v python3.10 2>/dev/null || echo python3)
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 AGENT_DIR   := $(shell cd "$(dir $(abspath $(lastword $(MAKEFILE_LIST))))" && pwd)
 PROJECT     ?= $(or $(PROJECT),rc29)
@@ -129,15 +135,15 @@ harvest:
 	PROFILE_ROOT="$(IQTREE_DIR)/gadi-ci/profiles" \
 	SCRATCH_DIR="$(IQTREE_DIR)" \
 	BENCHMARKS_DIR="$(IQTREE_DIR)/benchmarks" \
-	python3 "$(AGENT_DIR)/tools/harvest_scratch.py"
+	$(PY) "$(AGENT_DIR)/tools/harvest_scratch.py"
 
 # ── Dashboard + tests ─────────────────────────────────────────────────────────
 
 .PHONY: dashboard
 dashboard:
 	$(call header,Validating + building dashboard)
-	python3 "$(AGENT_DIR)/tools/validate.py"
-	python3 "$(AGENT_DIR)/tools/build.py"
+	$(PY) "$(AGENT_DIR)/tools/validate.py"
+	$(PY) "$(AGENT_DIR)/tools/build.py"
 	cd "$(AGENT_DIR)" && git add -A \
 	    && (git commit -m "dashboard update $$(date '+%Y-%m-%d %H:%M')" || true) \
 	    && git push origin "$$(git rev-parse --abbrev-ref HEAD)"
@@ -145,7 +151,7 @@ dashboard:
 .PHONY: test
 test:
 	$(call header,Running pytest)
-	cd "$(AGENT_DIR)" && python3 -m pytest tests/ -v
+	cd "$(AGENT_DIR)" && $(PY) -m pytest tests/ -v
 
 # ── Status ────────────────────────────────────────────────────────────────────
 

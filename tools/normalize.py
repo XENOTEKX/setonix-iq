@@ -274,8 +274,12 @@ def summarize_profile(prof: dict) -> dict:
 
 
 def write_json(path: Path, obj) -> None:
+    """Write obj as compact JSON, skipping the write if content is unchanged."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, separators=(",", ":"), ensure_ascii=False))
+    text = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return  # no change — preserve mtime so build.py skips the copy
+    path.write_text(text, encoding="utf-8")
 
 
 def main() -> int:

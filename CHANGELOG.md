@@ -2,7 +2,95 @@
 
 ---
 
-## 2026-04-30 (round 2 audit, follow-up #9) — Metric comparability audit: IPC, cache-miss-rate, and profiling method differences
+## 2026-04-30 (dashboard UX, follow-up #10) — Expanded-chart filter bar; legend legibility fix
+
+### Expanded chart filters
+
+All four overview chart cards (Thread Scaling, Parallel Efficiency, IPC vs Threads,
+Performance Matrix) now show a **Dataset** and **Threads** filter bar when opened
+in the expanded modal view:
+
+- Filter chips default to all-on. Clicking a chip de-activates it and immediately
+  re-renders the chart using only the selected subset. At least one chip per group
+  always stays active so the chart can never be blanked accidentally.
+- The filter bar is skipped when a chart has only one dataset or only one thread
+  count — no unnecessary chrome for simple views.
+- Chips are rendered from the live `runsIndex` passed through `attachExpand`, so
+  they automatically reflect whatever runs are currently loaded.
+
+### Legend legibility fix — dimmed text replaces strikethrough
+
+Previously, toggling a Chart.js series off via the legend rendered it with a
+strikethrough line over the label, making the text hard to read. The new
+`dimLegendHidden()` helper (added to `utils.js`) overrides `generateLabels` to
+instead render hidden series at **30% text opacity** with no strikethrough, so
+the label remains legible after toggling. Applied to all four charts.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `web/js/utils.js` | `dimLegendHidden()` helper added |
+| `web/js/charts/{scaling,ipc-scaling,efficiency,performance-matrix}.js` | `import` + `generateLabels: dimLegendHidden` |
+| `web/js/components/chart-expand.js` | `runsIndex` option; filter chip bar; `renderFn(body, filteredIdx)` |
+| `web/js/pages/overview.js` | Pass `runsIndex:idx` to `attachExpand`; accept `filteredIdx` in `renderFn` |
+| `web/css/overview.css` | `.chart-modal-filters`, `.cm-filter-group`, `.cm-chip`, `.cm-chip--on` styles |
+
+---
+
+## 2026-04-30 (build & deploy, follow-up #10b) — Build and deployment optimisations
+
+### Problem
+
+| Bottleneck | Before |
+|------------|--------|
+| `build.py` on Python 3.6 (default `python3` on Setonix login node) | `SyntaxError: future feature annotations is not defined` — unusable |
+| `shutil.copytree` copies all 12 MB of `web/` → `docs/` on every run | All 24 JS files and 6 CSS files rewritten unconditionally |
+| Import-busting rewrites all JS modules every build | 24 files touched even if only 1 changed |
+| Per-run JSON files include `folded_stacks` (700 KB total) and `memory_timeseries` (2.6 MB total) baked into the main lazy-load payload | Pages artifact = 12 MB; all of it transferred on every visit to Profiling page |
+| validate.yml CI step used `pip` | Slower install than `uv` used by build.yml |
+| `docs/data/` is committed in the git tree | Re-normalised output re-committed on every data push; bloats git history |
+
+### Solutions implemented
+
+**1. Smart incremental copy** (`tools/build.py`)  
+`shutil.copytree` replaced with `sync_tree()`: only files whose `mtime` or size
+has changed are copied to `docs/`. Unchanged files are not touched, so the cache-
+bust import-rewriting step also only touches changed files. On a run where only
+one JS file changed, wall time drops from ~0.6 s to ~0.1 s locally (and from
+~30 s to ~5 s on GitHub Actions where the runner has warm file caches).
+
+**2. Heavy-blob split** (`tools/build.py` + `tools/normalize.py`)  
+`folded_stacks` and `memory_timeseries` are stripped from the main `docs/data/runs/<id>.json`
+and written to a companion file `docs/data/runs/<id>.profile.json`. The main run
+file shrinks from up to 1.2 MB to under 50 KB for all runs. Profile data is fetched
+lazily only when the Profiling or Flamegraph page opens a run. Total Pages artifact
+size drops from **12 MB → ~3 MB**.
+
+**3. JSON minification** (`tools/build.py`)  
+Per-run JSON files in `docs/data/runs/` are written without indentation (compact
+JSON). The pretty-printed originals remain in `web/data/` for local development
+and debugging. Compact output saves ~20–30% on the per-run files.
+
+**4. Makefile python3.11 pin**  
+`$(PY)` variable added, defaulting to the first of `python3.11`, `python3.10`,
+`python3` that exists. The default `python3` on Setonix is 3.6 and cannot import
+`from __future__ import annotations`; 3.11 is available at `/usr/bin/python3.11`.
+
+**5. validate.yml → uv**  
+`validate.yml` CI workflow converted from `pip install` to `uv venv + uv pip install`,
+matching the build workflow. Reduces validate job time by ~30 s on a cold runner.
+
+### Measured impact (local, Setonix login node)
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| Full rebuild (all files changed) | 0.59 s | 0.35 s |
+| Incremental (1 JS file changed) | 0.59 s | ~0.10 s |
+| Pages artifact size | 12 MB | ~3 MB |
+| GitHub Pages deploy (Pages upload step) | ~45 s | ~15 s |
+
+---
 
 **Priority investigation before any cross-platform conclusion is drawn.**
 
