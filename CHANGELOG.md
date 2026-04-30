@@ -2,6 +2,116 @@
 
 ---
 
+## 2026-04-30 (round 2 audit, follow-up #9) — Metric comparability audit: IPC, cache-miss-rate, and profiling method differences
+
+**Priority investigation before any cross-platform conclusion is drawn.**
+
+### IPC — definition and comparability
+
+Both platforms compute IPC as `instructions / cycles`, using hardware retired-instruction
+and cycle counters:
+
+| Platform | `instructions` event | `cycles` event | Max retire width |
+|----------|---------------------|----------------|-----------------|
+| Setonix (AMD Zen3) | `RETIRED_INSTRUCTIONS` (x86 insn, not µops) | `CPU_CYCLES` (core clock, halted excluded) | **4 insn/cycle** |
+| Gadi (Intel SPR) | `INST_RETIRED.ANY` (x86 insn, not µops) | `CPU_CLK_UNHALTED.THREAD` (core clock) | **6 insn/cycle** |
+
+Both count **architectural (x86) instructions**, not micro-ops, so the raw formula
+`instructions / cycles` is conceptually equivalent. AMD additionally collects
+`ex_ret_ops` (micro-ops); the ratio `insn/ex_ret_ops ≈ 1.08` confirms slight macro-fusion
+but no large discrepancy. Intel does not collect µops in the current event set.
+
+**However, the retire widths differ: AMD max = 4, Intel SPR max = 6.** A raw IPC
+of 1.8 on Setonix means 45% of peak AMD utilisation; the same IPC of 1.8 on Gadi
+would mean only 30% of Intel peak. **IPC values should not be compared as if they
+measure the same fraction of available pipeline capacity.**
+
+`xlarge_mf` utilisation at key thread counts (ICX runs are non-canonical, gcc pending):
+
+| Threads | Setonix IPC | AMD utilisation (÷4) | Gadi IPC (ICX) | Intel utilisation (÷6) |
+|--------:|------------|---------------------|----------------|------------------------|
+| 4T      | 1.8037     | 45.1%               | 1.6205         | 27.0%                  |
+| 32T     | 0.3487     | 8.7%                | 1.3667         | 22.8%                  |
+| 64T     | 0.1742     | 4.4%                | 1.1551         | 19.3%                  |
+| 104T    | 0.0673     | 1.7%                | 1.0295         | 17.2%                  |
+
+The Setonix IPC collapse at >32T is more dramatic in absolute terms, but the AMD
+peak is lower. At 104T the Gadi ICX IPC remains ~1.0 — but this is *also* non-canonical
+(ICX compiler + VTune). Canonical gcc Gadi IPC is pending.
+
+### `cache-miss-rate` — **CRITICAL: not the same cache level on both platforms**
+
+The `cache-miss-rate` field shown on the dashboard is computed as
+`cache-misses / cache-references`. **This formula resolves to different cache
+levels on AMD vs Intel**, making cross-platform comparison of this metric invalid.
+
+| Platform | `cache-references` event | `cache-misses` event | Cache level described |
+|----------|--------------------------|---------------------|-----------------------|
+| Setonix (AMD Zen3) | `PERF_COUNT_HW_CACHE_REFERENCES` → maps to **L2 requests** (≈ L1-miss demand, ratio to L1-loads ≈ 0.15) | L2 misses | **L2 miss rate** |
+| Gadi (Intel SPR) | `LONGEST_LAT_CACHE.REFERENCE` → **all L3 (LLC) lookups** (ratio to L1-loads ≈ 0.07) | `LONGEST_LAT_CACHE.MISS` → L3 misses to DRAM | **L3 (LLC) miss rate** |
+
+Verified by ratio analysis on `xlarge_mf` 4T:
+
+```
+Setonix: cache-refs / L1-misses = 1.97  → cache-refs ≈ L2 requests (L1-miss demand + L2 prefetch)
+Gadi:    cache-refs / LLC-loads  = 8.16  → cache-refs is L3-level (LONGEST_LAT_CACHE.REF)
+```
+
+As a result:
+- **Setonix `cache-miss-rate` ≈ 3.9%** at 4T — this is **L2** miss rate
+- **Gadi `cache-miss-rate` ≈ 45.4%** at 4T — this is **L3/LLC** miss rate
+
+These numbers **cannot be compared**. The dashboard's `cache-miss-rate` chart is
+currently showing L2-domain data for Setonix and L3-domain data for Gadi on the
+same axis — this is actively misleading and must be corrected.
+
+Gadi also records separate explicit LLC events (`LLC-loads`, `LLC-load-misses` =
+`MEM_LOAD_RETIRED.L3_HIT` / `L3_MISS`) giving an independent LLC miss rate of
+**48.4%** at 4T, consistent with the `LONGEST_LAT_CACHE` reading. Setonix has
+no direct LLC/L3 event in the current `PERF_EVENTS` list — only the L2-level
+generic `cache-references`.
+
+### `L1-dcache-miss-rate` — valid cross-platform comparison
+
+Both platforms use `L1-dcache-load-misses / L1-dcache-loads` = L1 data-cache load
+miss rate. This is the **only cache metric currently comparable across platforms**:
+
+| Threads | Setonix L1-miss-rate | Gadi L1-miss-rate (ICX) |
+|--------:|---------------------|------------------------|
+| 4T      | 7.55%               | 2.41%                  |
+| 32T     | 8.15%               | 2.07%                  |
+| 104T    | 7.65%               | 3.59%                  |
+
+Setonix L1-miss-rate is ~3× Gadi's. At face value this suggests higher memory
+pressure on Setonix, but cache geometry differs: AMD Zen3 L1-D = 32 KB/core,
+Intel SPR L1-D = 48 KB/core — a 50% larger L1 will absorb more pressure.
+
+### `stalled-cycles-frontend` — different semantics
+
+| Platform | Event mapped | Meaning |
+|----------|-------------|---------|
+| Setonix (AMD Zen3) | `stalled-cycles-frontend` PMU | Cycles where the front-end (fetch/decode) delivered 0 µops to the back-end, and the back-end was not stalled |
+| Gadi (Intel SPR) | `UOPS_NOT_DELIVERED.CORE` (or `IDQ_UOPS_NOT_DELIVERED`) | Slots (not cycles) where the allocator was starverd of µops from the front-end |
+
+Not directly comparable — AMD counts *cycles*, Intel counts *slots* (up to 6/cycle on SPR).
+
+### Priority actions required
+
+- [ ] **Fix dashboard `cache-miss-rate` label**: rename to `L2 miss rate` on Setonix plots
+      and `LLC miss rate` on Gadi plots (or suppress cross-platform comparison)
+- [ ] **Add LLC events to Setonix `PERF_EVENTS`**: check if AMD Zen3 perf supports
+      `l3_cache_misses` or similar raw event (e.g. `r4FF04` on Zen3 = L3 miss).
+      Candidate: `amd_l3/requests/`, `amd_l3/l3_misses/`, or raw PMU events
+      `r4000040` / `r4000041`
+- [ ] **Normalise IPC display**: show `IPC / max_retire_width` as a utilisation %
+      alongside raw IPC so cross-platform comparison is meaningful
+- [ ] **Verify `stalled-cycles-frontend` semantics** after canonical Gadi gcc runs
+      complete — the current Gadi ICX runs use VTune for microarch which may report
+      this differently than perf
+- [ ] **Verify all of above with canonical `_sr_gcc_pin` runs** once harvested
+
+---
+
 ## 2026-04-30 (round 2 audit, follow-up #8) — Non-canonical reference series: root causes documented, labels corrected
 
 All 33 non-canonical runs now appear on all four dashboard charts as faded
