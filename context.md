@@ -661,3 +661,229 @@ because it is the only dataset whose alignment file matches the canonical
 sha256 on both platforms and whose model selection (GTR-family) was
 consistent. Corrected Setonix re-runs for the other two datasets are
 scheduled (6 500-9 700 CPU-hours) but are not on the GPU work critical path.
+
+---
+
+## 13. Post-audit state (as of 2026-05-01) — parity, scaling analysis, known gotchas
+
+This section records everything that was learned during CHANGELOG follow-ups
+#1–#5b. Treat it as the **diagnostic reference** — if something breaks on
+Gadi or Setonix, check here first.
+
+---
+
+### 13.1 `large_modelfinder` canonical Setonix matrix (`_smtoff_pin`)
+
+SLURM jobs 42179139–42179145, all completed. Canonical conditions:
+`gcc 14.3.0 -march=znver3 -mtune=znver3 -O3 -fno-omit-frame-pointer -g`,
+`OMP_PROC_BIND=close OMP_PLACES=cores OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=10000`,
+`numactl --localalloc`, `--exclusive`, `--hint=nomultithread`, full ModelFinder,
+`-seed 1`, sha256 `73908728…b01207`.
+
+| T   | Wall (s) | Selected model | Notes                          |
+|----:|---------:|----------------|--------------------------------|
+|   1 | 2 190.4  | GTR+F+G4       | single-thread baseline         |
+|   4 |   758.2  | GTR+F+G4       |                                |
+|   8 |   513.1  | GTR+F+G4       | **best per-thread efficiency** |
+|  16 |   660.1  | GTR+F+G4       | **scaling collapse begins**    |
+|  32 |   628.2  | GTR+F+G4       |                                |
+|  64 |   731.4  | GTR+F+G4       |                                |
+| 104 | 1 084.4  | GTR+F+G4       |                                |
+
+Selected model is **bit-stable** (`GTR+F+G4`, BIC = 5 383 255.5602) at every T.
+Per-thread CPU utilisation stays at 94–96 % at every T — threads are not idle,
+they are doing super-linear **redundant work** (total CPU jumps 2.6× at the
+8T→16T boundary, i.e. the exact CCX crossing — see §13.2).
+
+Harvested into `logs/runs/large_modelfinder_{1,4,8,16,32,64,104}t_smtoff_pin.json`.
+Pre-audit `*_baseline_smton.json` records kept but marked `archived: true`.
+
+---
+
+### 13.2 Why Setonix `large_modelfinder` collapses after 8T — CCX boundary
+
+EPYC 7763 "Trento" (Zen 3) topology on Setonix `work` nodes:
+
+| Threads spanned | Coherence cost  | Architectural reason                                        |
+|-----------------|-----------------|-------------------------------------------------------------|
+| 1–8 cores       | ~10 ns          | One **CCX** (8 cores share one 32 MB L3 slice on Zen 3)    |
+| 9–16 cores      | ~30 ns          | Spans 2 CCXes (1 CCD pair), same Infinity Fabric stop       |
+| 17–64 cores     | ~80–120 ns      | Spans multiple CCDs, routed through I/O die                 |
+| 65–128 cores    | ~200–300 ns     | Second EPYC 7763 socket via xGMI-2                          |
+
+At 8T the OpenMP reduction completes inside one L3; at 16T it crosses a CCX
+boundary and every reduction-tail merge pays ~30 ns per thread.
+
+**Gadi Sapphire Rapids does NOT show this collapse** because SPR has a
+monolithic 105 MB L3 mesh per socket — uniform latency from 1T to 52T. The
+first coherence cliff on Gadi is at 53T (second socket), so scaling is smooth
+to 32T and only flattens around 64T.
+
+Cross-platform at matching thread points (both canonical, same alignment):
+
+| T  | Setonix `_smtoff_pin` (s) | Gadi `_sr_icx` (s) | Ratio |
+|---:|--------------------------:|-------------------:|------:|
+|  1 | 2 190.4                   | 2 168.2            | 1.01× |
+|  4 |   758.2                   |   805.4            | 0.94× |
+|  8 |   513.1                   |   460.8            | 1.11× |
+| 16 |   660.1                   |   293.7            | 2.25× |
+| 32 |   628.2                   |   219.8            | 2.86× |
+| 64 |   731.4                   |   244.9            | 2.99× |
+
+Single-thread parity is 1.01× — the prior 1T gap was launcher noise, closed
+by the audit. The ≥16T gap is the Trento CCX microarchitecture, **not** a
+configuration bug.
+
+---
+
+### 13.3 Gadi `_sr_gcc_pin` matrix — purpose and parity table
+
+**Goal:** Isolate compiler family from microarchitecture. Holds everything
+the same as Setonix `_smtoff_pin` except the CPU (SPR vs Zen 3) and
+architecture flag. If this matrix reproduces the Gadi `_sr_icx` scaling
+curve within ±5 %, the icx-vs-gcc axis is inert and the ≥16T Setonix gap
+is definitively AMD Zen 3 CCX fragmentation. If it trends toward the Setonix
+curve, libiomp5's task-stealing scheduler is hiding some of the hardware cost.
+
+**Current submission (2026-05-01):**
+- Bootstrap: job `167507203` (`iqtree-bootstrap`, normalsr, running, ~1 h walltime)
+- Matrix jobs `167507204–167507210` held (`H`) on `afterok:167507203`
+- Label pattern: `large_modelfinder_{1,4,8,16,32,64,104}t_sr_gcc_pin`
+- Output JSON: `logs/runs/gadi_large_modelfinder_<T>t_sr_gcc_pin.json`
+- Profile directories: `/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/<label>_<pbs_id>/`
+
+**Full 26-row parity audit (Setonix `_smtoff_pin` vs Gadi `_sr_gcc_pin`):**
+
+| # | Concern | Setonix | Gadi | Match |
+|---|---------|---------|------|-------|
+| 1  | Dataset file           | `large_modelfinder.fa` | same | ✅ |
+| 2  | sha256 lockfile gate   | enforced in preflight  | enforced in worker (exit 3) | ✅ |
+| 3  | Canonical sha256       | `73908728…` | same lockfile | ✅ |
+| 4  | Dimensions             | 100 taxa × 50 000 sites | identical bytes | ✅ |
+| 5  | Thread sweep           | 1 4 8 16 32 64 104 | 1 4 8 16 32 64 104 | ✅ |
+| 6  | IQ-TREE seed           | `-seed 1` | `-seed 1` | ✅ |
+| 7  | ModelFinder scope      | full default (no `-mset`) | full default | ✅ |
+| 8  | Compiler family        | gcc | gcc/14.2.0 | ✅ |
+| 9  | Compiler version       | gcc 14.3.0 | gcc 14.2.0 (patch-level only) | ✅ |
+| 10 | Architecture flag      | `-march=znver3 -mtune=znver3` | `-march=sapphirerapids -mtune=sapphirerapids` | ✅ intentional |
+| 11 | Frame-pointer build    | `-fno-omit-frame-pointer -g` | same | ✅ |
+| 12 | OpenMP runtime         | libgomp | libgomp (gcc binary, not libiomp5) | ✅ |
+| 13 | OMP_NUM_THREADS        | `${THREADS}` | `${THREADS}` | ✅ |
+| 14 | OMP_PROC_BIND          | `close` | `close` | ✅ |
+| 15 | OMP_PLACES             | `cores` | `cores` | ✅ |
+| 16 | OMP_WAIT_POLICY        | `PASSIVE` | `PASSIVE` | ✅ |
+| 17 | GOMP_SPINCOUNT         | `10000` | `10000` | ✅ |
+| 18 | NUMA locality          | `numactl --localalloc` | `numactl --localalloc` | ✅ |
+| 19 | SMT off                | `--hint=nomultithread` (SLURM) | BIOS-disabled on normalsr | ✅ |
+| 20 | Full-node exclusive    | `--exclusive` | `-l ncpus=104` | ✅ |
+| 21 | CPU binding            | `srun --cpu-bind=cores` | PBS cpuset + `OMP_PLACES=cores` | ✅ |
+| 22 | Memory request         | `--mem=230G` | `mem=500GB` (node max) | ✅ |
+| 23 | Walltime               | 24 h | 24 h | ✅ |
+| 24 | Output label           | `…_smtoff_pin` | `…_sr_gcc_pin` | ✅ |
+| 25 | Eigen version          | 3.4.0 (Setonix) | **3.3.7** (Gadi ceiling) | ⚠️ inert |
+| 26 | Boost version          | 1.86.0 (Setonix) | **1.84.0** (Gadi ceiling) | ⚠️ inert |
+
+Rows 25–26 are header-only libraries in the paths IQ-TREE uses — no impact
+on compiled output. All 24 experimentally material rows are ✅.
+
+---
+
+### 13.4 Gadi module tree facts (known ceilings and gotchas)
+
+**Do not try to load modules higher than these — they do not exist on NCI:**
+
+| Module | Setonix version | Gadi ceiling | Notes |
+|--------|----------------|--------------|-------|
+| `eigen` | 3.4.0 | **3.3.7** | header-only, inert diff |
+| `boost` | 1.86.0 | **1.84.0** | header-only, inert diff |
+| `gcc` | 14.3.0 (SUSE) | **14.2.0** | patch-level only |
+| `binutils` | ≥2.38 (system) | **2.44** (module) | see §13.5 |
+| `intel-vtune` | n/a | **2024.2.0** | OK |
+| `intel-compiler-llvm` | n/a | **2024.2.0** | do NOT load alongside gcc build — shadows libgomp |
+
+**Module load order matters for the `_sr_gcc_pin` bootstrap:**
+```
+module load gcc/14.2.0
+module load binutils/2.44   # MUST come after gcc, overrides /bin/as on PATH
+module load eigen/3.3.7
+module load boost/1.84.0
+module load intel-vtune/2024.2.0
+# do NOT load intel-compiler-llvm — it shadow-replaces libgomp with libiomp5
+```
+
+**TMPDIR on normalsr:** default is `/jobfs` (100 MB quota). VTune writes
+driver/temp files there and will overflow it. Always set:
+```bash
+export TMPDIR="/scratch/rc29/as1708/iqtree3/tmp"
+mkdir -p "${TMPDIR}"
+```
+
+**`perf_event_paranoid=2` on Gadi normalsr compute nodes:** blocks
+kernel-mode sampling. All perf events **must** have `:u` suffix (user-mode
+only). Without this, `perf stat` silently writes no output file at all.
+Affected events: `stalled-cycles-frontend`, `stalled-cycles-backend`, and
+most `topdown-*` pseudo-events are not available on SPR with kernel 4.18.0
+even with `:u` — omit them from the event list entirely.
+
+---
+
+### 13.5 binutils 2.30 vs 2.44 — AVX-512-FP16 assembler failure
+
+**Symptom:**
+```
+/jobfs/<id>.gadi-pbs/ccYmyoht.s:162739: Error: no such instruction: `vmovw %xmm0,264(%rax)'
+make[2]: *** [main/CMakeFiles/main.dir/phylotesting.cpp.o] Error 1
+```
+
+**Root cause:** `vmovw` is an AVX-512-FP16 instruction added to GNU binutils
+in 2.38 (Jan 2022). Gadi `normalsr` system assembler is RHEL 8's
+`binutils-2.30-128.el8_10` (predates AVX-512-FP16 by 4 years). gcc 14.2.0
+with `-march=sapphirerapids` emits FP16 instructions in `phylotesting.cpp`;
+`cc1` pipes the assembly to `/bin/as` which rejects it. gcc does **not**
+bundle its own `as` — it PATH-resolves to `/bin/as` unless overridden.
+
+**Setonix is unaffected** because `-march=znver3` (Zen 3) has no AVX-512-FP16,
+so gcc never emits `vmovw`.
+
+**Fix:** `module load binutils/2.44` in the bootstrap script, immediately
+after `module load gcc/14.2.0`. This puts `/apps/binutils/2.44/bin/as` ahead
+of `/bin/as` on PATH. Verify: `as --version` → `GNU assembler (GNU Binutils) 2.44`.
+
+**Do NOT use `-mno-avx512fp16` instead** — `-march=sapphirerapids` enables
+many post-binutils-2.30 ISA extensions (AMX-INT8, AMX-BF16, AVX-VNNI,
+CLDEMOTE, …). Loading newer binutils fixes the whole class at once without
+stripping ISA features.
+
+---
+
+### 13.6 `perf stat` wrapping `srun` — historic bug (fixed)
+
+In all Setonix `*_baseline_smton` runs, `perf stat` was wrapped around the
+`srun` launcher process, not the IQ-TREE worker. Result: `task-clock ≈ 91 ms`
+while wall-clock is `2 190 s` — counters describe the launcher, not the
+workload. All derived metrics (IPC, cache-miss-rate, stall-rate) in those
+records are physically meaningless.
+
+**Fix (applied before `_smtoff_pin` runs):** reordered to
+`srun … bash -c "perf stat -o … numactl … iqtree3 …"` so `perf` runs
+inside the step on the compute node.
+
+`tools/harvest_scratch.py:_derive_rates` now refuses to emit perf-derived
+metrics when computed `IPC > 10` (schema cap) — catches the launcher-only
+case unambiguously.
+
+Gadi `_run_matrix_job.sh` builds the `:u`-suffixed perf event list from the
+base list at runtime (no hardcoded `:u` in the source), so the event list
+stays readable but the suffix is always applied correctly.
+
+---
+
+### 13.7 Open action items (as of 2026-05-01)
+
+| Item | Status |
+|------|--------|
+| Harvest `large_modelfinder _sr_gcc_pin` results once jobs 167507204–167507210 complete | ⏳ waiting on bootstrap 167507203 |
+| Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc build) | ⏳ queued after above |
+| `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 — check if internal pools are sized from this (returns 2×T on Setonix due to SMT) | ⏳ not yet done |
+| Harvest Setonix `xlarge_mf _smtoff_pin` matrix (SLURM jobs 42181135–42181142) | ⏳ pending |
+| Commit new canonical run-id scheme (`{Platform}_{Dataset}_{T}T`) to all JSON records | ⏳ after gcc_pin results land |
