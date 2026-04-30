@@ -12,7 +12,7 @@
   "verify": [],
   "env": {
     "run_id": "41931856",
-    "label": "xlarge_mf_4t_baseline_smton",
+    "label": "xlarge_mf_4t",
     "threads": 4,
     "hostname": "",
     "kernel": "",

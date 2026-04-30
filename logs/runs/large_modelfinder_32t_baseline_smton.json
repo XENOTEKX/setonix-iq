@@ -12,7 +12,7 @@
   "verify": [],
   "env": {
     "run_id": "41931853",
-    "label": "large_modelfinder_32t_baseline_smton",
+    "label": "large_modelfinder_32t",
     "threads": 32,
     "hostname": "",
     "kernel": "",
