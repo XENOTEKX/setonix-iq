@@ -1,48 +1,27 @@
 {
   "run_id": "Setonix_large_modelfinder_8T",
-  "slurm_id": "42179141",
+  "slurm_id": "42190955",
   "platform": "setonix",
   "run_type": "deep_profile",
-  "label": "Setonix_large_modelfinder_8T",
+  "label": "large_modelfinder_8t_smtoff_pin",
   "description": "Setonix canonical large_modelfinder @ 8T (SMT-off, pinned, -march=znver3, gcc 14.3.0)",
   "timing": [
     {
-      "command": "iqtree3 -s large_modelfinder.fa",
-      "time_s": 513.132
+      "command": "iqtree3 -s large_modelfinder.fa -T 8 -seed 1",
+      "time_s": 545.824
     }
   ],
   "verify": [],
   "env": {
-    "run_id": "42179141",
+    "hostname": "nid001476",
+    "date": "Fri May  1 08:14:48 2026",
+    "cores": 16,
+    "cpu": "AVX2, FMA3, 250 GB RAM",
+    "run_id": "42190955",
     "label": "large_modelfinder_8t_smtoff_pin",
     "threads": 8,
-    "hostname": "",
     "kernel": "",
     "os": "",
-    "cpu": "",
-    "iqtree_binary": "/scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3",
-    "iqtree_version": "",
-    "date": "",
-    "dataset": {
-      "path": "/scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa",
-      "file": "large_modelfinder.fa",
-      "size_bytes": 5001200,
-      "sha256": "73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207"
-    },
-    "slurm": {
-      "job_id": "42179141",
-      "job_name": "iq-large_modelfinder-8t",
-      "partition": "work",
-      "account": "pawsey1351",
-      "nodelist": "nid001149",
-      "num_nodes": "1",
-      "cpus_per_task": "128",
-      "ntasks": "1",
-      "mem_per_node": "235520",
-      "submit_host": "nid002808",
-      "submit_dir": "/scratch/pawsey1351/asamuel/iqtree3"
-    },
-    "cores": 16,
     "cpu_sockets": 0,
     "cpu_cores_per_socket": 0,
     "cpu_threads_per_core": 0,
@@ -53,604 +32,678 @@
     "mem_total_kb": 0,
     "glibc": "",
     "gcc": "",
-    "python": ""
+    "python": "",
+    "iqtree_binary": "/scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3",
+    "iqtree_version": "",
+    "slurm": {
+      "job_id": "42190955",
+      "job_name": "iq-large_modelfinder-8t",
+      "partition": "work",
+      "account": "pawsey1351",
+      "nodelist": "nid001476",
+      "num_nodes": "1",
+      "cpus_per_task": "128",
+      "ntasks": "1",
+      "mem_per_node": "235520",
+      "submit_host": "setonix-04",
+      "submit_dir": "/scratch/pawsey1351/asamuel/iqtree3"
+    }
   },
   "profile": {
     "dataset": "large_modelfinder.fa",
     "threads": 8,
-    "perf_cmd": "srun --cpus-per-task=8 --cpu-bind=cores --hint=nomultithread --mem=0 numactl --localalloc /scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa -T 8 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/large_modelfinder_8t_smtoff_pin_42179141/iqtree_run",
-    "metrics": {
-      "branch-instructions": 111770752,
-      "branch-misses": 793220,
-      "cache-references": 3708255,
-      "cache-misses": 419915,
-      "L1-dcache-loads": 102884569,
-      "L1-dcache-load-misses": 1623249,
-      "dTLB-loads": 601132,
-      "dTLB-load-misses": 28482,
-      "iTLB-loads": 9951,
-      "iTLB-load-misses": 15074,
-      "stalled-cycles-frontend": 19409960,
-      "page-faults": 3991,
-      "context-switches": 0,
-      "cpu-migrations": 0,
-      "ex_ret_ops": 380093853,
-      "ex_ret_brn_misp": 645552,
-      "ls_l1_d_tlb_miss.all": 157973,
-      "bp_l1_tlb_miss_l2_tlb_hit": 28727,
-      "bp_l1_tlb_miss_l2_tlb_miss": 14975,
-      "ls_tablewalker.dside": 250794,
-      "cache-miss-rate": 0.11323789760952253,
-      "branch-miss-rate": 0.0070968476618999575,
-      "L1-dcache-miss-rate": 0.015777380571035875,
-      "dTLB-miss-rate": 0.04738060858513604,
-      "iTLB-miss-rate": 1.5148226308913677,
-      "cache_level": "L2",
-      "l2-miss-rate": 0.11323789760952253
-    },
+    "perf_cmd": "numactl --localalloc /scratch/pawsey1351/asamuel/iqtree3/build-profiling/iqtree3 -s /scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa -T 8 -seed 1 --prefix /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/large_modelfinder_8t_smtoff_pin_42190955/iqtree_run",
     "hotspots": [
       {
-        "percent": 16.19,
+        "percent": 53.26,
         "samples": 1,
         "command": "srun",
         "module": "libslurmfull.so",
-        "function": "_foreach_helper_setup_pollfds"
+        "function": "_find_name_in_env"
       },
       {
-        "percent": 15.57,
+        "percent": 11.71,
+        "samples": 2,
+        "command": "srun",
+        "module": "ld-linux-x86-64.so.2",
+        "function": "do_lookup_x"
+      },
+      {
+        "percent": 6.69,
+        "samples": 3,
+        "command": "srun",
+        "module": "libc.so.6",
+        "function": "__libc_calloc"
+      },
+      {
+        "percent": 4.81,
+        "samples": 1,
+        "command": "scontrol",
+        "module": "libslurmfull.so",
+        "function": "unpack32@plt"
+      },
+      {
+        "percent": 4.45,
+        "samples": 1,
+        "command": "sh",
+        "module": "ld-linux-x86-64.so.2",
+        "function": "strcmp"
+      },
+      {
+        "percent": 4.3,
         "samples": 1,
         "command": "sinfo",
         "module": "libc.so.6",
-        "function": "re_search_internal"
+        "function": "_int_malloc"
       },
       {
-        "percent": 9.61,
+        "percent": 4.23,
+        "samples": 1,
+        "command": "sinfo",
+        "module": "ld-linux-x86-64.so.2",
+        "function": "_dl_fixup"
+      },
+      {
+        "percent": 3.1,
+        "samples": 1,
+        "command": "srun",
+        "module": "ld-linux-x86-64.so.2",
+        "function": "_dl_map_object_deps"
+      },
+      {
+        "percent": 2.96,
+        "samples": 1,
+        "command": "sinfo",
+        "module": "libslurmfull.so",
+        "function": "slurm_unpack32"
+      },
+      {
+        "percent": 1.2,
+        "samples": 1,
+        "command": "sh",
+        "module": "libc.so.6",
+        "function": "__strcpy_avx2"
+      },
+      {
+        "percent": 0.64,
         "samples": 1,
         "command": "srun",
         "module": "ld-linux-x86-64.so.2",
         "function": "_dl_lookup_symbol_x"
       },
       {
-        "percent": 9.14,
-        "samples": 1,
-        "command": "scontrol",
-        "module": "libc.so.6",
-        "function": "_int_malloc"
-      },
-      {
-        "percent": 6.81,
+        "percent": 0.62,
         "samples": 1,
         "command": "srun",
-        "module": "libslurmfull.so",
-        "function": "slurm_get_port@plt"
-      },
-      {
-        "percent": 6.64,
-        "samples": 1,
-        "command": "sinfo",
-        "module": "libc.so.6",
-        "function": "__libc_calloc"
-      },
-      {
-        "percent": 6.13,
-        "samples": 1,
-        "command": "sinfo",
-        "module": "libc.so.6",
-        "function": "__memmove_avx_unaligned_erms"
-      },
-      {
-        "percent": 3.44,
-        "samples": 1,
-        "command": "sinfo",
-        "module": "ld-linux-x86-64.so.2",
-        "function": "do_lookup_x"
-      },
-      {
-        "percent": 3.14,
-        "samples": 1,
-        "command": "srun",
-        "module": "ld-linux-x86-64.so.2",
-        "function": "strcmp"
-      },
-      {
-        "percent": 2.88,
-        "samples": 1,
-        "command": "srun",
-        "module": "libc.so.6",
-        "function": "__printf_buffer"
-      },
-      {
-        "percent": 1.68,
-        "samples": 1,
-        "command": "sh",
-        "module": "libc.so.6",
-        "function": "__strcmp_avx2"
+        "module": "liblua5.3.so.5.3.0",
+        "function": "luaL_checkudata"
       }
     ],
     "folded_stacks": [
       {
-        "stack": "_foreach_helper_setup_pollfds",
+        "stack": "do_lookup_x;[runtime]",
+        "count": 6
+      },
+      {
+        "stack": "do_lookup_x",
+        "count": 2
+      },
+      {
+        "stack": "_find_name_in_env",
         "count": 1
       },
       {
-        "stack": "re_search_internal",
+        "stack": "do_lookup_x;[runtime];slurm_eio_handle_mainloop",
         "count": 1
       }
     ],
+    "metrics": {
+      "cycles": 14191474575905,
+      "instructions": 22255846883545,
+      "branch-instructions": 1984762716042,
+      "branch-misses": 961108231,
+      "cache-references": 1518714463362,
+      "cache-misses": 69333700523,
+      "L1-dcache-loads": 10247820919640,
+      "L1-dcache-load-misses": 780680561561,
+      "dTLB-loads": 913194752,
+      "dTLB-load-misses": 78676330,
+      "iTLB-loads": 12071238,
+      "iTLB-load-misses": 15976624,
+      "stalled-cycles-frontend": 372637558400,
+      "page-faults": 172829,
+      "context-switches": 0,
+      "cpu-migrations": 0,
+      "ex_ret_ops": 20585103191771,
+      "ex_ret_brn_misp": 1017151740,
+      "ls_l1_d_tlb_miss.all": 906407457,
+      "bp_l1_tlb_miss_l2_tlb_hit": 11965863,
+      "bp_l1_tlb_miss_l2_tlb_miss": 16061313,
+      "ls_tablewalker.dside": 208489248,
+      "ls_tablewalker.iside": 1047792366,
+      "ls_dispatch.ld_dispatch": 9640885845337,
+      "ls_dispatch.store_dispatch": 2883669180858,
+      "IPC": 1.5682547126802522,
+      "cache-miss-rate": 0.045652887488484825,
+      "branch-miss-rate": 0.00048424339253844677,
+      "L1-dcache-miss-rate": 0.07618015260832885,
+      "dTLB-miss-rate": 0.08615503957692477,
+      "iTLB-miss-rate": 1.3235282081257946,
+      "frontend-stall-rate": 0.026257846315187204,
+      "L1d-mpki": 35.07754908837916,
+      "cache-miss-mpki": 3.115302728572522,
+      "cache-ref-mpki": 68.23889790888484,
+      "cache_level": "L2",
+      "l2-miss-rate": 0.045652887488484825,
+      "l2-miss-mpki": 3.115302728572522
+    },
     "peak_rss_kb": 10240,
     "memory_timeseries": [
       {
-        "t_s": 0.0,
+        "t_s": 0.05,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 89,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 10.01,
+        "t_s": 10.06,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 20.02,
+        "t_s": 20.07,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 30.03,
+        "t_s": 30.08,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 40.05,
+        "t_s": 40.1,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 50.06,
+        "t_s": 50.11,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 60.07,
+        "t_s": 60.12,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 70.08,
+        "t_s": 70.13,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 80.09,
+        "t_s": 80.14,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 90.1,
+        "t_s": 90.15,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 100.11,
+        "t_s": 100.16,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 110.12,
+        "t_s": 110.17,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 120.13,
+        "t_s": 120.18,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 130.14,
+        "t_s": 130.2,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 140.15,
+        "t_s": 140.21,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 150.16,
+        "t_s": 150.22,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 160.18,
+        "t_s": 160.23,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 170.19,
+        "t_s": 170.24,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 180.2,
+        "t_s": 180.25,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 190.21,
+        "t_s": 190.26,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 200.22,
+        "t_s": 200.27,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 210.23,
+        "t_s": 210.28,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 220.24,
+        "t_s": 220.29,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 230.25,
+        "t_s": 230.31,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 240.27,
+        "t_s": 240.32,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 250.28,
+        "t_s": 250.33,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 260.29,
+        "t_s": 260.34,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 270.3,
+        "t_s": 270.35,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 280.31,
+        "t_s": 280.36,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 290.32,
+        "t_s": 290.37,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 300.33,
+        "t_s": 300.38,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 310.35,
+        "t_s": 310.39,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 320.36,
+        "t_s": 320.41,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 330.37,
+        "t_s": 330.42,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 340.38,
+        "t_s": 340.43,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 350.39,
+        "t_s": 350.44,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 360.4,
+        "t_s": 360.45,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 370.41,
+        "t_s": 370.46,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 380.42,
+        "t_s": 380.47,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 390.43,
+        "t_s": 390.48,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 400.45,
+        "t_s": 400.49,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 410.46,
+        "t_s": 410.5,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 420.47,
+        "t_s": 420.52,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 430.48,
+        "t_s": 430.53,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 440.49,
+        "t_s": 440.54,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 450.5,
+        "t_s": 450.55,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 460.51,
+        "t_s": 460.56,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 470.52,
+        "t_s": 470.57,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 480.54,
+        "t_s": 480.58,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 490.55,
+        "t_s": 490.59,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       },
       {
-        "t_s": 500.56,
+        "t_s": 500.6,
         "rss_kb": 10240,
         "peak_kb": 10240,
         "vms_kb": 244932,
         "threads_now": 4,
-        "voluntary_cs": 93,
-        "involuntary_cs": 0
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 510.61,
+        "rss_kb": 10240,
+        "peak_kb": 10240,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 520.62,
+        "rss_kb": 10240,
+        "peak_kb": 10240,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 530.64,
+        "rss_kb": 10240,
+        "peak_kb": 10240,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
+      },
+      {
+        "t_s": 540.65,
+        "rss_kb": 10240,
+        "peak_kb": 10240,
+        "vms_kb": 244932,
+        "threads_now": 4,
+        "voluntary_cs": 90,
+        "involuntary_cs": 1
       }
     ],
     "io": {
-      "rchar": 271881,
-      "wchar": 58929,
-      "syscr": 680,
-      "syscw": 268,
-      "read_bytes": 1538048,
+      "rchar": 271947,
+      "wchar": 61662,
+      "syscr": 675,
+      "syscw": 269,
+      "read_bytes": 1518592,
       "write_bytes": 4096,
       "cancelled_write_bytes": 0
-    },
-    "notes": [
-      "perf_stat wrapped srun launcher only (task_clock ~ms vs wall ~s); IPC/cycles/instructions/cache-miss rates dropped as invalid"
-    ]
+    }
   },
   "dataset_info": {
     "file": "large_modelfinder.fa",
@@ -670,7 +723,7 @@
   "summary": {
     "pass": 1,
     "fail": 0,
-    "total_time": 513.132,
+    "total_time": 545.824,
     "all_pass": true
   },
   "modelfinder": {
