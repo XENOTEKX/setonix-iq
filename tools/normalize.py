@@ -222,6 +222,8 @@ def summarize_run(run: dict) -> dict:
         "archived": run.get("archived", False),
         "non_canonical": run.get("non_canonical", False),
         "non_canonical_label": run.get("non_canonical_label", None),
+        "canonical": run.get("canonical", False),
+        "build_tag": run.get("build_tag"),
     }
 
 

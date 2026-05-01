@@ -1,5 +1,5 @@
 {
-  "run_id": "gadi_large_modelfinder_104t_sr_gcc_pin",
+  "run_id": "Gadi_large_modelfinder_104T",
   "pbs_id": "167507210",
   "platform": "gadi",
   "run_type": "profile",
@@ -98,5 +98,7 @@
       "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/vtune_hotspots.tsv",
       "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/large_modelfinder_104t_sr_gcc_pin_167507210/vtune_hw_events.txt"
     }
-  }
+  },
+  "canonical": true,
+  "build_tag": "sr_gcc_pin"
 }

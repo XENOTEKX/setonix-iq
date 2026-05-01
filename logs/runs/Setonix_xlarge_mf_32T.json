@@ -3303,5 +3303,7 @@
         "bic_weight": 0.0
       }
     ]
-  }
+  },
+  "canonical": true,
+  "build_tag": "smtoff_pin"
 }

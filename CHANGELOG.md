@@ -18,8 +18,10 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **CRITICAL** | Fix `cache-miss-rate` dashboard label/chart — currently shows **L2 miss rate** for Setonix and **LLC miss rate** for Gadi on the same axis | See follow-up #9: `cache-references` is L2-domain on AMD Zen3, L3-domain (LONGEST_LAT_CACHE) on Intel SPR — not comparable |
+| ~~**CRITICAL**~~ | ~~Fix Setonix `IPC` always reading N/A — `cycles:u` returns 0 under `perf_event_paranoid=2`~~ | ✅ **Done 2026-05-01** (follow-up #12b) — `cycles:uk,instructions:uk` in `PERF_EVENTS`; next Setonix matrix re-run will populate IPC |
 | **HIGH** | Add LLC/L3 events to Setonix `PERF_EVENTS` in `setonix-ci/run_mega_profile.sh` | Candidates: `amd_l3/requests/`, `amd_l3/l3_misses/`, or raw events `r4000040`/`r4000041` (Zen3) |
 | **HIGH** | Add `stalled-cycles-backend` to Gadi event list (`gadi-ci/run_profiling.sh`) | Currently absent; needed for frontend vs backend stall comparison |
+| **HIGH** | Re-run Setonix `large_modelfinder` and `xlarge_mf` matrices with the `cycles:uk` fix | Required to populate IPC values across the canonical Setonix corpus |
 | **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
 | **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
 
@@ -28,6 +30,96 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-01 (canonicalisation, follow-up #13) — Canonical run flagging, Gadi gcc files promoted to canonical name slots, ICX files suffixed `_sr_icx`
+
+### Why
+
+After harvesting the Gadi `large_modelfinder _sr_gcc_pin` matrix (follow-ups #11/#12) the corpus contains TWO Gadi series for the same dataset: the new gcc/14.2.0 canonical runs and the older Intel-LLVM (ICX) + VTune reference runs. The new gcc files were stored as `gadi_large_modelfinder_{T}t_sr_gcc_pin.json` (lowercase, suffixed) — violating the `{Platform}_{Dataset}_{T}T` naming convention from follow-up #3 — while the canonical name slots `Gadi_large_modelfinder_{T}T.json` were occupied by the non-canonical ICX files.
+
+This audit (follow-up #13) corrects that: the gcc files are promoted to the canonical name slots, the ICX files are suffixed `_sr_icx` to remain available as a faded reference series, and every active run JSON is now explicitly tagged with `canonical` (bool) and `build_tag` (string) fields.
+
+### Canonical criteria (extracted from prior audits, restated)
+
+**Setonix `smtoff_pin`** — gcc 14.3.0, `-march=znver3`, libgomp, `OMP_PROC_BIND=close`, SMT off (`--hint=nomultithread`), `numactl --localalloc`, `srun --cpu-bind=cores`, full ModelFinder, `perf stat` only.
+
+**Gadi `sr_gcc_pin`** — gcc/14.2.0 + binutils 2.44, `-march=sapphirerapids`, libgomp, `OMP_PROC_BIND=close`, SMT off (BIOS), `numactl --localalloc`, full ModelFinder, `perf stat` only (no VTune).
+
+### Renames (Gadi `large_modelfinder` only)
+
+| Before                                        | After                                         | Status            |
+|-----------------------------------------------|-----------------------------------------------|-------------------|
+| `Gadi_large_modelfinder_{T}T.json` (ICX)      | `Gadi_large_modelfinder_{T}T_sr_icx.json`     | `non_canonical`   |
+| `gadi_large_modelfinder_{T}t_sr_gcc_pin.json` | `Gadi_large_modelfinder_{T}T.json`            | **canonical**     |
+
+`run_id` updated to match new filename in every case. 13 file moves total (6 ICX × T={1,4,8,16,32,64} + 7 gcc × T={1,4,8,16,32,64,104}).
+
+`Gadi_xlarge_mf_*.json` and `Gadi_mega_dna_*.json` are not renamed because no gcc replacement exists yet for those datasets — they retain the canonical name slot but are flagged non-canonical (they will be displaced once the pending Gadi `xlarge_mf` and `mega_dna` `_sr_gcc_pin` matrices are harvested).
+
+### Build tags applied
+
+| `build_tag`        | Platform | Runs | Meaning                            |
+|--------------------|----------|-----:|------------------------------------|
+| `smtoff_pin`       | Setonix  |   15 | Canonical (gcc 14.3.0, SMT off, pin, NUMA) |
+| `sr_gcc_pin`       | Gadi     |    7 | Canonical (gcc/14.2.0, SR, pin, NUMA) |
+| `sr_icx`           | Gadi     |   16 | Non-canonical (ICX 2024.2 + VTune) |
+| `baseline_smton`   | Setonix  |   17 | Non-canonical (SMT on, no pin, restricted ModelFinder) |
+
+### Final canonical run set (22 runs)
+
+**Setonix (15)** — `Setonix_large_modelfinder_{1,4,8,16,32,64,104}T` and `Setonix_xlarge_mf_{1,4,8,16,32,64,104,128}T`.
+
+**Gadi (7)** — `Gadi_large_modelfinder_{1,4,8,16,32,64,104}T`.
+
+All 22 runs now carry `canonical: true` and a `build_tag` field. The dashboard index propagates both fields so charts / filters can key off them directly.
+
+### Speedup baselines re-anchored
+
+After rename, `enrich_index_with_speedup()` correctly anchors:
+
+- Gadi `large_modelfinder` 1T → `Gadi_large_modelfinder_1T` (gcc, 2450.5 s)
+- Setonix `large_modelfinder` 1T → `Setonix_large_modelfinder_1T` (2190.4 s)
+- Setonix `xlarge_mf` 1T → `Setonix_xlarge_mf_1T` (11077.3 s)
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `tools/canonicalize_runs.py` | New — one-shot migration script (idempotent) |
+| `tools/normalize.py` | Index now propagates `canonical` and `build_tag` fields |
+| `logs/runs/Gadi_large_modelfinder_{T}T.json` × 7 | New canonical slot (was `gadi_..._sr_gcc_pin.json`) |
+| `logs/runs/Gadi_large_modelfinder_{T}T_sr_icx.json` × 6 | Renamed from old canonical slot |
+| `logs/runs/{Setonix,Gadi,*_baseline_smton}*.json` × 42 | `canonical` / `build_tag` fields added |
+
+### Pending next
+
+Once Gadi `xlarge_mf _sr_gcc_pin` and `mega_dna _sr_gcc_pin` matrices are harvested, the same migration will move the existing `Gadi_xlarge_mf_*` and `Gadi_mega_dna_*` ICX files to `_sr_icx`-suffixed names and promote the new gcc files into the canonical slots.
+
+---
+
+## 2026-05-01 (perf, follow-up #12b) — Setonix `cycles` counter fix: `cycles:uk` instead of `cycles`
+
+### Why IPC was N/A on every Setonix canonical run
+
+`perf_event_paranoid=2` on Setonix compute nodes blocks the AMD Zen3 hardware cycle counter (`CPU_CLK_UNHALTED`) when collected with the implicit `:u` (user-mode) suffix that `perf stat` applies by default to unprivileged sessions. As a result, `perf_stat.txt` records `0      cycles:u` for every Setonix run, while every other counter (`instructions`, L1, branch, TLB, AMD raw events) reads correctly.
+
+`harvest_scratch.py` then sees `cycles=0`, `instructions≠0`, would compute IPC = ∞ and (correctly) drops both counters via the IPC-implausibility guard. The stored JSON has no `cycles`, no `instructions`, and no `IPC` — which is why the Setonix canonical runs show `IPC: N/A` in cross-platform comparisons.
+
+### Fix
+
+`setonix-ci/run_mega_profile.sh` — change the leading two events in `PERF_EVENTS` from `cycles,instructions,...` to `cycles:uk,instructions:uk,...`. The `:uk` suffix explicitly requests both user+kernel domains; even though the kernel-mode half is still blocked, the PMU driver falls back to the user-mode counter and stores a non-zero count.
+
+`harvest_scratch.py`'s `_normalise_metric_keys()` already strips `:u`/`:k` mode suffixes, so the stored JSON key remains `cycles` — no schema or downstream changes needed.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `setonix-ci/run_mega_profile.sh` | `cycles,instructions` → `cycles:uk,instructions:uk` |
+
+The next re-run of any Setonix matrix will populate `cycles`, `instructions`, and the derived `IPC`, `frontend-stall-rate`, `backend-stall-rate` in the stored JSON.
 
 ---
 
