@@ -86,11 +86,15 @@ export async function mount(root) {
 function updateForRun(run) {
   if (!run) return;
   const m = run.profile?.metrics || {};
+  const cacheLevel = m.cache_level || (run.platform === 'gadi' ? 'L3' : run.platform === 'setonix' ? 'L2' : null);
+  const cacheLabel = cacheLevel ? `${cacheLevel} miss` : 'Cache miss';
   const metrics = [
     ['IPC', fmtNum(m.IPC, 2)],
+    ['L1d-MPKI', fmtNum(m['L1d-mpki'], 1)],
     ['FE-stall', fmtPercent(m['frontend-stall-rate'], 2)],
     ['BE-stall', fmtPercent(m['backend-stall-rate'], 2)],
-    ['Cache miss', fmtPercent(m['cache-miss-rate'], 2)],
+    [cacheLabel, fmtPercent(m['cache-miss-rate'], 2)],
+    [`${cacheLevel || 'Cache'}-MPKI`, fmtNum(m['cache-miss-mpki'], 2)],
     ['Branch miss', fmtPercent(m['branch-miss-rate'], 3)],
     ['L1-D miss', fmtPercent(m['L1-dcache-miss-rate'], 2)],
     ['dTLB miss', fmtPercent(m['dTLB-miss-rate'], 2)],

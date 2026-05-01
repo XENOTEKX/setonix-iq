@@ -213,6 +213,13 @@ def summarize_run(run: dict) -> dict:
         "IPC": metrics.get("IPC"),
         "frontend_stall_rate": metrics.get("frontend-stall-rate"),
         "cache_miss_rate": metrics.get("cache-miss-rate"),
+        # 2026-05-01 (follow-up #15): cross-platform memory-pressure metric.
+        # L1d-MPKI uses identical events on AMD Zen3 and Intel SPR PMUs, so
+        # it is the recommended primary memory metric. cache_level tags
+        # whether cache_miss_rate refers to L2 (AMD) or L3 (Intel).
+        "l1d_mpki": metrics.get("L1d-mpki"),
+        "cache_miss_mpki": metrics.get("cache-miss-mpki"),
+        "cache_level": metrics.get("cache_level"),
         "has_hotspots": bool(p.get("hotspots")),
         "has_stacks": bool(p.get("folded_stacks") or p.get("callstacks")),
         "has_candidates": bool(mf.get("candidates")),

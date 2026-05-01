@@ -1,12 +1,19 @@
 // web/js/charts/microarch.js — radar-style comparison of CPU microarch metrics
 
-import { hashColour } from '../utils.js?v=20260430160708';
+import { hashColour } from '../utils.js?v=20260501004534';
 
 let chart;
 
 const AXES = [
   { key: 'IPC', label: 'IPC', normalize: (v) => Math.min(100, (v / 3.5) * 100) },
-  { key: 'cache-miss-rate', label: 'Cache hit', normalize: (v) => 100 - Math.min(100, v) },
+  // Replaced the kernel `cache-miss-rate` axis (L2 on AMD vs L3 on Intel —
+  // not comparable across platforms; see CHANGELOG follow-up #15).
+  // L1d-MPKI uses identical events on both PMUs and is the recommended
+  // primary cross-platform memory-pressure metric. Lower MPKI = healthier
+  // memory behaviour, so we invert + clamp to a 0-50 MPKI window where
+  // 0 → 100 score and ≥50 → 0 score (50 MPKI is "very memory-bound" in
+  // most HPC workloads).
+  { key: 'L1d-mpki', label: 'Mem light', normalize: (v) => Math.max(0, 100 - Math.min(100, (v / 50) * 100)) },
   { key: 'branch-miss-rate', label: 'Branch hit', normalize: (v) => 100 - Math.min(100, v) },
   { key: 'L1-dcache-miss-rate', label: 'L1 hit', normalize: (v) => 100 - Math.min(100, v) },
   { key: 'frontend-stall-rate', label: 'FE alive', normalize: (v) => 100 - Math.min(100, v) },

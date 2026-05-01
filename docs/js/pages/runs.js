@@ -1,10 +1,10 @@
 // web/js/pages/runs.js — leaderboard/list with expandable detail
 
-import { store } from '../state.js?v=20260430162139';
-import { loadRun } from '../data.js?v=20260430162139';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260430162139';
-import { escHtml, fmtTime, debounce } from '../utils.js?v=20260430162139';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430162139';
+import { store } from '../state.js?v=20260501004534';
+import { loadRun } from '../data.js?v=20260501004534';
+import { bindCopyButtons } from '../components/copy-button.js?v=20260501004534';
+import { escHtml, fmtTime, debounce } from '../utils.js?v=20260501004534';
+import * as hotspotChart from '../charts/hotspot.js?v=20260501004534';
 
 const TMPL = `
   <div class="page-header">
@@ -179,6 +179,9 @@ function renderDetail(run) {
   const m = p.metrics || {};
   const env = run.env || {};
 
+  const cacheLevel = m.cache_level || (run.platform === 'gadi' ? 'L3' : run.platform === 'setonix' ? 'L2' : null);
+  const cacheMissLabel = cacheLevel ? `${cacheLevel} miss %` : 'Cache miss %';
+
   const kv = Object.entries({
     Platform: run.platform === 'gadi' ? 'Gadi (NCI · Intel Sapphire Rapids)'
             : run.platform === 'setonix' ? 'Setonix (Pawsey · AMD EPYC)'
@@ -188,14 +191,15 @@ function renderDetail(run) {
     Threads: p.threads ?? run.hints?.threads,
     Model: run.hints?.model,
     IPC: m.IPC,
+    'L1d-MPKI': m['L1d-mpki'],
     'FE stall %': m['frontend-stall-rate'],
-    'Cache miss %': m['cache-miss-rate'],
+    [cacheMissLabel]: m['cache-miss-rate'],
     Host: env.hostname,
     CPU: env.cpu,
     Date: env.date,
     Job: run.pbs_id || run.slurm_id,
   }).filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => `<div class="kv-item"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(String(v))}</div></div>`)
+    .map(([k, v]) => `<div class="kv-item"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v))}</div></div>`)
     .join('');
 
   const cmds = timing.map((t, i) => `

@@ -1,12 +1,12 @@
 // web/js/pages/profiling.js — deep dive for selected run: hotspots + callstack + flamegraph
 
-import { store } from '../state.js?v=20260430162139';
-import { loadRunProfile } from '../data.js?v=20260430162139';
-import { mountRunPicker } from '../components/run-picker.js?v=20260430162139';
-import * as hotspotChart from '../charts/hotspot.js?v=20260430162139';
-import * as callstack from '../charts/callstack.js?v=20260430162139';
-import * as flamegraph from '../charts/flamegraph.js?v=20260430162139';
-import { escHtml, fmtNum, fmtPercent } from '../utils.js?v=20260430162139';
+import { store } from '../state.js?v=20260501004534';
+import { loadRunProfile } from '../data.js?v=20260501004534';
+import { mountRunPicker } from '../components/run-picker.js?v=20260501004534';
+import * as hotspotChart from '../charts/hotspot.js?v=20260501004534';
+import * as callstack from '../charts/callstack.js?v=20260501004534';
+import * as flamegraph from '../charts/flamegraph.js?v=20260501004534';
+import { escHtml, fmtNum, fmtPercent } from '../utils.js?v=20260501004534';
 
 const TMPL = `
   <div class="page-header"><div><h1>Profiling</h1>
@@ -86,11 +86,15 @@ export async function mount(root) {
 function updateForRun(run) {
   if (!run) return;
   const m = run.profile?.metrics || {};
+  const cacheLevel = m.cache_level || (run.platform === 'gadi' ? 'L3' : run.platform === 'setonix' ? 'L2' : null);
+  const cacheLabel = cacheLevel ? `${cacheLevel} miss` : 'Cache miss';
   const metrics = [
     ['IPC', fmtNum(m.IPC, 2)],
+    ['L1d-MPKI', fmtNum(m['L1d-mpki'], 1)],
     ['FE-stall', fmtPercent(m['frontend-stall-rate'], 2)],
     ['BE-stall', fmtPercent(m['backend-stall-rate'], 2)],
-    ['Cache miss', fmtPercent(m['cache-miss-rate'], 2)],
+    [cacheLabel, fmtPercent(m['cache-miss-rate'], 2)],
+    [`${cacheLevel || 'Cache'}-MPKI`, fmtNum(m['cache-miss-mpki'], 2)],
     ['Branch miss', fmtPercent(m['branch-miss-rate'], 3)],
     ['L1-D miss', fmtPercent(m['L1-dcache-miss-rate'], 2)],
     ['dTLB miss', fmtPercent(m['dTLB-miss-rate'], 2)],
