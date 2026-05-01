@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-01 (libgomp-vs-libomp test, follow-up #19) — Clang/AOCC build path + dashboard cache-level rename
+
+### Hypothesis (Minh, IQ-TREE author)
+
+> "libgomp is not good, from my experience before. Can you try compile with Clang? It will use intel OpenMP, which is better."
+
+The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD step on EPYC 7763) is a candidate symptom of libgomp's barrier/spin behaviour interacting badly with the L3-per-CCD topology. Gadi (Intel SPR + libiomp5 via OneAPI) does not exhibit it. To isolate the OpenMP-runtime variable from the architecture variable, we add a Clang/libomp build path on **both** clusters and a non-canonical reference sweep on Setonix.
+
+### What
+
+- **`setonix-ci/bootstrap_iqtree_aocc.sh`** — builds IQ-TREE with AOCC 5.1.0 (Clang 17, znver3-tuned, libomp). Verifies via `ldd` that libgomp is **not** linked. Output → `${PROJECT_DIR}/build-profiling-aocc/iqtree3`. Same `-O3` / IPO-disabled / Eigen / Boost as the canonical gcc build — the only deltas are the compiler and the OpenMP runtime.
+- **`setonix-ci/submit_clang_xlarge.sh`** — fan-out of `xlarge_mf.fa` × {8, 16, 32, 64, 104, 128} T using `run_mega_profile.sh` as the worker, with `BUILD_DIR=…build-profiling-aocc`, `LABEL_SUFFIX=clang_omp_pin`, and libomp env (`KMP_BLOCKTIME=200`, mirrors Gadi's libiomp5 default). 1T/4T omitted: the regression only appears once threads cross the CCD boundary. sha256-gated against the canonical `xlarge_mf.fa` (66eaf64b…). Build directory pre-flight refuses to submit if `ldd` shows libgomp.
+- **`gadi-ci/bootstrap_iqtree_clang.sh`** — Sapphire Rapids mirror. Prefers `intel-compiler-llvm` (icx + libiomp5), falls back to `llvm` then plain `clang`. Output → `${PROJECT_DIR}/build-profiling-clang/iqtree3`. Same `-O3 -march=sapphirerapids` flags as gcc canonical.
+- **`setonix-ci/run_mega_profile.sh`** — `env.json` now records `build_tag` (= `LABEL_SUFFIX`), `omp_runtime` (auto-detected from `ldd`), `omp_proc_bind`, `omp_places`, `omp_wait_policy`, `kmp_blocktime`, `gomp_spincount`, and the contents of `${BUILD_DIR}/.build-info.json`. Lets the harvester tag clang runs as `non_canonical=true` automatically.
+- **`tools/harvest_scratch.py`** — `enrich_run` now copies `build_tag` from `env.json` to the run-level field, and auto-flags `canonical=false / non_canonical=true` for any tag other than `smtoff_pin` (Setonix canonical) or `sr_gcc_pin` (Gadi canonical). Also emits `frontend-stall-unit` (`cycles` for AMD, `slots` for Intel SPR) and `frontend-stall-max-pct` (100 vs 600) so dashboards can disambiguate raw stall percentages without rescaling counter values.
+- **`tools/normalize.py`** — index entries gain `l2_miss_rate`, `l3_miss_rate`, and `omp_runtime` fields. Pre-existing `cache_level` annotation is unchanged.
+- **`web/js/pages/runs.js`** — detail panel now shows L1-dcache miss %, the platform-specific `Lx miss %` (auto-selected from `cache_level`), the OpenMP runtime tag, the build tag, and an FE-stall annotation that includes the unit (`AMD cycles` vs `Intel slots`). Falls back to the legacy `cache-miss-rate` field for older runs.
+- **`web/js/pages/profiling.js`** — same platform-aware cache-miss field; FE-stall card label now reads "FE-stall (cycles)" / "(slots)".
+
+### Verification
+
+- Test suite: `17 passed, 1 xfailed` (no regressions).
+- `tools/normalize.py && tools/build.py`: 56 runs, 2 profiles, 38 split files, dashboard rebuilt at `v=20260501115130`.
+- Spot-check on a Setonix `large_modelfinder` row: `cache_level=L2`, `l2_miss_rate=12.98`, `l3_miss_rate=null`, `l1d_mpki=29.36`, `build_tag=smtoff_pin` (canonical, unchanged).
+- Spot-check on a Gadi row: `cache_level=L3`, `l2_miss_rate=null`, `l3_miss_rate=84.96`, `l1d_mpki=15.63`, `build_tag=sr_gcc_pin`.
+- Shell syntax: `bash -n` clean on all four new/modified shell scripts.
+- `ldd` libomp gate: enforced in both bootstrap scripts (exit 3 if libgomp leaks in) and in the Setonix submitter (exit 4 if the binary still links libgomp).
+
+### Out of scope (deliberate)
+
+- **No FE-stall rescaling.** AMD cycles and Intel slots are kept as raw `perf stat` output so values remain reproducible against upstream tooling. Unit annotation is descriptive only.
+- **No microarch radar change.** Both vendors' FE-stall axes are clamped to 100 by `normalize`, so the radar shape stays meaningful even with the unit difference.
+- **Threads {1, 4} skipped** for the Clang sweep — the libgomp/libomp split only matters once the workload spans more than one CCD on Zen 3.
+
+### Pending
+
+- Run `setonix-ci/bootstrap_iqtree_aocc.sh` on a Setonix compute node, then `setonix-ci/submit_clang_xlarge.sh`. Harvest with `tools/harvest_scratch.py` — runs will appear as `xlarge_mf_<T>t_clang_omp_pin_*` and the harvester will auto-tag them `non_canonical=true`.
+- Mirror on Gadi via `gadi-ci/bootstrap_iqtree_clang.sh` once a comparable submitter is wired up (low priority — the primary signal is the Setonix gcc-vs-Clang delta).
+
+---
+
 ## Critical & Pending Tasks
 
 ### 🔴 Harvest — blocking cross-platform analysis

@@ -171,6 +171,18 @@ env = {
   "python":   sh("python3 --version"),
   "iqtree_binary":  "${BUILD_DIR}/iqtree3",
   "iqtree_version": sh("${BUILD_DIR}/iqtree3 --version 2>&1 | head -1"),
+  # 2026-05-01 (follow-up #19): record build provenance so harvest can tag
+  # clang/libomp variants distinctly from gcc/libgomp canonical runs.
+  # Fields are best-effort — empty string if .build-info.json is missing
+  # or ldd cannot resolve the OpenMP runtime path.
+  "build_tag":      "${LABEL_SUFFIX}",
+  "build_info":     json.loads(open("${BUILD_DIR}/.build-info.json").read()) if os.path.isfile("${BUILD_DIR}/.build-info.json") else {},
+  "omp_runtime":    "libomp" if "libomp" in sh("ldd ${BUILD_DIR}/iqtree3") or "libiomp5" in sh("ldd ${BUILD_DIR}/iqtree3") else ("libgomp" if "libgomp" in sh("ldd ${BUILD_DIR}/iqtree3") else os.environ.get("OMP_RUNTIME_TAG", "unknown")),
+  "omp_proc_bind":  os.environ.get("OMP_PROC_BIND", ""),
+  "omp_places":     os.environ.get("OMP_PLACES", ""),
+  "omp_wait_policy":os.environ.get("OMP_WAIT_POLICY", ""),
+  "kmp_blocktime":  os.environ.get("KMP_BLOCKTIME", ""),
+  "gomp_spincount": os.environ.get("GOMP_SPINCOUNT", ""),
   "date":     sh("date -Iseconds"),
   "dataset": {
     "path": dataset,

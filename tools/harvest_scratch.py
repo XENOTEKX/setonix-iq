@@ -562,7 +562,6 @@ def _derive_rates(metrics: dict) -> None:
             metrics["frontend-stall-rate"] = round(100.0 * fe / cycles, 4)
         if be is not None and "backend-stall-rate" not in metrics:
             metrics["backend-stall-rate"] = round(100.0 * be / cycles, 4)
-
     # ── MPKI (misses per kilo-instruction) — cross-platform memory metric ──
     # MPKI is the standard hardware-agnostic memory-pressure metric in HPC
     # because it is independent of clock-rate and pipeline width. Computed
@@ -610,12 +609,22 @@ def _derive_rates(metrics: dict) -> None:
             metrics.setdefault("l2-miss-rate", metrics["cache-miss-rate"])
         if "cache-miss-mpki" in metrics:
             metrics.setdefault("l2-miss-mpki", metrics["cache-miss-mpki"])
+        # AMD Zen3 stalled-cycles-frontend counts CYCLES (cap 100 %).
+        metrics.setdefault("frontend-stall-unit", "cycles")
+        metrics.setdefault("frontend-stall-max-pct", 100.0)
     elif is_intel and not is_amd:
         metrics.setdefault("cache_level", "L3")
         if "cache-miss-rate" in metrics:
             metrics.setdefault("l3-miss-rate", metrics["cache-miss-rate"])
         if "cache-miss-mpki" in metrics:
             metrics.setdefault("l3-miss-mpki", metrics["cache-miss-mpki"])
+        # Intel SPR stalled-cycles-frontend counts SLOTS (6 slots/cycle, so
+        # the percentage can theoretically reach 600 %). Documented inline,
+        # values are NOT rescaled — preserves parity with raw `perf stat`
+        # output and lets users compare against upstream tooling.
+        metrics.setdefault("frontend-stall-unit", "slots")
+        metrics.setdefault("frontend-stall-max-pct", 600.0)
+
 
 
 def enrich_run(run: dict) -> bool:
@@ -743,6 +752,25 @@ def enrich_run(run: dict) -> bool:
                 changed = True
         if env != (run.get("env") or {}):
             run["env"] = env
+
+        # ── Build-tag propagation (follow-up #19) ──────────────────────────
+        # If the worker recorded a build_tag in env.json (LABEL_SUFFIX), copy
+        # it to the run-level field so the dashboard can group by toolchain.
+        # Non-canonical tags (e.g. clang_omp_pin) are auto-flagged so they
+        # do not displace the gcc/smtoff_pin canonical series.
+        env_build_tag = env_extra.get("build_tag")
+        if env_build_tag and run.get("build_tag") != env_build_tag:
+            run["build_tag"] = env_build_tag
+            changed = True
+        # Anything other than smtoff_pin (Setonix canonical) or sr_gcc_pin
+        # (Gadi canonical) is a non-canonical reference series.
+        if env_build_tag and env_build_tag not in ("smtoff_pin", "sr_gcc_pin"):
+            if run.get("canonical") is not False:
+                run["canonical"] = False
+                changed = True
+            if run.get("non_canonical") is not True:
+                run["non_canonical"] = True
+                changed = True
 
     if meta:
         profile = dict(run.get("profile") or {})

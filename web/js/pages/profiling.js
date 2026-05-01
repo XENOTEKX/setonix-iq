@@ -88,12 +88,27 @@ function updateForRun(run) {
   const m = run.profile?.metrics || {};
   const cacheLevel = m.cache_level || (run.platform === 'gadi' ? 'L3' : run.platform === 'setonix' ? 'L2' : null);
   const cacheLabel = cacheLevel ? `${cacheLevel} miss` : 'Cache miss';
+  // Prefer the platform-specific alias (l2-/l3-miss-rate) when present so
+  // that the same field name no longer mixes L2 (Setonix) and L3 (Gadi)
+  // counters. Older runs without the alias still fall back to the generic
+  // cache-miss-rate value.
+  const cacheMissValue =
+       (cacheLevel === 'L2' ? m['l2-miss-rate'] : null)
+    ?? (cacheLevel === 'L3' ? m['l3-miss-rate'] : null)
+    ?? m['cache-miss-rate'];
+  // FE-stall: AMD Zen3 reports cycles, Intel SPR reports issue-slots
+  // (1 cycle = up to 6 slots on SPR), so the same percentage means
+  // different things across platforms. Annotate inline; the data is left
+  // un-rescaled so it remains comparable to upstream perf output.
+  const feStallLabel = run.platform === 'gadi'
+    ? 'FE-stall (slots)'
+    : run.platform === 'setonix' ? 'FE-stall (cycles)' : 'FE-stall';
   const metrics = [
     ['IPC', fmtNum(m.IPC, 2)],
     ['L1d-MPKI', fmtNum(m['L1d-mpki'], 1)],
-    ['FE-stall', fmtPercent(m['frontend-stall-rate'], 2)],
+    [feStallLabel, fmtPercent(m['frontend-stall-rate'], 2)],
     ['BE-stall', fmtPercent(m['backend-stall-rate'], 2)],
-    [cacheLabel, fmtPercent(m['cache-miss-rate'], 2)],
+    [cacheLabel, fmtPercent(cacheMissValue, 2)],
     [`${cacheLevel || 'Cache'}-MPKI`, fmtNum(m['cache-miss-mpki'], 2)],
     ['Branch miss', fmtPercent(m['branch-miss-rate'], 3)],
     ['L1-D miss', fmtPercent(m['L1-dcache-miss-rate'], 2)],

@@ -221,6 +221,15 @@ def summarize_run(run: dict) -> dict:
         "l1_dcache_miss_rate": metrics.get("L1-dcache-miss-rate"),
         "cache_miss_mpki": metrics.get("cache-miss-mpki"),
         "cache_level": metrics.get("cache_level"),
+        # Platform-specific aliases so the dashboard never has to guess
+        # which level a "cache miss" refers to. l2_miss_rate populated for
+        # AMD Zen3 runs, l3_miss_rate for Intel SPR runs; both default to
+        # None on the other platform.
+        "l2_miss_rate": metrics.get("l2-miss-rate"),
+        "l3_miss_rate": metrics.get("l3-miss-rate"),
+        # OpenMP runtime fingerprint — non-null only after the libgomp /
+        # libomp comparison sweep (follow-up #19) is harvested.
+        "omp_runtime": (run.get("env") or {}).get("omp_runtime"),
         "has_hotspots": bool(p.get("hotspots")),
         "has_stacks": bool(p.get("folded_stacks") or p.get("callstacks")),
         "has_candidates": bool(mf.get("candidates")),

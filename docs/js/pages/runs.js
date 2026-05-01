@@ -1,10 +1,10 @@
 // web/js/pages/runs.js — leaderboard/list with expandable detail
 
-import { store } from '../state.js?v=20260501012002';
-import { loadRun } from '../data.js?v=20260501012002';
-import { bindCopyButtons } from '../components/copy-button.js?v=20260501012002';
-import { escHtml, fmtTime, debounce } from '../utils.js?v=20260501012002';
-import * as hotspotChart from '../charts/hotspot.js?v=20260501012002';
+import { store } from '../state.js?v=20260501115130';
+import { loadRun } from '../data.js?v=20260501115130';
+import { bindCopyButtons } from '../components/copy-button.js?v=20260501115130';
+import { escHtml, fmtTime, debounce } from '../utils.js?v=20260501115130';
+import * as hotspotChart from '../charts/hotspot.js?v=20260501115130';
 
 const TMPL = `
   <div class="page-header">
@@ -181,6 +181,13 @@ function renderDetail(run) {
 
   const cacheLevel = m.cache_level || (run.platform === 'gadi' ? 'L3' : run.platform === 'setonix' ? 'L2' : null);
   const cacheMissLabel = cacheLevel ? `${cacheLevel} miss %` : 'Cache miss %';
+  // Prefer the platform-specific alias (l2-miss-rate / l3-miss-rate) when
+  // present; fall back to the generic cache-miss-rate field for older runs
+  // that pre-date the cache-level annotation.
+  const cacheMissValue =
+       (cacheLevel === 'L2' ? m['l2-miss-rate'] : null)
+    ?? (cacheLevel === 'L3' ? m['l3-miss-rate'] : null)
+    ?? m['cache-miss-rate'];
 
   const kv = Object.entries({
     Platform: run.platform === 'gadi' ? 'Gadi (NCI · Intel Sapphire Rapids)'
@@ -192,8 +199,14 @@ function renderDetail(run) {
     Model: run.hints?.model,
     IPC: m.IPC,
     'L1d-MPKI': m['L1d-mpki'],
-    'FE stall %': m['frontend-stall-rate'],
-    [cacheMissLabel]: m['cache-miss-rate'],
+    'L1d miss %': m['L1-dcache-miss-rate'],
+    // FE-stall units differ across vendors: AMD Zen3 reports cycles
+    // (max 100 %); Intel SPR reports issue-slots (max 600 %, since SPR
+    // can issue 6 µops/cycle). Tooltip annotates the unit.
+    [`FE stall % (${run.platform === 'gadi' ? 'Intel slots' : 'AMD cycles'})`]: m['frontend-stall-rate'],
+    [cacheMissLabel]: cacheMissValue,
+    'Build tag': run.build_tag,
+    'OpenMP runtime': env.omp_runtime,
     Host: env.hostname,
     CPU: env.cpu,
     Date: env.date,
