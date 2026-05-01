@@ -34,7 +34,58 @@
 
 ---
 
-## 2026-05-01 (rate-unit normalisation, follow-up #17) — Setonix `*-rate` fields rescaled from ratios to percent
+## 2026-05-01 (chart UX, follow-up #18) — IPC vs Threads tooltip now shows L1d-cache miss rate (canonical cross-platform metric)
+
+### What
+
+The "IPC vs Threads" overview chart now displays L1d-cache miss rate (percent) and L1d-MPKI on hover for every individual data point, on top of the existing IPC + threads readout.
+
+### Why L1d (and not the generic `cache-miss-rate`)
+
+`L1-dcache-loads` and `L1-dcache-load-misses` are the cleanest **cross-platform comparable** memory-pressure events available from user-mode perf:
+
+- **Identical PMU semantics on both platforms** — on AMD Zen3 (Setonix) `L1-dcache-loads` maps to `ls_dispatch.ld_dispatch` (demand L1 loads) and `L1-dcache-load-misses` maps to `l1d.replacement` / equivalent, while on Intel SPR (Gadi) they map to `MEM_INST_RETIRED.ALL_LOADS` and `L1D.REPLACEMENT`. Both count demand L1 data-cache loads and demand L1 data-cache misses, with the same denominator semantics. (Contrast with the generic `cache-miss-rate`, which is **L2 on AMD vs L3 on Intel** — see follow-up #15.)
+- **Same units after follow-up #17** — both platforms now emit `L1-dcache-miss-rate` as percent (×100, 4 dp). Spot-checked on canonical runs:
+  | Run                                  | L1d miss rate | L1d-MPKI |
+  |--------------------------------------|--------------:|---------:|
+  | `Setonix_xlarge_mf_1T`               | 7.5277 %      | 33.84    |
+  | `Setonix_xlarge_mf_4T`               | 7.5467 %      | 33.98    |
+  | `Gadi_large_modelfinder_1T`          | 2.7928 %      | 12.08    |
+  | `Gadi_large_modelfinder_16T`         | 5.1444 %      | 22.02    |
+- **Available on every canonical run** — every canonical Setonix `_smtoff_pin` and Gadi `_sr_gcc_pin` run carries the raw counters and the derived `L1-dcache-miss-rate` + `L1d-mpki` fields. No "N/A" gaps in the canonical corpus.
+
+### What changed
+
+| Layer | Change |
+|------|--------|
+| `tools/normalize.py` | Index entry now also propagates `l1_dcache_miss_rate` (was already propagating `l1d_mpki`). Both are sourced from `profile.metrics.L1-dcache-miss-rate` / `L1d-mpki`. |
+| `web/js/charts/ipc-scaling.js` | Each `(threads, IPC)` data point is now constructed with attached `l1MissPct` and `l1Mpki` fields. The Chart.js `tooltip.callbacks.label` now returns three lines per point: IPC@T, L1d miss %, L1d-MPKI. |
+
+The chart axis (Y = IPC) is unchanged. L1 data is hover-only so the visual remains an IPC scaling plot, with the secondary memory-pressure context surfaced when a user investigates a specific point.
+
+### Unit consistency
+
+Per follow-up #17, every `*-rate` field stored in the run JSON is now percent (0-100). The tooltip formats with `.toFixed(2) + '%'` and matches `web/js/utils.js:fmtPercent()` exactly. There is no longer a single field on the dashboard that is sometimes a ratio and sometimes a percentage.
+
+### Verification
+
+- `python3.11 tools/validate.py` → 55 runs, 2 profiles, 0 errors.
+- `python3.11 -m pytest tests/ -q` → 17 passed, 1 xpassed.
+- `python3.11 tools/build.py` → built and synced to `docs/`.
+- Manual spot-check of `docs/data/runs.index.json` confirms `l1_dcache_miss_rate` and `l1d_mpki` are present for all canonical runs (Setonix and Gadi) at every thread count.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `tools/normalize.py` | Add `l1_dcache_miss_rate` to the index entry. |
+| `web/js/charts/ipc-scaling.js` | Per-point L1 attachment + multi-line tooltip. |
+| `CHANGELOG.md` | This entry. |
+| `docs/`, `web/data/` | Rebuilt from updated normaliser. |
+
+---
+
+
 
 ### The problem
 

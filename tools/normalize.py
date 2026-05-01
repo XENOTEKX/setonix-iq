@@ -218,6 +218,7 @@ def summarize_run(run: dict) -> dict:
         # it is the recommended primary memory metric. cache_level tags
         # whether cache_miss_rate refers to L2 (AMD) or L3 (Intel).
         "l1d_mpki": metrics.get("L1d-mpki"),
+        "l1_dcache_miss_rate": metrics.get("L1-dcache-miss-rate"),
         "cache_miss_mpki": metrics.get("cache-miss-mpki"),
         "cache_level": metrics.get("cache_level"),
         "has_hotspots": bool(p.get("hotspots")),
