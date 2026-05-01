@@ -10,7 +10,7 @@
 |----------|------|---------|
 | ~~**CRITICAL**~~ | ~~Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/`~~ | ✅ **Done 2026-05-01** — full 1T–104T matrix harvested |
 | ~~**CRITICAL**~~ | ~~Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures~~ | ✅ **Done 2026-05-01** — wall=11077s, IPC=2.72, speedup baseline fixed |
-| **HIGH** | Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104) | Cross-platform comparison on the 200×100k dataset |
+| ~~**HIGH**~~ | ~~Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104)~~ | ✅ **Submitted 2026-05-01** (follow-up #16) — PBS jobs **167520752–167520758**, sha256-gated against canonical `xlarge_mf.fa` |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
 
 ### 🟠 Dashboard fixes — actively misleading metrics
@@ -31,6 +31,92 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-01 (matrix submission, follow-up #16) — Gadi `xlarge_mf _sr_gcc_pin` matrix submitted (1T–104T)
+
+### What was submitted
+
+Seven PBS jobs covering the full Setonix-comparable thread sweep on the 200 taxa × 100 000 bp `xlarge_mf.fa` dataset:
+
+| Threads | PBS Job ID  |
+|--------:|-------------|
+| 1T      | 167520752   |
+| 4T      | 167520753   |
+| 8T      | 167520754   |
+| 16T     | 167520755   |
+| 32T     | 167520756   |
+| 64T     | 167520757   |
+| 104T    | 167520758   |
+
+Queue: `normalsr`. Resource request: `ncpus=104, mem=500GB, walltime=24h, jobfs=2gb`.
+All 7 jobs queued cleanly (no rejected submissions).
+
+### Parity with canonical Setonix `xlarge_mf` corpus
+
+The canonical Setonix `xlarge_mf` runs (`logs/runs/Setonix_xlarge_mf_*.json`, `build_tag: smtoff_pin`, `canonical: true`) were produced with:
+
+- **Dataset**: `xlarge_mf.fa` (200 taxa × 100 000 bp, AliSim seed 202, sha256 `66eaf64b9b7e561f52dc515198c0b7db6d68cd37ada9498b254777f2dde94c44`)
+- **Compiler**: gcc 14.3.0 with `-march=znver3`
+- **Pinning**: SMT-off, `OMP_PROC_BIND=close`, `OMP_PLACES=cores`, `numactl --localalloc`
+- **IQ-TREE invocation**: `iqtree3 -s xlarge_mf.fa -T <N> -seed 1`
+
+The Gadi submission matches every comparable axis:
+
+| Axis | Setonix (canonical) | Gadi (this submission) | Parity |
+|------|---------------------|------------------------|--------|
+| Dataset file | `xlarge_mf.fa` | `xlarge_mf.fa` | ✅ identical |
+| Dataset sha256 | `66eaf6…b01207` | `66eaf6…b01207` (verified login-side + worker-side) | ✅ identical |
+| Compiler | gcc 14.3.0 | gcc 14.2.0 (only Gadi version available; same major) | ✅ matched family |
+| Arch flags | `-march=znver3` | `-march=sapphirerapids` | ⚠️ arch-native (expected) |
+| OpenMP runtime | libgomp | libgomp | ✅ identical |
+| Thread pinning | `OMP_PROC_BIND=close, OMP_PLACES=cores` | `OMP_PROC_BIND=close, OMP_PLACES=cores` | ✅ identical |
+| NUMA policy | `numactl --localalloc` | `numactl --localalloc` | ✅ identical |
+| SMT | off | off (single thread per core, `numactl` + `OMP_PLACES=cores`) | ✅ identical |
+| Seed | 1 | 1 | ✅ identical |
+| Build type | RelWithDebInfo + `-fno-omit-frame-pointer -g` | RelWithDebInfo + `-fno-omit-frame-pointer -g` | ✅ identical |
+| Thread points | 1, 4, 8, 16, 32, 64, 104, 128 | 1, 4, 8, 16, 32, 64, 104 | ✅ overlap (no 128T on 104-core Gadi node) |
+
+The single intentional delta is the architecture flag — each platform's binary is built with the optimal `-march=` for its own silicon, which is the entire point of a cross-platform benchmark. Everything else is byte-for-byte parity.
+
+### Profiling flags (verified against follow-up #11/#12 success)
+
+The worker payload in `gadi-ci/submit_benchmark_matrix.sh` uses the same `:u`-suffixed `PERF_EVENTS` list that produced valid `IPC` and `LLC-miss-rate` metrics for all 7 just-harvested `large_modelfinder _sr_gcc_pin` runs (follow-ups #11/#12). Specifically:
+
+```
+cycles:u, instructions:u,
+branch-instructions:u, branch-misses:u,
+cache-references:u, cache-misses:u,
+L1-dcache-loads:u, L1-dcache-load-misses:u,
+LLC-loads:u, LLC-load-misses:u,
+dTLB-loads:u, dTLB-load-misses:u,
+iTLB-loads:u, iTLB-load-misses:u
+```
+
+User-mode counting is mandatory on Gadi `normalsr` (`perf_event_paranoid=2` blocks kernel-mode sampling). `LLC-loads` / `LLC-load-misses` resolve to the SPR `LONGEST_LAT_CACHE` events — physically L3 (the LLC on Intel SPR) — matching the data-layer `cache_level: L3` annotation added in follow-up #15.
+
+`stalled-cycles-frontend/backend` and TMA pseudo-events were intentionally omitted by follow-up #11 because the SPR + kernel-4.18 perf-tool group fails when they are added (they did not group cleanly with the user-mode events). They will be added back when targeted micro-architecture profiling is needed; thread-scaling and IPC analysis do not require them.
+
+### Pre-flight gates passed
+
+- Login-side sha256 check against `benchmarks/sha256sums.txt` — all three canonical alignments matched (`large_modelfinder.fa`, `xlarge_mf.fa`, `mega_dna.fa`).
+- Worker-side sha256 gate is enabled per-job (refuses to run on a non-canonical alignment).
+- IQ-TREE binary at `/scratch/rc29/as1708/iqtree3/build-profiling/iqtree3` verified `IQ-TREE version 3.1.1 for Linux x86 64-bit built May 1 2026` under `module load gcc/14.2.0`.
+
+### After jobs complete
+
+1. `python3.11 tools/harvest_scratch.py` — harvest into `logs/runs/gadi_xlarge_mf_{1,4,8,16,32,64,104}t_sr_gcc_pin.json`.
+2. Verify each run reports the same `loglik` (the canonical Setonix value for `xlarge_mf.fa`); apply follow-up #13 canonicalisation (promote to `Gadi_xlarge_mf_NT.json` slots, archive existing ICX runs as `*_sr_icx`).
+3. `make dashboard` and commit/push.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `CHANGELOG.md` | This entry; pending-task table updated to mark the `xlarge_mf _sr_gcc_pin` blocker as submitted. |
+
+(No script changes were required — `gadi-ci/submit_benchmark_matrix.sh` already supports `xlarge_mf` natively in its `MATRIX` map and uses the validated `_sr_gcc_pin` worker payload from follow-ups #11/#12.)
 
 ---
 
