@@ -329,9 +329,23 @@ PERF_STAT_TXT="${WORK_DIR}/perf_stat.txt"
 # the AMD Zen3 PMU returns 0 for the cycle counter in pure user-mode context;
 # ':uk' requests both domains so at minimum the user-mode count is stored.
 # harvest_scratch.py already strips mode suffixes in _normalise_metric_keys().
+#
+# CACHE HIERARCHY NOTE (follow-up #15, 2026-05-01):
+# On AMD Zen3 the kernel aliases `cache-references`/`cache-misses` map to L2.
+# On Intel SPR (Gadi) the same aliases map to L3 (LONGEST_LAT_CACHE). Plotting
+# both as a single "cache-miss-rate" series is *not* a fair comparison.
+# `LLC-loads`/`LLC-load-misses` are not supported on Zen3 in user-mode (uncore
+# locked under perf_event_paranoid=2). The closest user-accessible L3-traffic
+# proxies are the *prefetcher-path* events below:
+#   l2_pf_miss_l2_hit_l3  → L2 prefetcher misses that hit L3 (L3-served traffic)
+#   l2_pf_miss_l2_l3      → L2 prefetcher misses that miss L3 (DRAM traffic)
+# Together they give an L3 prefetch hit/miss ratio comparable in spirit to
+# Gadi's `LLC-load-misses / LLC-loads`. The dashboard should normalise to
+# MPKI (misses per kilo-instruction) for cross-platform memory-pressure plots.
 PERF_EVENTS="cycles:uk,instructions:uk,branch-instructions,branch-misses,\
 cache-references,cache-misses,\
 L1-dcache-loads,L1-dcache-load-misses,\
+l2_pf_miss_l2_hit_l3,l2_pf_miss_l2_l3,\
 dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,\
 stalled-cycles-frontend,stalled-cycles-backend,\
 task-clock,page-faults,context-switches,cpu-migrations,\

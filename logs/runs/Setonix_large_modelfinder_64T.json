@@ -78,7 +78,14 @@
       "ex_ret_brn_misp": 651635,
       "ls_l1_d_tlb_miss.all": 154017,
       "bp_l1_tlb_miss_l2_tlb_hit": 21997,
-      "bp_l1_tlb_miss_l2_tlb_miss": 3635
+      "bp_l1_tlb_miss_l2_tlb_miss": 3635,
+      "cache-miss-rate": 0.09500397636900704,
+      "branch-miss-rate": 0.005453653635524578,
+      "L1-dcache-miss-rate": 0.00901922217270748,
+      "dTLB-miss-rate": 0.05087914206752178,
+      "iTLB-miss-rate": 0.9062128222075347,
+      "cache_level": "L2",
+      "l2-miss-rate": 0.09500397636900704
     },
     "hotspots": [
       {

@@ -72,7 +72,15 @@
       "LLC-load-misses": 22716374586,
       "dTLB-loads": 10437940018686,
       "dTLB-load-misses": 783372568,
-      "iTLB-load-misses": 24082041
+      "iTLB-load-misses": 24082041,
+      "L1d-mpki": 9.831115385741157,
+      "cache-miss-mpki": 9.441087479533206,
+      "cache-ref-mpki": 17.491591636528582,
+      "LLC-miss-mpki": 0.9580169112486099,
+      "LLC-load-mpki": 1.4601494255666982,
+      "cache_level": "L3",
+      "l3-miss-rate": 53.975,
+      "l3-miss-mpki": 9.441087479533206
     },
     "vtune": {
       "elapsed_time_s": 448.417,
@@ -923,7 +931,7 @@
   },
   "notes": "[2026-04-30 round 2 audit] Pre-audit Gadi corpus: built with intel-compiler-llvm/2024.2 (icx + libiomp5), launched without OMP_PROC_BIND/OMP_PLACES, no numactl, no OMP_WAIT_POLICY override. The corrected gcc-built + libgomp + close/cores-pinned + numactl --localalloc + OMP_WAIT_POLICY=PASSIVE corpus lands under labels ending in _sr_gcc_pin.",
   "archived": false,
-  "archived_reason": "pre-canonical Gadi run \u2014 not parity-matched with Setonix _smtoff_pin corpus. Issues: (1) ICX compiler (intel-compiler-llvm/2024.2, -xSAPPHIRERAPIDS) \u2014 uses Intel OpenMP runtime libiomp5 instead of libgomp, different vectorisation passes and auto-prefetch; (2) VTune hotspot collection co-running alongside IQ-TREE, adding 6-26%% wall overhead at high thread counts (32T: +6%%, 64T: +15%%, 104T: +26%%). Superseded by pending _sr_gcc_pin matrix (gcc/14.2.0, binutils/2.44, no VTune).",
+  "archived_reason": "pre-canonical Gadi run — not parity-matched with Setonix _smtoff_pin corpus. Issues: (1) ICX compiler (intel-compiler-llvm/2024.2, -xSAPPHIRERAPIDS) — uses Intel OpenMP runtime libiomp5 instead of libgomp, different vectorisation passes and auto-prefetch; (2) VTune hotspot collection co-running alongside IQ-TREE, adding 6-26%% wall overhead at high thread counts (32T: +6%%, 64T: +15%%, 104T: +26%%). Superseded by pending _sr_gcc_pin matrix (gcc/14.2.0, binutils/2.44, no VTune).",
   "non_canonical": true,
   "non_canonical_label": "ICX+VTune (ref)",
   "build_tag": "sr_icx"

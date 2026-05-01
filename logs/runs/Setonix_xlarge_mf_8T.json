@@ -178,7 +178,13 @@
       "L1-dcache-miss-rate": 0.07578189942144015,
       "dTLB-miss-rate": 0.24652954850775238,
       "iTLB-miss-rate": 0.9458150464857411,
-      "frontend-stall-rate": 0.0358388068854683
+      "frontend-stall-rate": 0.0358388068854683,
+      "L1d-mpki": 34.036192685744425,
+      "cache-miss-mpki": 2.5567926325788113,
+      "cache-ref-mpki": 66.04663439360556,
+      "cache_level": "L2",
+      "l2-miss-rate": 0.038711929170252346,
+      "l2-miss-mpki": 2.5567926325788113
     },
     "peak_rss_kb": 10240,
     "memory_timeseries": [

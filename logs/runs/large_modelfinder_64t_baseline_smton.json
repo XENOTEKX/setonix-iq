@@ -201,7 +201,13 @@
       "L1-dcache-miss-rate": 0.07513236920090423,
       "dTLB-miss-rate": 0.04209139633918881,
       "iTLB-miss-rate": 2.04085544733077,
-      "frontend-stall-rate": 0.011971684522025338
+      "frontend-stall-rate": 0.011971684522025338,
+      "L1d-mpki": 30.744015125973196,
+      "cache-miss-mpki": 5.067121371788843,
+      "cache-ref-mpki": 51.54928401568127,
+      "cache_level": "L2",
+      "l2-miss-rate": 0.09829663919769335,
+      "l2-miss-mpki": 5.067121371788843
     },
     "peak_rss_kb": 1166404,
     "memory_timeseries": [
@@ -723,6 +729,6 @@
   "archived": false,
   "non_canonical": true,
   "non_canonical_label": "SMT+no-pin (ref)",
-  "archived_reason": "pre-audit Setonix run \u2014 not parity-matched with canonical _smtoff_pin corpus. Issues: (1) SMT active: cores=256 (128 physical x2 SMT siblings contending for shared L1/L2 and execution units); (2) no --hint=nomultithread so OpenMP threads land on logical not physical cores; (3) no numactl --localalloc so memory pages can be allocated on any NUMA domain; (4) no --cpu-bind=cores so OS scheduler can migrate threads; (5) restricted model search (-mset GTR,HKY,K80 not full ModelFinder). SMT sharing is the dominant factor causing higher wall times at all thread counts.",
+  "archived_reason": "pre-audit Setonix run — not parity-matched with canonical _smtoff_pin corpus. Issues: (1) SMT active: cores=256 (128 physical x2 SMT siblings contending for shared L1/L2 and execution units); (2) no --hint=nomultithread so OpenMP threads land on logical not physical cores; (3) no numactl --localalloc so memory pages can be allocated on any NUMA domain; (4) no --cpu-bind=cores so OS scheduler can migrate threads; (5) restricted model search (-mset GTR,HKY,K80 not full ModelFinder). SMT sharing is the dominant factor causing higher wall times at all thread counts.",
   "build_tag": "baseline_smton"
 }

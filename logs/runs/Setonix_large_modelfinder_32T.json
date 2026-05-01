@@ -79,7 +79,14 @@
       "ls_l1_d_tlb_miss.all": 169363,
       "bp_l1_tlb_miss_l2_tlb_hit": 22633,
       "bp_l1_tlb_miss_l2_tlb_miss": 14943,
-      "ls_tablewalker.dside": 45722
+      "ls_tablewalker.dside": 45722,
+      "cache-miss-rate": 0.08653237944790555,
+      "branch-miss-rate": 0.007018128825930944,
+      "L1-dcache-miss-rate": 0.015575480087784442,
+      "dTLB-miss-rate": 0.03674728261252613,
+      "iTLB-miss-rate": 1.6516428880242109,
+      "cache_level": "L2",
+      "l2-miss-rate": 0.08653237944790555
     },
     "hotspots": [
       {

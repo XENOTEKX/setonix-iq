@@ -84,7 +84,15 @@
       "LLC-load-misses": 20737741683,
       "dTLB-loads": 9527721362137,
       "dTLB-load-misses": 4125877909,
-      "iTLB-load-misses": 10130549
+      "iTLB-load-misses": 10130549,
+      "L1d-mpki": 22.20909064631971,
+      "cache-miss-mpki": 6.17268444196155,
+      "cache-ref-mpki": 24.62956658398353,
+      "LLC-miss-mpki": 0.9375033122674887,
+      "LLC-load-mpki": 3.672998964126712,
+      "cache_level": "L3",
+      "l3-miss-rate": 25.0621,
+      "l3-miss-mpki": 6.17268444196155
     },
     "vtune": {
       "elapsed_time_s": 544.758,

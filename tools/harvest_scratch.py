@@ -538,7 +538,8 @@ def _derive_rates(metrics: dict) -> None:
                       "branch-instructions", "L1-dcache-load-misses",
                       "L1-dcache-loads", "dTLB-load-misses", "dTLB-loads",
                       "iTLB-load-misses", "iTLB-loads",
-                      "stalled-cycles-frontend", "stalled-cycles-backend"):
+                      "stalled-cycles-frontend", "stalled-cycles-backend",
+                      "l2_pf_miss_l2_hit_l3", "l2_pf_miss_l2_l3"):
                 metrics.pop(k, None)
             return
         if "IPC" not in metrics:
@@ -555,6 +556,59 @@ def _derive_rates(metrics: dict) -> None:
             metrics["frontend-stall-rate"] = fe / cycles
         if be is not None and "backend-stall-rate" not in metrics:
             metrics["backend-stall-rate"] = be / cycles
+
+    # ── MPKI (misses per kilo-instruction) — cross-platform memory metric ──
+    # MPKI is the standard hardware-agnostic memory-pressure metric in HPC
+    # because it is independent of clock-rate and pipeline width. Computed
+    # for whatever cache-level events each platform reports.
+    #   - L1d-MPKI: directly comparable across Setonix and Gadi.
+    #   - cache-miss-MPKI: L2 on Zen3, L3 on SPR — same name, different level.
+    #     Use alongside `cache_level` field below to interpret correctly.
+    if instructions:
+        for src, out in (
+            ("L1-dcache-load-misses", "L1d-mpki"),
+            ("cache-misses",          "cache-miss-mpki"),
+            ("cache-references",      "cache-ref-mpki"),
+            ("LLC-load-misses",       "LLC-miss-mpki"),       # Intel only
+            ("LLC-loads",             "LLC-load-mpki"),       # Intel only
+            ("l2_pf_miss_l2_l3",      "l3-pf-miss-mpki"),     # AMD Zen3 only
+        ):
+            v = g(src)
+            if v is not None and out not in metrics:
+                metrics[out] = v * 1000.0 / instructions
+
+    # ── Zen3 L3 prefetcher hit/miss ratio (proxy for L3 miss rate) ──
+    # Only the prefetcher path is observable from process-scope on Setonix
+    # (uncore amd_l3 PMU is admin-locked). This is a partial picture but is
+    # the closest user-mode L3 hit/miss split available on Zen3.
+    pf_hit = g("l2_pf_miss_l2_hit_l3")
+    pf_miss = g("l2_pf_miss_l2_l3")
+    if pf_hit is not None and pf_miss is not None:
+        total = pf_hit + pf_miss
+        if total > 0 and "l3-prefetch-miss-rate" not in metrics:
+            metrics["l3-prefetch-miss-rate"] = pf_miss / total
+
+    # ── Cache-level annotation (cross-platform fairness) ──
+    # On AMD Zen3 the kernel `cache-references`/`cache-misses` aliases map to
+    # L2; on Intel SPR they map to L3 (LONGEST_LAT_CACHE). Tag the cache
+    # level of the generic counters so dashboards don't compare L2 vs L3 on
+    # the same axis. Also provide explicit `l2-*` / `l3-*` aliases.
+    is_amd = ("l2_pf_miss_l2_l3" in metrics or "ex_ret_ops" in metrics
+              or "ls_dispatch.ld_dispatch" in metrics)
+    is_intel = ("LLC-loads" in metrics or "LLC-load-misses" in metrics
+                or "topdown-total-slots" in metrics)
+    if is_amd and not is_intel:
+        metrics.setdefault("cache_level", "L2")
+        if "cache-miss-rate" in metrics:
+            metrics.setdefault("l2-miss-rate", metrics["cache-miss-rate"])
+        if "cache-miss-mpki" in metrics:
+            metrics.setdefault("l2-miss-mpki", metrics["cache-miss-mpki"])
+    elif is_intel and not is_amd:
+        metrics.setdefault("cache_level", "L3")
+        if "cache-miss-rate" in metrics:
+            metrics.setdefault("l3-miss-rate", metrics["cache-miss-rate"])
+        if "cache-miss-mpki" in metrics:
+            metrics.setdefault("l3-miss-mpki", metrics["cache-miss-mpki"])
 
 
 def enrich_run(run: dict) -> bool:

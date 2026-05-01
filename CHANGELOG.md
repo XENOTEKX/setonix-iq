@@ -17,10 +17,11 @@
 
 | Priority | Task | Detail |
 |----------|------|--------|
-| **CRITICAL** | Fix `cache-miss-rate` dashboard label/chart — currently shows **L2 miss rate** for Setonix and **LLC miss rate** for Gadi on the same axis | See follow-up #9: `cache-references` is L2-domain on AMD Zen3, L3-domain (LONGEST_LAT_CACHE) on Intel SPR — not comparable |
+| **HIGH** | Update dashboard chart: rename `cache-miss-rate` to use platform-aware fields `l2-miss-rate` (Setonix) and `l3-miss-rate` (Gadi); switch primary memory-pressure plot to `L1d-mpki` (cross-platform comparable) | Data layer fixed in follow-up #15 — `cache_level` field, `*-mpki` derived metrics, and Zen3 `l3-prefetch-miss-rate` proxy are now in every harvested run. Web frontend (`web/js/charts/*`, `web/js/pages/*`) needs to consume them. |
+| **HIGH** | Normalise `cache-miss-rate` units across platforms — Gadi stores as percentage (25.06 = 25.06 %), Setonix as ratio (0.039 = 3.9 %) | Pre-existing inconsistency exposed by follow-up #15 audit; affects `l2-miss-rate` / `l3-miss-rate` aliases too. MPKI fields are unaffected (computed fresh from raw counters). |
 | ~~**CRITICAL**~~ | ~~Fix Setonix `IPC` always reading N/A — `cycles:u` returns 0 under `perf_event_paranoid=2`~~ | ✅ **Done 2026-05-01** (follow-up #12b) — `cycles:uk,instructions:uk` in `PERF_EVENTS`; next Setonix matrix re-run will populate IPC |
-| **HIGH** | Add LLC/L3 events to Setonix `PERF_EVENTS` in `setonix-ci/run_mega_profile.sh` | Candidates: `amd_l3/requests/`, `amd_l3/l3_misses/`, or raw events `r4000040`/`r4000041` (Zen3) |
-| **HIGH** | Add `stalled-cycles-backend` to Gadi event list (`gadi-ci/run_profiling.sh`) | Currently absent; needed for frontend vs backend stall comparison |
+| ~~**HIGH**~~ | ~~Add LLC/L3 events to Setonix `PERF_EVENTS`~~ | ✅ **Done 2026-05-01** (follow-up #15) — `l2_pf_miss_l2_hit_l3,l2_pf_miss_l2_l3` (core-level Zen3 L3 prefetcher proxy events) added. `amd_l3/*` uncore PMU is admin-locked under `perf_event_paranoid=2`, so demand-path L3 hit/miss is not directly measurable; the prefetcher path is the closest user-mode equivalent to Gadi's `LLC-load-misses`. |
+| ~~**HIGH**~~ | ~~Add `stalled-cycles-backend` to Gadi event list~~ | ✅ **Already present** — verified 2026-05-01, line 35 of `gadi-ci/run_profiling.sh`. Phantom to-do; removed. |
 | ~~**HIGH**~~ | ~~Re-run Setonix `large_modelfinder` matrix (7 runs, 1T–104T) — `perf stat` measured login-node srun wrapper (92ms task-clock) rather than compute-node iqtree3; `cycles:u = 0` because srun does negligible CPU work~~ | ✅ **Submitted 2026-05-01** (follow-up #14) — jobs **42190953–42190959**, fixed script synced to scratch (`perf stat` inside srun + `cycles:uk`). `xlarge_mf` already correct — no rerun needed. |
 | **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
 | **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
@@ -33,7 +34,72 @@
 
 ---
 
-## 2026-05-01 (rerun, follow-up #14) — Setonix `large_modelfinder` matrix re-submitted with correct perf scope
+## 2026-05-01 (cache hierarchy audit, follow-up #15) — Setonix L2 vs Gadi L3 mismatch resolved at data layer; MPKI added as cross-platform memory metric
+
+### The mismatch
+
+The dashboard chart labelled "cache-miss-rate" was plotting two physically different quantities on the same axis. The Linux perf kernel-event aliases `cache-references` and `cache-misses` resolve to **different cache levels** on the two PMUs:
+
+| Counter | Setonix (AMD Zen3, EPYC 7763) | Gadi (Intel Sapphire Rapids) |
+|---|---|---|
+| `cache-references` | **L2** references (core-private 1 MiB/core) | **L3 / LONGEST_LAT_CACHE** references (LLC, ~100 MiB shared) |
+| `cache-misses` | **L2** misses | **L3 / LONGEST_LAT_CACHE** misses |
+| `LLC-loads` / `LLC-load-misses` | **`<not supported>`** | LLC loads / load-misses |
+| `amd_l3/*` uncore PMU | Exposed but **`<not supported>`** in user-mode under `perf_event_paranoid=2` (needs `CAP_PERFMON` or paranoid ≤ 0) | n/a |
+
+L2 miss rates in HPC workloads typically run 10–30 %; L3 miss rates run 50–90 %. Plotting them on a single axis labelled "cache-miss-rate" was numerically meaningful but **physically misleading** — Setonix appeared to have a 3–5× lower miss rate purely as an artefact of the kernel alias mapping.
+
+### What is actually measurable on Setonix at process scope
+
+I probed the AMD Zen3 PMU on a Setonix login node (paranoid=2). The findings:
+
+- **Uncore `amd_l3/l3_lookup_state.all_l3_req_typs/`** and `amd_l3/l3_comb_clstr_state.request_miss/` → both `<not supported>`. Uncore PMUs need `CAP_PERFMON` or system-wide perf, neither of which is available to unprivileged users on Setonix.
+- **Kernel `LLC-loads` / `LLC-load-misses`** aliases → both `<not supported>` on Zen3 (perf does not provide a Zen3 fallback; on Intel they map to `LONGEST_LAT_CACHE.*`).
+- **Core-level Zen3 events** → all supported at user-mode:
+  - `l2_request_g1.all_no_prefetch` (demand L2 references)
+  - `l2_cache_req_stat.ls_rd_blk_x` (L2 read misses)
+  - `l2_pf_miss_l2_hit_l3` (L2 prefetcher misses that **hit** L3)
+  - `l2_pf_miss_l2_l3` (L2 prefetcher misses that **miss** L3 → DRAM traffic)
+
+The prefetcher-path events are the closest **demand-comparable** L3 traffic signal observable from user-mode on Setonix. They miss the demand-load path of L3 traffic, so they are a **proxy**, not a complete replacement, but they give a hit/miss split on the prefetched-line subset which is the largest fraction of L2-miss-driven L3 traffic in memory-bound workloads.
+
+### Fair-comparison strategy
+
+Three changes, ordered by scientific defensibility:
+
+1. **Annotate cache level, don't hide it.** Each run JSON now carries `metrics.cache_level` ∈ {`L2`, `L3`}. The generic `cache-miss-rate` field is preserved for backwards compatibility, plus explicit `l2-miss-rate` (Setonix) / `l3-miss-rate` (Gadi) aliases are emitted. Dashboard plots should switch to the explicit aliases on separate axes.
+
+2. **Promote MPKI as the primary cross-platform memory-pressure metric.** Misses Per Kilo-Instruction is the standard hardware-agnostic memory metric in HPC because it is independent of clock rate and pipeline width. New derived fields:
+   - `L1d-mpki` — directly comparable across both platforms (best primary metric)
+   - `cache-miss-mpki` / `cache-ref-mpki` — same MPKI maths, but interprets the `cache_level` annotation
+   - `LLC-miss-mpki` / `LLC-load-mpki` — Gadi only
+   - `l3-pf-miss-mpki` — Setonix only (Zen3 prefetcher path)
+
+3. **Add Zen3 L3 prefetcher proxy events.** New Setonix `PERF_EVENTS` adds:
+   - `l2_pf_miss_l2_hit_l3,l2_pf_miss_l2_l3`
+   - Derived: `l3-prefetch-miss-rate = l2_pf_miss_l2_l3 / (l2_pf_miss_l2_hit_l3 + l2_pf_miss_l2_l3)`. This is the closest user-mode-accessible analogue of Gadi's `LLC-load-misses / LLC-loads`.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `setonix-ci/run_mega_profile.sh` | Added `l2_pf_miss_l2_hit_l3,l2_pf_miss_l2_l3` to `PERF_EVENTS`; added 11-line comment block documenting the L2-vs-L3 mismatch and the prefetcher-path proxy rationale. |
+| `tools/harvest_scratch.py` (`_derive_rates`) | Added MPKI computations (`L1d-mpki`, `cache-miss-mpki`, `cache-ref-mpki`, `LLC-miss-mpki`, `LLC-load-mpki`, `l3-pf-miss-mpki`); added Zen3 `l3-prefetch-miss-rate`; added `cache_level` annotation (`L2` for AMD, `L3` for Intel) plus explicit `l2-miss-rate` / `l3-miss-rate` aliases; extended IPC-guard drop-list with the two new prefetcher events. |
+| `gadi-ci/run_profiling.sh` | No change required — `stalled-cycles-backend` already present (line 35); the prior "to-do" was stale. |
+
+### Limitations (honest disclosure)
+
+- Setonix's L3 hit/miss split is **prefetcher-path only**. The demand-load path is not observable without admin-level uncore access. Quoting `l3-prefetch-miss-rate` as a complete "Setonix L3 miss rate" would be incorrect; it must be labelled as a prefetcher-only proxy.
+- The cleanest fully-fair comparison achievable today is **L1d-MPKI**, which uses identical events on both PMUs (`L1-dcache-load-misses` / `instructions × 1000`).
+- For complete demand-path L3 visibility on Setonix, system administrators would need to lower `perf_event_paranoid` to 0 (or grant `CAP_PERFMON` to the user) to expose the `amd_l3/*` uncore PMU. That is out of scope for this repo.
+
+### Note on the in-flight `large_modelfinder` rerun (jobs 42190953–42190959)
+
+The 7 jobs already submitted (follow-up #14) were spooled by SLURM **before** this script update, so they will produce JSON with `cycles:uk` data but **without** the new `l2_pf_miss_*` events. This is acceptable — the IPC fix is the priority. Future submissions will include the L3 prefetcher events.
+
+---
+
+
 
 ### Root cause of IPC=None on `Setonix_large_modelfinder_*` runs
 

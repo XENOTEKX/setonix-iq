@@ -76,7 +76,14 @@
       "cpu-migrations": 0,
       "ex_ret_ops": 336488098,
       "ex_ret_brn_misp": 539169,
-      "ls_l1_d_tlb_miss.all": 32106
+      "ls_l1_d_tlb_miss.all": 32106,
+      "cache-miss-rate": 0.1688177831375154,
+      "branch-miss-rate": 0.004267954076383276,
+      "L1-dcache-miss-rate": 0.02003988041778687,
+      "dTLB-miss-rate": 0.08748827118509435,
+      "iTLB-miss-rate": 1.7964558208220527,
+      "cache_level": "L2",
+      "l2-miss-rate": 0.1688177831375154
     },
     "peak_rss_kb": 8192,
     "memory_timeseries": [
