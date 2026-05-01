@@ -518,9 +518,14 @@ def _derive_rates(metrics: dict) -> None:
             return None
 
     def ratio(num_key, den_key, out_key):
+        # Emit as PERCENT (0-100), matching the Gadi worker's `rate()` helper
+        # in submit_benchmark_matrix.sh and the dashboard's fmtPercent() / radar
+        # normalize() functions which both assume percent units. Prior to
+        # follow-up #17 this emitted ratios (0-1), causing Setonix rates to
+        # render as e.g. "0.10%" instead of "9.91%".
         n, d = g(num_key), g(den_key)
         if n is not None and d and out_key not in metrics:
-            metrics[out_key] = n / d
+            metrics[out_key] = round(100.0 * n / d, 4)
 
     cycles = g("cycles")
     instructions = g("instructions")
@@ -552,10 +557,11 @@ def _derive_rates(metrics: dict) -> None:
     if cycles:
         fe = g("stalled-cycles-frontend")
         be = g("stalled-cycles-backend")
+        # Emit as percent (see follow-up #17 ratio-vs-percent unit fix above).
         if fe is not None and "frontend-stall-rate" not in metrics:
-            metrics["frontend-stall-rate"] = fe / cycles
+            metrics["frontend-stall-rate"] = round(100.0 * fe / cycles, 4)
         if be is not None and "backend-stall-rate" not in metrics:
-            metrics["backend-stall-rate"] = be / cycles
+            metrics["backend-stall-rate"] = round(100.0 * be / cycles, 4)
 
     # ── MPKI (misses per kilo-instruction) — cross-platform memory metric ──
     # MPKI is the standard hardware-agnostic memory-pressure metric in HPC
@@ -585,8 +591,9 @@ def _derive_rates(metrics: dict) -> None:
     pf_miss = g("l2_pf_miss_l2_l3")
     if pf_hit is not None and pf_miss is not None:
         total = pf_hit + pf_miss
+        # Emit as percent (see follow-up #17).
         if total > 0 and "l3-prefetch-miss-rate" not in metrics:
-            metrics["l3-prefetch-miss-rate"] = pf_miss / total
+            metrics["l3-prefetch-miss-rate"] = round(100.0 * pf_miss / total, 4)
 
     # ── Cache-level annotation (cross-platform fairness) ──
     # On AMD Zen3 the kernel `cache-references`/`cache-misses` aliases map to

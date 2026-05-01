@@ -19307,17 +19307,17 @@
       "ls_dispatch.ld_dispatch": 188109891896002,
       "ls_dispatch.store_dispatch": 61892439648750,
       "IPC": 0.11554541710934207,
-      "cache-miss-rate": 0.08704460002219186,
-      "branch-miss-rate": 0.0007251629811996854,
-      "L1-dcache-miss-rate": 0.07236151520967861,
-      "dTLB-miss-rate": 0.12343368697114353,
-      "iTLB-miss-rate": 1.5327052656877171,
-      "frontend-stall-rate": 0.009449559912379696,
+      "cache-miss-rate": 8.7045,
+      "branch-miss-rate": 0.0725,
+      "L1-dcache-miss-rate": 7.2362,
+      "dTLB-miss-rate": 12.3434,
+      "iTLB-miss-rate": 153.2705,
+      "frontend-stall-rate": 0.945,
       "L1d-mpki": 27.238334279648473,
       "cache-miss-mpki": 4.394791866868197,
       "cache-ref-mpki": 50.48896618225316,
       "cache_level": "L2",
-      "l2-miss-rate": 0.08704460002219186,
+      "l2-miss-rate": 8.7045,
       "l2-miss-mpki": 4.394791866868197
     },
     "folded_stacks": [
@@ -19512,6 +19512,6 @@
   "archived": false,
   "non_canonical": true,
   "non_canonical_label": "SMT+no-pin (ref)",
-  "archived_reason": "pre-audit Setonix run — not parity-matched with canonical _smtoff_pin corpus. Issues: (1) SMT active: cores=256 (128 physical x2 SMT siblings contending for shared L1/L2 and execution units); (2) no --hint=nomultithread so OpenMP threads land on logical not physical cores; (3) no numactl --localalloc so memory pages can be allocated on any NUMA domain; (4) no --cpu-bind=cores so OS scheduler can migrate threads; (5) restricted model search (-mset GTR,HKY,K80 not full ModelFinder). SMT sharing is the dominant factor causing higher wall times at all thread counts.",
+  "archived_reason": "pre-audit Setonix run \u2014 not parity-matched with canonical _smtoff_pin corpus. Issues: (1) SMT active: cores=256 (128 physical x2 SMT siblings contending for shared L1/L2 and execution units); (2) no --hint=nomultithread so OpenMP threads land on logical not physical cores; (3) no numactl --localalloc so memory pages can be allocated on any NUMA domain; (4) no --cpu-bind=cores so OS scheduler can migrate threads; (5) restricted model search (-mset GTR,HKY,K80 not full ModelFinder). SMT sharing is the dominant factor causing higher wall times at all thread counts.",
   "build_tag": "baseline_smton"
 }

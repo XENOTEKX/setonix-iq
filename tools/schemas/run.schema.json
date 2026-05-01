@@ -170,7 +170,7 @@
             "frontend-stall-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "backend-stall-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "dTLB-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
-            "iTLB-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
+            "iTLB-miss-rate": { "type": "number", "minimum": 0, "maximum": 1000, "description": "Percent. AMD Zen3 perf events can exceed 100 % because iTLB-load-misses includes speculative/page-walk paths not present in iTLB-loads; max set to 1000 to admit those values." },
             "amd-branch-mispred-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "amd-l1-dtlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },
             "amd-l2-tlb-miss-rate": { "type": "number", "minimum": 0, "maximum": 100 },

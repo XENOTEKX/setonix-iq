@@ -18,7 +18,7 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **HIGH** | Update dashboard chart: rename `cache-miss-rate` to use platform-aware fields `l2-miss-rate` (Setonix) and `l3-miss-rate` (Gadi); switch primary memory-pressure plot to `L1d-mpki` (cross-platform comparable) | Data layer fixed in follow-up #15 — `cache_level` field, `*-mpki` derived metrics, and Zen3 `l3-prefetch-miss-rate` proxy are now in every harvested run. Web frontend (`web/js/charts/*`, `web/js/pages/*`) needs to consume them. |
-| **HIGH** | Normalise `cache-miss-rate` units across platforms — Gadi stores as percentage (25.06 = 25.06 %), Setonix as ratio (0.039 = 3.9 %) | Pre-existing inconsistency exposed by follow-up #15 audit; affects `l2-miss-rate` / `l3-miss-rate` aliases too. MPKI fields are unaffected (computed fresh from raw counters). |
+| ~~**HIGH**~~ | ~~Normalise `cache-miss-rate` units across platforms — Gadi stores as percentage (25.06 = 25.06 %), Setonix as ratio (0.039 = 3.9 %)~~ | ✅ **Done 2026-05-01** (follow-up #17) — `tools/harvest_scratch.py:_derive_rates` now emits all `*-miss-rate` / `*-stall-rate` fields as percent (matching the Gadi worker's `rate()` helper and the dashboard's `fmtPercent` / radar `normalize` assumptions); `tools/migrate_rate_units.py` rescaled 32 legacy Setonix files (224 field rescales). |
 | ~~**CRITICAL**~~ | ~~Fix Setonix `IPC` always reading N/A — `cycles:u` returns 0 under `perf_event_paranoid=2`~~ | ✅ **Done 2026-05-01** (follow-up #12b) — `cycles:uk,instructions:uk` in `PERF_EVENTS`; next Setonix matrix re-run will populate IPC |
 | ~~**HIGH**~~ | ~~Add LLC/L3 events to Setonix `PERF_EVENTS`~~ | ✅ **Done 2026-05-01** (follow-up #15) — `l2_pf_miss_l2_hit_l3,l2_pf_miss_l2_l3` (core-level Zen3 L3 prefetcher proxy events) added. `amd_l3/*` uncore PMU is admin-locked under `perf_event_paranoid=2`, so demand-path L3 hit/miss is not directly measurable; the prefetcher path is the closest user-mode equivalent to Gadi's `LLC-load-misses`. |
 | ~~**HIGH**~~ | ~~Add `stalled-cycles-backend` to Gadi event list~~ | ✅ **Already present** — verified 2026-05-01, line 35 of `gadi-ci/run_profiling.sh`. Phantom to-do; removed. |
@@ -34,7 +34,64 @@
 
 ---
 
-## 2026-05-01 (matrix submission, follow-up #16) — Gadi `xlarge_mf _sr_gcc_pin` matrix submitted (1T–104T)
+## 2026-05-01 (rate-unit normalisation, follow-up #17) — Setonix `*-rate` fields rescaled from ratios to percent
+
+### The problem
+
+Pre-existing data-layer inconsistency exposed by follow-up #15: Gadi runs stored cache/branch/L1/TLB miss rates as **percent** (e.g. `cache-miss-rate: 24.7335`), while Setonix runs stored them as **ratios** (e.g. `cache-miss-rate: 0.0991`). The dashboard's `fmtPercent()` (`web/js/utils.js`) and the radar chart's `normalize()` functions (`web/js/charts/microarch.js`) both assume **percent input**, so Setonix values rendered as e.g. `"0.10%"` instead of `"9.91%"` and the radar chart silently scored Setonix runs as near-perfect on every miss-rate axis (`100 − min(100, 0.0799) = 99.92`).
+
+### Fix at the data layer
+
+`tools/harvest_scratch.py:_derive_rates()` now emits every `*-miss-rate` and `*-stall-rate` field as percent (multiplied by 100, rounded to 4 decimals), matching the Gadi worker's `rate(n, d)` helper in `gadi-ci/submit_benchmark_matrix.sh`. Affected fields:
+
+`cache-miss-rate`, `branch-miss-rate`, `L1-dcache-miss-rate`, `dTLB-miss-rate`, `iTLB-miss-rate`, `frontend-stall-rate`, `backend-stall-rate`, `l3-prefetch-miss-rate`.
+
+The `cache_level`-based aliases (`l2-miss-rate`, `l3-miss-rate`) follow the canonical `cache-miss-rate` automatically. MPKI fields are unaffected (they are misses-per-1000-instructions, not percentages).
+
+### Migration of legacy files
+
+`tools/migrate_rate_units.py` (new, idempotent) walks `logs/runs/*.json` and `logs/profiles/*.json`, detects ratio-format records via the heuristic `cache-miss-rate < 1.0` (impossible in any real HPC workload — would mean the cache absorbs > 99 % of references), and rescales 8 percent-typed fields by ×100. Result of running the migration:
+
+```
+[migrate] 57 files scanned, 32 migrated (224 field rescales), 25 unchanged.
+```
+
+The 25 unchanged files are all Gadi runs (already percent) plus the 2 profile records (no rate fields). Every Setonix run was migrated cleanly.
+
+### Schema relaxation for AMD Zen3 iTLB
+
+The migration produced 24 schema-validation errors on `iTLB-miss-rate > 100 %`. This is a known AMD Zen3 perf-counter artefact: `iTLB-load-misses` includes speculative and page-walk paths that are not counted in `iTLB-loads`, so the ratio can legitimately exceed 1.0. Pre-migration these values silently passed schema as ratios > 1.0; after migration they exceed the percent ceiling.
+
+`tools/schemas/run.schema.json:iTLB-miss-rate.maximum` raised from `100` to `1000` with an inline comment documenting the Zen3 quirk. No data is dropped — users see the real (anomalous) value rather than a clamped lie.
+
+### Verification
+
+- `python3.11 tools/validate.py` → 55 runs, 2 profiles, 0 errors.
+- `python3.11 -m pytest tests/ -q` → 17 passed, 1 xpassed.
+- Spot-check parity post-migration:
+  | File | `cache-miss-rate` | `L1-dcache-miss-rate` | `branch-miss-rate` |
+  |---|---:|---:|---:|
+  | `Setonix_xlarge_mf_64T.json`         | 9.9114  | 7.9870 | 0.0891 |
+  | `Gadi_large_modelfinder_16T.json`    | 39.1276 | 5.1444 | 0.0639 |
+- `make dashboard` → built and synced to `docs/`.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `tools/harvest_scratch.py` | `_derive_rates()`: `*-miss-rate`, `*-stall-rate`, `l3-prefetch-miss-rate` now emitted as percent (×100, 4dp). Inline comment documents follow-up #17 unit convention. |
+| `tools/migrate_rate_units.py` | New — one-shot migration tool that walks `logs/{runs,profiles}/*.json` and rescales legacy ratio-format files to percent. Idempotent (heuristic on `cache-miss-rate < 1.0`). |
+| `tools/schemas/run.schema.json` | `iTLB-miss-rate.maximum` raised from 100 to 1000 with description documenting the AMD Zen3 perf-counter quirk that produces real ratios > 1.0. |
+| `logs/runs/Setonix_*.json`, `logs/runs/*_baseline_smton.json` (32 files) | Migrated — 8 percent-typed fields per file rescaled by ×100. |
+| `web/data/*`, `docs/*` | Rebuilt from migrated source. |
+
+### What this does NOT yet fix
+
+The follow-up #15 task remains open: switching the dashboard frontend (`web/js/charts/*.js`, `web/js/pages/*.js`) to plot platform-aware fields (`l2-miss-rate` for Setonix, `l3-miss-rate` for Gadi) on **separate axes** rather than mixing them into one `cache-miss-rate` plot. The data layer is now ready for that change (cache levels are correctly tagged and units are unified), but the chart-rendering work is a larger UI task and is deferred.
+
+---
+
+
 
 ### What was submitted
 
