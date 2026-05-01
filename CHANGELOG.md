@@ -21,7 +21,7 @@
 | ~~**CRITICAL**~~ | ~~Fix Setonix `IPC` always reading N/A — `cycles:u` returns 0 under `perf_event_paranoid=2`~~ | ✅ **Done 2026-05-01** (follow-up #12b) — `cycles:uk,instructions:uk` in `PERF_EVENTS`; next Setonix matrix re-run will populate IPC |
 | **HIGH** | Add LLC/L3 events to Setonix `PERF_EVENTS` in `setonix-ci/run_mega_profile.sh` | Candidates: `amd_l3/requests/`, `amd_l3/l3_misses/`, or raw events `r4000040`/`r4000041` (Zen3) |
 | **HIGH** | Add `stalled-cycles-backend` to Gadi event list (`gadi-ci/run_profiling.sh`) | Currently absent; needed for frontend vs backend stall comparison |
-| **HIGH** | Re-run Setonix `large_modelfinder` and `xlarge_mf` matrices with the `cycles:uk` fix | Required to populate IPC values across the canonical Setonix corpus |
+| ~~**HIGH**~~ | ~~Re-run Setonix `large_modelfinder` matrix (7 runs, 1T–104T) — `perf stat` measured login-node srun wrapper (92ms task-clock) rather than compute-node iqtree3; `cycles:u = 0` because srun does negligible CPU work~~ | ✅ **Submitted 2026-05-01** (follow-up #14) — jobs **42190953–42190959**, fixed script synced to scratch (`perf stat` inside srun + `cycles:uk`). `xlarge_mf` already correct — no rerun needed. |
 | **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
 | **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
 
@@ -30,6 +30,62 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-01 (rerun, follow-up #14) — Setonix `large_modelfinder` matrix re-submitted with correct perf scope
+
+### Root cause of IPC=None on `Setonix_large_modelfinder_*` runs
+
+The existing 7 `Setonix_large_modelfinder_*.json` files (SLURM 42179139–42179142) all have `cycles: null, IPC: null`. The cause was mis-scoped `perf stat`, not `perf_event_paranoid`.
+
+**Evidence from `perf_stat.txt` headers:**
+
+| Run | perf_stat.txt header | task-clock | cycles |
+|-----|----------------------|------------|--------|
+| `large_modelfinder_8t_smtoff_pin_42179141` | `perf stat for 'srun --cpus-per-task=8 … numactl … iqtree3 …'` | **92ms** (0.000 CPUs) | **0** |
+| `xlarge_mf_8t_smtoff_pin_42181137` | `perf stat for 'numactl --localalloc … iqtree3 …'` | 3854 s, 8 CPUs | **99T** ✓ |
+
+The large_modelfinder jobs ran `perf stat` on the **login node**, wrapping the srun launcher. srun itself does ~92ms of CPU work before handing off to the compute node; `cycles:u = 0` because the srun process is almost entirely idle.
+
+The xlarge_mf jobs ran `perf stat` **inside srun on the compute node**, directly measuring iqtree3. This produced correct hardware-counter data.
+
+**Why the timing mismatch?** The large_modelfinder jobs (42179139–42179142) were submitted before the perf-inside-srun fix (follow-up #2, 2026-04-30) was **synced to scratch**. The fix was committed to the repo but the scratch copy (`/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/run_mega_profile.sh`) was not updated until after those jobs ran. The xlarge_mf jobs were submitted later, after scratch was updated.
+
+The `cycles:uk` change (follow-up #12b) is an additional safety net for nodes where `perf_event_paranoid=2` blocks the AMD Zen3 cycle counter, but it was not the primary fix needed here. Both fixes are now in the script.
+
+### IPC guard interaction
+
+`harvest_scratch.py:_derive_rates()` computes `IPC = instructions / cycles`. When `cycles = 0` (from the srun-scoped perf), the division is either 0/0 (→ None) or produces infinity. The guard drops `cycles` and `instructions` from the JSON entirely, resulting in `"IPC": null` in all 7 runs.
+
+### Fix applied
+
+1. `setonix-ci/run_mega_profile.sh` already had the perf-inside-srun fix (follow-up #2). The scratch copy was synced from the repo (`cp` of the current HEAD) — only the `cycles:uk` line was missing on scratch.
+2. Matrix re-submitted: `bash setonix-ci/submit_matrix.sh --dataset large_modelfinder.fa`
+
+| Thread count | SLURM job ID |
+|:---:|:---:|
+| 1T | 42190953 |
+| 4T | 42190954 |
+| 8T | 42190955 |
+| 16T | 42190956 |
+| 32T | 42190957 |
+| 64T | 42190958 |
+| 104T | 42190959 |
+
+### After jobs complete
+
+1. `python3.11 tools/harvest_scratch.py` — harvest into `logs/runs/Setonix_large_modelfinder_*.json`
+2. `make dashboard` — rebuild and push
+3. `git add -A && git commit -m "data: re-harvest Setonix large_modelfinder with cycles:uk — IPC now populated"`
+
+`xlarge_mf` requires no rerun — its `perf_stat.txt` already contains valid `cycles:u` data (jobs 42181135–42181142).
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `setonix-ci/run_mega_profile.sh` | Synced to scratch — `cycles:uk,instructions:uk` now present on scratch |
 
 ---
 
