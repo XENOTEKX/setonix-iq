@@ -1,0 +1,4735 @@
+{
+  "run_id": "gadi_xlarge_mf_4t_sr_gcc_pin",
+  "pbs_id": "167520753",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "xlarge_mf_4t_sr_gcc_pin",
+  "description": "Gadi Sapphire Rapids reproduction of Setonix xlarge_mf @ 4T",
+  "timing": [
+    {
+      "command": "perf stat ... /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s xlarge_mf.fa -T 4 -seed 1",
+      "time_s": 4803.175,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -10956936.611,
+      "reported": -10956936.611,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0318.gadi.nci.org.au",
+    "date": "Fri May  1 20:14:57 2026",
+    "cpu": "AVX512, FMA3, 503 GB RAM",
+    "cores": 104,
+    "gcc": "",
+    "icc": "",
+    "icx": "",
+    "vtune_version": "",
+    "kernel": "",
+    "os": "",
+    "pbs": {
+      "job_id": "167520753.gadi-pbs",
+      "job_name": "iq-xlarge_mf-4t",
+      "queue": "normalsr-exec",
+      "ncpus": "104",
+      "submit_host": "gadi-login-05.gadi.nci.org.au",
+      "submit_dir": "/home/272/as1708/setonix-iq"
+    },
+    "run_id": "gadi_xlarge_mf_4t_sr_gcc_pin",
+    "label": "xlarge_mf_4t_sr_gcc_pin",
+    "threads": 4,
+    "cpu_sockets": 0,
+    "cpu_cores_per_socket": 0,
+    "cpu_threads_per_core": 0,
+    "cpu_count_logical": 0,
+    "numa_nodes": 0,
+    "smt_active": false,
+    "cpu_governor": "",
+    "mem_total_kb": 0,
+    "glibc": "",
+    "iqtree_binary": "/scratch/rc29/as1708/iqtree3/build-profiling/iqtree3",
+    "iqtree_version": ""
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 4803.175,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf.fa",
+    "threads": 4,
+    "perf_cmd": "numactl --localalloc /scratch/rc29/as1708/iqtree3/build-profiling/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/xlarge_mf.fa -T 4 -seed 1 --prefix /scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/iqtree_perf",
+    "metrics": {
+      "IPC": 1.5855,
+      "cache-miss-rate": 41.9341,
+      "branch-miss-rate": 0.0773,
+      "L1-dcache-miss-rate": 5.0138,
+      "LLC-miss-rate": 49.4888,
+      "dTLB-miss-rate": 0.1532,
+      "cycles": 65813727829205,
+      "instructions": 104346232522836,
+      "cache-references": 3364828746030,
+      "cache-misses": 1411009735162,
+      "branch-instructions": 9997915928796,
+      "branch-misses": 7726267709,
+      "L1-dcache-loads": 44282771043375,
+      "L1-dcache-load-misses": 2220264137275,
+      "LLC-loads": 548007392701,
+      "LLC-load-misses": 271202248217,
+      "dTLB-loads": 44287459486214,
+      "dTLB-load-misses": 67856715792,
+      "iTLB-load-misses": 31908089
+    },
+    "vtune": {
+      "elapsed_time_s": 1793.854,
+      "cpu_time_s": 6068.669
+    },
+    "vtune_uarch": null,
+    "proc_summary": {
+      "sample_count": 481,
+      "duration_s": 4804.8,
+      "peak_rss_kb": 4481176,
+      "peak_vms_kb": 5265164,
+      "max_threads": 4,
+      "read_bytes": 92508160,
+      "write_bytes": 2789376
+    },
+    "artefacts": {
+      "proc_timeseries": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/samples.jsonl",
+      "perf_stat": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/perf_stat.txt",
+      "perf_callgraph": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/perf_script.txt",
+      "perf_hotspot_report": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/perf_report.txt",
+      "perf_data": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/perf.data",
+      "vtune_hotspots_dir": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/vtune_hotspots",
+      "vtune_hotspots_tsv": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/vtune_hotspots.tsv",
+      "vtune_hw_events": "/scratch/rc29/as1708/iqtree3/gadi-ci/profiles/xlarge_mf_4t_sr_gcc_pin_167520753/vtune_hw_events.txt"
+    },
+    "hotspots": [
+      {
+        "percent": 86.53,
+        "samples": 384387,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 7.46,
+        "samples": 33047,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 3.35,
+        "samples": 14864,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 0.77,
+        "samples": 3412,
+        "command": "iqtree3",
+        "module": "libgomp.so.1.0.0",
+        "function": "gomp_team_barrier_wait_end"
+      },
+      {
+        "percent": 0.5,
+        "samples": 2222,
+        "command": "iqtree3",
+        "module": "libgomp.so.1.0.0",
+        "function": "gomp_barrier_wait_end"
+      },
+      {
+        "percent": 0.35,
+        "samples": 1528,
+        "command": "iqtree3",
+        "module": "iqtree3",
+        "function": "PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>"
+      },
+      {
+        "percent": 0.23,
+        "samples": 1041,
+        "command": "iqtree3",
+        "module": "libc-2.28.so",
+        "function": "__memmove_avx512_unaligned_erms"
+      },
+      {
+        "percent": 0.17,
+        "samples": 755,
+        "command": "iqtree3",
+        "module": "libm-2.28.so",
+        "function": "scalbnf32x"
+      },
+      {
+        "percent": 0.16,
+        "samples": 710,
+        "command": "iqtree3",
+        "module": "libc-2.28.so",
+        "function": "__memset_avx512_unaligned_erms"
+      }
+    ],
+    "folded_stacks": [
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
+        "count": 384387
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
+        "count": 383305
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>",
+        "count": 33122
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;gomp_thread_start",
+        "count": 25130
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>",
+        "count": 14829
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;gomp_thread_start",
+        "count": 11100
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>;gomp_thread_start;GOMP_parallel",
+        "count": 7992
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>;gomp_thread_start;GOMP_parallel",
+        "count": 3729
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;gomp_barrier_wait_end",
+        "count": 2220
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;gomp_barrier_wait_end;start_thread",
+        "count": 1953
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 1509
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;gomp_thread_start",
+        "count": 1110
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;__memmove_avx512_unaligned_erms",
+        "count": 976
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;__memmove_avx512_unaligned_erms;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 799
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;[runtime]",
+        "count": 754
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;[runtime];PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>",
+        "count": 754
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;[runtime];PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 666
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;__memset_avx512_unaligned_erms",
+        "count": 666
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;__memmove_avx512_unaligned_erms;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;gomp_thread_start",
+        "count": 621
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;scalbnf32x",
+        "count": 621
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;__memset_avx512_unaligned_erms;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>",
+        "count": 577
+      },
+      {
+        "stack": "PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;[runtime];PhyloTree::computePartialLikelihoodSIMD<Vec4d, false, 4, true, false>;PhyloTree::computeLikelihoodBranchSIMD<Vec4d, false, 4, true, false>;gomp_thread_start",
+        "count": 488
+      }
+    ],
+    "memory_timeseries": [
+      {
+        "t_s": 0.0,
+        "rss_kb": 276,
+        "peak_kb": 276,
+        "vms_kb": 12888,
+        "threads_now": 1,
+        "voluntary_cs": 81,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 10.01,
+        "rss_kb": 3239792,
+        "peak_kb": 3239792,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 545,
+        "involuntary_cs": 370
+      },
+      {
+        "t_s": 20.02,
+        "rss_kb": 3239792,
+        "peak_kb": 3239792,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 550,
+        "involuntary_cs": 780
+      },
+      {
+        "t_s": 30.03,
+        "rss_kb": 3239792,
+        "peak_kb": 3239792,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 571,
+        "involuntary_cs": 1178
+      },
+      {
+        "t_s": 40.04,
+        "rss_kb": 3239792,
+        "peak_kb": 3239792,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 578,
+        "involuntary_cs": 1567
+      },
+      {
+        "t_s": 50.05,
+        "rss_kb": 3239792,
+        "peak_kb": 3239792,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 609,
+        "involuntary_cs": 1990
+      },
+      {
+        "t_s": 60.06,
+        "rss_kb": 3265124,
+        "peak_kb": 3265124,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 649,
+        "involuntary_cs": 2372
+      },
+      {
+        "t_s": 70.07,
+        "rss_kb": 3265124,
+        "peak_kb": 3265124,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 798,
+        "involuntary_cs": 2657
+      },
+      {
+        "t_s": 80.08,
+        "rss_kb": 3265124,
+        "peak_kb": 3265124,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 818,
+        "involuntary_cs": 2937
+      },
+      {
+        "t_s": 90.09,
+        "rss_kb": 3265124,
+        "peak_kb": 3265124,
+        "vms_kb": 3613828,
+        "threads_now": 4,
+        "voluntary_cs": 855,
+        "involuntary_cs": 3222
+      },
+      {
+        "t_s": 100.1,
+        "rss_kb": 1345156,
+        "peak_kb": 3265124,
+        "vms_kb": 1600816,
+        "threads_now": 4,
+        "voluntary_cs": 2464,
+        "involuntary_cs": 3446
+      },
+      {
+        "t_s": 110.11,
+        "rss_kb": 3219496,
+        "peak_kb": 3265124,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 3249,
+        "involuntary_cs": 3700
+      },
+      {
+        "t_s": 120.12,
+        "rss_kb": 3219496,
+        "peak_kb": 3265124,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 4219,
+        "involuntary_cs": 4010
+      },
+      {
+        "t_s": 130.13,
+        "rss_kb": 458196,
+        "peak_kb": 3265124,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 5246,
+        "involuntary_cs": 4319
+      },
+      {
+        "t_s": 140.14,
+        "rss_kb": 3219316,
+        "peak_kb": 3265124,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 5808,
+        "involuntary_cs": 4655
+      },
+      {
+        "t_s": 150.15,
+        "rss_kb": 3219316,
+        "peak_kb": 3265124,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 6755,
+        "involuntary_cs": 5029
+      },
+      {
+        "t_s": 160.16,
+        "rss_kb": 2645972,
+        "peak_kb": 3265124,
+        "vms_kb": 3284408,
+        "threads_now": 4,
+        "voluntary_cs": 7513,
+        "involuntary_cs": 5352
+      },
+      {
+        "t_s": 170.17,
+        "rss_kb": 426860,
+        "peak_kb": 3265124,
+        "vms_kb": 643648,
+        "threads_now": 4,
+        "voluntary_cs": 8282,
+        "involuntary_cs": 5664
+      },
+      {
+        "t_s": 180.18,
+        "rss_kb": 3257624,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 8785,
+        "involuntary_cs": 6031
+      },
+      {
+        "t_s": 190.19,
+        "rss_kb": 3257708,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 9491,
+        "involuntary_cs": 6261
+      },
+      {
+        "t_s": 200.2,
+        "rss_kb": 2607768,
+        "peak_kb": 3265124,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 9569,
+        "involuntary_cs": 6448
+      },
+      {
+        "t_s": 210.21,
+        "rss_kb": 3257460,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 10286,
+        "involuntary_cs": 6729
+      },
+      {
+        "t_s": 220.22,
+        "rss_kb": 3257472,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 11009,
+        "involuntary_cs": 6937
+      },
+      {
+        "t_s": 230.23,
+        "rss_kb": 3257740,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 11749,
+        "involuntary_cs": 7135
+      },
+      {
+        "t_s": 240.24,
+        "rss_kb": 3257756,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 12580,
+        "involuntary_cs": 7459
+      },
+      {
+        "t_s": 250.25,
+        "rss_kb": 3257768,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 13292,
+        "involuntary_cs": 7802
+      },
+      {
+        "t_s": 260.26,
+        "rss_kb": 2607828,
+        "peak_kb": 3265124,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 13906,
+        "involuntary_cs": 8140
+      },
+      {
+        "t_s": 270.27,
+        "rss_kb": 2607640,
+        "peak_kb": 3265124,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 14466,
+        "involuntary_cs": 8470
+      },
+      {
+        "t_s": 280.28,
+        "rss_kb": 3257544,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 14825,
+        "involuntary_cs": 8867
+      },
+      {
+        "t_s": 290.29,
+        "rss_kb": 3257304,
+        "peak_kb": 3265124,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 15140,
+        "involuntary_cs": 9242
+      },
+      {
+        "t_s": 300.3,
+        "rss_kb": 3869168,
+        "peak_kb": 3869168,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 15865,
+        "involuntary_cs": 9573
+      },
+      {
+        "t_s": 310.31,
+        "rss_kb": 3869168,
+        "peak_kb": 3869168,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 15951,
+        "involuntary_cs": 9976
+      },
+      {
+        "t_s": 320.32,
+        "rss_kb": 3869156,
+        "peak_kb": 3869168,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 16745,
+        "involuntary_cs": 10292
+      },
+      {
+        "t_s": 330.33,
+        "rss_kb": 3869156,
+        "peak_kb": 3869168,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 16842,
+        "involuntary_cs": 10675
+      },
+      {
+        "t_s": 340.34,
+        "rss_kb": 3869324,
+        "peak_kb": 3869324,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 17602,
+        "involuntary_cs": 11040
+      },
+      {
+        "t_s": 350.35,
+        "rss_kb": 3219600,
+        "peak_kb": 3869324,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 18308,
+        "involuntary_cs": 11364
+      },
+      {
+        "t_s": 360.36,
+        "rss_kb": 4480892,
+        "peak_kb": 4480892,
+        "vms_kb": 5265164,
+        "threads_now": 4,
+        "voluntary_cs": 19104,
+        "involuntary_cs": 11717
+      },
+      {
+        "t_s": 370.37,
+        "rss_kb": 4480892,
+        "peak_kb": 4480892,
+        "vms_kb": 5265164,
+        "threads_now": 4,
+        "voluntary_cs": 19182,
+        "involuntary_cs": 12126
+      },
+      {
+        "t_s": 380.38,
+        "rss_kb": 3831188,
+        "peak_kb": 4480892,
+        "vms_kb": 4269760,
+        "threads_now": 4,
+        "voluntary_cs": 19377,
+        "involuntary_cs": 12529
+      },
+      {
+        "t_s": 390.39,
+        "rss_kb": 4481176,
+        "peak_kb": 4481176,
+        "vms_kb": 5265164,
+        "threads_now": 4,
+        "voluntary_cs": 20268,
+        "involuntary_cs": 12872
+      },
+      {
+        "t_s": 400.4,
+        "rss_kb": 2645756,
+        "peak_kb": 4481176,
+        "vms_kb": 3284408,
+        "threads_now": 4,
+        "voluntary_cs": 20756,
+        "involuntary_cs": 13208
+      },
+      {
+        "t_s": 410.41,
+        "rss_kb": 2646232,
+        "peak_kb": 4481176,
+        "vms_kb": 3284408,
+        "threads_now": 4,
+        "voluntary_cs": 21353,
+        "involuntary_cs": 13602
+      },
+      {
+        "t_s": 420.42,
+        "rss_kb": 3257700,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 22057,
+        "involuntary_cs": 13951
+      },
+      {
+        "t_s": 430.43,
+        "rss_kb": 3257700,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 22135,
+        "involuntary_cs": 14262
+      },
+      {
+        "t_s": 440.44,
+        "rss_kb": 3257588,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 23020,
+        "involuntary_cs": 14653
+      },
+      {
+        "t_s": 450.45,
+        "rss_kb": 3257820,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 23846,
+        "involuntary_cs": 14995
+      },
+      {
+        "t_s": 460.46,
+        "rss_kb": 3257556,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 24629,
+        "involuntary_cs": 15351
+      },
+      {
+        "t_s": 470.47,
+        "rss_kb": 2607612,
+        "peak_kb": 4481176,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 25248,
+        "involuntary_cs": 15706
+      },
+      {
+        "t_s": 480.48,
+        "rss_kb": 2607856,
+        "peak_kb": 4481176,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 25847,
+        "involuntary_cs": 16099
+      },
+      {
+        "t_s": 490.49,
+        "rss_kb": 2607860,
+        "peak_kb": 4481176,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 26408,
+        "involuntary_cs": 16543
+      },
+      {
+        "t_s": 500.5,
+        "rss_kb": 3257544,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 27093,
+        "involuntary_cs": 16916
+      },
+      {
+        "t_s": 510.51,
+        "rss_kb": 3257816,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 27872,
+        "involuntary_cs": 17309
+      },
+      {
+        "t_s": 520.52,
+        "rss_kb": 3257300,
+        "peak_kb": 4481176,
+        "vms_kb": 3934360,
+        "threads_now": 4,
+        "voluntary_cs": 28427,
+        "involuntary_cs": 17624
+      },
+      {
+        "t_s": 530.53,
+        "rss_kb": 2607776,
+        "peak_kb": 4481176,
+        "vms_kb": 2938956,
+        "threads_now": 4,
+        "voluntary_cs": 28882,
+        "involuntary_cs": 17949
+      },
+      {
+        "t_s": 540.54,
+        "rss_kb": 3869432,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 29664,
+        "involuntary_cs": 18379
+      },
+      {
+        "t_s": 550.55,
+        "rss_kb": 3869432,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 29722,
+        "involuntary_cs": 18773
+      },
+      {
+        "t_s": 560.56,
+        "rss_kb": 3869432,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 29800,
+        "involuntary_cs": 19138
+      },
+      {
+        "t_s": 570.57,
+        "rss_kb": 3869492,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 30547,
+        "involuntary_cs": 19591
+      },
+      {
+        "t_s": 580.58,
+        "rss_kb": 3219552,
+        "peak_kb": 4481176,
+        "vms_kb": 3588912,
+        "threads_now": 4,
+        "voluntary_cs": 30626,
+        "involuntary_cs": 19944
+      },
+      {
+        "t_s": 590.59,
+        "rss_kb": 3869492,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 31318,
+        "involuntary_cs": 20334
+      },
+      {
+        "t_s": 600.6,
+        "rss_kb": 3869244,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 31808,
+        "involuntary_cs": 20732
+      },
+      {
+        "t_s": 610.61,
+        "rss_kb": 3869492,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 32319,
+        "involuntary_cs": 21211
+      },
+      {
+        "t_s": 620.62,
+        "rss_kb": 3869500,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 32815,
+        "involuntary_cs": 21538
+      },
+      {
+        "t_s": 630.63,
+        "rss_kb": 3869536,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 33296,
+        "involuntary_cs": 21890
+      },
+      {
+        "t_s": 640.64,
+        "rss_kb": 3869280,
+        "peak_kb": 4481176,
+        "vms_kb": 4584316,
+        "threads_now": 4,
+        "voluntary_cs": 33797,
+        "involuntary_cs": 22270
+      },
+      {
+        "t_s": 650.65,
+        "rss_kb": 4481088,
+        "peak_kb": 4481176,
+        "vms_kb": 5245856,
+        "threads_now": 4,
+        "voluntary_cs": 34550,
+        "involuntary_cs": 22667
+      },
+      {
+        "t_s": 660.66,
+        "rss_kb": 4481088,
+        "peak_kb": 4481176,
+        "vms_kb": 5245856,
+        "threads_now": 4,
+        "voluntary_cs": 34623,
+        "involuntary_cs": 23046
+      },
+      {
+        "t_s": 670.67,
+        "rss_kb": 3831252,
+        "peak_kb": 4481176,
+        "vms_kb": 4250452,
+        "threads_now": 4,
+        "voluntary_cs": 34959,
+        "involuntary_cs": 23445
+      },
+      {
+        "t_s": 680.68,
+        "rss_kb": 4480948,
+        "peak_kb": 4481176,
+        "vms_kb": 5245856,
+        "threads_now": 4,
+        "voluntary_cs": 35506,
+        "involuntary_cs": 23832
+      },
+      {
+        "t_s": 690.69,
+        "rss_kb": 3172960,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 36179,
+        "involuntary_cs": 24214
+      },
+      {
+        "t_s": 700.7,
+        "rss_kb": 3219508,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 36739,
+        "involuntary_cs": 24624
+      },
+      {
+        "t_s": 710.71,
+        "rss_kb": 3869440,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 37176,
+        "involuntary_cs": 25000
+      },
+      {
+        "t_s": 720.72,
+        "rss_kb": 3869440,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 37249,
+        "involuntary_cs": 25318
+      },
+      {
+        "t_s": 730.73,
+        "rss_kb": 3869296,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 37988,
+        "involuntary_cs": 25784
+      },
+      {
+        "t_s": 740.74,
+        "rss_kb": 3869296,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 38064,
+        "involuntary_cs": 26160
+      },
+      {
+        "t_s": 750.75,
+        "rss_kb": 3219764,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 38598,
+        "involuntary_cs": 26540
+      },
+      {
+        "t_s": 760.76,
+        "rss_kb": 2944252,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 39096,
+        "involuntary_cs": 26907
+      },
+      {
+        "t_s": 770.77,
+        "rss_kb": 2973760,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 39588,
+        "involuntary_cs": 27266
+      },
+      {
+        "t_s": 780.78,
+        "rss_kb": 3869492,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 40026,
+        "involuntary_cs": 27608
+      },
+      {
+        "t_s": 790.79,
+        "rss_kb": 3869492,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 40092,
+        "involuntary_cs": 27988
+      },
+      {
+        "t_s": 800.8,
+        "rss_kb": 3869260,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 40843,
+        "involuntary_cs": 28422
+      },
+      {
+        "t_s": 810.81,
+        "rss_kb": 3219388,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 41223,
+        "involuntary_cs": 28839
+      },
+      {
+        "t_s": 820.82,
+        "rss_kb": 3219244,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 41606,
+        "involuntary_cs": 29206
+      },
+      {
+        "t_s": 830.83,
+        "rss_kb": 3869604,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 42082,
+        "involuntary_cs": 29620
+      },
+      {
+        "t_s": 840.84,
+        "rss_kb": 3219804,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 42332,
+        "involuntary_cs": 29985
+      },
+      {
+        "t_s": 850.85,
+        "rss_kb": 3219568,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 42883,
+        "involuntary_cs": 30476
+      },
+      {
+        "t_s": 860.86,
+        "rss_kb": 3219540,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 43400,
+        "involuntary_cs": 30906
+      },
+      {
+        "t_s": 870.87,
+        "rss_kb": 3219388,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 44117,
+        "involuntary_cs": 31278
+      },
+      {
+        "t_s": 880.88,
+        "rss_kb": 3869348,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 44170,
+        "involuntary_cs": 31629
+      },
+      {
+        "t_s": 890.89,
+        "rss_kb": 3869344,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 44676,
+        "involuntary_cs": 32035
+      },
+      {
+        "t_s": 900.9,
+        "rss_kb": 3219588,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 45096,
+        "involuntary_cs": 32391
+      },
+      {
+        "t_s": 910.91,
+        "rss_kb": 3869268,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 45663,
+        "involuntary_cs": 32798
+      },
+      {
+        "t_s": 920.92,
+        "rss_kb": 3219512,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 46175,
+        "involuntary_cs": 33182
+      },
+      {
+        "t_s": 930.93,
+        "rss_kb": 3869596,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 46457,
+        "involuntary_cs": 33587
+      },
+      {
+        "t_s": 940.94,
+        "rss_kb": 3869304,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 46936,
+        "involuntary_cs": 33948
+      },
+      {
+        "t_s": 950.95,
+        "rss_kb": 3869216,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 47408,
+        "involuntary_cs": 34340
+      },
+      {
+        "t_s": 960.96,
+        "rss_kb": 3219460,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 48126,
+        "involuntary_cs": 34759
+      },
+      {
+        "t_s": 970.97,
+        "rss_kb": 3869268,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 48405,
+        "involuntary_cs": 35225
+      },
+      {
+        "t_s": 980.98,
+        "rss_kb": 3219620,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 48704,
+        "involuntary_cs": 35656
+      },
+      {
+        "t_s": 990.99,
+        "rss_kb": 2917424,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 49173,
+        "involuntary_cs": 36053
+      },
+      {
+        "t_s": 1001.0,
+        "rss_kb": 3219560,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 49633,
+        "involuntary_cs": 36392
+      },
+      {
+        "t_s": 1011.01,
+        "rss_kb": 3219716,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 50134,
+        "involuntary_cs": 36807
+      },
+      {
+        "t_s": 1021.02,
+        "rss_kb": 3219428,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 50603,
+        "involuntary_cs": 37256
+      },
+      {
+        "t_s": 1031.03,
+        "rss_kb": 3869120,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 50673,
+        "involuntary_cs": 37655
+      },
+      {
+        "t_s": 1041.04,
+        "rss_kb": 3869500,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 51352,
+        "involuntary_cs": 38035
+      },
+      {
+        "t_s": 1051.05,
+        "rss_kb": 3219284,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 51789,
+        "involuntary_cs": 38422
+      },
+      {
+        "t_s": 1061.06,
+        "rss_kb": 3219580,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 52286,
+        "involuntary_cs": 38825
+      },
+      {
+        "t_s": 1071.07,
+        "rss_kb": 3201484,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 52800,
+        "involuntary_cs": 39209
+      },
+      {
+        "t_s": 1081.08,
+        "rss_kb": 3219388,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 53086,
+        "involuntary_cs": 39582
+      },
+      {
+        "t_s": 1091.09,
+        "rss_kb": 3219396,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 53767,
+        "involuntary_cs": 40108
+      },
+      {
+        "t_s": 1101.1,
+        "rss_kb": 3869356,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 53806,
+        "involuntary_cs": 40454
+      },
+      {
+        "t_s": 1111.11,
+        "rss_kb": 3869356,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 53880,
+        "involuntary_cs": 40855
+      },
+      {
+        "t_s": 1121.12,
+        "rss_kb": 3869300,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 54377,
+        "involuntary_cs": 41184
+      },
+      {
+        "t_s": 1131.13,
+        "rss_kb": 3365352,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 54630,
+        "involuntary_cs": 41589
+      },
+      {
+        "t_s": 1141.14,
+        "rss_kb": 3869312,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 55123,
+        "involuntary_cs": 41962
+      },
+      {
+        "t_s": 1151.15,
+        "rss_kb": 3869284,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 55801,
+        "involuntary_cs": 42342
+      },
+      {
+        "t_s": 1161.16,
+        "rss_kb": 3219476,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 56314,
+        "involuntary_cs": 42748
+      },
+      {
+        "t_s": 1171.17,
+        "rss_kb": 3869508,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 56575,
+        "involuntary_cs": 43121
+      },
+      {
+        "t_s": 1181.18,
+        "rss_kb": 3869608,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 56837,
+        "involuntary_cs": 43530
+      },
+      {
+        "t_s": 1191.19,
+        "rss_kb": 3219408,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 57516,
+        "involuntary_cs": 43928
+      },
+      {
+        "t_s": 1201.2,
+        "rss_kb": 3219484,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 57780,
+        "involuntary_cs": 44307
+      },
+      {
+        "t_s": 1211.21,
+        "rss_kb": 3219644,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 58027,
+        "involuntary_cs": 44700
+      },
+      {
+        "t_s": 1221.22,
+        "rss_kb": 3219492,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 58512,
+        "involuntary_cs": 45163
+      },
+      {
+        "t_s": 1231.23,
+        "rss_kb": 3219440,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 58988,
+        "involuntary_cs": 45561
+      },
+      {
+        "t_s": 1241.24,
+        "rss_kb": 3869400,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 59025,
+        "involuntary_cs": 45938
+      },
+      {
+        "t_s": 1251.25,
+        "rss_kb": 3219460,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 59414,
+        "involuntary_cs": 46289
+      },
+      {
+        "t_s": 1261.26,
+        "rss_kb": 2996560,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 59805,
+        "involuntary_cs": 46696
+      },
+      {
+        "t_s": 1271.27,
+        "rss_kb": 3219328,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 60008,
+        "involuntary_cs": 47022
+      },
+      {
+        "t_s": 1281.28,
+        "rss_kb": 3869296,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 60065,
+        "involuntary_cs": 47409
+      },
+      {
+        "t_s": 1291.29,
+        "rss_kb": 3219452,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 60755,
+        "involuntary_cs": 47845
+      },
+      {
+        "t_s": 1301.3,
+        "rss_kb": 3869684,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 61015,
+        "involuntary_cs": 48222
+      },
+      {
+        "t_s": 1311.31,
+        "rss_kb": 3219776,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 61295,
+        "involuntary_cs": 48597
+      },
+      {
+        "t_s": 1321.32,
+        "rss_kb": 3869232,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 61581,
+        "involuntary_cs": 49006
+      },
+      {
+        "t_s": 1331.33,
+        "rss_kb": 3869572,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 61845,
+        "involuntary_cs": 49404
+      },
+      {
+        "t_s": 1341.34,
+        "rss_kb": 3869456,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 62335,
+        "involuntary_cs": 49843
+      },
+      {
+        "t_s": 1351.35,
+        "rss_kb": 3219220,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 62995,
+        "involuntary_cs": 50256
+      },
+      {
+        "t_s": 1361.36,
+        "rss_kb": 3219644,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 63325,
+        "involuntary_cs": 50638
+      },
+      {
+        "t_s": 1371.37,
+        "rss_kb": 3869320,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 63542,
+        "involuntary_cs": 50990
+      },
+      {
+        "t_s": 1381.38,
+        "rss_kb": 3219400,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 63916,
+        "involuntary_cs": 51366
+      },
+      {
+        "t_s": 1391.39,
+        "rss_kb": 3219100,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 64498,
+        "involuntary_cs": 51790
+      },
+      {
+        "t_s": 1401.4,
+        "rss_kb": 3219636,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 64542,
+        "involuntary_cs": 52173
+      },
+      {
+        "t_s": 1411.41,
+        "rss_kb": 3219432,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 65022,
+        "involuntary_cs": 52572
+      },
+      {
+        "t_s": 1421.42,
+        "rss_kb": 3219736,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 65432,
+        "involuntary_cs": 52985
+      },
+      {
+        "t_s": 1431.43,
+        "rss_kb": 3219536,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 65811,
+        "involuntary_cs": 53358
+      },
+      {
+        "t_s": 1441.44,
+        "rss_kb": 3219500,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 66451,
+        "involuntary_cs": 53710
+      },
+      {
+        "t_s": 1451.45,
+        "rss_kb": 3869204,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 66492,
+        "involuntary_cs": 54136
+      },
+      {
+        "t_s": 1461.46,
+        "rss_kb": 3869172,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 66939,
+        "involuntary_cs": 54608
+      },
+      {
+        "t_s": 1471.47,
+        "rss_kb": 3869336,
+        "peak_kb": 4481176,
+        "vms_kb": 4595904,
+        "threads_now": 4,
+        "voluntary_cs": 67204,
+        "involuntary_cs": 54976
+      },
+      {
+        "t_s": 1481.48,
+        "rss_kb": 3219408,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 67700,
+        "involuntary_cs": 55346
+      },
+      {
+        "t_s": 1491.49,
+        "rss_kb": 3219524,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 68204,
+        "involuntary_cs": 55732
+      },
+      {
+        "t_s": 1501.5,
+        "rss_kb": 3219620,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 68473,
+        "involuntary_cs": 56100
+      },
+      {
+        "t_s": 1511.51,
+        "rss_kb": 3219280,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 68752,
+        "involuntary_cs": 56462
+      },
+      {
+        "t_s": 1521.52,
+        "rss_kb": 3219340,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 69014,
+        "involuntary_cs": 56829
+      },
+      {
+        "t_s": 1531.53,
+        "rss_kb": 3015644,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 69348,
+        "involuntary_cs": 57142
+      },
+      {
+        "t_s": 1541.54,
+        "rss_kb": 941988,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 69749,
+        "involuntary_cs": 57541
+      },
+      {
+        "t_s": 1551.55,
+        "rss_kb": 3219220,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 70231,
+        "involuntary_cs": 57989
+      },
+      {
+        "t_s": 1561.56,
+        "rss_kb": 3219220,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 70264,
+        "involuntary_cs": 58344
+      },
+      {
+        "t_s": 1571.57,
+        "rss_kb": 3219592,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 70768,
+        "involuntary_cs": 58712
+      },
+      {
+        "t_s": 1581.58,
+        "rss_kb": 3219468,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 71045,
+        "involuntary_cs": 59233
+      },
+      {
+        "t_s": 1591.59,
+        "rss_kb": 3219280,
+        "peak_kb": 4481176,
+        "vms_kb": 3600500,
+        "threads_now": 4,
+        "voluntary_cs": 71328,
+        "involuntary_cs": 59588
+      },
+      {
+        "t_s": 1601.6,
+        "rss_kb": 3241156,
+        "peak_kb": 4481176,
+        "vms_kb": 3672192,
+        "threads_now": 4,
+        "voluntary_cs": 71860,
+        "involuntary_cs": 59966
+      },
+      {
+        "t_s": 1611.61,
+        "rss_kb": 3241540,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73118,
+        "involuntary_cs": 60390
+      },
+      {
+        "t_s": 1621.62,
+        "rss_kb": 3222316,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 73129,
+        "involuntary_cs": 60730
+      },
+      {
+        "t_s": 1631.63,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73139,
+        "involuntary_cs": 61105
+      },
+      {
+        "t_s": 1641.64,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73151,
+        "involuntary_cs": 61504
+      },
+      {
+        "t_s": 1651.65,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73161,
+        "involuntary_cs": 61919
+      },
+      {
+        "t_s": 1661.66,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 73173,
+        "involuntary_cs": 62266
+      },
+      {
+        "t_s": 1671.67,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73184,
+        "involuntary_cs": 62514
+      },
+      {
+        "t_s": 1681.68,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73195,
+        "involuntary_cs": 62769
+      },
+      {
+        "t_s": 1691.69,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 73207,
+        "involuntary_cs": 63005
+      },
+      {
+        "t_s": 1701.7,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73217,
+        "involuntary_cs": 63312
+      },
+      {
+        "t_s": 1711.71,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 73229,
+        "involuntary_cs": 63660
+      },
+      {
+        "t_s": 1721.72,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73240,
+        "involuntary_cs": 63962
+      },
+      {
+        "t_s": 1731.73,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73252,
+        "involuntary_cs": 64319
+      },
+      {
+        "t_s": 1741.74,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73264,
+        "involuntary_cs": 64735
+      },
+      {
+        "t_s": 1751.75,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73275,
+        "involuntary_cs": 65117
+      },
+      {
+        "t_s": 1761.76,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73286,
+        "involuntary_cs": 65493
+      },
+      {
+        "t_s": 1771.77,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 73298,
+        "involuntary_cs": 65910
+      },
+      {
+        "t_s": 1781.78,
+        "rss_kb": 3241588,
+        "peak_kb": 4481176,
+        "vms_kb": 3660744,
+        "threads_now": 4,
+        "voluntary_cs": 73308,
+        "involuntary_cs": 66313
+      },
+      {
+        "t_s": 1791.79,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 74108,
+        "involuntary_cs": 66645
+      },
+      {
+        "t_s": 1801.8,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 75304,
+        "involuntary_cs": 67002
+      },
+      {
+        "t_s": 1811.81,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 76474,
+        "involuntary_cs": 67380
+      },
+      {
+        "t_s": 1821.82,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 77663,
+        "involuntary_cs": 67850
+      },
+      {
+        "t_s": 1831.83,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 78841,
+        "involuntary_cs": 68232
+      },
+      {
+        "t_s": 1841.84,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 80039,
+        "involuntary_cs": 68638
+      },
+      {
+        "t_s": 1851.85,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 81183,
+        "involuntary_cs": 69018
+      },
+      {
+        "t_s": 1861.86,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 82316,
+        "involuntary_cs": 69382
+      },
+      {
+        "t_s": 1871.87,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 83565,
+        "involuntary_cs": 69781
+      },
+      {
+        "t_s": 1881.88,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 84775,
+        "involuntary_cs": 70127
+      },
+      {
+        "t_s": 1891.89,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 85997,
+        "involuntary_cs": 70495
+      },
+      {
+        "t_s": 1901.9,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 87213,
+        "involuntary_cs": 70933
+      },
+      {
+        "t_s": 1911.91,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 88355,
+        "involuntary_cs": 71324
+      },
+      {
+        "t_s": 1921.92,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 89501,
+        "involuntary_cs": 71663
+      },
+      {
+        "t_s": 1931.93,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 90688,
+        "involuntary_cs": 72047
+      },
+      {
+        "t_s": 1941.94,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 91887,
+        "involuntary_cs": 72513
+      },
+      {
+        "t_s": 1951.95,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 93080,
+        "involuntary_cs": 72913
+      },
+      {
+        "t_s": 1961.96,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 94355,
+        "involuntary_cs": 73314
+      },
+      {
+        "t_s": 1971.97,
+        "rss_kb": 3222320,
+        "peak_kb": 4481176,
+        "vms_kb": 3641296,
+        "threads_now": 4,
+        "voluntary_cs": 95638,
+        "involuntary_cs": 73679
+      },
+      {
+        "t_s": 1981.98,
+        "rss_kb": 3891276,
+        "peak_kb": 4481176,
+        "vms_kb": 4656008,
+        "threads_now": 4,
+        "voluntary_cs": 96058,
+        "involuntary_cs": 74000
+      },
+      {
+        "t_s": 1991.99,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 96301,
+        "involuntary_cs": 74343
+      },
+      {
+        "t_s": 2002.0,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 96767,
+        "involuntary_cs": 74765
+      },
+      {
+        "t_s": 2012.01,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 97470,
+        "involuntary_cs": 75153
+      },
+      {
+        "t_s": 2022.02,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 98627,
+        "involuntary_cs": 75461
+      },
+      {
+        "t_s": 2032.03,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 99105,
+        "involuntary_cs": 75748
+      },
+      {
+        "t_s": 2042.04,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 99239,
+        "involuntary_cs": 75954
+      },
+      {
+        "t_s": 2052.05,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 99755,
+        "involuntary_cs": 76179
+      },
+      {
+        "t_s": 2062.06,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 100359,
+        "involuntary_cs": 76526
+      },
+      {
+        "t_s": 2072.07,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 101065,
+        "involuntary_cs": 76811
+      },
+      {
+        "t_s": 2082.08,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 101657,
+        "involuntary_cs": 77114
+      },
+      {
+        "t_s": 2092.09,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 101746,
+        "involuntary_cs": 77485
+      },
+      {
+        "t_s": 2102.1,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 102743,
+        "involuntary_cs": 77905
+      },
+      {
+        "t_s": 2112.11,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 103159,
+        "involuntary_cs": 78281
+      },
+      {
+        "t_s": 2122.12,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 104045,
+        "involuntary_cs": 78644
+      },
+      {
+        "t_s": 2132.13,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 105308,
+        "involuntary_cs": 79057
+      },
+      {
+        "t_s": 2142.14,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 105797,
+        "involuntary_cs": 79356
+      },
+      {
+        "t_s": 2152.15,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 106068,
+        "involuntary_cs": 79589
+      },
+      {
+        "t_s": 2162.16,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 106463,
+        "involuntary_cs": 79887
+      },
+      {
+        "t_s": 2172.17,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 107364,
+        "involuntary_cs": 80102
+      },
+      {
+        "t_s": 2182.18,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 107617,
+        "involuntary_cs": 80403
+      },
+      {
+        "t_s": 2192.19,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 107855,
+        "involuntary_cs": 80746
+      },
+      {
+        "t_s": 2202.2,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 109241,
+        "involuntary_cs": 81068
+      },
+      {
+        "t_s": 2212.21,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 109384,
+        "involuntary_cs": 81448
+      },
+      {
+        "t_s": 2222.22,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 109536,
+        "involuntary_cs": 81816
+      },
+      {
+        "t_s": 2232.23,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 110660,
+        "involuntary_cs": 82202
+      },
+      {
+        "t_s": 2242.24,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 111129,
+        "involuntary_cs": 82530
+      },
+      {
+        "t_s": 2252.25,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 111336,
+        "involuntary_cs": 82855
+      },
+      {
+        "t_s": 2262.26,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 111630,
+        "involuntary_cs": 83213
+      },
+      {
+        "t_s": 2272.27,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 111832,
+        "involuntary_cs": 83500
+      },
+      {
+        "t_s": 2282.28,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 113225,
+        "involuntary_cs": 83748
+      },
+      {
+        "t_s": 2292.29,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 114096,
+        "involuntary_cs": 84004
+      },
+      {
+        "t_s": 2302.3,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 114758,
+        "involuntary_cs": 84268
+      },
+      {
+        "t_s": 2312.31,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 115783,
+        "involuntary_cs": 84613
+      },
+      {
+        "t_s": 2322.32,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 117017,
+        "involuntary_cs": 84880
+      },
+      {
+        "t_s": 2332.33,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 117393,
+        "involuntary_cs": 85236
+      },
+      {
+        "t_s": 2342.34,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 117695,
+        "involuntary_cs": 85616
+      },
+      {
+        "t_s": 2352.35,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 117773,
+        "involuntary_cs": 85983
+      },
+      {
+        "t_s": 2362.36,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 118044,
+        "involuntary_cs": 86404
+      },
+      {
+        "t_s": 2372.37,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 118311,
+        "involuntary_cs": 86760
+      },
+      {
+        "t_s": 2382.38,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 118738,
+        "involuntary_cs": 87101
+      },
+      {
+        "t_s": 2392.39,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 119599,
+        "involuntary_cs": 87409
+      },
+      {
+        "t_s": 2402.4,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 119899,
+        "involuntary_cs": 87618
+      },
+      {
+        "t_s": 2412.41,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 120565,
+        "involuntary_cs": 87839
+      },
+      {
+        "t_s": 2422.42,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 120688,
+        "involuntary_cs": 88160
+      },
+      {
+        "t_s": 2432.43,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 121540,
+        "involuntary_cs": 88462
+      },
+      {
+        "t_s": 2442.44,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 121749,
+        "involuntary_cs": 88761
+      },
+      {
+        "t_s": 2452.45,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 121913,
+        "involuntary_cs": 89141
+      },
+      {
+        "t_s": 2462.46,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 122523,
+        "involuntary_cs": 89504
+      },
+      {
+        "t_s": 2472.47,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 122661,
+        "involuntary_cs": 89843
+      },
+      {
+        "t_s": 2482.48,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 123253,
+        "involuntary_cs": 90235
+      },
+      {
+        "t_s": 2492.49,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 123667,
+        "involuntary_cs": 90646
+      },
+      {
+        "t_s": 2502.5,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 124140,
+        "involuntary_cs": 91032
+      },
+      {
+        "t_s": 2512.51,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 124506,
+        "involuntary_cs": 91387
+      },
+      {
+        "t_s": 2522.52,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 124946,
+        "involuntary_cs": 91740
+      },
+      {
+        "t_s": 2532.53,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 125651,
+        "involuntary_cs": 92063
+      },
+      {
+        "t_s": 2542.54,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 126665,
+        "involuntary_cs": 92481
+      },
+      {
+        "t_s": 2552.55,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 127300,
+        "involuntary_cs": 92978
+      },
+      {
+        "t_s": 2562.56,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 127961,
+        "involuntary_cs": 93334
+      },
+      {
+        "t_s": 2572.57,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 129044,
+        "involuntary_cs": 93659
+      },
+      {
+        "t_s": 2582.58,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 129274,
+        "involuntary_cs": 94031
+      },
+      {
+        "t_s": 2592.59,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 130330,
+        "involuntary_cs": 94395
+      },
+      {
+        "t_s": 2602.6,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 130669,
+        "involuntary_cs": 94799
+      },
+      {
+        "t_s": 2612.61,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 130747,
+        "involuntary_cs": 95190
+      },
+      {
+        "t_s": 2622.62,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 131021,
+        "involuntary_cs": 95533
+      },
+      {
+        "t_s": 2632.63,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 131186,
+        "involuntary_cs": 95826
+      },
+      {
+        "t_s": 2642.64,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 132016,
+        "involuntary_cs": 96081
+      },
+      {
+        "t_s": 2652.65,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 132321,
+        "involuntary_cs": 96361
+      },
+      {
+        "t_s": 2662.66,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 133962,
+        "involuntary_cs": 96658
+      },
+      {
+        "t_s": 2672.67,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 134869,
+        "involuntary_cs": 97009
+      },
+      {
+        "t_s": 2682.68,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 136134,
+        "involuntary_cs": 97309
+      },
+      {
+        "t_s": 2692.69,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 136838,
+        "involuntary_cs": 97632
+      },
+      {
+        "t_s": 2702.7,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 137084,
+        "involuntary_cs": 98069
+      },
+      {
+        "t_s": 2712.71,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 137989,
+        "involuntary_cs": 98499
+      },
+      {
+        "t_s": 2722.72,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 138607,
+        "involuntary_cs": 98942
+      },
+      {
+        "t_s": 2732.73,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 138833,
+        "involuntary_cs": 99398
+      },
+      {
+        "t_s": 2742.74,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 139781,
+        "involuntary_cs": 99730
+      },
+      {
+        "t_s": 2752.75,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 140244,
+        "involuntary_cs": 100093
+      },
+      {
+        "t_s": 2762.76,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 140659,
+        "involuntary_cs": 100437
+      },
+      {
+        "t_s": 2772.77,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 141989,
+        "involuntary_cs": 100697
+      },
+      {
+        "t_s": 2782.78,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 142497,
+        "involuntary_cs": 100990
+      },
+      {
+        "t_s": 2792.79,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 143714,
+        "involuntary_cs": 101311
+      },
+      {
+        "t_s": 2802.8,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 144165,
+        "involuntary_cs": 101678
+      },
+      {
+        "t_s": 2812.81,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 144227,
+        "involuntary_cs": 102187
+      },
+      {
+        "t_s": 2822.82,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 144974,
+        "involuntary_cs": 102697
+      },
+      {
+        "t_s": 2832.83,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 145238,
+        "involuntary_cs": 103208
+      },
+      {
+        "t_s": 2842.84,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 145818,
+        "involuntary_cs": 103645
+      },
+      {
+        "t_s": 2852.85,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 145997,
+        "involuntary_cs": 104045
+      },
+      {
+        "t_s": 2862.86,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 146137,
+        "involuntary_cs": 104431
+      },
+      {
+        "t_s": 2872.87,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 146466,
+        "involuntary_cs": 104754
+      },
+      {
+        "t_s": 2882.88,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 146785,
+        "involuntary_cs": 105027
+      },
+      {
+        "t_s": 2892.89,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 147229,
+        "involuntary_cs": 105271
+      },
+      {
+        "t_s": 2902.9,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 148076,
+        "involuntary_cs": 105560
+      },
+      {
+        "t_s": 2912.91,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 148800,
+        "involuntary_cs": 105850
+      },
+      {
+        "t_s": 2922.92,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 149720,
+        "involuntary_cs": 106225
+      },
+      {
+        "t_s": 2932.93,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 149847,
+        "involuntary_cs": 106669
+      },
+      {
+        "t_s": 2942.94,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 150289,
+        "involuntary_cs": 107049
+      },
+      {
+        "t_s": 2952.95,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 150390,
+        "involuntary_cs": 107399
+      },
+      {
+        "t_s": 2962.96,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 150521,
+        "involuntary_cs": 107845
+      },
+      {
+        "t_s": 2972.97,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 151876,
+        "involuntary_cs": 108212
+      },
+      {
+        "t_s": 2982.98,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 152276,
+        "involuntary_cs": 108558
+      },
+      {
+        "t_s": 2992.99,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 153044,
+        "involuntary_cs": 108801
+      },
+      {
+        "t_s": 3003.0,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 154542,
+        "involuntary_cs": 109092
+      },
+      {
+        "t_s": 3013.01,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 155685,
+        "involuntary_cs": 109320
+      },
+      {
+        "t_s": 3023.02,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 156896,
+        "involuntary_cs": 109567
+      },
+      {
+        "t_s": 3033.03,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 158042,
+        "involuntary_cs": 109851
+      },
+      {
+        "t_s": 3043.04,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 158825,
+        "involuntary_cs": 110231
+      },
+      {
+        "t_s": 3053.05,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 159023,
+        "involuntary_cs": 110591
+      },
+      {
+        "t_s": 3063.06,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 159547,
+        "involuntary_cs": 110965
+      },
+      {
+        "t_s": 3073.07,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 160024,
+        "involuntary_cs": 111326
+      },
+      {
+        "t_s": 3083.08,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 160235,
+        "involuntary_cs": 111716
+      },
+      {
+        "t_s": 3093.09,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 160862,
+        "involuntary_cs": 112122
+      },
+      {
+        "t_s": 3103.1,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 161174,
+        "involuntary_cs": 112524
+      },
+      {
+        "t_s": 3113.11,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 161571,
+        "involuntary_cs": 112956
+      },
+      {
+        "t_s": 3123.12,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 161893,
+        "involuntary_cs": 113345
+      },
+      {
+        "t_s": 3133.13,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 162446,
+        "involuntary_cs": 113740
+      },
+      {
+        "t_s": 3143.14,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 163115,
+        "involuntary_cs": 114113
+      },
+      {
+        "t_s": 3153.15,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 163822,
+        "involuntary_cs": 114526
+      },
+      {
+        "t_s": 3163.16,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 165004,
+        "involuntary_cs": 115013
+      },
+      {
+        "t_s": 3173.17,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 166569,
+        "involuntary_cs": 115398
+      },
+      {
+        "t_s": 3183.18,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 166739,
+        "involuntary_cs": 115822
+      },
+      {
+        "t_s": 3193.19,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 167049,
+        "involuntary_cs": 116242
+      },
+      {
+        "t_s": 3203.2,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 167402,
+        "involuntary_cs": 116618
+      },
+      {
+        "t_s": 3213.21,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 167565,
+        "involuntary_cs": 116989
+      },
+      {
+        "t_s": 3223.22,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 168547,
+        "involuntary_cs": 117373
+      },
+      {
+        "t_s": 3233.23,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 169894,
+        "involuntary_cs": 117784
+      },
+      {
+        "t_s": 3243.24,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 170310,
+        "involuntary_cs": 118151
+      },
+      {
+        "t_s": 3253.25,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 170742,
+        "involuntary_cs": 118517
+      },
+      {
+        "t_s": 3263.26,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 170824,
+        "involuntary_cs": 118895
+      },
+      {
+        "t_s": 3273.27,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 171309,
+        "involuntary_cs": 119324
+      },
+      {
+        "t_s": 3283.28,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 172338,
+        "involuntary_cs": 119778
+      },
+      {
+        "t_s": 3293.29,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 172867,
+        "involuntary_cs": 120163
+      },
+      {
+        "t_s": 3303.3,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 173116,
+        "involuntary_cs": 120591
+      },
+      {
+        "t_s": 3313.31,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 173704,
+        "involuntary_cs": 120962
+      },
+      {
+        "t_s": 3323.32,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 174167,
+        "involuntary_cs": 121333
+      },
+      {
+        "t_s": 3333.33,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 174354,
+        "involuntary_cs": 121691
+      },
+      {
+        "t_s": 3343.34,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 174658,
+        "involuntary_cs": 122031
+      },
+      {
+        "t_s": 3353.35,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 175585,
+        "involuntary_cs": 122457
+      },
+      {
+        "t_s": 3363.36,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 175884,
+        "involuntary_cs": 122906
+      },
+      {
+        "t_s": 3373.37,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 176454,
+        "involuntary_cs": 123257
+      },
+      {
+        "t_s": 3383.38,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 177183,
+        "involuntary_cs": 123648
+      },
+      {
+        "t_s": 3393.39,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 178014,
+        "involuntary_cs": 124145
+      },
+      {
+        "t_s": 3403.4,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 178976,
+        "involuntary_cs": 124623
+      },
+      {
+        "t_s": 3413.41,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 179999,
+        "involuntary_cs": 124959
+      },
+      {
+        "t_s": 3423.42,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 180511,
+        "involuntary_cs": 125355
+      },
+      {
+        "t_s": 3433.43,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 181965,
+        "involuntary_cs": 125720
+      },
+      {
+        "t_s": 3443.44,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 182642,
+        "involuntary_cs": 126062
+      },
+      {
+        "t_s": 3453.45,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 182959,
+        "involuntary_cs": 126446
+      },
+      {
+        "t_s": 3463.46,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 184424,
+        "involuntary_cs": 126827
+      },
+      {
+        "t_s": 3473.47,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 184629,
+        "involuntary_cs": 127190
+      },
+      {
+        "t_s": 3483.48,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 185777,
+        "involuntary_cs": 127560
+      },
+      {
+        "t_s": 3493.49,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 186687,
+        "involuntary_cs": 127941
+      },
+      {
+        "t_s": 3503.5,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 187041,
+        "involuntary_cs": 128280
+      },
+      {
+        "t_s": 3513.51,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 187780,
+        "involuntary_cs": 128643
+      },
+      {
+        "t_s": 3523.52,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 188267,
+        "involuntary_cs": 129051
+      },
+      {
+        "t_s": 3533.53,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 188791,
+        "involuntary_cs": 129472
+      },
+      {
+        "t_s": 3543.54,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 189106,
+        "involuntary_cs": 129814
+      },
+      {
+        "t_s": 3553.55,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 189565,
+        "involuntary_cs": 130236
+      },
+      {
+        "t_s": 3563.56,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 190198,
+        "involuntary_cs": 130628
+      },
+      {
+        "t_s": 3573.57,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 190383,
+        "involuntary_cs": 130968
+      },
+      {
+        "t_s": 3583.58,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 190992,
+        "involuntary_cs": 131392
+      },
+      {
+        "t_s": 3593.59,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 191565,
+        "involuntary_cs": 131754
+      },
+      {
+        "t_s": 3603.6,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 191644,
+        "involuntary_cs": 132091
+      },
+      {
+        "t_s": 3613.61,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 192307,
+        "involuntary_cs": 132436
+      },
+      {
+        "t_s": 3623.62,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 192548,
+        "involuntary_cs": 132859
+      },
+      {
+        "t_s": 3633.63,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 193552,
+        "involuntary_cs": 133266
+      },
+      {
+        "t_s": 3643.64,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 193944,
+        "involuntary_cs": 133627
+      },
+      {
+        "t_s": 3653.65,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 194713,
+        "involuntary_cs": 134116
+      },
+      {
+        "t_s": 3663.66,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 194882,
+        "involuntary_cs": 134528
+      },
+      {
+        "t_s": 3673.67,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 196067,
+        "involuntary_cs": 134895
+      },
+      {
+        "t_s": 3683.68,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 196214,
+        "involuntary_cs": 135308
+      },
+      {
+        "t_s": 3693.69,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 196357,
+        "involuntary_cs": 135691
+      },
+      {
+        "t_s": 3703.7,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 197133,
+        "involuntary_cs": 136029
+      },
+      {
+        "t_s": 3713.71,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 197934,
+        "involuntary_cs": 136451
+      },
+      {
+        "t_s": 3723.72,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 199229,
+        "involuntary_cs": 136833
+      },
+      {
+        "t_s": 3733.73,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 199569,
+        "involuntary_cs": 137220
+      },
+      {
+        "t_s": 3743.74,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 200132,
+        "involuntary_cs": 137663
+      },
+      {
+        "t_s": 3753.75,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 200851,
+        "involuntary_cs": 138074
+      },
+      {
+        "t_s": 3763.76,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 202650,
+        "involuntary_cs": 138476
+      },
+      {
+        "t_s": 3773.77,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 203178,
+        "involuntary_cs": 138896
+      },
+      {
+        "t_s": 3783.78,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 203474,
+        "involuntary_cs": 139261
+      },
+      {
+        "t_s": 3793.79,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 203783,
+        "involuntary_cs": 139595
+      },
+      {
+        "t_s": 3803.8,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 203938,
+        "involuntary_cs": 139944
+      },
+      {
+        "t_s": 3813.81,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 205098,
+        "involuntary_cs": 140308
+      },
+      {
+        "t_s": 3823.82,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 205573,
+        "involuntary_cs": 140690
+      },
+      {
+        "t_s": 3833.83,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 205716,
+        "involuntary_cs": 141064
+      },
+      {
+        "t_s": 3843.84,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 206814,
+        "involuntary_cs": 141455
+      },
+      {
+        "t_s": 3853.85,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 207561,
+        "involuntary_cs": 141826
+      },
+      {
+        "t_s": 3863.86,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 208362,
+        "involuntary_cs": 142200
+      },
+      {
+        "t_s": 3873.87,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 209153,
+        "involuntary_cs": 142558
+      },
+      {
+        "t_s": 3883.88,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 209440,
+        "involuntary_cs": 142939
+      },
+      {
+        "t_s": 3893.89,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 210153,
+        "involuntary_cs": 143384
+      },
+      {
+        "t_s": 3903.9,
+        "rss_kb": 3241556,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 210406,
+        "involuntary_cs": 143824
+      },
+      {
+        "t_s": 3913.91,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 211890,
+        "involuntary_cs": 144202
+      },
+      {
+        "t_s": 3923.92,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 212518,
+        "involuntary_cs": 144599
+      },
+      {
+        "t_s": 3933.93,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 212638,
+        "involuntary_cs": 145015
+      },
+      {
+        "t_s": 3943.94,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 213094,
+        "involuntary_cs": 145424
+      },
+      {
+        "t_s": 3953.95,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 213297,
+        "involuntary_cs": 145783
+      },
+      {
+        "t_s": 3963.96,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 214286,
+        "involuntary_cs": 146164
+      },
+      {
+        "t_s": 3973.97,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 214442,
+        "involuntary_cs": 146507
+      },
+      {
+        "t_s": 3983.98,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 214685,
+        "involuntary_cs": 146899
+      },
+      {
+        "t_s": 3993.99,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 214972,
+        "involuntary_cs": 147342
+      },
+      {
+        "t_s": 4004.0,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 215062,
+        "involuntary_cs": 147717
+      },
+      {
+        "t_s": 4014.01,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 215601,
+        "involuntary_cs": 148160
+      },
+      {
+        "t_s": 4024.02,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 215685,
+        "involuntary_cs": 148507
+      },
+      {
+        "t_s": 4034.03,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 216207,
+        "involuntary_cs": 148879
+      },
+      {
+        "t_s": 4044.04,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 217782,
+        "involuntary_cs": 149203
+      },
+      {
+        "t_s": 4054.05,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 218054,
+        "involuntary_cs": 149544
+      },
+      {
+        "t_s": 4064.06,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 219101,
+        "involuntary_cs": 149911
+      },
+      {
+        "t_s": 4074.07,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 219541,
+        "involuntary_cs": 150272
+      },
+      {
+        "t_s": 4084.08,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 219717,
+        "involuntary_cs": 150702
+      },
+      {
+        "t_s": 4094.09,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 220437,
+        "involuntary_cs": 151119
+      },
+      {
+        "t_s": 4104.1,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 222037,
+        "involuntary_cs": 151525
+      },
+      {
+        "t_s": 4114.11,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 222150,
+        "involuntary_cs": 151968
+      },
+      {
+        "t_s": 4124.12,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 223106,
+        "involuntary_cs": 152330
+      },
+      {
+        "t_s": 4134.13,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 224728,
+        "involuntary_cs": 152780
+      },
+      {
+        "t_s": 4144.14,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 225474,
+        "involuntary_cs": 153152
+      },
+      {
+        "t_s": 4154.15,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 226731,
+        "involuntary_cs": 153535
+      },
+      {
+        "t_s": 4164.16,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 226802,
+        "involuntary_cs": 153912
+      },
+      {
+        "t_s": 4174.17,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 227166,
+        "involuntary_cs": 154277
+      },
+      {
+        "t_s": 4184.18,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 227902,
+        "involuntary_cs": 154727
+      },
+      {
+        "t_s": 4194.19,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 228244,
+        "involuntary_cs": 155113
+      },
+      {
+        "t_s": 4204.2,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 229027,
+        "involuntary_cs": 155514
+      },
+      {
+        "t_s": 4214.21,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 229494,
+        "involuntary_cs": 155909
+      },
+      {
+        "t_s": 4224.22,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 229690,
+        "involuntary_cs": 156268
+      },
+      {
+        "t_s": 4234.23,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 230301,
+        "involuntary_cs": 156651
+      },
+      {
+        "t_s": 4244.24,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 231045,
+        "involuntary_cs": 157058
+      },
+      {
+        "t_s": 4254.25,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 231279,
+        "involuntary_cs": 157494
+      },
+      {
+        "t_s": 4264.26,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 231759,
+        "involuntary_cs": 157949
+      },
+      {
+        "t_s": 4274.27,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 232634,
+        "involuntary_cs": 158347
+      },
+      {
+        "t_s": 4284.28,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 233207,
+        "involuntary_cs": 158771
+      },
+      {
+        "t_s": 4294.29,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 233347,
+        "involuntary_cs": 159165
+      },
+      {
+        "t_s": 4304.3,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 233970,
+        "involuntary_cs": 159556
+      },
+      {
+        "t_s": 4314.31,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 234257,
+        "involuntary_cs": 159952
+      },
+      {
+        "t_s": 4324.32,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 235314,
+        "involuntary_cs": 160333
+      },
+      {
+        "t_s": 4334.33,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 236009,
+        "involuntary_cs": 160698
+      },
+      {
+        "t_s": 4344.34,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 237150,
+        "involuntary_cs": 161096
+      },
+      {
+        "t_s": 4354.35,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 238143,
+        "involuntary_cs": 161483
+      },
+      {
+        "t_s": 4364.36,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 239905,
+        "involuntary_cs": 161939
+      },
+      {
+        "t_s": 4374.37,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 240234,
+        "involuntary_cs": 162354
+      },
+      {
+        "t_s": 4384.38,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 241310,
+        "involuntary_cs": 162817
+      },
+      {
+        "t_s": 4394.39,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 241665,
+        "involuntary_cs": 163167
+      },
+      {
+        "t_s": 4404.4,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 241880,
+        "involuntary_cs": 163570
+      },
+      {
+        "t_s": 4414.41,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 242136,
+        "involuntary_cs": 163987
+      },
+      {
+        "t_s": 4424.42,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 243438,
+        "involuntary_cs": 164355
+      },
+      {
+        "t_s": 4434.43,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 244186,
+        "involuntary_cs": 164759
+      },
+      {
+        "t_s": 4444.44,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 244637,
+        "involuntary_cs": 165199
+      },
+      {
+        "t_s": 4454.45,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 244849,
+        "involuntary_cs": 165623
+      },
+      {
+        "t_s": 4464.46,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 244980,
+        "involuntary_cs": 166031
+      },
+      {
+        "t_s": 4474.47,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 245325,
+        "involuntary_cs": 166475
+      },
+      {
+        "t_s": 4484.48,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 245873,
+        "involuntary_cs": 166909
+      },
+      {
+        "t_s": 4494.49,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 246117,
+        "involuntary_cs": 167286
+      },
+      {
+        "t_s": 4504.5,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 247026,
+        "involuntary_cs": 167804
+      },
+      {
+        "t_s": 4514.51,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 247483,
+        "involuntary_cs": 168218
+      },
+      {
+        "t_s": 4524.52,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 248161,
+        "involuntary_cs": 168619
+      },
+      {
+        "t_s": 4534.53,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 250115,
+        "involuntary_cs": 169039
+      },
+      {
+        "t_s": 4544.54,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 251085,
+        "involuntary_cs": 169439
+      },
+      {
+        "t_s": 4554.55,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 251391,
+        "involuntary_cs": 169861
+      },
+      {
+        "t_s": 4564.56,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 252793,
+        "involuntary_cs": 170310
+      },
+      {
+        "t_s": 4574.57,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 253215,
+        "involuntary_cs": 170742
+      },
+      {
+        "t_s": 4584.58,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 254061,
+        "involuntary_cs": 171129
+      },
+      {
+        "t_s": 4594.59,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 255058,
+        "involuntary_cs": 171520
+      },
+      {
+        "t_s": 4604.6,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 255438,
+        "involuntary_cs": 171991
+      },
+      {
+        "t_s": 4614.61,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 256784,
+        "involuntary_cs": 172390
+      },
+      {
+        "t_s": 4624.62,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 257467,
+        "involuntary_cs": 172886
+      },
+      {
+        "t_s": 4634.63,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 258419,
+        "involuntary_cs": 173271
+      },
+      {
+        "t_s": 4644.64,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 258725,
+        "involuntary_cs": 173664
+      },
+      {
+        "t_s": 4654.65,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 259330,
+        "involuntary_cs": 174061
+      },
+      {
+        "t_s": 4664.66,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 259723,
+        "involuntary_cs": 174460
+      },
+      {
+        "t_s": 4674.67,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 259819,
+        "involuntary_cs": 174822
+      },
+      {
+        "t_s": 4684.68,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 260503,
+        "involuntary_cs": 175222
+      },
+      {
+        "t_s": 4694.69,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 261214,
+        "involuntary_cs": 175623
+      },
+      {
+        "t_s": 4704.7,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 261286,
+        "involuntary_cs": 176054
+      },
+      {
+        "t_s": 4714.71,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 261609,
+        "involuntary_cs": 176477
+      },
+      {
+        "t_s": 4724.72,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 262149,
+        "involuntary_cs": 176897
+      },
+      {
+        "t_s": 4734.73,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 262449,
+        "involuntary_cs": 177305
+      },
+      {
+        "t_s": 4744.74,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 263012,
+        "involuntary_cs": 177793
+      },
+      {
+        "t_s": 4754.75,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 263659,
+        "involuntary_cs": 178228
+      },
+      {
+        "t_s": 4764.76,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 264230,
+        "involuntary_cs": 178617
+      },
+      {
+        "t_s": 4774.77,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 264834,
+        "involuntary_cs": 179000
+      },
+      {
+        "t_s": 4784.78,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 265549,
+        "involuntary_cs": 179419
+      },
+      {
+        "t_s": 4794.79,
+        "rss_kb": 3239196,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 266741,
+        "involuntary_cs": 179818
+      },
+      {
+        "t_s": 4804.8,
+        "rss_kb": 3239824,
+        "peak_kb": 4481176,
+        "vms_kb": 3660604,
+        "threads_now": 4,
+        "voluntary_cs": 266841,
+        "involuntary_cs": 180250
+      }
+    ],
+    "peak_rss_kb": 4481176,
+    "io": {
+      "rchar": 20056476,
+      "wchar": 2404843,
+      "syscr": 1387,
+      "syscw": 1345,
+      "read_bytes": 92508160,
+      "write_bytes": 2789376,
+      "cancelled_write_bytes": 405504
+    }
+  },
+  "dataset_info": {
+    "file": "xlarge_mf.fa",
+    "file_size_bytes": 20002400,
+    "fasta_taxa": 200,
+    "fasta_sites": 100000,
+    "taxa": 200,
+    "sites": 100000,
+    "patterns": 98858,
+    "constant_sites": 468,
+    "invariant_sites": 468,
+    "informative_sites": 97924,
+    "sequence_type": "DNA"
+  },
+  "modelfinder": {
+    "best_model_bic": "GTR+R4",
+    "model_selected": "GTR+F+R4",
+    "log_likelihood": -10956936.6106,
+    "unconstrained_log_likelihood": -1147914.3716,
+    "tree_length": 41.6661,
+    "bic": 21918605.0335,
+    "aic": 21914695.2211,
+    "aicc": 21914698.6218,
+    "candidates": [
+      {
+        "model": "GTR+R4",
+        "log_likelihood": -10956932.34,
+        "aic": 21914680.68,
+        "aic_weight": 0.344,
+        "aicc": 21914684.031,
+        "aicc_weight": 0.344,
+        "bic": 21918561.954,
+        "bic_weight": 0.345
+      },
+      {
+        "model": "SYM+R4",
+        "log_likelihood": -10956932.39,
+        "aic": 21914680.78,
+        "aic_weight": 0.328,
+        "aicc": 21914684.131,
+        "aicc_weight": 0.328,
+        "bic": 21918562.054,
+        "bic_weight": 0.328
+      },
+      {
+        "model": "SYM+R4",
+        "log_likelihood": -10956932.39,
+        "aic": 21914680.78,
+        "aic_weight": 0.328,
+        "aicc": 21914684.131,
+        "aicc_weight": 0.328,
+        "bic": 21918562.054,
+        "bic_weight": 0.328
+      },
+      {
+        "model": "GTR+F+R4",
+        "log_likelihood": -10956936.61,
+        "aic": 21914695.22,
+        "aic_weight": 0.00024,
+        "aicc": 21914698.621,
+        "aicc_weight": 0.000234,
+        "bic": 21918605.032,
+        "bic_weight": 1.52e-10
+      },
+      {
+        "model": "TVM+R4",
+        "log_likelihood": -10958275.92,
+        "aic": 21917365.84,
+        "aic_weight": 0.0,
+        "aicc": 21917369.175,
+        "aicc_weight": 0.0,
+        "bic": 21921237.601,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TVMe+R4",
+        "log_likelihood": -10958275.96,
+        "aic": 21917365.92,
+        "aic_weight": 0.0,
+        "aicc": 21917369.255,
+        "aicc_weight": 0.0,
+        "bic": 21921237.681,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TVMe+R4",
+        "log_likelihood": -10958275.96,
+        "aic": 21917365.92,
+        "aic_weight": 0.0,
+        "aicc": 21917369.255,
+        "aicc_weight": 0.0,
+        "bic": 21921237.681,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TVM+F+R4",
+        "log_likelihood": -10958304.86,
+        "aic": 21917429.72,
+        "aic_weight": 0.0,
+        "aicc": 21917433.104,
+        "aicc_weight": 0.0,
+        "bic": 21921330.019,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TIM3e+R4",
+        "log_likelihood": -10959738.0,
+        "aic": 21920288.0,
+        "aic_weight": 0.0,
+        "aicc": 21920291.318,
+        "aicc_weight": 0.0,
+        "bic": 21924150.248,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TIM3+R4",
+        "log_likelihood": -10959738.0,
+        "aic": 21920288.0,
+        "aic_weight": 0.0,
+        "aicc": 21920291.318,
+        "aicc_weight": 0.0,
+        "bic": 21924150.248,
+        "bic_weight": 0.0
+      }
+    ]
+  }
+}
