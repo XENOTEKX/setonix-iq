@@ -45,15 +45,30 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 
 ## Critical & Pending Tasks
 
+> **Last audited: 2026-05-02.** 73 run files tracked (45 Setonix, 28 Gadi). See data quality notes below.
+
 ### 🔴 Harvest — blocking cross-platform analysis
 
 | Priority | Task | Blocker |
 |----------|------|---------|
 | ~~**CRITICAL**~~ | ~~Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/`~~ | ✅ **Done 2026-05-01** — full 1T–104T matrix harvested |
 | ~~**CRITICAL**~~ | ~~Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures~~ | ✅ **Done 2026-05-01** — wall=11077s, IPC=2.72, speedup baseline fixed |
-| ~~**HIGH**~~ | ~~Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104)~~ | ✅ **Submitted 2026-05-01** (follow-up #16) — PBS jobs **167520752–167520758**, sha256-gated against canonical `xlarge_mf.fa`. 1T/4T/8T harvested ✅; 16T/32T/64T/104T held on inode quota then released 2026-05-02. |
-| **HIGH** | Harvest remaining `xlarge_mf _sr_gcc_pin` jobs (16T/32T/64T/104T, PBS 167520755–167520758) once complete | Jobs released from hold 2026-05-02 after scratch inode cleanup |
-| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
+| ~~**HIGH**~~ | ~~Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104)~~ | ✅ **Submitted 2026-05-01** (follow-up #16) — PBS jobs **167520752–167520758**, sha256-gated against canonical `xlarge_mf.fa`. |
+| ~~**HIGH**~~ | ~~Harvest remaining `xlarge_mf _sr_gcc_pin` jobs (16T/32T/64T/104T, PBS 167520755–167520758) once complete~~ | ✅ **Partially done 2026-05-02** — 16T (PBS 167520755) and 32T (PBS 167520756) harvested. **64T and 104T still missing** — see data gap note below. |
+| ~~**HIGH**~~ | ~~Submit + harvest Setonix AOCC/libomp `xlarge_mf` sweep (follow-up #19)~~ | ✅ **Done 2026-05-02** — bootstrap **42225453** COMPLETED; matrix jobs **42225454–42225459** (8–128T) all COMPLETED and harvested. See 2026-05-02 entry. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T (PBS **167520757**) and 104T (PBS **167520758**) | Jobs were released from hold 2026-05-02 after inode cleanup — status on Gadi scratch unverified from Setonix |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | No canonical Gadi mega_dna sweep exists — only the earlier `sr_icx` reference runs (4 runs, 16T–104T). Cross-platform mega_dna comparison blocked. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Only SMT-on reference runs exist (4 runs: 16/32/64/128T, `baseline_smton`, slurm 41849110–41849113). No canonical SMT-off pinned Setonix mega_dna data. |
+
+### 🟠 Data quality issues (discovered 2026-05-02 audit)
+
+| Severity | File(s) | Issue |
+|----------|---------|-------|
+| **INFO** | `large_modelfinder_{1,4,8,16,32,64,104}t_smtoff_pin_baseline.json` (slurm 42179034–42179046) | **FAILED RUNS** — all 7 exited with `srun: fatal: SLURM_MEM_PER_CPU, SLURM_MEM_PER_GPU, and SLURM_MEM_PER_NODE are mutually exclusive`. No wall time, no IQ-TREE output, no hotspots, no modelfinder. Kept as `non_canonical=true` / `nc_label="smtoff_pin (prev)"` so they do not pollute the canonical series. Impact: none — superseded by canonical `Setonix_large_modelfinder_*T.json` runs (42190953–42190959). |
+| **LOW** | `Setonix_xlarge_mf_1T.json` (slurm 42181135) | `hotspots=0` — perf record was not run for the 1T canonical run (only `perf stat`). IPC and wall time are correct. |
+| **LOW** | `Gadi_xlarge_mf_{32,64,104}T.json`, `Gadi_mega_dna_{32,64,104}T.json`, `Gadi_large_modelfinder_64T_sr_icx.json` | `modelfinder=null` — these are the older `sr_icx` reference runs (PBS 167001081–167004590) where `perf record` was run but `.iqtree` log parsing didn't extract modelfinder candidates. All are `non_canonical=true` so not used as baseline. |
+| **LOW** | `gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` (PBS 167520752–167520756) | `build_tag=null`, `canonical` and `non_canonical` both unset. Normalize infers canonical correctly (no `non_canonical` flag → falls into the canonical series, baseline at T=1). Should be patched to set `build_tag="sr_gcc_pin"` explicitly. |
+| **OPEN** | `gadi_xlarge_mf_{64,104}t_sr_gcc_pin.json` | **FILES MISSING** — PBS jobs 167520757–167520758 either still pending on Gadi or completed but not yet transferred. The `sr_icx` reference covers those thread counts but the canonical `sr_gcc_pin` series is incomplete above 32T. |
 
 ### 🟠 Dashboard fixes — actively misleading metrics
 
@@ -65,6 +80,8 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | ~~**HIGH**~~ | ~~Add LLC/L3 events to Setonix `PERF_EVENTS`~~ | ✅ **Done 2026-05-01** (follow-up #15) — `l2_pf_miss_l2_hit_l3,l2_pf_miss_l2_l3` (core-level Zen3 L3 prefetcher proxy events) added. `amd_l3/*` uncore PMU is admin-locked under `perf_event_paranoid=2`, so demand-path L3 hit/miss is not directly measurable; the prefetcher path is the closest user-mode equivalent to Gadi's `LLC-load-misses`. |
 | ~~**HIGH**~~ | ~~Add `stalled-cycles-backend` to Gadi event list~~ | ✅ **Already present** — verified 2026-05-01, line 35 of `gadi-ci/run_profiling.sh`. Phantom to-do; removed. |
 | ~~**HIGH**~~ | ~~Re-run Setonix `large_modelfinder` matrix (7 runs, 1T–104T) — `perf stat` measured login-node srun wrapper (92ms task-clock) rather than compute-node iqtree3; `cycles:u = 0` because srun does negligible CPU work~~ | ✅ **Submitted 2026-05-01** (follow-up #14) — jobs **42190953–42190959**, fixed script synced to scratch (`perf stat` inside srun + `cycles:uk`). `xlarge_mf` already correct — no rerun needed. |
+| ~~**HIGH**~~ | ~~Fix double data points / zigzag lines in IPC and efficiency charts for Setonix `large_modelfinder`~~ | ✅ **Done 2026-05-02** — root cause: 7 harvested `large_modelfinder_*t_smtoff_pin_baseline` stubs had no `non_canonical` flag, landing in canonical series alongside `Setonix_large_modelfinder_*T` runs. Fixed by marking them `non_canonical=true` / `nc_label="smtoff_pin (prev)"`. |
+| **MEDIUM** | Add `build_tag="sr_gcc_pin"` explicitly to the 5 `gadi_xlarge_mf_*t_sr_gcc_pin.json` files | Currently `build_tag=null`; normalize infers canonical correctly but explicit tagging is cleaner for filtering |
 | **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
 | **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
 
@@ -73,6 +90,50 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+### 📊 Corpus snapshot (2026-05-02)
+
+| Platform | Dataset | Series | Threads covered | Status |
+|----------|---------|--------|-----------------|--------|
+| Setonix | `large_modelfinder.fa` | `smtoff_pin` (canonical) | 1, 4, 8, 16, 32, 64, 104 | ✅ Complete — slurm 42190953–42190959 |
+| Setonix | `large_modelfinder.fa` | `baseline_smton` (nc ref) | 1, 4, 8, 16, 32, 64 | ✅ Harvested (SMT-on, no pin) |
+| Setonix | `large_modelfinder.fa` | `smtoff_pin (prev)` (nc, failed) | 1, 4, 8, 16, 32, 64, 104 | ⚠ FAILED — srun mem conflict |
+| Setonix | `xlarge_mf.fa` | `smtoff_pin` (canonical) | 1, 4, 8, 16, 32, 64, 104, 128 | ✅ Complete — slurm 42181135–42181142 |
+| Setonix | `xlarge_mf.fa` | `baseline_smton` (nc ref) | 1, 4, 8, 16, 32, 64, 128 | ✅ Harvested (SMT-on, no pin) |
+| Setonix | `xlarge_mf.fa` | `clang_omp_pin` / AOCC (nc ref) | 8, 16, 32, 64, 104, 128 | ✅ Complete — slurm 42225454–42225459 |
+| Setonix | `mega_dna.fa` | `smtoff_pin` (canonical) | — | ❌ Missing — no canonical SMT-off sweep |
+| Setonix | `mega_dna.fa` | `baseline_smton` (nc ref) | 16, 32, 64, 128 | ✅ Harvested (SMT-on, no pin) |
+| Gadi | `large_modelfinder.fa` | `sr_gcc_pin` (canonical) | 1, 4, 8, 16, 32, 64, 104 | ✅ Complete — PBS 167507204–167507210 |
+| Gadi | `large_modelfinder.fa` | `sr_icx` (nc ref) | 1, 4, 8, 16, 32, 64 | ✅ Harvested (ICX+VTune) |
+| Gadi | `xlarge_mf.fa` | `sr_gcc_pin` (canonical) | 1, 4, 8, 16, 32 | ⚠ Incomplete — 64T/104T not yet harvested |
+| Gadi | `xlarge_mf.fa` | `sr_icx` (nc ref) | 1, 4, 8, 32, 64, 104 | ✅ Harvested (ICX+VTune) |
+| Gadi | `mega_dna.fa` | `sr_gcc_pin` (canonical) | — | ❌ Missing — no canonical Gadi mega sweep |
+| Gadi | `mega_dna.fa` | `sr_icx` (nc ref) | 16, 32, 64, 104 | ✅ Harvested (ICX+VTune) |
+
+---
+
+## 2026-05-02 — data audit + dashboard duplicate fix
+
+### Audit findings
+
+Full corpus audit across all 73 run files revealed:
+
+1. **7 `large_modelfinder_*t_smtoff_pin_baseline` runs (slurm 42179034–42179046) are failed jobs.** All exited with `srun: fatal: SLURM_MEM_PER_CPU, SLURM_MEM_PER_GPU, and SLURM_MEM_PER_NODE are mutually exclusive` — the `run_mega_profile.sh` script at the time had conflicting `--mem-per-cpu` and `--mem` SBATCH directives. No IQ-TREE process launched; profile dirs contain only `env.json`, `perf_stat.txt` (from the perf stat wrapper on the failed srun), and `profile_meta.json`. These are superseded by the canonical `Setonix_large_modelfinder_*T.json` runs (slurm 42190953–42190959). Marked `non_canonical=true` / `nc_label="smtoff_pin (prev)"`.
+
+2. **Double data points in IPC and Parallel Efficiency charts.** The harvester's `discover_new_profile_runs()` creates stubs named `<label>_baseline.json` and checks for existing stubs by filename only. Older runs already tracked under the `Setonix_*/Gadi_*` naming scheme (set by a prior normalize pass) were not detected as duplicates, so new stubs were created alongside them. Fix: the 7 failed smtoff_pin stubs above were the direct cause — they had `non_canonical` unset, landing in the canonical series alongside the `Setonix_large_modelfinder_*T` runs at identical thread counts. After marking them non_canonical the charts render cleanly.
+
+3. **25 stale duplicate stubs** (zero-data copies of already-tracked runs) were deleted during the AOCC harvest session.
+
+4. **Gadi `xlarge_mf` canonical series incomplete above 32T.** PBS jobs 167520757 (64T) and 167520758 (104T) were released from hold 2026-05-02 after inode cleanup but their status on Gadi scratch is not yet verified from Setonix. The `sr_icx` reference series covers these thread counts but `sr_gcc_pin` canonical remains incomplete.
+
+5. **No canonical mega_dna sweep on either platform.** Only SMT-on reference runs (Setonix, 4 runs) and ICX+VTune reference runs (Gadi, 4 runs) exist. The mega_dna thread-scaling chart is currently reference-only.
+
+6. **5 `gadi_xlarge_mf_*t_sr_gcc_pin.json` files missing `build_tag`.** Normalize infers canonical correctly but `build_tag=null` is inconsistent with all other canonical series.
+
+### Changes committed
+
+- `fix(data): label Setonix clang_omp_pin xlarge_mf runs as AOCC in chart legend` (e1618d9)
+- `fix(data): mark superseded large_modelfinder smtoff_pin runs as non_canonical` (62918d5)
 
 ---
 
@@ -101,16 +162,29 @@ Bootstrap job **42225453** (SLURM, Setonix `work` partition, exclusive, 128 cpus
 
 The bootstrap now hard-fails with a clear message if either path cannot be resolved to an existing directory — no silent fallback to broken hardcoded paths.
 
-### Pending
+### Outcome ✅
 
-- Monitor `squeue -u $USER`; bootstrap expected ~30–45 min, matrix jobs ~1–4 h per thread count.
-- Once all six matrix jobs complete, harvest with:
-  ```
-  python3 tools/harvest_scratch.py \
-    /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/xlarge_mf_*_clang_omp_pin_*
-  ```
-  Runs will auto-tag as `build_tag=clang_omp_pin`, `non_canonical=true`, `omp_runtime=libomp`.
-- Update pending task table below once harvested.
+All 6 matrix jobs completed successfully (exit 0:0). Harvest, validation, and dashboard rebuild completed 2026-05-02:
+
+```
+PROFILE_ROOT=/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles \
+python3.11 tools/harvest_scratch.py
+# → 6 xlarge_mf clang_omp_pin runs enriched
+# → non_canonical_label set to "AOCC" via subsequent patch
+python3.11 tools/normalize.py && python3.11 tools/build.py
+# → 73 runs, 2 profiles (v=20260502070346)
+```
+
+| Job | Threads | Wall time | IPC (8T proxy) |
+|-----|---------|-----------|----------------|
+| 42225454 | 8T | 3830.6s | — |
+| 42225455 | 16T | 2639.5s | — |
+| 42225456 | 32T | 1940.3s | — |
+| 42225457 | 64T | 1905.2s | — |
+| 42225458 | 104T | 2305.1s | — |
+| 42225459 | 128T | 2368.4s | — |
+
+Key finding: AOCC/libomp is **~2% faster than gcc/libgomp at 8T** but the thread-scaling regression above 32T is essentially identical — ruling out the OpenMP runtime as the primary cause of the Setonix cross-CCD performance cliff.
 
 ---
 
