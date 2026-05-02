@@ -3202,5 +3202,7 @@
         "bic_weight": 0.0
       }
     ]
-  }
+  },
+  "build_tag": "sr_gcc_pin",
+  "canonical": true
 }
