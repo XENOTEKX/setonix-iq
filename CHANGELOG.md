@@ -10,7 +10,8 @@
 |----------|------|---------|
 | ~~**CRITICAL**~~ | ~~Harvest remaining Gadi `large_modelfinder _sr_gcc_pin` runs (PBS jobs **167507204, 167507207–167507210**) once complete → commit JSON to `logs/runs/`~~ | ✅ **Done 2026-05-01** — full 1T–104T matrix harvested |
 | ~~**CRITICAL**~~ | ~~Harvest `Setonix_xlarge_mf_1T` (SLURM job **42181135**, nid001938) → rebuild so canonical 1T baseline replaces archived SMT-on proxy in speedup figures~~ | ✅ **Done 2026-05-01** — wall=11077s, IPC=2.72, speedup baseline fixed |
-| ~~**HIGH**~~ | ~~Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104)~~ | ✅ **Submitted 2026-05-01** (follow-up #16) — PBS jobs **167520752–167520758**, sha256-gated against canonical `xlarge_mf.fa` |
+| ~~**HIGH**~~ | ~~Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104)~~ | ✅ **Submitted 2026-05-01** (follow-up #16) — PBS jobs **167520752–167520758**, sha256-gated against canonical `xlarge_mf.fa`. 1T/4T/8T harvested ✅; 16T/32T/64T/104T held on inode quota then released 2026-05-02. |
+| **HIGH** | Harvest remaining `xlarge_mf _sr_gcc_pin` jobs (16T/32T/64T/104T, PBS 167520755–167520758) once complete | Jobs released from hold 2026-05-02 after scratch inode cleanup |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Complete cross-platform corpus |
 
 ### 🟠 Dashboard fixes — actively misleading metrics
@@ -31,6 +32,44 @@
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-02 — scratch inode cleanup: delete raw VTune collection dirs to unblock held PBS jobs
+
+### Problem
+
+After the `large_modelfinder _sr_gcc_pin` matrix (PBS 167507204–167507210) and the first three `xlarge_mf _sr_gcc_pin` jobs (PBS 167520752–167520754) completed, the scratch inode usage for project `rc29` exceeded the 202 K limit (Lustre reported **206,518 inodes**). PBS automatically placed an operator hold (`Hold_Types = o`) on the four remaining `xlarge_mf` jobs (167520755–167520758), preventing them from running.
+
+The culprit was VTune's raw collection directory (`vtune_hotspots/`) inside each profile dir. On high thread counts, VTune writes tens of thousands of small binary sampling files into a `data.0/` subdirectory:
+
+| Profile dir | Inodes in `vtune_hotspots/` |
+|---|---:|
+| `large_modelfinder_104t_sr_gcc_pin_167507210` | 80,314 |
+| `large_modelfinder_64t_sr_gcc_pin_167507209` | 49,139 |
+| `large_modelfinder_32t_sr_gcc_pin_167507208` | 24,202 |
+| `xlarge_mf_8t_sr_gcc_pin_167520754` | 12,939 |
+| `large_modelfinder_16t_sr_gcc_pin_167507207` | 11,746 |
+| *(42 further dirs)* | ~19,900 |
+| **Total vtune_hotspots/ inodes** | **~198,240** |
+
+### Fix
+
+The VTune summary data that matters (`vtune_hotspots.tsv`, `vtune_hw_events.txt`, `vtune_summary.txt`) is written to the **top level** of each profile directory — outside `vtune_hotspots/` — and had already been harvested into the JSON run records. The raw `vtune_hotspots/` collection directories contain only internal VTune binary state (sampling ring buffers, SQLite databases, archive packs) and have no further analysis value once the summaries are extracted.
+
+All 47 `vtune_hotspots/` subdirectories were deleted:
+
+```
+find /scratch/rc29/as1708/iqtree3/gadi-ci/profiles \
+    -maxdepth 2 -name "vtune_hotspots" -type d -print0 \
+    | xargs -0 rm -rf
+```
+
+Lustre inode count after cleanup: **8,832** (was 206,518). The four held jobs were released with `qrls` and will re-enter the queue once NCI's operator-hold scanner detects the resolved quota.
+
+### Prevention
+
+Future pipeline runs should either (a) compress the VTune result dir to a tarball immediately after `vtune -report` extraction, or (b) skip `vtune_hotspots` collection at thread counts where perf-stat + perf-record already provides sufficient data (≤ 16T). The perf-record callgraph (Pass 3) covers hotspot identification for the remaining jobs.
 
 ---
 
