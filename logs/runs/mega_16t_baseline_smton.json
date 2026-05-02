@@ -15792,7 +15792,9 @@
       "cache-ref-mpki": 64.6200700306192,
       "cache_level": "L2",
       "l2-miss-rate": 7.6538,
-      "l2-miss-mpki": 4.945897999867469
+      "l2-miss-mpki": 4.945897999867469,
+      "frontend-stall-unit": "cycles",
+      "frontend-stall-max-pct": 100.0
     },
     "folded_stacks": [
       {

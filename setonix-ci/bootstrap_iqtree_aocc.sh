@@ -58,14 +58,78 @@ echo "╚═══════════════════════�
 # ── Module load: AOCC + cmake + Eigen + Boost ────────────────────────────────
 # AOCC 5.1.0 ships clang 17 with Zen 3/4-tuned codegen and libomp/libomptarget
 # (LLVM OpenMP runtime, same API surface as Intel libiomp5 on Gadi).
-# Eigen / Boost — same versions as the gcc bootstrap so the only delta is
-# the compiler + OpenMP runtime.
+#
+# Path resolution strategy for Eigen/Boost:
+#   Pawsey spack-manages eigen/boost under the gcc-native hierarchy. The module
+#   files set PAWSEY_EIGEN_HOME / PAWSEY_BOOST_HOME — but boost/1.86.0-c++14-python
+#   also requires spack python/py-numpy which is NOT pre-loaded on batch compute
+#   nodes, causing `module load boost` to silently fail (|| true) and leave the
+#   env vars unset.
+#
+#   Robust fix: use `module show` to read the spack path directly from the
+#   modulefile's whatis("Path :") entry — this works without loading the module
+#   (no dep chain needed). The path is stable for the 2025.08 software stack.
+#   We try env vars first (will work when the module does load), then fall back
+#   to the module-show parse.
+#
+# Two-phase compiler setup: load gcc-native first to expose the
+# gcc-hierarchy modulefiles, capture paths, then swap to AOCC.
+
+_module_show_path() {
+    # Extract the spack install prefix from `module show <mod>` by parsing the
+    # whatis("Path : /...") entry. Works without loading the module (no dep chain).
+    # The line format is: whatis("Path : /software/...")
+    module show "$1" 2>&1 | grep '"Path :' | sed 's/.*"Path : //; s/")//'
+}
+
+EIGEN3_INCLUDE_DIR=""
+BOOST_ROOT_PATH=""
 if command -v module >/dev/null 2>&1; then
-    module load aocc/5.1.0                2>/dev/null || true
+    module load gcc-native/14.2           2>/dev/null || true
     module load cmake/3.30.5              2>/dev/null || true
     module load eigen/3.4.0               2>/dev/null || true
     module load boost/1.86.0-c++14-python 2>/dev/null || true
+
+    # ── Capture Eigen path ───────────────────────────────────────────────
+    # Prefer env var (set when module loads); fall back to module-show parse.
+    _eigen_base="${PAWSEY_EIGEN_HOME:-${EIGEN_ROOT:-}}"
+    if [[ -z "${_eigen_base}" ]]; then
+        _eigen_base="$(_module_show_path eigen/3.4.0)"
+    fi
+    if [[ -n "${_eigen_base}" ]]; then
+        EIGEN3_INCLUDE_DIR="${_eigen_base}/include/eigen3"
+    fi
+
+    # ── Capture Boost path ───────────────────────────────────────────────
+    # boost/1.86.0-c++14-python needs spack python+py-numpy which are not
+    # pre-loaded on compute nodes → module load silently fails → env vars unset.
+    # module show always works (no dep chain executed at show time).
+    _boost_base="${PAWSEY_BOOST_HOME:-${BOOST_ROOT:-}}"
+    if [[ -z "${_boost_base}" ]]; then
+        _boost_base="$(_module_show_path boost/1.86.0-c++14-python)"
+    fi
+    if [[ -n "${_boost_base}" ]]; then
+        BOOST_ROOT_PATH="${_boost_base}"
+    fi
+
+    # Swap compiler hierarchy: drop gcc-native, load AOCC.
+    module unload gcc-native              2>/dev/null || true
+    module load aocc/5.1.0                2>/dev/null || true
 fi
+
+if [[ -z "${EIGEN3_INCLUDE_DIR}" || ! -d "${EIGEN3_INCLUDE_DIR}" ]]; then
+    echo "ERROR: Eigen include dir not resolved." >&2
+    echo "       Got EIGEN3_INCLUDE_DIR='${EIGEN3_INCLUDE_DIR}'" >&2
+    exit 2
+fi
+if [[ -z "${BOOST_ROOT_PATH}" || ! -d "${BOOST_ROOT_PATH}" ]]; then
+    echo "ERROR: Boost root not resolved." >&2
+    echo "       Got BOOST_ROOT_PATH='${BOOST_ROOT_PATH}'" >&2
+    exit 2
+fi
+BOOST_ROOT="${BOOST_ROOT_PATH}"
+echo "[bootstrap-aocc] EIGEN3_INCLUDE_DIR=${EIGEN3_INCLUDE_DIR}"
+echo "[bootstrap-aocc] BOOST_ROOT=${BOOST_ROOT}"
 
 if ! command -v clang >/dev/null 2>&1; then
     echo "ERROR: clang not on PATH after 'module load aocc/5.1.0'." >&2
@@ -75,12 +139,6 @@ fi
 CC="$(command -v clang)"
 CXX="$(command -v clang++)"
 echo "[bootstrap-aocc] using AOCC: $(${CC} --version | head -1)"
-
-# Eigen / Boost include paths (same defaults as the gcc bootstrap).
-EIGEN_BASE="${EIGEN_ROOT:-${PAWSEY_EIGEN_HOME:-}}"
-EIGEN3_INCLUDE_DIR="${EIGEN_BASE:+${EIGEN_BASE}/include/eigen3}"
-EIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR:-/software/setonix/2025.08/software/linux-sles15-zen3/gcc-14.2.0/eigen-3.4.0/include/eigen3}"
-BOOST_ROOT="${BOOST_ROOT:-${PAWSEY_BOOST_HOME:-/software/setonix/2025.08/software/linux-sles15-zen3/gcc-14.2.0/boost-1.86.0}}"
 
 mkdir -p "$(dirname "${SRC_DIR}")"
 

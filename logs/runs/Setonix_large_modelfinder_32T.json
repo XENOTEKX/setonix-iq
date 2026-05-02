@@ -185,7 +185,9 @@
       "cache-ref-mpki": 68.48410096388925,
       "cache_level": "L2",
       "l2-miss-rate": 6.1793,
-      "l2-miss-mpki": 4.231839788456676
+      "l2-miss-mpki": 4.231839788456676,
+      "frontend-stall-unit": "cycles",
+      "frontend-stall-max-pct": 100.0
     },
     "peak_rss_kb": 8192,
     "memory_timeseries": [

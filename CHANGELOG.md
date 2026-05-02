@@ -38,7 +38,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 
 ### Pending
 
-- Run `setonix-ci/bootstrap_iqtree_aocc.sh` on a Setonix compute node, then `setonix-ci/submit_clang_xlarge.sh`. Harvest with `tools/harvest_scratch.py` — runs will appear as `xlarge_mf_<T>t_clang_omp_pin_*` and the harvester will auto-tag them `non_canonical=true`.
+- ~~Run `setonix-ci/bootstrap_iqtree_aocc.sh` on a Setonix compute node, then `setonix-ci/submit_clang_xlarge.sh`.~~ ✅ **Submitted 2026-05-02** — bootstrap `42225453` running; matrix jobs `42225454–42225459` (8/16/32/64/104/128 T) queued with `afterok:42225453`. See 2026-05-02 entry above for details and harvest instructions.
 - Mirror on Gadi via `gadi-ci/bootstrap_iqtree_clang.sh` once a comparable submitter is wired up (low priority — the primary signal is the Setonix gcc-vs-Clang delta).
 
 ---
@@ -73,6 +73,44 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+
+---
+
+## 2026-05-02 — AOCC xlarge_mf sweep submitted (follow-up #19 execution)
+
+### Status: running
+
+Bootstrap job **42225453** (SLURM, Setonix `work` partition, exclusive, 128 cpus, 1 h) is currently **R** (running). Six dependent matrix jobs **42225454–42225459** are queued `PD` with `afterok:42225453`:
+
+| Job ID | Name | Threads |
+|--------|------|---------|
+| 42225454 | `iq-clang-xlarge_mf-8t` | 8 |
+| 42225455 | `iq-clang-xlarge_mf-16t` | 16 |
+| 42225456 | `iq-clang-xlarge_mf-32t` | 32 |
+| 42225457 | `iq-clang-xlarge_mf-64t` | 64 |
+| 42225458 | `iq-clang-xlarge_mf-104t` | 104 |
+| 42225459 | `iq-clang-xlarge_mf-128t` | 128 |
+
+### Bug fixed during pre-flight (bootstrap module load)
+
+**Root cause:** `boost/1.86.0-c++14-python` on Setonix has an undeclared runtime dependency on spack's `python/3.11.6` + `py-numpy/1.26.4`. These modules are never pre-loaded on batch compute nodes, so `module load boost/1.86.0-c++14-python` silently failed (`|| true`), leaving `PAWSEY_BOOST_HOME` and `BOOST_ROOT` unset. The bootstrap then exited with code 2 (`FAILED`), cancelling all six matrix jobs (first attempt: bootstrap `42225305`).
+
+**Fix (`setonix-ci/bootstrap_iqtree_aocc.sh`):** Added a `_module_show_path()` helper that reads the spack install prefix directly from `module show`'s `whatis("Path : ...")` entry — no loading, no dep chain needed. Resolution order for both libraries:
+1. `PAWSEY_EIGEN_HOME` / `PAWSEY_BOOST_HOME` env vars (populated if module load succeeds)
+2. `module show` parse of the whatis Path line (always works regardless of environment state)
+
+The bootstrap now hard-fails with a clear message if either path cannot be resolved to an existing directory — no silent fallback to broken hardcoded paths.
+
+### Pending
+
+- Monitor `squeue -u $USER`; bootstrap expected ~30–45 min, matrix jobs ~1–4 h per thread count.
+- Once all six matrix jobs complete, harvest with:
+  ```
+  python3 tools/harvest_scratch.py \
+    /scratch/pawsey1351/asamuel/iqtree3/setonix-ci/profiles/xlarge_mf_*_clang_omp_pin_*
+  ```
+  Runs will auto-tag as `build_tag=clang_omp_pin`, `non_canonical=true`, `omp_runtime=libomp`.
+- Update pending task table below once harvested.
 
 ---
 
