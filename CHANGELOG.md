@@ -69,6 +69,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | **LOW** | `Gadi_xlarge_mf_{32,64,104}T.json`, `Gadi_mega_dna_{32,64,104}T.json`, `Gadi_large_modelfinder_64T_sr_icx.json` | `modelfinder=null` — these are the older `sr_icx` reference runs (PBS 167001081–167004590) where `perf record` was run but `.iqtree` log parsing didn't extract modelfinder candidates. All are `non_canonical=true` so not used as baseline. |
 | ~~**LOW**~~ ✅ | ~~`gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` (PBS 167520752–167520756)~~ | **FIXED (59b09bf)** — patched `build_tag="sr_gcc_pin"` and `canonical=true` on all 5 files. Normalize was already treating them as canonical; fields were simply absent. |
 | **OPEN** | `gadi_xlarge_mf_{64,104}t_sr_gcc_pin.json` | **FILES MISSING** — PBS jobs 167520757–167520758 either still pending on Gadi or completed but not yet transferred. The `sr_icx` reference covers those thread counts but the canonical `sr_gcc_pin` series is incomplete above 32T. |
+| ~~**INFO**~~ ✅ | ~~`xlarge_mf_{8,16,32,64,104,128}t_clang_omp_pin_baseline.json` (slurm 42225454–42225459)~~ | **FIXED (933f305)** — `smt_active=False`, `hostname=""`, `cpu_count_logical=0`, and all `sh()`-derived fields were `""` / `0`. **Root cause:** `run_mega_profile.sh` env.json heredoc used bare `python3`, which on Setonix compute nodes resolves to system Python 3.6.15. `text=True` in `subprocess.check_output` was added in Python 3.7; all four `sh()` calls silently hit `TypeError: __init__() got an unexpected keyword argument 'text'`, caught and returning defaults. Identical failure in the sampler launch (line 423) and perf-folded pipe (line 485). GCC canonical runs (42181xxx) were unaffected — those ran in a session where the login-node `python3` symlink pointed to 3.11.14. **Actual SMT state during both series:** kernel SMT on; OMP threads pinned to physical cores via `#SBATCH --hint=nomultithread`. The GCC vs AOCC wall-time comparison is valid — both series had identical SMT configuration. Fixed by changing all four `python3` calls to `python3.11` in `setonix-ci/run_mega_profile.sh` (lines 132, 423, 485, 512). |
 
 ### 🟠 Dashboard fixes — actively misleading metrics
 
@@ -139,6 +140,9 @@ Full corpus audit across all 73 run files revealed:
 - `fix(data): delete 7 failed smtoff_pin stubs; tag gadi_xlarge gcc_pin build_tag+canonical` (59b09bf)
   - Deleted all 7 `large_modelfinder_*t_smtoff_pin_baseline.json` files (audit finding #1). Zero-data, charts already filtered them via `wall_s ≤ 0`, but they were polluting the index with a "smtoff_pin (prev)" series entry. Run count 73 → 66.
   - Patched `gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` with `build_tag="sr_gcc_pin"` and `canonical=true` (audit finding #6). Normalize was already treating them as canonical; fields were simply absent.
+- `fix(setonix-ci): use python3.11 for all heredoc/sampler calls in run_mega_profile.sh` (933f305)
+  - `python3` on Setonix compute nodes is 3.6.15 (system default), which predates `text=True` in `subprocess.check_output` (added Python 3.7). Every `sh()` call in the env.json heredoc silently raised `TypeError` and returned defaults, producing `smt_active=False`, `hostname=""`, `cpu_count_logical=0` for all AOCC runs (42225454–42225459). The sampler (`_sampler.py`, line 423) and perf-folded pipe (line 485) had the same issue.
+  - Fixed by replacing bare `python3` with `python3.11` on lines 132, 423, 485, and 512 of `setonix-ci/run_mega_profile.sh`. Scratch copy and repo copy both updated.
 
 ---
 
@@ -189,7 +193,9 @@ python3.11 tools/normalize.py && python3.11 tools/build.py
 | 42225458 | 104T | 2305.1s | — |
 | 42225459 | 128T | 2368.4s | — |
 
-Key finding: AOCC/libomp is **~2% faster than gcc/libgomp at 8T** but the thread-scaling regression above 32T is essentially identical — ruling out the OpenMP runtime as the primary cause of the Setonix cross-CCD performance cliff.
+**Note (2026-05-02 correction):** The key finding originally stated here was wrong — it was based on a data collection bug. See data quality entry for `xlarge_mf_*t_clang_omp_pin_baseline.json` above. The AOCC env.json files had `smt_active=False` and all-zero cpu fields because `run_mega_profile.sh` used `python3` (3.6.15), which lacks `text=True` in `subprocess.check_output`. Both series ran with identical `#SBATCH --hint=nomultithread` (OMP threads pinned to physical cores; kernel SMT on for both).
+
+**Corrected key finding:** AOCC/libomp and gcc/libgomp are within **0.6%** at 8T (3831s vs 3854s — single CCD, no cross-CCD communication). Above 16T AOCC is **26–67% faster** (e.g. 128T: AOCC 2368s vs gcc 7145s). The thread-scaling regression above 32T is *not* identical — libgomp collapses dramatically at cross-CCD scale while libomp does not. IPC collapse: gcc −97.9% from 1T→128T vs AOCC −44% from 8T→128T. Root cause is likely libgomp's aggressive spin policy at cross-CCD barriers vs libomp's `OMP_WAIT_POLICY=PASSIVE`. Confound: compiler (GCC 14.2 vs AOCC 5.1.0 / Clang 17) is entangled with OpenMP runtime. To isolate: rerun gcc with `GOMP_SPINCOUNT=0` or `OMP_WAIT_POLICY=PASSIVE`.
 
 **Math libraries: Neither MKL nor AOCL.** The AOCC build uses Eigen 3.4.0 (header-only; confirmed from `bootstrap_iqtree_aocc.sh` cmake invocation and `env.build_info` captured in every run JSON). No BLAS/LAPACK/MKL/AOCL linkage exists in any IQ-TREE build — Eigen's compile-time SIMD templates replace all external numerical dependencies. The gcc canonical Setonix build is identical in this respect.
 
