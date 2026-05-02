@@ -86,6 +86,19 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
 | **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
 
+### 🟡 SMT / HT platform clarification (confirmed 2026-05-02)
+
+**IQ-TREE uses OpenMP, not MPI.** All runs are `iqtree3 -T N` — N shared-memory OpenMP threads in a single process. "1 thread per core" refers to 1 OMP thread per physical core, not 1 MPI rank.
+
+| Platform | SMT/HT state | How confirmed | Practical effect |
+|----------|-------------|---------------|-----------------|
+| **Gadi (SPR)** | HT **off at BIOS level** — siblings never brought online by firmware | `smt/active=0`, `smt/control=on` on login node (control=on means kernel switch is enabled but has no siblings to toggle) | True 96-physical-core execution; full per-core resources, no sharing |
+| **Setonix (Zen3)** | Kernel SMT **on** (siblings present but idle) | `smt/active=1` in env.json for GCC runs; cannot be disabled without root | `--hint=nomultithread` + `OMP_PLACES=cores` + `OMP_PROC_BIND=close` + `--exclusive` pins 1 OMP thread per physical core; idle sibling is invisible to the running thread |
+
+**Why Setonix's idle-sibling SMT does not meaningfully affect results:** AMD Zen3 uses *dynamic* SMT resource allocation — when only one logical CPU per core is active, it receives the full ROB, register file, execution units, and L1/L2. Intel pre-ADL used *static* partitioning (each HT thread permanently gets ~half the ROB regardless of activity), which is why SMT-off matters more on Intel. On Zen3 with an idle sibling the active thread is functionally in the same state as kernel SMT-off. Any marginal cache/TLB noise from OS kernel threads on the idle sibling would slightly *understate* Setonix performance relative to a true SMT-off node, making the Setonix numbers conservative.
+
+**Conclusion:** The user-space pinning setup already eliminates SMT as a practical confound. The remaining real variables in the Setonix vs Gadi comparison are (1) CCD topology (AMD L3-per-CCD vs Intel flat mesh) and (2) OpenMP runtime (libgomp vs libiomp5/libomp). Disabling SMT at the kernel level on Setonix would require a Pawsey admin action and is not expected to shift results measurably on Zen3.
+
 ### 🟡 Source audit
 
 | Priority | Task | Detail |
