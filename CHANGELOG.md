@@ -90,6 +90,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | Priority | Task | Detail |
 |----------|------|--------|
 | **MEDIUM** | `grep -RIn 'hardware_concurrency'` audit of IQ-TREE 3.1.1 source | On Setonix cpuset includes SMT siblings → returns 2×T; internal pools sized from this would over-subscribe by 2× |
+| ~~**INFO**~~ ✅ | **Math library audit — all builds (AOCC, ICX/sr_icx, gcc canonical)** | **No Intel MKL or AMD AOCL used in any run.** IQ-TREE's numerical kernel goes entirely through **Eigen** (header-only SIMD template library; no external BLAS/LAPACK linkage). Confirmed via: (1) `CMakeCache.txt` on Gadi scratch lists only `EIGEN3_INCLUDE_DIR` + `BOOST_ROOT` — no `MKL_`, `BLAS_`, `LAPACK_`, or `AOCL_` cmake entries; (2) `ldd build-profiling/iqtree3` links `libgomp.so.1` only — no `libmkl_*`, `libblas*`, or `libamd*`; (3) `grep -iE 'mkl\|aocl\|blas\|lapack\|openblas'` over all four bootstrap scripts returns zero hits; (4) `env.build_info.arch_flags` in AOCC run JSONs is `-O3 -march=znver3 -fopenmp` — no math-lib link flags. The ICX `sr_icx` reference runs pre-date the `bootstrap_iqtree_clang.sh` script but use the same IQ-TREE CMakeLists, which has no `find_package(MKL)` or `find_package(BLAS)` call. **Eigen version per build**: Setonix (gcc canonical + AOCC) = 3.4.0; Gadi (gcc canonical + ICX ref) = 3.3.7 (only version available on Gadi). |
 
 ### 📊 Corpus snapshot (2026-05-02)
 
@@ -189,6 +190,8 @@ python3.11 tools/normalize.py && python3.11 tools/build.py
 | 42225459 | 128T | 2368.4s | — |
 
 Key finding: AOCC/libomp is **~2% faster than gcc/libgomp at 8T** but the thread-scaling regression above 32T is essentially identical — ruling out the OpenMP runtime as the primary cause of the Setonix cross-CCD performance cliff.
+
+**Math libraries: Neither MKL nor AOCL.** The AOCC build uses Eigen 3.4.0 (header-only; confirmed from `bootstrap_iqtree_aocc.sh` cmake invocation and `env.build_info` captured in every run JSON). No BLAS/LAPACK/MKL/AOCL linkage exists in any IQ-TREE build — Eigen's compile-time SIMD templates replace all external numerical dependencies. The gcc canonical Setonix build is identical in this respect.
 
 ---
 
