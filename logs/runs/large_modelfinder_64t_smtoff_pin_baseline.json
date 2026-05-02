@@ -94,5 +94,9 @@
     "fasta_sites": 50000,
     "sha256": "73908728537994a4ad43a3a8dfd8b7b736d2578fe0276a617e71848e15b01207",
     "path": "/scratch/pawsey1351/asamuel/iqtree3/benchmarks/large_modelfinder.fa"
-  }
+  },
+  "non_canonical": true,
+  "canonical": false,
+  "build_tag": "smtoff_pin",
+  "non_canonical_label": "smtoff_pin (prev)"
 }
