@@ -64,10 +64,10 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 
 | Severity | File(s) | Issue |
 |----------|---------|-------|
-| **INFO** | `large_modelfinder_{1,4,8,16,32,64,104}t_smtoff_pin_baseline.json` (slurm 42179034–42179046) | **FAILED RUNS** — all 7 exited with `srun: fatal: SLURM_MEM_PER_CPU, SLURM_MEM_PER_GPU, and SLURM_MEM_PER_NODE are mutually exclusive`. No wall time, no IQ-TREE output, no hotspots, no modelfinder. Kept as `non_canonical=true` / `nc_label="smtoff_pin (prev)"` so they do not pollute the canonical series. Impact: none — superseded by canonical `Setonix_large_modelfinder_*T.json` runs (42190953–42190959). |
-| **LOW** | `Setonix_xlarge_mf_1T.json` (slurm 42181135) | `hotspots=0` — perf record was not run for the 1T canonical run (only `perf stat`). IPC and wall time are correct. |
+| ~~**INFO**~~ ✅ | ~~`large_modelfinder_{1,4,8,16,32,64,104}t_smtoff_pin_baseline.json` (slurm 42179034–42179046)~~ | **FIXED (59b09bf)** — all 7 files **deleted**. FAILED RUNS: exited with `srun: fatal: SLURM_MEM_PER_CPU, SLURM_MEM_PER_GPU, and SLURM_MEM_PER_NODE are mutually exclusive`. No wall time, no IQ-TREE output. Were previously marked `non_canonical=true` / `nc_label="smtoff_pin (prev)"`. Run count 73 → 66. |
+| **LOW** | `Setonix_xlarge_mf_1T.json` (slurm 42181135) | `hotspots=0` — perf record was not run for the 1T canonical run (only `perf stat`). IPC and wall time are correct. By design — `run_mega_profile.sh` skips `perf record` at 1T. |
 | **LOW** | `Gadi_xlarge_mf_{32,64,104}T.json`, `Gadi_mega_dna_{32,64,104}T.json`, `Gadi_large_modelfinder_64T_sr_icx.json` | `modelfinder=null` — these are the older `sr_icx` reference runs (PBS 167001081–167004590) where `perf record` was run but `.iqtree` log parsing didn't extract modelfinder candidates. All are `non_canonical=true` so not used as baseline. |
-| **LOW** | `gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` (PBS 167520752–167520756) | `build_tag=null`, `canonical` and `non_canonical` both unset. Normalize infers canonical correctly (no `non_canonical` flag → falls into the canonical series, baseline at T=1). Should be patched to set `build_tag="sr_gcc_pin"` explicitly. |
+| ~~**LOW**~~ ✅ | ~~`gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` (PBS 167520752–167520756)~~ | **FIXED (59b09bf)** — patched `build_tag="sr_gcc_pin"` and `canonical=true` on all 5 files. Normalize was already treating them as canonical; fields were simply absent. |
 | **OPEN** | `gadi_xlarge_mf_{64,104}t_sr_gcc_pin.json` | **FILES MISSING** — PBS jobs 167520757–167520758 either still pending on Gadi or completed but not yet transferred. The `sr_icx` reference covers those thread counts but the canonical `sr_gcc_pin` series is incomplete above 32T. |
 
 ### 🟠 Dashboard fixes — actively misleading metrics
@@ -81,7 +81,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | ~~**HIGH**~~ | ~~Add `stalled-cycles-backend` to Gadi event list~~ | ✅ **Already present** — verified 2026-05-01, line 35 of `gadi-ci/run_profiling.sh`. Phantom to-do; removed. |
 | ~~**HIGH**~~ | ~~Re-run Setonix `large_modelfinder` matrix (7 runs, 1T–104T) — `perf stat` measured login-node srun wrapper (92ms task-clock) rather than compute-node iqtree3; `cycles:u = 0` because srun does negligible CPU work~~ | ✅ **Submitted 2026-05-01** (follow-up #14) — jobs **42190953–42190959**, fixed script synced to scratch (`perf stat` inside srun + `cycles:uk`). `xlarge_mf` already correct — no rerun needed. |
 | ~~**HIGH**~~ | ~~Fix double data points / zigzag lines in IPC and efficiency charts for Setonix `large_modelfinder`~~ | ✅ **Done 2026-05-02** — root cause: 7 harvested `large_modelfinder_*t_smtoff_pin_baseline` stubs had no `non_canonical` flag, landing in canonical series alongside `Setonix_large_modelfinder_*T` runs. Fixed by marking them `non_canonical=true` / `nc_label="smtoff_pin (prev)"`. |
-| **MEDIUM** | Add `build_tag="sr_gcc_pin"` explicitly to the 5 `gadi_xlarge_mf_*t_sr_gcc_pin.json` files | Currently `build_tag=null`; normalize infers canonical correctly but explicit tagging is cleaner for filtering |
+| ~~**MEDIUM**~~ ✅ | ~~Add `build_tag="sr_gcc_pin"` explicitly to the 5 `gadi_xlarge_mf_*t_sr_gcc_pin.json` files~~ | **Done (59b09bf)** — `build_tag="sr_gcc_pin"` and `canonical=true` patched on all 5 files. |
 | **MEDIUM** | Normalise IPC display: show `IPC / max_retire_width` as utilisation % alongside raw IPC | AMD max = 4, Intel SPR max = 6 — raw IPC not comparable cross-platform |
 | **MEDIUM** | Verify `stalled-cycles-frontend` semantics after canonical Gadi gcc runs complete | AMD counts cycles; Intel counts slots (up to 6/cycle on SPR) |
 
@@ -97,7 +97,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 |----------|---------|--------|-----------------|--------|
 | Setonix | `large_modelfinder.fa` | `smtoff_pin` (canonical) | 1, 4, 8, 16, 32, 64, 104 | ✅ Complete — slurm 42190953–42190959 |
 | Setonix | `large_modelfinder.fa` | `baseline_smton` (nc ref) | 1, 4, 8, 16, 32, 64 | ✅ Harvested (SMT-on, no pin) |
-| Setonix | `large_modelfinder.fa` | `smtoff_pin (prev)` (nc, failed) | 1, 4, 8, 16, 32, 64, 104 | ⚠ FAILED — srun mem conflict |
+| ~~Setonix~~ | ~~`large_modelfinder.fa`~~ | ~~`smtoff_pin (prev)` (nc, failed)~~ | ~~1, 4, 8, 16, 32, 64, 104~~ | ✅ **Deleted** (59b09bf) — 7 empty stubs removed |
 | Setonix | `xlarge_mf.fa` | `smtoff_pin` (canonical) | 1, 4, 8, 16, 32, 64, 104, 128 | ✅ Complete — slurm 42181135–42181142 |
 | Setonix | `xlarge_mf.fa` | `baseline_smton` (nc ref) | 1, 4, 8, 16, 32, 64, 128 | ✅ Harvested (SMT-on, no pin) |
 | Setonix | `xlarge_mf.fa` | `clang_omp_pin` / AOCC (nc ref) | 8, 16, 32, 64, 104, 128 | ✅ Complete — slurm 42225454–42225459 |
