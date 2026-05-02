@@ -134,6 +134,10 @@ Full corpus audit across all 73 run files revealed:
 
 - `fix(data): label Setonix clang_omp_pin xlarge_mf runs as AOCC in chart legend` (e1618d9)
 - `fix(data): mark superseded large_modelfinder smtoff_pin runs as non_canonical` (62918d5)
+- `docs(changelog): 2026-05-02 data audit — corpus status, data quality issues, AOCC outcome` (9dff149)
+- `fix(data): delete 7 failed smtoff_pin stubs; tag gadi_xlarge gcc_pin build_tag+canonical` (59b09bf)
+  - Deleted all 7 `large_modelfinder_*t_smtoff_pin_baseline.json` files (audit finding #1). Zero-data, charts already filtered them via `wall_s ≤ 0`, but they were polluting the index with a "smtoff_pin (prev)" series entry. Run count 73 → 66.
+  - Patched `gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` with `build_tag="sr_gcc_pin"` and `canonical=true` (audit finding #6). Normalize was already treating them as canonical; fields were simply absent.
 
 ---
 
