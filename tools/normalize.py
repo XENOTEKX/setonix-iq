@@ -210,7 +210,10 @@ def summarize_run(run: dict) -> dict:
         "pass": run["summary"]["pass"],
         "fail": run["summary"]["fail"],
         "all_pass": run["summary"]["all_pass"],
-        "IPC": metrics.get("IPC"),
+        # ipc_derived is the counter-ratio fallback (instructions/cycles).
+        # Used when the sampler-produced IPC field is null (e.g. GCC xlarge
+        # runs where python3.6/cycles:u bugs zeroed the sampler output).
+        "IPC": metrics.get("IPC") if metrics.get("IPC") is not None else p.get("ipc_derived"),
         "frontend_stall_rate": metrics.get("frontend-stall-rate"),
         "cache_miss_rate": metrics.get("cache-miss-rate"),
         # 2026-05-01 (follow-up #15): cross-platform memory-pressure metric.

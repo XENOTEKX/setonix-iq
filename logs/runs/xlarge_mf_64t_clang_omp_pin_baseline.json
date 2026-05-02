@@ -1942,7 +1942,8 @@
       "read_bytes": 1500160,
       "write_bytes": 0,
       "cancelled_write_bytes": 0
-    }
+    },
+    "ipc_derived": 0.6116
   },
   "summary": {
     "pass": 0,

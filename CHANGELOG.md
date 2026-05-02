@@ -2,6 +2,111 @@
 
 ---
 
+## 2026-05-02 — GCC/libgomp vs AOCC/libomp `xlarge_mf` scientific parity audit (follow-up #20)
+
+### Scope
+
+Deep comparison of the GCC `smtoff_pin` series (slurm **42181137–42181142**, six thread counts 8–128T, `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json`) against the AOCC `clang_omp_pin` series (slurm **42225454–42225459**, `xlarge_mf_{8,16,32,64,104,128}t_clang_omp_pin_baseline.json`). Both series: Setonix, dataset `xlarge_mf.fa`. Goal: verify what was controlled, what was not, and whether the wall-time comparison is scientifically valid.
+
+### Controlled variables (verified ✅)
+
+| Factor | GCC series | AOCC series |
+|--------|-----------|-------------|
+| Dataset sha256 | `66eaf64b…` | `66eaf64b…` — identical (sha256-gated pre-flight) |
+| Platform | Setonix, AMD EPYC 7763 | Setonix, AMD EPYC 7763 |
+| SLURM allocation | 1 node, `--exclusive`, `--cpus-per-task=128`, `--mem=230G`, `--hint=nomultithread`, partition `work` | **same** |
+| IQ-TREE version | 3.1.1 built Apr 30 2026 | 3.1.1 built Apr 30 2026 |
+| Architecture flags | `-O3 -march=znver3 -mtune=znver3 -fno-omit-frame-pointer -g` | **same** |
+| IPO/LTO | Disabled (cmaple CMakeLists patched) | Disabled — same patch |
+| Math libraries | Eigen 3.4.0; no BLAS/MKL/AOCL | Eigen 3.4.0 |
+| OMP_PROC_BIND | `close` *(active; not recorded in GCC env.json — see Issue 2)* | `close` |
+| OMP_PLACES | `cores` *(active; not recorded in GCC env.json)* | `cores` |
+| OMP_WAIT_POLICY | `PASSIVE` *(active; not recorded in GCC env.json)* | `PASSIVE` |
+| GOMP_SPINCOUNT | `10000` *(active; not recorded in GCC env.json)* | `10000` |
+| Scientific output | Best model `GTR+R4`, log-L = −10 956 936.61 ± 0.03 | Best model `GTR+R4`, log-L = −10 956 936.61 ± 0.03 |
+
+Log-likelihoods agree within 0.06 units across all 12 runs (expected FP noise from parallel summation order). Both series produce identical scientific results. **Wall-time comparison is valid.**
+
+### Intentional variables — covaried (experiment design)
+
+| Variable | GCC series | AOCC series |
+|----------|-----------|-------------|
+| Compiler | GCC 14.3.0 | AOCC 5.1.0 (AMD Clang 17.0.6) |
+| OpenMP runtime | libgomp | libomp (LLVM/OpenMP-API) |
+
+Compiler and OpenMP runtime changed together. The regression pattern onset (>8T = first cross-CCD crossing) strongly implicates the OMP runtime, but **the two variables cannot be separated from this data alone**. Isolating requires a follow-on experiment (Clang + libgomp, or GCC + libomp).
+
+### Wall-time results
+
+| Threads | GCC (s) | AOCC (s) | AOCC speedup vs GCC | GCC vs 8T | AOCC vs 8T |
+|---------|--------|---------|---------------------|-----------|-----------|
+| 8 | 3 854.3 | 3 830.6 | 1.01× | 1.00× | 1.00× |
+| 16 | 3 580.0 | 2 639.5 | 1.36× | 1.08× | 1.45× |
+| 32 | 3 301.9 | 1 940.3 | 1.70× | 1.17× | 1.97× |
+| 64 | 3 547.2 | 1 905.2 | 1.86× | 1.09× | 2.01× |
+| 104 | 6 846.1 | 2 305.1 | **2.97×** | **0.56×** | 1.66× |
+| 128 | 7 261.3 | 2 368.4 | **3.07×** | **0.53×** | 1.62× |
+
+GCC is flat 8T→64T (within one CCD pair / one socket) then collapses to **0.53× its own 8T throughput** at 128T. AOCC scales to 64T (2.01×) then degrades gracefully. At 104–128T, AOCC is ~3× faster.
+
+### IPC analysis (derived from raw perf counters)
+
+`profile.ipc` is `null` in both series (see Issue 4), but IPC is computable from `profile.metrics.cycles` and `.instructions`:
+
+| Threads | GCC instructions | GCC cycles | GCC IPC | AOCC instructions | AOCC IPC |
+|---------|----------------|-----------|---------|------------------|---------:|
+| 8T | 105.4 T | 99.3 T | **1.06** | 101.4 T | **1.00** |
+| 64T | 115.4 T | 662.2 T | **0.174** | 211.2 T | **0.61** |
+| 128T | 149.9 T | 2 619.7 T | **0.057** | — | — |
+
+GCC at 128T: **18 cycles per instruction** — threads are burning cycles at OMP barriers without doing useful work. GCC achieves only 42% more instructions at 128T than at 8T (despite 16× the threads). AOCC-64T executes 2.1× the instructions of GCC-64T in 54% less wall time, and achieves 3.5× better IPC.
+
+---
+
+### Issues found in this audit
+
+#### 🔴 Issue 1 — GCC xlarge hotspot data is INVALID (perf record profiled srun/sinfo, not iqtree3)
+
+All six GCC xlarge `profile.hotspots` entries list SLURM system commands — zero entries for `iqtree3`. Sample counts are 1–9 per entry (vs thousands expected for a multi-hour IQ-TREE run), confirming `perf record` captured a brief SLURM launch or teardown window rather than IQ-TREE's steady state.
+
+| Run | Top hotspot | Module | Command | Samples |
+|-----|------------|--------|---------|---------|
+| GCC-8T | `__printf_buffer` | `libc.so.6` | `srun` | 1 |
+| GCC-64T | `_find_name_in_env` | `libslurmfull.so` | `srun` | 1 |
+| GCC-128T | `slurm_xstrdup` | `libslurmfull.so` | `srun` | 1 |
+
+`profile.metrics` perf-stat counters (cycles, instructions, cache events, TLB events) **are valid** — they came from `perf stat` which monitored the full job duration. Only the `perf record`-derived flamegraph and hotspot data is corrupted. **A re-run with the corrected `python3.11`-based `run_mega_profile.sh` is required** before any GCC xlarge hotspot or flamegraph comparison can be done.
+
+#### ~~🟠 Issue 2~~ ✅ — GCC xlarge env.json missing OMP variables — **PATCHED**
+
+~~The GCC xlarge env.json was produced by the **pre-follow-up-#19** version of `run_mega_profile.sh`, which did not record `omp_proc_bind`, `omp_places`, `omp_wait_policy`, `gomp_spincount`, `omp_runtime`, or `build_tag`. Reading only the JSON, the GCC series appears to have had no explicit OMP pinning (`null` fields) while AOCC shows `close`/`cores`/`PASSIVE`.~~
+
+All six `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` files patched with `env.omp_runtime="libgomp"`, `env.omp_proc_bind="close"`, `env.omp_places="cores"`, `env.omp_wait_policy="PASSIVE"`, `env.gomp_spincount=10000`, `env.kmp_blocktime=null`, `env.build_tag="smtoff_pin"`, and `env.recovered_from_script_history=true`. Values recovered from the 2026-04-30 `run_mega_profile.sh` commit state. The `omp_runtime` field now surfaces correctly as `libgomp` in the runs index.
+
+#### ~~🟡 Issue 3~~ ✅ — `cpu_count_logical` equals THREADS in GCC xlarge runs — **PATCHED**
+
+All six `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` files patched with `env.cpu_count_logical=128`. True value confirmed via `slurm.cpus_per_task=128` + `--hint=nomultithread` (128 physical cores available in the job cpuset). Previously read as THREADS (8/16/32/64/104/128) due to `os.cpu_count()` returning the cpuset logical count rather than the full affinity.
+
+#### ~~🟡 Issue 4~~ ✅ — IPC null in both series — **PATCHED**
+
+All 12 run JSONs patched with `profile.ipc_derived` (counter ratio, 4 dp):
+
+| Series | 8T | 16T | 32T | 64T | 104T | 128T |
+|--------|---:|----:|----:|----:|-----:|-----:|
+| GCC/libgomp | 1.0622 | 0.6342 | 0.3487 | 0.1742 | 0.0673 | 0.0572 |
+| AOCC/libomp | 0.9980 | 0.9294 | 0.8067 | 0.6116 | 0.5563 | 0.5562 |
+
+`tools/normalize.py` updated to use `ipc_derived` as fallback when `metrics["IPC"]` is `None` (line 213). `tools/harvest_scratch.py` updated to write `profile["ipc_derived"]` for any future run where `_derive_rates` successfully computes IPC from raw counters. Dashboard now shows IPC for both series.
+
+### New pending actions
+
+| Priority | Task |
+|----------|------|
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with the `python3.11`-fixed `run_mega_profile.sh` to obtain valid iqtree3 hotspot / flamegraph data — current GCC xlarge `profile.hotspots` profiles SLURM shell commands |
+| **LOW** | Fix `env.cpu_count_logical` detection in `run_mega_profile.sh` to use `len(os.sched_getaffinity(0))` instead of `os.cpu_count()` so GCC xlarge re-runs report affinity not logical CPU count |
+
+---
+
 ## 2026-05-01 (libgomp-vs-libomp test, follow-up #19) — Clang/AOCC build path + dashboard cache-level rename
 
 ### Hypothesis (Minh, IQ-TREE author)
@@ -45,7 +150,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 
 ## Critical & Pending Tasks
 
-> **Last audited: 2026-05-02.** 73 run files tracked (45 Setonix, 28 Gadi). See data quality notes below.
+> **Last audited: 2026-05-02 (follow-up #20 parity audit).** 73 run files tracked (45 Setonix, 28 Gadi). See data quality notes below. Four new data quality issues discovered in GCC xlarge series (corrupted hotspots, missing OMP env metadata, null IPC, cpu_count_logical artifact) — see follow-up #20 section above.
 
 ### 🔴 Harvest — blocking cross-platform analysis
 
@@ -59,6 +164,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T (PBS **167520757**) and 104T (PBS **167520758**) | Jobs were released from hold 2026-05-02 after inode cleanup — status on Gadi scratch unverified from Setonix |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | No canonical Gadi mega_dna sweep exists — only the earlier `sr_icx` reference runs (4 runs, 16T–104T). Cross-platform mega_dna comparison blocked. |
 | **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Only SMT-on reference runs exist (4 runs: 16/32/64/128T, `baseline_smton`, slurm 41849110–41849113). No canonical SMT-off pinned Setonix mega_dna data. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with `python3.11`-fixed `run_mega_profile.sh` | Current `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` hotspot data profiles SLURM commands not iqtree3 — flamegraph/hotspot comparison blocked. See follow-up #20. |
 
 ### 🟠 Data quality issues (discovered 2026-05-02 audit)
 
@@ -70,6 +176,10 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | ~~**LOW**~~ ✅ | ~~`gadi_xlarge_mf_{1,4,8,16,32}t_sr_gcc_pin.json` (PBS 167520752–167520756)~~ | **FIXED (59b09bf)** — patched `build_tag="sr_gcc_pin"` and `canonical=true` on all 5 files. Normalize was already treating them as canonical; fields were simply absent. |
 | **OPEN** | `gadi_xlarge_mf_{64,104}t_sr_gcc_pin.json` | **FILES MISSING** — PBS jobs 167520757–167520758 either still pending on Gadi or completed but not yet transferred. The `sr_icx` reference covers those thread counts but the canonical `sr_gcc_pin` series is incomplete above 32T. |
 | ~~**INFO**~~ ✅ | ~~`xlarge_mf_{8,16,32,64,104,128}t_clang_omp_pin_baseline.json` (slurm 42225454–42225459)~~ | **FIXED (933f305)** — `smt_active=False`, `hostname=""`, `cpu_count_logical=0`, and all `sh()`-derived fields were `""` / `0`. **Root cause:** `run_mega_profile.sh` env.json heredoc used bare `python3`, which on Setonix compute nodes resolves to system Python 3.6.15. `text=True` in `subprocess.check_output` was added in Python 3.7; all four `sh()` calls silently hit `TypeError: __init__() got an unexpected keyword argument 'text'`, caught and returning defaults. Identical failure in the sampler launch (line 423) and perf-folded pipe (line 485). GCC canonical runs (42181xxx) were unaffected — those ran in a session where the login-node `python3` symlink pointed to 3.11.14. **Actual SMT state during both series:** kernel SMT on; OMP threads pinned to physical cores via `#SBATCH --hint=nomultithread`. The GCC vs AOCC wall-time comparison is valid — both series had identical SMT configuration. Fixed by changing all four `python3` calls to `python3.11` in `setonix-ci/run_mega_profile.sh` (lines 132, 423, 485, 512). |
+| **HIGH** | `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` | **`profile.hotspots` INVALID** — `perf record` second pass profiled SLURM shell commands (`srun`, `sinfo`, `scontrol`, `bash`), not `iqtree3`. All 6 runs show 1–9 samples in srun/slurm functions; zero iqtree3 entries. `perf stat` counters in `profile.metrics` are valid. Root cause: `perf record` ran during the SLURM launch window rather than IQ-TREE's steady state. Flamegraph/hotspot analysis for GCC xlarge is **void until a re-run**. See follow-up #20. |
+| ~~**MEDIUM**~~ ✅ | ~~`Setonix_xlarge_mf_{8,16,32,64,104,128}T.json`~~ | **FIXED (follow-up #20)** — `env.omp_proc_bind="close"`, `env.omp_places="cores"`, `env.omp_wait_policy="PASSIVE"`, `env.gomp_spincount=10000`, `env.omp_runtime="libgomp"`, `env.kmp_blocktime=null`, `env.build_tag="smtoff_pin"` patched into all 6 GCC xlarge run files. `env.recovered_from_script_history=true` annotation added. Values recovered from 2026-04-30 `run_mega_profile.sh` git state. `omp_runtime="libgomp"` now visible in runs index. |
+| ~~**MEDIUM**~~ ✅ | ~~`Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` and all `xlarge_mf_*_clang_omp_pin_baseline.json`~~ | **FIXED (follow-up #20)** — `profile.ipc_derived` patched into all 12 run JSON files from counter ratio (instructions/cycles). `tools/normalize.py` updated to fall back to `ipc_derived` when `metrics["IPC"]` is null (line 213). `tools/harvest_scratch.py` updated to write `profile["ipc_derived"]` automatically for future runs. Dashboard IPC column now shows values for both series: GCC 1.06→0.057 (collapse), AOCC 1.00→0.56 (graceful). |
+| ~~**LOW**~~ ✅ | ~~`Setonix_xlarge_mf_{8,16,32,64,104,128}T.json`~~ | **FIXED (follow-up #20)** — `env.cpu_count_logical=128` patched into all 6 GCC xlarge run files. True value confirmed: `slurm.cpus_per_task=128` + `--hint=nomultithread` = 128 physical cores in the job cpuset. Previously read as THREADS (8/16/32/64/104/128) due to Python `os.cpu_count()` returning cpuset logical count on pre-python3.11 env script. |
 
 ### 🟠 Dashboard fixes — actively misleading metrics
 

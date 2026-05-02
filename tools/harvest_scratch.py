@@ -794,6 +794,16 @@ def enrich_run(run: dict) -> bool:
             if merged != profile.get("metrics"):
                 profile["metrics"] = merged
                 changed = True
+        # ipc_derived — fallback IPC from raw counter ratio.
+        # Populated whenever metrics["IPC"] is available so the dashboard
+        # can display IPC even when the perf sampler produced a null
+        # profile.ipc (e.g. pre-#12b cycles:u=0 or python3.6 sampler bug).
+        ipc_from_metrics = metrics.get("IPC")
+        if ipc_from_metrics is not None:
+            ipc_derived_val = round(ipc_from_metrics, 4)
+            if profile.get("ipc_derived") != ipc_derived_val:
+                profile["ipc_derived"] = ipc_derived_val
+                changed = True
         if raw_events and profile.get("raw_events") != raw_events:
             profile["raw_events"] = raw_events
             changed = True

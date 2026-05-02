@@ -47,7 +47,15 @@
       "mem_per_node": "235520",
       "submit_host": "setonix-02",
       "submit_dir": "/scratch/pawsey1351/asamuel/iqtree3"
-    }
+    },
+    "omp_runtime": "libgomp",
+    "omp_proc_bind": "close",
+    "omp_places": "cores",
+    "omp_wait_policy": "PASSIVE",
+    "gomp_spincount": 10000,
+    "kmp_blocktime": null,
+    "build_tag": "smtoff_pin",
+    "recovered_from_script_history": true
   },
   "profile": {
     "dataset": "xlarge_mf.fa",
@@ -6711,7 +6719,8 @@
         "7": 1.61
       },
       "total_mb": 14.19
-    }
+    },
+    "ipc_derived": 0.0572
   },
   "summary": {
     "pass": 0,
