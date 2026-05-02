@@ -129,7 +129,7 @@ echo ""
 echo "[$(date +%H:%M:%S)] Snapshotting environment..."
 
 ENV_JSON="${WORK_DIR}/env.json"
-python3 <<PYEOF > "${ENV_JSON}"
+python3.11 <<PYEOF > "${ENV_JSON}"
 import json, os, subprocess, hashlib, pathlib
 
 def sh(cmd, default=""):
@@ -420,7 +420,7 @@ fi
 echo "  → srun pid=${IQTREE_PID} inner iqtree pid=${INNER_PID}"
 
 # Start the sampler (10s interval)
-python3 "${SAMPLER_PY}" "${INNER_PID}" "${SAMPLE_JSONL}" 10 &
+python3.11 "${SAMPLER_PY}" "${INNER_PID}" "${SAMPLE_JSONL}" 10 &
 SAMPLER_PID=$!
 
 # Wait for IQ-TREE
@@ -482,7 +482,7 @@ if [[ "${IQTREE_RC}" -eq 0 && "${SKIP_PERF_RECORD:-0}" != "1" ]]; then
 
         # pipefail-safe: either side of the pipe may fail without aborting the run
         set +o pipefail
-        perf script -i "${PERF_DATA}" 2>/dev/null | python3 - <<'PYEOF' > "${WORK_DIR}/perf_folded.txt" || true
+        perf script -i "${PERF_DATA}" 2>/dev/null | python3.11 - <<'PYEOF' > "${WORK_DIR}/perf_folded.txt" || true
 import sys, collections
 stacks = collections.Counter()
 current = []
@@ -509,7 +509,7 @@ fi
 # 6. Emit structured profile_meta.json (machine-readable, for harvester)
 # ─────────────────────────────────────────────────────────────────────────────
 echo "[$(date +%H:%M:%S)] Writing profile_meta.json..."
-python3 <<PYEOF > "${WORK_DIR}/profile_meta.json"
+python3.11 <<PYEOF > "${WORK_DIR}/profile_meta.json"
 import json, os, re
 
 work = "${WORK_DIR}"
