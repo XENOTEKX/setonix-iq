@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-05-05 — NUMA-aware OpenMP binding gap: `OMP_PROC_BIND=close` vs `spread`, `numactl --localalloc` vs node-pinned `--cpunodebind/--membind`
+
+### Background
+
+User raised the following pattern as the recommended approach for multi-socket OpenMP scaling benchmarks:
+
+```bash
+# Single-socket phase (threads ≤ cores-per-socket):
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+for t in 1 2 4 8 16 32 48 52; do
+  OMP_NUM_THREADS=$t numactl --cpunodebind=0 --membind=0 ./myprog
+done
+
+# Cross-socket phase (threads > cores-per-socket):
+export OMP_PLACES=cores
+export OMP_PROC_BIND=spread
+for t in 52 64 80 96 104; do
+  OMP_NUM_THREADS=$t numactl --cpunodebind=0,1 --membind=0,1 ./myprog
+done
+```
+
+Additionally: data initialisation in first-touch NUMA models must use a parallel static-scheduled loop so pages are distributed across sockets at allocation time:
+
+```c
+#pragma omp parallel for schedule(static)
+for (long i = 0; i < N; i++) a[i] = 0.0;
+```
+
+Otherwise all alignment pages fault-in on socket 0 (master thread), causing remote-NUMA traffic for every thread on socket 1 regardless of how well threads are pinned.
+
+### Gap analysis: what our scripts actually do
+
+Both `setonix-ci/run_mega_profile.sh` (Setonix / SLURM) and `gadi-ci/submit_benchmark_matrix.sh` (Gadi / PBS Pro) use the same binding setup at **all** thread counts:
+
+```bash
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+NUMACTL=( numactl --localalloc )
+```
+
+Three specific gaps vs the recommended pattern:
+
+#### Gap 1 — No `OMP_PROC_BIND=spread` for cross-socket runs
+
+`close` packs threads onto cores sequentially starting from socket 0 and overflows into socket 1. For T ≤ 64 (Setonix, 1 CCD pair per socket) or T ≤ 52 (Gadi, 1 socket) this is single-socket and `close` is correct. For T > 64 / T > 52 `close` continues filling linearly into socket 1 — the placement itself is correct — but the *intent* of `spread` is to interleave threads across sockets so that each socket's threads are contiguous in the OpenMP team ID space. This matters for worksharing loops: `spread` distributes loop iterations evenly across sockets, maximising locality for data that was initialised in parallel (first-touch already spread). With `close` and a single-threaded first-touch init, the loop-chunk boundaries don't align with the socket boundary, and threads on socket 1 pull data from socket 0's NUMA domain.
+
+#### Gap 2 — `numactl --localalloc` does not pin data to specific sockets
+
+`--localalloc` allocates each **new** page on the NUMA node where the page-fault occurs — it has no effect on pages already faulted in. For the alignment file (multi-GB, loaded by the master thread before the OMP parallel region), all pages land on socket 0 regardless of `--localalloc`. The recommended `--cpunodebind=0,1 --membind=0,1` would at minimum interleave OS memory allocations across both sockets' DRAM controllers during the load phase, reducing pressure on socket 0's memory bus.
+
+#### Gap 3 — First-touch initialisation is in IQ-TREE source, not our scripts
+
+We have no visibility into whether IQ-TREE parallelises its alignment buffer initialisation with a `schedule(static)` OMP loop before the main compute phase. If the alignment is read sequentially by the master thread (single-threaded first-touch), all alignment pages reside on socket 0 for the entire run. Every cross-socket thread (T > 64 on Setonix, T > 52 on Gadi) pays a remote-NUMA penalty on every cache-line miss into the alignment. This is a plausible contributing factor to the observed cross-socket wall-time regression at high thread counts (especially pronounced in the GCC/libgomp series: 128T is 1.9× *slower* than 8T).
+
+### What was confirmed in the logs
+
+- All 7 `xlarge_mf_*_baseline_smton` runs and all 8 canonical `smtoff_pin` runs: `cpus_per_task=128`, `OMP_PROC_BIND=close` at all T. No `spread` transition at the socket boundary. `numactl --localalloc` only.
+- Gadi `submit_benchmark_matrix.sh` is identical: `OMP_PROC_BIND=close` at all T (including 104T = 2 sockets), `numactl --localalloc`.
+- `srun --cpu-bind=cores` (Setonix) and PBS cpuset (Gadi) handle physical-core pinning at the OS level, but neither changes the data-placement problem.
+
+### Recommended follow-on experiments
+
+| Experiment | Change | Expected signal |
+|------------|--------|----------------|
+| Switch to `spread` + `--cpunodebind=0,1 --membind=0,1` for T > socket size | `OMP_PROC_BIND=spread`, `numactl --cpunodebind=0,1 --membind=0,1` | Should reduce remote-NUMA latency for cross-socket runs; if wall time improves, confirms first-touch + bandwidth was the dominant cross-socket bottleneck |
+| `numactl --interleave=all` for full run | Replaces `--localalloc` | Spreads all allocations round-robin across both sockets; reduces peak socket-0 pressure; less targeted than cpunodebind but easier to test |
+| Audit IQ-TREE source for parallel init | `grep -rn 'schedule(static)' src/` in IQ-TREE 3.1.1 | Determines whether first-touch is already parallel; if not, a patch or `GOMP_STACKSIZE` + `OMP_SCHEDULE=static` hint may help |
+
+### Current status
+
+No script changes made in this session — this is a methodology finding. Scripts still use `OMP_PROC_BIND=close` + `numactl --localalloc` at all thread counts. Tracking as a pending improvement.
+
+---
+
 ## 2026-05-02 — GCC/libgomp vs AOCC/libomp `xlarge_mf` scientific parity audit (follow-up #20)
 
 ### Scope
