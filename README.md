@@ -384,12 +384,24 @@ These symlinks are gitignored (they only work on Setonix).
 
 ### 3. Configure git push access
 
-```bash
-# If using HTTPS with a PAT:
-git remote set-url origin https://<TOKEN>@github.com/<YOUR_USERNAME>/setonix-iq.git
+**On Gadi (NCI) — use VS Code + HTTPS remote:**
 
-# Or use SSH if configured:
+The repo remote must be HTTPS, not SSH. Gadi login nodes have no SSH key registered with GitHub, so `git push` over SSH always fails with `Permission denied (publickey)`. VS Code's built-in GitHub extension authenticates over HTTPS via OAuth (token stored locally on your machine and forwarded through the Remote SSH session) — no PAT or SSH key needed.
+
+Ensure the remote is HTTPS:
+```bash
+git remote set-url origin https://github.com/XENOTEKX/setonix-iq.git
+```
+
+Then push via the **VS Code Source Control panel** (branch icon in sidebar → sync/push button). VS Code handles auth automatically. Do not run `git push` from a plain terminal — it has no credential helper and will fail.
+
+**On Setonix (Pawsey) — SSH or HTTPS PAT:**
+```bash
+# SSH (if key is registered with GitHub):
 git remote set-url origin git@github.com:<YOUR_USERNAME>/setonix-iq.git
+
+# HTTPS with a PAT:
+git remote set-url origin https://<TOKEN>@github.com/<YOUR_USERNAME>/setonix-iq.git
 ```
 
 ---
@@ -681,6 +693,7 @@ Benefits over a monolithic `runs.json` array:
 |---------|-----|
 | Dashboard shows "No pipeline runs" locally | Run `git pull` to get latest `logs/runs/*.json` files |
 | Symlink errors on Setonix | Verify `/scratch/$PAWSEY_PROJECT/$USER/iqtree3/setonix-ci/results` exists |
+| `git push` fails on Gadi with `Permission denied (publickey)` | Remote is SSH but Gadi has no GitHub SSH key. Switch to HTTPS: `git remote set-url origin https://github.com/XENOTEKX/setonix-iq.git` then push via **VS Code Source Control panel** — VS Code's GitHub OAuth works over HTTPS through the Remote SSH session. Never `git push` from a plain terminal on Gadi. |
 | `git push` fails on Setonix | Check remote URL has valid token: `git remote -v` |
 | Dashboard doesn't update on GitHub Pages | Check `docs/index.html` was committed; Pages serves from `docs/` on `main` |
 | Charts not rendering | Requires internet for Chart.js CDN (`cdn.jsdelivr.net`) |
