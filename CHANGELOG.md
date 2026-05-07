@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-07 — Harvest: `clang_bbblock` 8T result; `canonical` flag fix
+
+### `clang_bbblock` 8T harvest (SLURM 42390186)
+
+Job 42390186 completed. Harvested into `logs/runs/xlarge_mf_8t_clang_bbblock_baseline.json`.
+
+| Metric | `clang_bbblock` 8T (new) | `clang_omp_pin` 8T (baseline) | `smtoff_pin` 8T | Δ (bbblock vs omp_pin) |
+|---|---|---|---|---|
+| Wall time | **3831.0 s** | 3830.6 s | 3854.3 s | ≈ 0 s (within noise) |
+| `build_tag` | `clang_bbblock` | `clang_omp_pin` | `smtoff_pin` | — |
+
+**Reading.** As predicted, `block:block:block` has zero effect at 8T. At 8 threads, all threads land on a single CCD (CCD0) regardless of distribution policy — there is no inter-CCD scattering to prevent. The 8T result is therefore a valid control: it confirms the clang/libomp runtime and pinning are otherwise identical between the two series, and isolates the 64T delta (−1.4 %, within noise) as a distribution-policy signal rather than a runtime artefact. **Conclusion: `block:block:block` does not meaningfully improve wall time at any measured thread count.** The full `{8,16,32,64,104,128}` sweep is not warranted.
+
+### `canonical` flag fix — `xlarge_mf_64t_clang_bbblock_baseline.json`
+
+The 64T bbblock file was harvested with `canonical=true` / `non_canonical=false` in error. Fixed to `canonical=false` / `non_canonical=true` so it appears only in the non-canonical comparison series in charts, not alongside the `smtoff_pin` baseline.
+
+### Updated Pending
+
+| Priority | Task |
+|----------|------|
+| ~~**HIGH**~~ | ~~Harvest `clang_bbblock` 8T (SLURM 42390186)~~ ✅ Done 2026-05-07 — Δ ≈ 0 s, no effect at 8T. Full sweep not warranted. |
+| ~~**MED**~~ | ~~If the 8T comparison shows a meaningful gap, run the full `{8,16,32,64,104,128}` sweep with `clang_bbblock`~~ ✅ Closed — gap is zero. |
+| **MED** | Empirical NUMA-first-touch verification on Setonix: rerun current 128T binary with `OMP_PROC_BIND=spread numactl --interleave=all` and compare wall time vs `--localalloc`. Recovery of any meaningful fraction of the 128T regression confirms the diagnosis without touching IQ-TREE source |
+| **LOW** | If the empirical test confirms it, write the two-pragma patch against `tree/phylotreesse.cpp:537,571`, rebuild from `build-profiling/`, and re-run the 128T sweep |
+
+---
+
 ## 2026-05-07 — Harvest: `clang_bbblock` 64T result; NUMA first-touch verified in IQ-TREE source + plain-English explainer
 
 ### `clang_bbblock` 64T harvest (SLURM 42390187)
@@ -51,8 +79,8 @@ Intended audience: future-us at 2 a.m. trying to recall why 128T runs collapse, 
 
 | Priority | Task |
 |----------|------|
-| **HIGH** | Harvest `clang_bbblock` 8T (SLURM 42390186) when it completes; add the 8T row to the comparison table |
-| **MED** | If the 8T comparison shows a meaningful gap, run the full `{8,16,32,64,104,128}` sweep with `clang_bbblock` |
+| ~~**HIGH**~~ | ~~Harvest `clang_bbblock` 8T (SLURM 42390186) when it completes; add the 8T row to the comparison table~~ ✅ Done 2026-05-07 — see entry above |
+| ~~**MED**~~ | ~~If the 8T comparison shows a meaningful gap, run the full `{8,16,32,64,104,128}` sweep with `clang_bbblock`~~ ✅ Closed — delta is zero |
 | **MED** | Empirical NUMA-first-touch verification on Setonix: rerun current 128T binary with `OMP_PROC_BIND=spread numactl --interleave=all` and compare wall time vs `--localalloc`. Recovery of any meaningful fraction of the 128T regression confirms the diagnosis without touching IQ-TREE source |
 | **LOW** | If the empirical test confirms it, write the two-pragma patch against `tree/phylotreesse.cpp:537,571`, rebuild from `build-profiling/`, and re-run the 128T sweep |
 
