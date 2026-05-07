@@ -2,6 +2,60 @@
 
 ---
 
+## 2026-05-07 (17:57 AWST) — `xlarge_mf` 128T patched harvest: no improvement at cross-socket scale
+
+### Results — complete patched sweep (`clang_omp_pin_numa_ft` vs `clang_omp_pin`)
+
+| Threads | Unpatched (s) | Patched (s) | Δ (s) | Δ (%) | BEST SCORE | Verdict |
+|---|---|---|---|---|---|---|
+| 32T (jobs 42225456 / 42399411) | 1940.255 | 1954.201 | +13.9 | **+0.72 %** | −10956936.612 bit-identical ✓ | parity — expected, single-socket |
+| 64T (jobs 42225457 / 42400752) | 1905.223 | 1796.483 | −108.7 | **−5.71 %** | −10956936.612 bit-identical ✓ | ✅ improvement — CCD-level NUMA |
+| 128T (jobs 42225459 / 42400753) | 2368.448 | 2382.155 | +13.7 | **+0.58 %** | −10956936.612 bit-identical ✓ | ❌ no improvement — cross-socket cliff intact |
+
+### What the results tell us
+
+**The `computePtnFreq` / `computePtnInvar` fix is a partial win:**
+
+- ✅ **64T (intra-socket, cross-CCD):** The patch recovers 5.71 %. Even within one socket, AMD EPYC's per-CCD NUMA nodes (NPS4/NPS8 mode gives each CCD its own NUMA domain) meant that threads on CCD 1–7 were paying a remote penalty to read `ptn_freq[]` and `ptn_invar[]` pages that were first-touched on CCD 0. The parallel-static fill distributes those pages across all CCDs, giving each thread local reads.
+
+- ❌ **128T (cross-socket):** Patched 128T (2382 s) is essentially identical to unpatched 128T (2368 s), and both are ~580–590 s slower than patched/unpatched 64T. The cross-socket cliff survived the fix.
+
+**Root-cause analysis — why the 128T cliff remains:**
+
+`ptn_freq[]` and `ptn_invar[]` are the two hottest *global* reads (called once at init, read on every LH evaluation). The fix correctly places them on both sockets. But the 128T slowdown is dominated by *per-call* serial-init buffers that get re-zeroed thousands of times during tree search:
+
+| Buffer | Zeroed where | Frequency | Size | Still serial |
+|---|---|---|---|---|
+| `_pattern_lh_cat` | `phylotreesse.cpp:1295` | once per `computePatternLhCat` call (every NNI eval per branch) | ~1.6 MB | **YES — not yet patched** |
+| `dad_branch->scale_num` | kernel headers (`phylokernel*.h`) | once per `computePartialLikelihood` call | ~50 KB/branch × all branches | YES (LOW priority headers) |
+
+`computePatternLhCat` is called in the hot NNI inner loop. Each call does `memset(_pattern_lh_cat, 0, nptn*ncat_mix*8)` on the master thread before forking the parallel-for. For 128T, the 64 threads on socket 1 then read those freshly-zeroed pages (all on socket 0) in the `+=` reduction loop. This pattern repeats hundreds of times per tree-search iteration × 100+ iterations. The sheer call frequency makes this the next dominant NUMA source.
+
+**The `schedule(dynamic,1)` factor:** The hot LH kernels in `phylokernelnew.h` use `schedule(dynamic,1)` for load balancing. Even if `_pattern_lh_cat` were parallel-first-touched with `schedule(static)`, the dynamic scheduler would still send socket-1 threads to any pattern, reading pages that may have been touched on socket 0. A combined fix (`_pattern_lh_cat` static init + kernel schedule change to `static`) would be needed for full locality. The `ptn_freq` / `ptn_invar` arrays are read with the same dynamic kernel but are *static data* — they don't change between NNI calls, so once placed correctly they stay correct regardless of dynamic scheduling.
+
+### Next steps
+
+1. **Patch `phylotreesse.cpp:1295`** — replace `memset(_pattern_lh_cat, 0, sizeof(double)*nptn*ncat_mix)` with `#pragma omp parallel for schedule(static)` fill. Same idiom, mechanical change. Rebuild → tag `numa-firsttouch-r2` → re-run 64/128T sweep to attribute incremental gain.
+2. **Investigate `schedule(dynamic,1)` vs `schedule(static)` trade-off** — static schedule is better for NUMA locality; dynamic is better for load balancing when pattern LH values are heterogeneous. Profile whether static loses time from load imbalance at 128T.
+3. **Add 104T data point** — the unpatched series has 104T showing a mid-cliff value (2305 s); adding a patched 104T point would show where the per-CCD benefit ends and the cross-socket penalty begins.
+
+### Updated pending
+
+| Priority | Task | Notes |
+|---|---|---|
+| ~~**HIGH**~~ | ~~Harvest `xlarge_mf` 32/64/128T patched sweep~~ | ✅ Complete. 32T parity, 64T −5.7%, 128T no gain. |
+| **HIGH** | Apply `phylotreesse.cpp:1295` patch (`_pattern_lh_cat` memset → parallel-static fill) | Next largest NUMA bug on the hot NNI path. Rebuild + tag `numa-firsttouch-r2`. |
+| **HIGH** | Re-run patched 64/128T after `_pattern_lh_cat` fix | Attribute incremental gain. |
+| **HIGH** | Investigate `schedule(dynamic,1)` → `schedule(static)` trade-off in `phylokernelnew.h` | May be needed to get full NUMA locality on the kernel itself, not just the init buffers. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T/104T (PBS **167520757–167520758**) | Unchanged. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T | Unchanged. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Unchanged. |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Unchanged. |
+| **HIGH** | Update dashboard chart | `cache-miss-rate` → `l2/l3-miss-rate`; primary memory plot → `L1d-mpki`. Unchanged. |
+| **MEDIUM** | Capture NUMA topology from job node (`numactl --hardware`, `lstopo`) | Confirm NPS mode to verify CCD = NUMA node interpretation. |
+
+---
+
 ## 2026-05-07 (16:48 AWST) — `xlarge_mf` 32T + 64T patched harvest: parity at 32T, **real improvement at 64T**
 
 ### Results — `xlarge_mf.fa`, AOCC clang+libomp, KMP_BLOCKTIME=200
