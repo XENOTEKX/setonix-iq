@@ -2,6 +2,117 @@
 
 ---
 
+## 2026-05-07 — Claude CLI installed on Setonix; home directory quota remediation
+
+### Problem
+
+Home directory on Setonix has a hard limit of **1 GB / 10 000 files**. Both limits were at capacity, preventing any new tool installs and causing `claude` to silently exit on launch (it could not write its config to `~/.claude`).
+
+Root cause of the file-count exhaustion: a prior failed `cp -r node-v22.../` into `~/.local` left 2 416 stranded files in `~/.local/lib/node_modules` and a 115 MB `node` binary in `~/.local/bin`.
+
+### Actions taken
+
+**Cleanup**
+- Removed partial Node.js copy from `~/.local`: `bin/node`, `bin/npm`, `bin/npx`, `bin/corepack`, `lib/node_modules/` (freed ~2 400 files, 134 MB).
+
+**Scratch-backed installs** (all large/file-heavy paths redirected to `/scratch/pawsey1351/asamuel/local/`)
+
+| Path in `$HOME` | Points to |
+|---|---|
+| `~/.claude` → | `/scratch/pawsey1351/asamuel/local/claude/` |
+| `~/.npm` → | `/scratch/pawsey1351/asamuel/local/npm/` |
+| Node.js v22.13.1 | `/scratch/pawsey1351/asamuel/local/node/` (no symlink, on `PATH`) |
+| Claude CLI v2.1.132 | `/scratch/pawsey1351/asamuel/local/npm-global/bin/claude` |
+| npm cache | `/scratch/pawsey1351/asamuel/local/npm-cache/` (via `NPM_CONFIG_CACHE`) |
+
+**`~/.bashrc` additions** (appended 2026-05-07):
+```bash
+export PATH="/scratch/pawsey1351/asamuel/local/node/bin:/scratch/pawsey1351/asamuel/local/npm-global/bin:$PATH"
+export NPM_CONFIG_CACHE="/scratch/pawsey1351/asamuel/local/npm-cache"
+```
+
+**Home directory state after cleanup**
+
+| Metric | Before | After |
+|---|---|---|
+| Files used | ~10 000 (at limit) | ~6 121 |
+| Disk used | ~547 MB | ~418 MB |
+| Quota limit | 1 024 MB / 10 000 files | same |
+
+### Notes
+- `~/.vscode-server` is already on scratch and symlinked to home (same pattern as the above).
+- Claude CLI config (`~/.claude/`) persists across sessions as long as the scratch filesystem is mounted (standard on Setonix login nodes).
+- `claude` is now invocable from any login session after `source ~/.bashrc`.
+
+---
+
+## 2026-05-07 — Pawsey feedback: `-m block:block:block` task distribution; AOCC xlarge_mf 8T/64T rerun
+
+### Background
+
+Deva Kumar Deeptimahanti (Pawsey HPC support) recommended rerunning multithreaded benchmarks with:
+
+```bash
+#SBATCH -m block:block:block
+srun -c $OMP_NUM_THREADS -m block:block:block ...
+```
+
+The `block:block:block` distribution (nodes:sockets:cores) packs threads into physically contiguous cores, which Pawsey documents as the best policy for L3 cache utilisation on AMD Milan (Setonix EPYC 7763 Zen3). Deva also recommended using thread counts in multiples of 8 (= one CCD on Zen3). Our thread counts (8, 16, 32, 64, 104, 128) already satisfy this.
+
+### Why this matters on AMD Zen3 — and why Gadi (SPR) is different
+
+AMD EPYC 7763 (Zen3) is composed of **8 Core Complex Dies (CCDs)** per socket, each with **8 cores and its own isolated 32 MB L3 cache**. The L3 partitions are hard — a core on CCD0 cannot hit CCD1's L3. When SLURM's default `cyclic` task distribution is used, threads may be scattered across CCDs. At 8T, for example, threads could be spread 1 per CCD × 8 CCDs, leaving each thread with only a 32 MB slice that is otherwise cold. `block:block:block` ensures threads 0–7 land on CCD0, threads 8–15 on CCD1, and so on — keeping the working set warm in a shared L3 partition.
+
+**Gadi (Intel Xeon Platinum 8470Q, Sapphire Rapids) is architecturally different and does not require this fix:**
+
+| Property | Setonix EPYC 7763 (Zen3) | Gadi Xeon 8470Q (Sapphire Rapids) |
+|---|---|---|
+| Die structure | 8 CCDs per socket, 8c each | Monolithic mesh die per socket, 52c |
+| L3 cache | 32 MB **isolated** per CCD | Distributed slices, **fully coherent** across mesh |
+| NUMA domains | 2 (one per socket) | 8 (SNC-4: 4 per socket × 13c each) |
+| Cross-"cluster" L3 penalty | **Hard miss** — must go to DRAM | Mesh hop latency only (~few ns) |
+| Scheduler | SLURM (has `-m` distribution flag) | PBS Pro (no equivalent `-m` flag) |
+
+On SPR, all L3 slices form a single coherent domain. A thread on any core can access data cached by a thread on any other core at mesh-hop latency, not a full DRAM round-trip. There is no hard L3 isolation. PBS Pro on Gadi's `normalsr` queue also allocates a contiguous cpuset for the full node automatically — no additional placement directive is needed or available. The `OMP_PROC_BIND=close` + `OMP_PLACES=cores` already in `gadi-ci/submit_benchmark_matrix.sh` handles NUMA locality within SPR's 8 SNC domains, which is sufficient.
+
+**In summary:** `-m block:block:block` is a Setonix-specific fix for AMD CCD topology. Gadi Sapphire Rapids does not have the same hard-partition problem and the PBS Pro scheduler does not expose an equivalent flag.
+
+### What changed
+
+**`setonix-ci/run_mega_profile.sh`** (applies to all future runs):
+- Added `#SBATCH -m block:block:block` to the job's SLURM directives.
+- Added `-m block:block:block` to the `srun` invocation (alongside the existing `--cpu-bind=cores`).
+- Added `"distribution": os.environ.get("SLURM_DISTRIBUTION", "block:block:block")` to the `slurm` block of `env.json` so the distribution policy is recorded per-run.
+
+**`setonix-ci/submit_clang_bbblock.sh`** (new):
+- Submits `xlarge_mf.fa` × `{8, 64}` T using the AOCC/libomp build (`build-profiling-aocc`).
+- Label suffix `clang_bbblock` — outputs go to distinct files, not overwriting the `clang_omp_pin` series.
+- Same pre-flights: AOCC ldd check (must link libomp, not libgomp) + sha256 gate on `xlarge_mf.fa`.
+- Full ModelFinder (no `-mset`), parity check via IQ-TREE log-likelihood comparison as per prior series.
+
+Thread count rationale: 8T (single-CCD baseline, intra-CCD; distribution policy should not matter here — any improvement vs `clang_omp_pin` at 8T is measurement noise) and 64T (full socket, 8 CCDs active; the point where `cyclic` vs `block` thread placement has the largest L3 locality impact and where the libgomp scaling collapse was observed).
+
+### Jobs submitted
+
+| Job ID | Dataset | Threads | Label | Cluster |
+|--------|---------|---------|-------|---------|
+| 42390186 | `xlarge_mf.fa` | 8T | `clang_bbblock` | Setonix |
+| 42390187 | `xlarge_mf.fa` | 64T | `clang_bbblock` | Setonix |
+
+### Expected outcome
+
+Comparison of `clang_bbblock` vs `clang_omp_pin` at 8T and 64T will isolate the effect of the task distribution policy, independent of compiler / OpenMP runtime. The 8T result should be flat (control). If 64T wall time improves, it confirms the default cyclic distribution was scattering threads across CCDs and degrading L3 hit rates even within a single socket; the improvement magnitude will bound how much of the AOCC scaling curve is attributable to binding policy vs OpenMP runtime behaviour.
+
+### Pending
+
+| Priority | Task |
+|----------|------|
+| **HIGH** | Harvest `clang_bbblock` results and compare wall time + IPC vs `clang_omp_pin` at 8T and 64T |
+| **MED** | If 64T improves meaningfully, rerun the full `{8,16,32,64,104,128}` sweep with `clang_bbblock` to build a complete scaling curve |
+| **LOW** | No action required on Gadi — SPR L3 is a coherent mesh, PBS Pro allocates contiguous cpusets automatically, no `-m` equivalent needed |
+
+---
+
 ## 2026-05-05 — NUMA-aware OpenMP binding gap: `OMP_PROC_BIND=close` vs `spread`, `numactl --localalloc` vs node-pinned `--cpunodebind/--membind`
 
 ### Background

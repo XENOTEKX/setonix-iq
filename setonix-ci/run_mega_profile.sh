@@ -29,6 +29,7 @@
 #SBATCH --cpus-per-task=128
 #SBATCH --exclusive
 #SBATCH --hint=nomultithread
+#SBATCH -m block:block:block
 #SBATCH --mem=230G
 #SBATCH --time=24:00:00
 #SBATCH --output=/scratch/pawsey1351/asamuel/iqtree3/setonix-ci/logs/mega_%x_%j.out
@@ -202,6 +203,7 @@ env = {
     "mem_per_node": os.environ.get("SLURM_MEM_PER_NODE"),
     "submit_host":  os.environ.get("SLURM_SUBMIT_HOST"),
     "submit_dir":   os.environ.get("SLURM_SUBMIT_DIR"),
+    "distribution": os.environ.get("SLURM_DISTRIBUTION", "block:block:block"),
   },
 }
 print(json.dumps(env, indent=2))
@@ -377,7 +379,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]] && command -v srun >/dev/null 2>&1; then
     # re-specifying a step-level limit.  Without it, SLURM can fail with
     # "SLURM_MEM_PER_CPU and SLURM_MEM_PER_NODE are mutually exclusive"
     # when the partition has a default mem-per-cpu and the job also sets --mem.
-    SRUN=( srun --cpus-per-task="${THREADS}" --cpu-bind=cores --hint=nomultithread --mem=0 )
+    SRUN=( srun --cpus-per-task="${THREADS}" -m block:block:block --cpu-bind=cores --hint=nomultithread --mem=0 )
 else
     SRUN=( )
 fi
