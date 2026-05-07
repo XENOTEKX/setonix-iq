@@ -1,0 +1,25 @@
+# Profile directories that must never generate a stub.
+# Add the full directory name (not path) — one per line.
+#
+# Reason for each group is noted inline.
+
+# Failed runs: srun fatal (SLURM_MEM_PER_CPU + SLURM_MEM_PER_NODE conflict).
+# No IQ-TREE output. Superseded by Setonix_large_modelfinder_*T.json (42190953-42190959).
+# Deleted from repo in commit 59b09bf.
+large_modelfinder_1t_smtoff_pin_42179033
+large_modelfinder_1t_smtoff_pin_42179034
+large_modelfinder_4t_smtoff_pin_42179036
+large_modelfinder_8t_smtoff_pin_42179038
+large_modelfinder_16t_smtoff_pin_42179040
+large_modelfinder_32t_smtoff_pin_42179042
+large_modelfinder_64t_smtoff_pin_42179044
+large_modelfinder_104t_smtoff_pin_42179046
+
+# Additional failed/retry runs from the same broken script version.
+large_modelfinder_1t_smtoff_pin_42179139
+large_modelfinder_4t_smtoff_pin_42179140
+large_modelfinder_8t_smtoff_pin_42179141
+large_modelfinder_16t_smtoff_pin_42179142
+large_modelfinder_32t_smtoff_pin_42179143
+large_modelfinder_64t_smtoff_pin_42179144
+large_modelfinder_104t_smtoff_pin_42179145

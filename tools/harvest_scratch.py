@@ -833,9 +833,37 @@ def discover_new_profile_runs() -> int:
     ``logs/runs/<label>_baseline.json`` exists but ``profile_meta.json``
     does, emit a minimal skeleton so the subsequent enrichment pass can
     populate it.
+
+    Two skip mechanisms prevent duplicate or unwanted stubs:
+    - ``logs/runs/.harvest_skip``: newline-separated list of profile directory
+      names (e.g. ``xlarge_mf_8t_smtoff_pin_42181137``) that must never
+      generate a stub. Used for failed/deleted runs whose scratch dirs remain.
+    - slurm_id dedup: if any existing ``logs/runs/*.json`` already carries the
+      same ``slurm_id``, the profile dir is already tracked (possibly under a
+      different filename) and no new stub is created.
     """
     if not PROFILE_ROOT.is_dir():
         return 0
+
+    # Load explicit skip list.
+    skip_file = RUNS_DIR / ".harvest_skip"
+    skip_dirs: set[str] = set()
+    if skip_file.is_file():
+        for line in skip_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                skip_dirs.add(line)
+
+    # Build set of slurm_ids already present in tracked run files.
+    known_slurm_ids: set[str] = set()
+    for existing in RUNS_DIR.glob("*.json"):
+        try:
+            sid = json.loads(existing.read_text()).get("slurm_id")
+            if sid:
+                known_slurm_ids.add(str(sid))
+        except (json.JSONDecodeError, OSError):
+            pass
+
     created = 0
     for pdir in sorted(PROFILE_ROOT.iterdir()):
         if not pdir.is_dir():
@@ -849,6 +877,10 @@ def discover_new_profile_runs() -> int:
             continue
         label = parts[0]
         slurm_id = parts[1]
+        if pdir.name in skip_dirs:
+            continue
+        if slurm_id in known_slurm_ids:
+            continue
         target = RUNS_DIR / f"{label}_baseline.json"
         if target.exists():
             continue
