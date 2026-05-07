@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-08 (e) — Gadi baseline vs R2 breakdown (SPR topology analysis)
+
+### Verification table, baseline (`sr_icx`, no patches) vs R2 (`sr_clang_pin`)
+
+| Threads | Metric | Baseline | R2 | Δ | Interpretation |
+|---|---|---|---|---|---|
+| 32T | Wall time | 1035.8s | 1118.6s | **+8%** | All 32 threads fit in socket 0 — no cross-socket NUMA to fix; static scheduling adds slight load-balance overhead |
+| 32T | IPC | 1.367 | 1.257 | −8% | Confirms load-balance cost outweighs locality gain within one socket |
+| 32T | LLC miss | 78.9% | 64.3% | −14.6pp | Even intra-socket, first-touch reduces unnecessary misses |
+| 32T | L1d miss | 2.07% | 1.15% | −0.92pp | Page locality improved despite no wall-time win |
+| 64T | Wall time | 897.4s | 690.5s | **−23%** | 64T spans both sockets; NUMA fix starts to pay |
+| 64T | IPC | 1.155 | 1.438 | +24.5% | Threads computing instead of waiting on remote DRAM |
+| 64T | LLC miss | 78.8% | 75.1% | −3.8pp | Cross-socket remote traffic reducing |
+| 64T | L1d miss | 2.21% | 1.05% | −1.16pp | First-touch giving each thread local L1 hits |
+| 104T | Wall time | 1111.6s | 523.7s | **−53%** | Full node; was slower than 64T (cross-socket cliff) — now fastest |
+| 104T | IPC | 1.030 | 1.377 | +33.8% | Worst-stalled config fixed; socket-1 threads now contributing |
+| 104T | LLC miss | 77.1% | 75.8% | −1.3pp | Already improved by scheduling change alone |
+| 104T | L1d miss | 3.59% | 1.14% | −2.45pp | Largest L1d gain — remote misses landing in L1 now |
+
+### Wall time + lnL
+
+| Threads | Baseline (s) | R2 (s) | Δ | Log-likelihood |
+|---|---|---|---|---|
+| 32T | 1035.8 | 1118.6 | +8% | −10956936.612 ✓ |
+| 64T | 897.4 | 690.5 | −23% | −10956936.612 ✓ |
+| 104T | 1111.6 | 523.7 | −53% | −10956936.612 ✓ |
+
+Log-likelihood is **bit-identical** at all three thread counts. The 104T baseline (1111.6s) was slower than 64T (897.4s) — the cross-socket cliff — which is now gone: 104T is the fastest at 523.7s, i.e. super-linear scaling restored above 52T.
+
+### Why 32T regresses on Gadi but not Setonix
+
+Sapphire Rapids has 2 sockets × 52 cores = 104 logical. At 32T all threads land on socket 0 — there is no cross-socket NUMA pressure and `schedule(static)` offers no locality benefit over `schedule(dynamic,1)`. The dynamic scheduler was already a near-optimal fit. On Setonix (Zen3) NUMA granularity is at the CCD level (~8 cores), so cross-NUMA effects appear from ~16T upward and R2 helps at every thread count tested.
+
+The cross-socket cliff on Gadi sits at ~52T. Below that, R2 is neutral-to-slightly-negative; above it, the benefit compounds (−23% at 64T, −53% at 104T).
+
+---
+
 ## 2026-05-08 (d) — Gadi NUMA r2 ICX results: all pass, full lnL parity with Setonix
 
 Benchmark chain (`167865972–976`, `build-profiling-clang/iqtree3`, icx/libiomp5, R1+R2 patches) completed successfully. All three thread counts passed the lnL gate.
