@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-08 — NUMA first-touch (R1+R2) ported from Setonix to Gadi; xlarge_mf 32/64/104T submitted
+
+Cross-platform replication: applied the same NUMA first-touch source patches that eliminated the Setonix cross-socket cliff (see `numa-firsttouch-patches.md`) to the Gadi tree at `/scratch/rc29/as1708/iqtree3/src/iqtree3/`. Same eight edits, same line ranges, same comments calling out the R1a / R1b / R2a / R2b correspondence — zero behavioural divergence between platforms.
+
+### Patches applied (Gadi, identical to Setonix r2)
+
+| Patch | File | Site | Change |
+|---|---|---|---|
+| R1a | `tree/phylotreesse.cpp` | `PhyloTree::computePtnFreq` (`:537`) | serial fill → `#pragma omp parallel for schedule(static)` |
+| R1b | `tree/phylotreesse.cpp` | `PhyloTree::computePtnInvar` (`:571`) | `memset` → `#pragma omp parallel for schedule(static)` zero-fill over `maxptn` |
+| R2a | `tree/phylotreesse.cpp` | `PhyloTree::computeLikelihoodBranchEigen` (`:1286`) | `memset(_pattern_lh_cat, …)` → parallel-static zero-fill matching downstream `schedule(static)` reductions at `:1312` and `:1356` |
+| R2b ×5 | `tree/phylokernelnew.h` | lines 1275, 2386, 2838, 3005, 3595 | `schedule(dynamic,1)` → `schedule(static)` on every `num_packets` parallel-for site |
+
+Verified post-edit: `grep -c 'schedule(dynamic,1)' tree/phylokernelnew.h` → `0`; the five static sites all show `schedule(static) num_threads(num_threads)` with their original reduction clauses preserved.
+
+### Build + smoke + benchmark jobs submitted (chained on `afterok`)
+
+| Job | ID | Depends on | Purpose |
+|---|---|---|---|
+| `iqtree-bootstrap` | 167864735 | — | Rebuild `build-profiling/iqtree3` (gcc 14.2.0, `-O3 -march=sapphirerapids -fopenmp -fno-omit-frame-pointer -g`) — same flags as the existing `sr_gcc_pin` baseline so only the source patches differ. |
+| `iqtree-smoke-numa-r2` | 167864739 | afterok 735 | `run_pipeline.sh` smoke test — turtle.fa + small alignments, log-likelihood compare against canonical expected values. |
+| `iq-xlarge-32t-r2` | 167864740 | afterok 735 | `xlarge_mf.fa` @ 32T, label `xlarge_mf_32t_sr_gcc_pin_numa_ft_r2` |
+| `iq-xlarge-64t-r2` | 167864741 | afterok 735 | `xlarge_mf.fa` @ 64T, label `xlarge_mf_64t_sr_gcc_pin_numa_ft_r2` |
+| `iq-xlarge-104t-r2` | 167864742 | afterok 735 | `xlarge_mf.fa` @ 104T (full Gadi node), label `xlarge_mf_104t_sr_gcc_pin_numa_ft_r2` |
+
+Thread-count rationale: Setonix r2 sweep was 32/64/128 (Zen3, 128 logical). Gadi normalsr is Sapphire Rapids 8470Q, 104 logical/node, so 32/64/104 is the closest analogue. Comparison with the existing `gadi_xlarge_mf_{32,64}t_sr_gcc_pin.json` baselines (no patches) gives a direct A/B on the same node class for two of the three thread counts; 104T is a new data point both with and without the patches (no prior 104T baseline exists for xlarge_mf — the existing matrix capped there at 64T).
+
+### Why this matters for the cross-platform story
+
+The Setonix wins were explained as a NUMA-locality fix (L1d unchanged, `l2_pf_miss_l2_l3` halved). Gadi normalsr has 8 NUMA nodes per node (vs Zen3's 16 CCDs / 2 sockets) but the same first-touch policy, so the patches should reduce remote-DRAM traffic at the 32T+ thread counts where Gadi crosses NUMA boundaries. Bit-identical log-likelihood (`expect: −10956936.6117` for xlarge_mf@GTR+G4) is the correctness gate on each run — the worker writes `verify[]` into the run JSON automatically. The runs land in `${REPO_DIR}/logs/runs/gadi_xlarge_mf_{32,64,104}t_sr_gcc_pin_numa_ft_r2.json`.
+
+Next: once jobs complete, compare wall time + IPC + LLC-miss / dTLB-miss-rate against `gadi_xlarge_mf_{32,64}t_sr_gcc_pin.json` baselines. If the shape matches Setonix (super-linear scaling above 32T, IPC up, LLC-miss down at the higher thread counts), the patches transfer cleanly across compiler (gcc vs AOCC) and microarchitecture (SPR vs Zen3) — i.e. they're a property of OpenMP scheduling and Linux first-touch, not of either toolchain.
+
+---
+
 ## 2026-05-07 (verification) — Hardware perf counters confirm NUMA cliff eliminated
 
 We needed to prove the wall-time wins are actually NUMA locality, not a lucky scheduler reshuffle. Pulled `perf stat` counters from `profile_meta.json` for baseline (no patches) vs r2 (R1+R2 applied) at 32/64/128T. The story is consistent across all three thread counts and matches the predicted mechanism.
