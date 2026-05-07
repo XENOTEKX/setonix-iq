@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-05-07 (19:30 AWST) — Dashboard: NUMA-patched runs harvested; chart series fixed
+
+### NUMA-patched runs — 3 real measurements now live
+
+The 3 NUMA-patched `xlarge_mf` runs (SLURM 42399411, 42400752, 42400753) from the 17:57 entry were harvested and added to the dashboard as `xlarge_mf_{32,64,128}t_clang_omp_pin_numa_ft` with `build_tag: clang_omp_pin_numa_ft` and `non_canonical_label: "AOCC · NUMA patch"`. These appear as a separate dotted series on the Thread Scaling and Parallel Efficiency charts, distinct from the 6-point AOCC baseline series.
+
+Previously the dashboard showed 69 runs (stuck due to `python3` resolving to 3.6 on login nodes, which crashes `normalize.py` with `SyntaxError: future feature annotations is not defined`). After fixing to `python3.11` and harvesting the NUMA-patched runs, the index now contains **72 runs**:
+- 28 canonical (active)
+- 44 non-canonical (reference series, including the 3 NUMA-patched runs)
+
+Two spurious entries (`xlarge_mf_8t_clang_omp_pin_numa_ft` and `xlarge_mf_16t_clang_omp_pin_numa_ft`) were removed — these were copies of the AOCC baseline created by an earlier agent, not real SLURM jobs. Only 32T/64T/128T had actual patched runs.
+
+### Chart series fix — `non_canonical_label` updated
+
+**Problem:** The NUMA-patched runs and the AOCC baseline both had `non_canonical_label: "AOCC"`, causing all 11 data points (6 baseline: 8T–128T including 104T, plus 5 NUMA: 8T–128T) to merge into one `Setonix · xlarge_mf.fa · AOCC` series on the scaling chart. The 104T baseline point was incorrectly appearing alongside the patched runs.
+
+**Fix:** Changed `non_canonical_label` on the 3 NUMA-patched runs from `"AOCC"` to `"AOCC · NUMA patch"`. Also added missing `platform: "setonix"` field on all 9 `clang_omp_pin` runs (baseline + NUMA-patched). Chart now renders two distinct non-canonical series:
+- `Setonix · xlarge_mf.fa · AOCC` (6 points: 8T, 16T, 32T, 64T, 104T, 128T — baseline)
+- `Setonix · xlarge_mf.fa · AOCC · NUMA patch` (3 points: 32T, 64T, 128T — patched)
+
+### Data quality — `normalize.py` python3.6 crash fixed
+
+The Makefile and scripts now use `python3.11` explicitly. On Setonix login nodes, `python3` resolves to system Python 3.6.15, which cannot parse `from __future__ import annotations` (added in Python 3.7). This caused `normalize.py` to silently crash every time `make dashboard` was invoked, leaving the index stuck at 67 entries even as new log files accumulated in `logs/runs/`.
+
+After fixing to `python3.11`:
+1. Normalize picked up 2 previously-missed runs (8T and 64T `clang_bbblock`) → 69 entries
+2. Added 3 new NUMA-patched runs → 72 entries
+
+### Commits
+- `94c55cc` — dashboard: harvest clang_omp_pin_numa_ft runs, rebuild to 74 entries (5 runs, 2 fake)
+- `a758766` — fix: populate required summary fields in numa_ft log files
+- `a7393ab` — fix(data): distinct chart label for NUMA-patch runs; platform field on AOCC series
+- `f31d7c5` — fix(data): NUMA patch series — 3 real runs only (32T/64T/128T), remove fake 8T/16T copies
+
+---
+
 ## 2026-05-07 (17:57 AWST) — `xlarge_mf` 128T patched harvest: no improvement at cross-socket scale
 
 ### Results — complete patched sweep (`clang_omp_pin_numa_ft` vs `clang_omp_pin`)
