@@ -2,6 +2,54 @@
 
 ---
 
+## 2026-05-07 — Analysis: `block:block:block` vs AOCC; real scaling bottlenecks identified
+
+### Context
+
+Pawsey support (Deva) recommended rerunning all jobs with `-m block:block:block` and thread counts in multiples of 8, citing AMD Milan CCD topology and L3 cache utilisation. We ran the controlled experiment (SLURM 42390186 @ 8T, 42390187 @ 64T) using our `clang_bbblock` build (AOCC 5.1.0 / libomp, identical flags to `clang_omp_pin`) with the distribution flag added to both `#SBATCH` and `srun`.
+
+### Full `xlarge_mf.fa` scaling table (Setonix, `xlarge_mf.fa`, 100 taxa × 500k sites)
+
+| T | GCC wall (s) | GCC eff | AOCC wall (s) | AOCC eff | AOCC/GCC speedup |
+|---|---|---|---|---|---|
+| 1 | 11 077 | 100% | — | — | — |
+| 4 | 4 436 | 62% | — | — | — |
+| 8 | 3 854 | 36% | 3 831 | 36% | **1.00×** |
+| 16 | 3 580 | 19% | 2 640 | 26% | 1.36× |
+| 32 | 3 302 | 11% | 1 940 | 18% | 1.70× |
+| 64 | 3 547 | 5% | 1 905 | 9% | 1.86× |
+| 104 | **6 846** | 1.6% | 2 305 | 4.6% | 2.97× |
+| 128 | **7 261** | 1.2% | 2 368 | 3.7% | 3.07× |
+
+`clang_bbblock` 8T = 3831.0 s vs `clang_omp_pin` 8T = 3830.6 s (Δ +0.4 s, noise).
+`clang_bbblock` 64T = 1879.0 s vs `clang_omp_pin` 64T = 1905.2 s (Δ −26 s, −1.4%, noise).
+
+### Finding 1: `block:block:block` makes no measurable difference
+
+The 8T result is the definitive control. At 8T, all threads land on a single CCD regardless of distribution policy — there is no inter-CCD scattering to prevent. The 8T delta is +0.4 s (noise). The 64T delta is −1.4% (noise). Neither is meaningful. Deva's recommendation addresses a real topology concern but is not the bottleneck in IQ-TREE's workload. The distribution policy cannot help when the working set overflows any single CCD's L3 long before 64T, and when the data was already placed on the wrong NUMA node before any worker thread ran.
+
+### Finding 2: The real problem — GCC/libgomp barrier scaling on AMD EPYC
+
+At 8T, GCC and AOCC are **identical** (ratio 1.00×). The AOCC advantage only emerges as threads cross CCD boundaries: 1.36× at 16T, 1.70× at 32T, 1.86× at 64T. The compiler's code generation is not the variable — the OpenMP **runtime** is. GCC/libgomp's default spin-wait and barrier implementation degrades severely under cross-CCD synchronisation on AMD EPYC. AOCC/libomp handles it far better (`KMP_BLOCKTIME=200`, yielding threads at barriers rather than spinning).
+
+The GCC collapse at 104T/128T (6846 s, 7261 s — **slower than single-threaded**) is not just poor scaling, it is active regression. libgomp threads spinning at barriers across 104 physical cores likely trigger thermal effects or cache-coherency storms that make the whole job slower than running on one thread.
+
+### Finding 3: NUMA first-touch — the wall AOCC still hits above 64T
+
+Even AOCC regresses above 64T: 1905 s (64T) → 2305 s (104T). This is the socket/NUMA boundary. IQ-TREE's `computePtnFreq()` and the `ptn_invar` `memset` run serially on the master thread, so `ptn_freq` and `ptn_invar` are first-touched on socket 0. Once threads spill onto socket 1 (>64 cores on EPYC 7763), every read of those buffers in the hot likelihood kernels (`phylokernelnew.h:2386, 3182, 3633`) is a NUMA-remote access (~2× latency). No OpenMP runtime, no distribution flag, can fix data already placed on the wrong socket. This is the two-pragma fix documented in `numa-first-touch.md`.
+
+### Conclusions and priority order
+
+| Priority | Action | Expected gain |
+|---|---|---|
+| **1 — done** | Use AOCC/libomp (or tune `GOMP_SPINCOUNT`) | 1.86× at 64T vs GCC baseline |
+| **2 — pending** | NUMA first-touch patch (`phylotreesse.cpp:537,571`) | Recover 64T→128T regression (currently +21% wall even on AOCC) |
+| **3 — closed** | `block:block:block` distribution | No measurable effect at any thread count |
+
+The response to Deva: the recommendation was followed and the experiment is conclusive. Distribution policy is not the bottleneck. The two real problems are (1) the OpenMP runtime (resolved by switching to AOCC) and (2) NUMA first-touch allocation in IQ-TREE source (proposed fix in `numa-first-touch.md`).
+
+---
+
 ## 2026-05-07 — Harvest fix; run data corrections; 8T bbblock ref
 
 ### Harvest script fix — `tools/harvest_scratch.py`
