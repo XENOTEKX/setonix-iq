@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-07 (15:42 AWST) — `xlarge_mf` 32T patched harvest: parity confirmed
+
+First patched run completed cleanly. **Parity criterion met** — the regression-free baseline below 64T is established, which means the 64/128T runs (still in flight) will cleanly attribute any wall-time delta to the NUMA fix rather than to a side-effect of the patch itself.
+
+### Result — `xlarge_mf.fa @ 32T, AOCC clang+libomp, KMP_BLOCKTIME=200`
+
+| Metric | Unpatched (job 42225456) | Patched (job 42399411) | Δ |
+|---|---|---|---|
+| BEST SCORE | −10956936.612 | −10956936.612 | **bit-identical** ✓ |
+| Tree length | 41.666 | 41.666 | bit-identical ✓ |
+| Iterations | 102 | 102 | bit-identical ✓ |
+| Wall-clock | **1940.255 s** | **1954.201 s** | +13.95 s (+0.72 %) |
+| CPU time | 57090.305 s | 57546.733 s | +456.4 s (+0.80 %) |
+
+The +0.72 % wall-time delta is comfortably inside run-to-run noise (the unpatched AOCC matrix already shows 1–3 % per-thread-count variability). All correctness invariants are bit-identical, which closes the worry that the parallel-static fill could perturb the tree-search trajectory.
+
+### What this confirms
+
+- The two-pragma fix in `computePtnFreq()` / `computePtnInvar()` adds no measurable overhead at 32T (single-socket regime where the fix can't help). The fork-join cost of the parallel init is amortised across the 1954 s tree search.
+- The `omp_outlined` symbols and `__kmpc_fork_call@plt` invocations are not just present in the binary — they execute correctly with no functional impact. Earlier worry about AOCC `-O3` re-serialising the parallel init was unfounded.
+- The 32T run is not the headline test (single-socket → no NUMA penalty to recover). The headline test is **128T**, currently running as job 42400753.
+
+### Chart reference for dashboard
+
+Tagged the patched binary's source state so the chart code can pin the patched-vs-unpatched comparison to a stable git ref:
+
+```
+git tag:                   numa-firsttouch-r1
+commit (setonix-agent):    <see git rev-parse below>
+patched binary sha256:     fa43971b6132412913b8a211de268fc481c7873116f5bf1bac05656944f3aefc
+unpatched binary sha256:   bd1ad710d7568f464bce12425b1a716db64a22a217e70227c98d75f507783c96
+patched build dir:         /scratch/pawsey1351/asamuel/iqtree3/build-profiling-aocc/iqtree3
+unpatched binary archive:  /scratch/pawsey1351/asamuel/iqtree3/build-profiling-aocc/iqtree3.unpatched
+
+Dashboard run-pair the chart should plot for the parity check (32T):
+  unpatched: setonix-ci/profiles/xlarge_mf_32t_clang_omp_pin_42225456/   (build_tag: clang_omp_pin)
+  patched:   setonix-ci/profiles/xlarge_mf_32t_clang_omp_pin_42399411/   (build_tag: clang_omp_pin_numa_ft)
+```
+
+**Action for ingestion** — when the harvest job rebuilds `web/data/runs.index.json`, the three patched job IDs (42399411, 42400752, 42400753) need to be tagged with `build_tag = "clang_omp_pin_numa_ft"` so they don't conflate with the 2026-04-29 unpatched `clang_omp_pin` matrix. Suggested label override at ingestion time:
+
+```bash
+# in run_mega_profile.sh harvest path, or as post-process:
+if [[ "$BUILD_DIR" == *iqtree3-numa-firsttouch* ]]; then
+    LABEL_SUFFIX="${LABEL_SUFFIX}_numa_ft"
+fi
+```
+
+The chart series description: `"AOCC clang+libomp + NUMA first-touch fix (computePtnFreq / computePtnInvar)"`.
+
+### Updated Pending
+
+| Priority | Task | Notes |
+|---|---|---|
+| ~~**HIGH**~~ | ~~Harvest `xlarge_mf` 32T patched (job 42399411)~~ | ✅ Parity confirmed: −10956936.612 / 1954 s vs unpatched 1940 s. |
+| **HIGH** | Harvest `xlarge_mf` 64T patched (job 42400752) | 56 min elapsed, still running. Expected: parity (still single-socket on EPYC 7763). |
+| **HIGH** | Harvest `xlarge_mf` 128T patched (job 42400753) | 56 min elapsed, still running. **Headline fix-validation run.** Should beat unpatched 128T (2368 s) and ideally beat unpatched 64T (1905 s). |
+| **HIGH** | Re-tag the three patched job IDs in `runs.index.json` to `clang_omp_pin_numa_ft` | Otherwise the chart will show a single noisy line instead of two parallel lines. |
+| **HIGH** | If 128T result confirms the patch, apply remaining HIGH bugs (`phylotreesse.cpp:1295`, `phylokernelsitemodel.cpp:593`) and re-run incremental 64/128T sweep | Mechanical patches; same idiom. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T/104T (PBS **167520757–167520758**) | Unchanged. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with `python3.11`-fixed `run_mega_profile.sh` | Unchanged. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Unchanged. |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Unchanged. |
+| **HIGH** | Update dashboard chart: `cache-miss-rate` → platform-aware `l2-miss-rate` / `l3-miss-rate`; primary memory-pressure plot → `L1d-mpki` | Unchanged. |
+| **MEDIUM** | UFBoot `pattern_lh` memset (`iqtree.cpp:3868, 3877`) | Worth fixing once UFBoot is part of the benchmark matrix. |
+| **LOW** | Remaining LOW-severity bugs (legacy / HMM kernels) | Track but don't chase — not on the production hot path. |
+| **LOW** | `Setonix_xlarge_mf_1T.json` — `hotspots=0` | Unchanged. |
+
+---
+
 ## 2026-05-07 (later) — Codebase survey for additional NUMA first-touch bugs; 8/16T cancelled, 64/128T submitted
 
 ### Survey scope
