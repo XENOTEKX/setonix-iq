@@ -4,7 +4,7 @@
 
 ## 2026-05-08 (e) — Gadi baseline vs R2 breakdown (SPR topology analysis)
 
-### Verification table, baseline (`sr_icx`, no patches) vs R2 (`sr_clang_pin`)
+### Verification table, baseline (`sr_icx`, no patches) vs R2 (`icx_omp_pin_numa_ft_r2`)
 
 | Threads | Metric | Baseline | R2 | Δ | Interpretation |
 |---|---|---|---|---|---|
