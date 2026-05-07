@@ -4199,7 +4199,8 @@
         "7": 3.99
       },
       "total_mb": 14.15
-    }
+    },
+    "ipc_derived": 1.8037
   },
   "summary": {
     "pass": 0,

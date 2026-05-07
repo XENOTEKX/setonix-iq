@@ -1815,7 +1815,8 @@
         "stack": "void PhyloTree::computeLikelihoodBufferSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, unsigned long, unsigned long, int);void PhyloTree::computeLikelihoodDervSIMD<Vec4d, false, 4, true, false>(PhyloNeighbor*, PhyloNode*, double*, double*);[runtime];GOMP_parallel",
         "count": 115500
       }
-    ]
+    ],
+    "ipc_derived": 0.2363
   },
   "summary": {
     "pass": 0,

@@ -1477,7 +1477,8 @@
       "read_bytes": 71889920,
       "write_bytes": 454656,
       "cancelled_write_bytes": 102400
-    }
+    },
+    "ipc_derived": 0.5373
   },
   "summary": {
     "pass": 0,

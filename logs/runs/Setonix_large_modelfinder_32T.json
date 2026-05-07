@@ -785,7 +785,8 @@
       "read_bytes": 1568768,
       "write_bytes": 4096,
       "cancelled_write_bytes": 0
-    }
+    },
+    "ipc_derived": 0.3769
   },
   "dataset_info": {
     "file": "large_modelfinder.fa",
