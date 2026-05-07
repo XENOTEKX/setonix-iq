@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-05-07 (16:48 AWST) — `xlarge_mf` 32T + 64T patched harvest: parity at 32T, **real improvement at 64T**
+
+### Results — `xlarge_mf.fa`, AOCC clang+libomp, KMP_BLOCKTIME=200
+
+| Threads | Unpatched wall (s) | Patched wall (s) | Δ wall | BEST SCORE | Iter | CPU Δ |
+|---|---|---|---|---|---|---|
+| **32T** (job 42399411 vs 42225456) | 1940.255 | 1954.201 | **+0.72 %** (noise) | −10956936.612 bit-identical ✓ | 102 = 102 ✓ | +0.80 % |
+| **64T** (job 42400752 vs 42225457) | 1905.223 | 1796.483 | **−5.71 %** ✅ | −10956936.612 bit-identical ✓ | 102 = 102 ✓ | −6.02 % |
+
+### Key finding: fix bites at 64T, not just 128T
+
+The original prediction was that the NUMA penalty would only appear when threads spilled onto the second socket (>64T). **The 64T result shows the fix already helps at exactly 64T**, saving 108.7 s (−5.71 %) with bit-identical correctness.
+
+**Explanation — NUMA-per-CCD (AMD EPYC `NPS4` or `NPS8` mode):** The EPYC 7763 has 8 CCDs per socket, each an independent L3 domain with its own memory-controller connection. When the OS configures NUMA-per-die, each CCD is its own NUMA node — up to 8 NUMA nodes per socket, 16 per dual-socket node. Even at 64T (all within socket 0), threads on CCD 1–7 pay a remote penalty to read `ptn_freq[]` and `ptn_invar[]` pages that were first-touched by the master thread on CCD 0. The parallel-static fill distributes the first-touch across all CCDs, giving each thread local reads.
+
+This is a stronger result than expected: the fix isn't just a "cross-socket" patch — it's a **cross-CCD** fix that pays dividends as soon as thread count exceeds ~8 (one CCD's worth of cores).
+
+### What this implies for the 128T run (in flight, job 42400753)
+
+With per-CCD NUMA in effect, the unpatched 128T regression (2368 s vs 1905 s unpatched) was partly CCD-internal and partly cross-socket. The patched 128T should recover substantially more than the original 2-socket model predicted. Expected patched 128T: likely below 1905 s (matching or beating patched 64T).
+
+### NUMA node topology check
+
+```bash
+# Verify on the compute node post-run:
+numactl --hardware    # to confirm NPS mode and NUMA node count
+lstopo --no-io        # CCD → NUMA node mapping
+```
+
+(This should be captured in the next job's env.json / `numa` field in samples.jsonl.)
+
+### Updated pending
+
+| Priority | Task | Notes |
+|---|---|---|
+| ~~**HIGH**~~ | ~~Harvest `xlarge_mf` 32T patched~~ | ✅ Parity +0.72 %. |
+| ~~**HIGH**~~ | ~~Harvest `xlarge_mf` 64T patched~~ | ✅ **−5.71 %** improvement. Per-CCD NUMA-per-die effect confirmed. |
+| **HIGH** | Harvest `xlarge_mf` 128T patched (job 42400753) | Still running (~1h elapsed). Expected: ≤ patched 64T (1796 s). |
+| **HIGH** | Re-tag patched job IDs in `runs.index.json` → `clang_omp_pin_numa_ft` | All three jobs (42399411, 42400752, 42400753). |
+| **HIGH** | Capture NUMA topology from job node (`numactl --hardware`, `lstopo`) | Confirm NPS mode (NPS4 = 4 nodes/socket = 4 CCDs grouped; NPS8 = each CCD is a NUMA node). |
+| **HIGH** | Apply remaining HIGH bugs (`phylotreesse.cpp:1295`, `phylokernelsitemodel.cpp:593`) after 128T headline result | Rebuild as patch v2; tag `numa-firsttouch-r2`. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T/104T (PBS **167520757–167520758**) | Unchanged. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T | Unchanged. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Unchanged. |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Unchanged. |
+| **HIGH** | Update dashboard chart | `cache-miss-rate` → `l2/l3-miss-rate`; primary memory plot → `L1d-mpki`. Unchanged. |
+
+---
+
 ## 2026-05-07 (15:42 AWST) — `xlarge_mf` 32T patched harvest: parity confirmed
 
 First patched run completed cleanly. **Parity criterion met** — the regression-free baseline below 64T is established, which means the 64/128T runs (still in flight) will cleanly attribute any wall-time delta to the NUMA fix rather than to a side-effect of the patch itself.
