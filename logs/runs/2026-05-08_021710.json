@@ -1,0 +1,36 @@
+{
+  "run_id": "2026-05-08_021710",
+  "pbs_id": "167865973",
+  "run_type": "pipeline",
+  "label": "gadi_pipeline_2026-05-08_021710",
+  "timing": [{"command":"/scratch/rc29/as1708/iqtree3/build-profiling-clang/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/turtle.fa -m GTR+G4 -seed 1 --prefix /jobfs/167865973.gadi-pbs/tmp.YdY44ZCmbb/turtle.fa","time_s":0.915},{"command":"/scratch/rc29/as1708/iqtree3/build-profiling-clang/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/example.phy -seed 1 --prefix /jobfs/167865973.gadi-pbs/tmp.YdY44ZCmbb/example.phy","time_s":6.648}],
+  "verify": [{"file":"turtle.fa","status":"fail","expected":-5681.1,"reported":135.3287),"diff":999},{"file":"example.phy","status":"pass","expected":0,"reported":336.3337),"diff":0}],
+  "env": {
+    "date": "2026-05-08T02:17:18+10:00",
+    "hostname": "gadi-cpu-spr-0105.gadi.nci.org.au",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "gcc": "8.5.0-28)",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "os": "Rocky Linux 8.10 (Green Obsidian)",
+    "iqtree_binary": "/scratch/rc29/as1708/iqtree3/build-profiling-clang/iqtree3",
+    "iqtree_version": "IQ-TREE version 3.1.1 for Linux x86 64-bit built May  8 2026",
+    "pbs": {
+      "job_id": "167865973.gadi-pbs",
+      "job_name": "iq-clang-smoke",
+      "queue": "normalsr-exec",
+      "project": "rc29",
+      "ncpus": "104",
+      "nodefile": "/local/spool/pbs/aux/167865973.gadi-pbs",
+      "submit_host": "gadi-login-06.gadi.nci.org.au",
+      "submit_dir": "/home/272/as1708",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 1,
+    "total_time": 7.563,
+    "all_pass": false
+  }
+}

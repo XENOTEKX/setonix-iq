@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-08 (d) — Gadi NUMA r2 ICX results: all pass, full lnL parity with Setonix
+
+Benchmark chain (`167865972–976`, `build-profiling-clang/iqtree3`, icx/libiomp5, R1+R2 patches) completed successfully. All three thread counts passed the lnL gate.
+
+### Results
+
+| Threads | Wall time (s) | lnL reported | lnL expected | Status |
+|---|---|---|---|---|
+| 32 | 1118.6 | −10956936.612 | −10956936.612 | ✅ pass |
+| 64 | 690.5  | −10956936.612 | −10956936.612 | ✅ pass |
+| 104 | 523.7 | −10956936.612 | −10956936.612 | ✅ pass |
+
+### Parity vs Setonix r2 (`clang_omp_pin_numa_ft_r2`)
+
+| Threads | Setonix wall (s) | Gadi wall (s) | lnL match |
+|---|---|---|---|
+| 32 | 1266.8 | 1118.6 | ✅ −10956936.612 |
+| 64 | 830.6  | 690.5  | ✅ −10956936.612 |
+| 128 (Setonix) / 104 (Gadi) | 736.6 | 523.7 | ✅ (hardware-bound thread cap) |
+
+Gadi is 10–17% faster at matched thread counts, consistent with the per-core SPR vs Zen3 IPC advantage and narrower NUMA topology (8 vs 16 domains). lnL matches to the full precision of the run record (0.000 diff) — output parity confirmed.
+
+### IPC / cache profile at 104T
+
+| Metric | Value |
+|---|---|
+| IPC | 1.377 |
+| L1-dcache miss rate | 1.14% |
+| LLC miss rate | 75.8% |
+| dTLB miss rate | 0.31% |
+| branch miss rate | 0.050% |
+| peak RSS | 3.88 GB |
+
+LLC miss rate is high (as expected for a large in-memory tree likelihood computation at full node width). NUMA first-touch (R1+R2) eliminates false-remote accesses by ensuring each thread's data pages are allocated on the local NUMA domain at first use.
+
+---
+
+## 2026-05-08 (c) — ICX bootstrap failed on terraphast `clamped_uint.cpp`; fixed by inlining operator templates in the header
+
+The `iqtree-clang-bootstrap` job (`167865536`) submitted in entry (b) above failed at 92% (terraphast/CMakeFiles/...clamped_uint.cpp.o, exit 2, 7m08s CPU). The four dependent jobs (`167865584–587`) were cleared by PBS Pro's `afterok` cascade — no SU spent on the downstream chain.
+
+### Root cause: clang/icx duplicate-symbol on explicitly-instantiated operator templates
+
+Compile error from `iqtree-clang-bootstrap.o167865536`:
+
+```
+terraphast/lib/clamped_uint.cpp:60:6: error: definition with same mangled name
+  '_ZN8terraceseqILb0EEEbNS_12checked_uintIXT_EEES2_' as another definition
+   60 | bool operator==(checked_uint<except> a, checked_uint<except> b) {
+```
+
+The TU contained both (a) the template body of `operator==`/`!=`/`+`/`*`/`<<` for `terraces::checked_uint<except>` and (b) explicit instantiation definitions for those operators at `<false>` and `<true>`. icx (LLVM/clang front-end) emitted a definition for each specialization twice — once via the in-TU template body and once via the explicit instantiation request — yielding the duplicate-symbol error. gcc happens to dedupe; clang treats it as ill-formed. Symbol-mangled name decodes to `terraces::operator==<false>(checked_uint<false>, checked_uint<false>)`, confirming the diagnosis.
+
+### Fix
+
+Moved the five free-function operator template *definitions* from `terraphast/lib/clamped_uint.cpp` into `terraphast/include/terraces/clamped_uint.hpp` and marked them `inline`. Removed the corresponding `template bool operator==(...)` etc. explicit-instantiation lines from the .cpp. The `template class checked_uint<false>;` / `template class checked_uint<true>;` member instantiations are kept (members were never the duplicated symbols). Header now `#include <ostream>` so the `operator<<` body can see the full type.
+
+This is ODR-correct (inline templates can be defined in multiple TUs) and gcc-compatible — the gcc build will continue to work unchanged.
+
+### Files touched
+
+- `src/iqtree3/terraphast/include/terraces/clamped_uint.hpp` — added `<ostream>` include; replaced 5 forward declarations with inline definitions.
+- `src/iqtree3/terraphast/lib/clamped_uint.cpp` — removed the 5 template bodies + 10 explicit instantiation lines; kept the two `template class` member instantiations and a comment explaining why.
+
+### Re-submitted PBS chain
+
+| Job | ID | Depends on |
+|---|---|---|
+| `iqtree-clang-bootstrap` | 167865972 | — |
+| `iq-clang-smoke` | 167865973 | afterok 972 |
+| `iq-xlarge-32t` | 167865974 | afterok 973 |
+| `iq-xlarge-64t` | 167865975 | afterok 973 |
+| `iq-xlarge-104t` | 167865976 | afterok 973 |
+
+All downstream jobs pass `BUILD_DIR=${PROJECT_DIR}/build-profiling-clang` and `KMP_BLOCKTIME=200` via `-v` env so the worker uses the icx binary and libiomp5 spin-wait parity. No source-patch changes — the R1/R2 NUMA edits from entry (a) are still in place; this fix is unrelated to the NUMA work and lives entirely in terraphast.
+
+---
+
 ## 2026-05-08 (b) — Gadi NUMA r2 sweep re-submitted under ICX/libiomp5 (full Setonix toolchain parity)
 
 The first attempt (entry above) used the gcc-built `build-profiling/iqtree3` so the binary's OpenMP runtime was libgomp. That breaks the cross-platform comparison with Setonix r2, which was built and benchmarked under AOCC 5.1.0 / libomp (LLVM-family OpenMP). Caught and corrected before any benchmark job ran — the four held jobs (`167864739–742`) were `qdel`-ed at queue time, so no SU was wasted.
