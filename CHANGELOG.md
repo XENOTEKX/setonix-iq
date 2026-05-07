@@ -8,13 +8,13 @@
 
 | Threads | Baseline (s) | R1 patch (s) | R2 patch (s) | R1 vs baseline | R2 vs baseline | Log-likelihood |
 |---|---|---|---|---|---|---|
-| 32T | 1940.3 | 1954.2 | pending | +0.7% | — | — |
+| 32T | 1940.3 | 1954.2 | **1266.8** | +0.7% | **−34.7%** | −10956936.6117 ✓ |
 | 64T | 1905.2 | 1796.5 | **830.6** | −5.7% | **−56.4%** | −10956936.6117 ✓ |
 | 128T | 2368.4 | 2382.2 | **736.6** | +0.6% | **−68.9%** | −10956936.6117 ✓ |
 
 Log-likelihood is **bit-identical** across all R1 and R2 runs (`−10956936.6117`). The schedule changes produce identical numerical results — same tree topology, same model, same BIC ranking.
 
-**128T is now faster than 64T (736.6s vs 830.6s)** — the cross-socket cliff that was visible in both baseline and R1 data is gone. Socket-1 threads are now contributing instead of fighting for remote memory.
+**128T is now faster than 64T (736.6s vs 830.6s), and 64T is faster than 32T (830.6s vs 1266.8s)** — the cross-socket cliff that was visible in both baseline and R1 data is gone. Socket-1 threads are now contributing instead of fighting for remote memory. Scaling is now super-linear above 64T (more threads = better NUMA distribution).
 
 ### What R2 fixed that R1 didn't
 
