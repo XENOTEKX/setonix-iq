@@ -150,7 +150,7 @@ $ grep -n 'schedule(static) num_threads' tree/phylokernelnew.h
 3595:#pragma omp parallel for schedule(static) num_threads(num_threads) reduction(+:...)
 ```
 
-R1a/R1b/R2a are at `phylotreesse.cpp:546`, `:578`, `:1287` (the new comment-and-block insertions). Bootstrap log (`iqtree-bootstrap.o167864735`) confirmed the gcc build linked against libgomp via `ldd`; the icx build will be re-verified from the `167865536` log on completion (`grep 'libomp\|libiomp5' build_log`).
+R1a/R1b/R2a are at `phylotreesse.cpp:546`, `:578`, `:1302`.
 
 ---
 
@@ -162,10 +162,10 @@ Cross-platform replication: applied the same NUMA first-touch source patches tha
 
 | Patch | File | Site | Change |
 |---|---|---|---|
-| R1a | `tree/phylotreesse.cpp` | `PhyloTree::computePtnFreq` (`:537`) | serial fill → `#pragma omp parallel for schedule(static)` |
-| R1b | `tree/phylotreesse.cpp` | `PhyloTree::computePtnInvar` (`:571`) | `memset` → `#pragma omp parallel for schedule(static)` zero-fill over `maxptn` |
-| R2a | `tree/phylotreesse.cpp` | `PhyloTree::computeLikelihoodBranchEigen` (`:1286`) | `memset(_pattern_lh_cat, …)` → parallel-static zero-fill matching downstream `schedule(static)` reductions at `:1312` and `:1356` |
-| R2b ×5 | `tree/phylokernelnew.h` | lines 1275, 2386, 2838, 3005, 3595 | `schedule(dynamic,1)` → `schedule(static)` on every `num_packets` parallel-for site |
+| R1a   | `tree/phylotreesse.cpp` `:546`  | `computePtnFreq`   | serial fill → `#pragma omp parallel for schedule(static)` |
+| R1b   | `tree/phylotreesse.cpp` `:578`  | `computePtnInvar`  | `memset` → `#pragma omp parallel for schedule(static)` |
+| R2a   | `tree/phylotreesse.cpp` `:1302` | `computeLikelihoodBranchEigen` | `memset(_pattern_lh_cat)` → `#pragma omp parallel for schedule(static)` |
+| R2b×5 | `tree/phylokernelnew.h` `:1275, :2386, :2838, :3005, :3595` | kernel packet loops | `schedule(dynamic,1)` → `schedule(static)` |
 
 Verified post-edit: `grep -c 'schedule(dynamic,1)' tree/phylokernelnew.h` → `0`; the five static sites all show `schedule(static) num_threads(num_threads)` with their original reduction clauses preserved.
 
