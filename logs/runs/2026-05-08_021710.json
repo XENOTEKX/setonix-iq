@@ -4,7 +4,7 @@
   "run_type": "pipeline",
   "label": "gadi_pipeline_2026-05-08_021710",
   "timing": [{"command":"/scratch/rc29/as1708/iqtree3/build-profiling-clang/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/turtle.fa -m GTR+G4 -seed 1 --prefix /jobfs/167865973.gadi-pbs/tmp.YdY44ZCmbb/turtle.fa","time_s":0.915},{"command":"/scratch/rc29/as1708/iqtree3/build-profiling-clang/iqtree3 -s /scratch/rc29/as1708/iqtree3/benchmarks/example.phy -seed 1 --prefix /jobfs/167865973.gadi-pbs/tmp.YdY44ZCmbb/example.phy","time_s":6.648}],
-  "verify": [{"file":"turtle.fa","status":"fail","expected":-5681.1,"reported":135.3287),"diff":999},{"file":"example.phy","status":"pass","expected":0,"reported":336.3337),"diff":0}],
+  "verify": [{"file":"turtle.fa","status":"fail","expected":-5681.1,"reported":135.3287,"diff":999},{"file":"example.phy","status":"pass","expected":0,"reported":336.3337,"diff":0}],
   "env": {
     "date": "2026-05-08T02:17:18+10:00",
     "hostname": "gadi-cpu-spr-0105.gadi.nci.org.au",
