@@ -2109,5 +2109,6 @@
   "build_tag": "clang_omp_pin_numa_ft",
   "canonical": false,
   "non_canonical": true,
-  "non_canonical_label": "AOCC"
+  "non_canonical_label": "AOCC \u00b7 NUMA patch",
+  "platform": "setonix"
 }

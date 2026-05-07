@@ -2406,5 +2406,6 @@
   "build_tag": "clang_omp_pin",
   "canonical": false,
   "non_canonical": true,
-  "non_canonical_label": "AOCC"
+  "non_canonical_label": "AOCC",
+  "platform": "setonix"
 }
