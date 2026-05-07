@@ -2,6 +2,180 @@
 
 ---
 
+## 2026-05-07 (later) — Codebase survey for additional NUMA first-touch bugs; 8/16T cancelled, 64/128T submitted
+
+### Survey scope
+
+Now that the two `phylotreesse.cpp` (`computePtnFreq`, `computePtnInvar`) bugs are fixed and verified, swept the rest of the IQ-TREE source for the same `serial-init → parallel-read` pattern. Search root: `/scratch/pawsey1351/asamuel/iqtree3-numa-firsttouch/src/iqtree3/` (the actually-compiled tree, not the top-level reference copy). Looked at every `memset`, `std::fill`, `calloc`, and zero-initialising `new T[N]()` on buffers whose size scales with `nptn`, `nsites`, `nbranches`, or `nstates*ncat*nptn`. Cross-checked against parallel-region context (a `memset(buf+ptn_lower*K, 0, (ptn_upper-ptn_lower)*K)` *inside* a `#pragma omp parallel for` is fine — that's per-thread chunk zeroing).
+
+### Confirmed remaining bugs (verified file:line)
+
+| Severity | File:Line | Buffer | Size (xlarge) | Init pattern | Hot read | Notes |
+|---|---|---|---|---|---|---|
+| ~~**HIGH**~~ | `tree/phylotreesse.cpp:537` | `ptn_freq` | 0.4 MB | serial `for` | LH inner loop | ✅ patched 2026-05-07 |
+| ~~**HIGH**~~ | `tree/phylotreesse.cpp:571` | `ptn_invar` | 0.4 MB | serial `memset` | LH inner loop | ✅ patched 2026-05-07 |
+| **HIGH** | `tree/phylotreesse.cpp:1295` | `_pattern_lh_cat` | ~1.6 MB | serial `memset(_pattern_lh_cat, 0, sizeof(double)*nptn*ncat_mix)`; immediately followed by `#pragma omp parallel for schedule(static)` at L1321 doing read-modify-write | DNA TIP-INTERNAL case in `computePatternLhCat` | Mechanical fix: same pragma idiom as the two we already landed |
+| **HIGH** | `tree/phylokernelsitemodel.cpp:593` | `_pattern_lh_cat` | ~1.6 MB | serial `memset` then `#pragma omp parallel for schedule(static)` at L600 | site-specific frequency models | Same fix shape; only hits AA/site-model paths |
+| **MEDIUM** | `tree/iqtree.cpp:3868, 3877` | `pattern_lh` (UFBoot) | ~0.4 MB | serial `memset` before `computePatternLikelihood`; later read in `#pragma omp parallel for` at L3909 (`dotProduct(pattern_lh, ...)`) | UFBoot tree-eval path, called per saved tree | Either parallel-static fill, or **delete the memset** — `computePatternLikelihood` overwrites the whole buffer right after |
+| **LOW** | `tree/phylokernel.h:361` | `dad_branch->scale_num` | ~50 KB/branch | serial `memset` then `#pragma omp parallel for` L365 | non-SIMD legacy kernel | Inactive when SIMD is on (xlarge_mf path) |
+| **LOW** | `tree/phylokernelmixrate.h:203` | `dad_branch->scale_num` | ~50 KB/branch | same | mixture-of-rates kernel | Not on xlarge_mf path |
+| **LOW** | `tree/phylokernelmixture.h:214` | `dad_branch->scale_num` | ~50 KB/branch | same | mixture-model kernel | Not on xlarge_mf path |
+| **LOW** | `tree/phylokernelsafe.h:346` | `dad_branch->scale_num` | ~1 MB/branch | same | numerically-safe kernel | Only on overflow fallback |
+| **LOW** | `tree/phylokernelsitemodel.h:103` | `dad_branch->scale_num` | ~50 KB/branch | same | site-model header | Not on xlarge_mf path |
+| **LOW** | `tree/phylokernelsitemodel.cpp:214` | `dad_branch->scale_num` | ~50 KB/branch | serial `memset` then `#pragma omp parallel for schedule(static)` L216 | site-specific freq | Not on xlarge_mf path |
+| **LOW** | `tree/iqtreemixhmm.cpp:962` | `tree->ptn_freq` | 0.4 MB | serial `memset`; the surrounding `#pragma omp parallel for` at L958 is **commented out** | tree-mixture HMM only | Not on xlarge_mf path; clear vestige — original author was thinking parallel and abandoned it |
+
+### Confirmed NOT bugs (verified, do not re-investigate)
+
+- **`phylokernelnew.h:2848, 3012, 1644`** — `memset(_pattern_lh_cat + ptn_lower*ncat_mix, ..., (ptn_upper-ptn_lower)*ncat_mix*sizeof(double))`. Sits *inside* the `#pragma omp parallel for schedule(dynamic,1)` at L2838. Each thread zeros only its own packet's slice, so first-touch happens on the worker thread. Already correct. (This is the new SIMD kernel — the one that runs on the xlarge_mf benchmark.)
+- **`central_partial_lh`, `central_scale_num`, `central_partial_pars`** (the largest LH buffers, 100 MB+ at xlarge scale) — allocated with `aligned_alloc` (no zero-init). The `memset` calls in `initializeAllPartialLh` (`tree/phylotree.cpp:1198, 1200`) are **commented out**. First write happens inside the parallel `computePartialLikelihood` kernel, so pages first-touch on the worker thread. Already correct.
+- **`eigenvectors` / `inv_eigenvectors` memsets** in `model/modelmarkov.cpp:1413-1414` — only 128 B (DNA) to ~30 KB (codon). Fits in L1/L2; NUMA placement irrelevant.
+- **All small per-iteration scratch memsets** (`sum_scale_num`, `theta`, `partial_lh_node`, etc.) — bytes-sized.
+- **No `std::fill`, `calloc`, or zero-initialising `new T[N]()`** anywhere in `tree/` or `alignment/`. The only init pattern in the codebase is `memset`.
+
+### Decision: defer the two HIGH patches
+
+The 64/128T jobs were already submitted under the current 2-pragma patch (which is what we want to compare against the unpatched AOCC baseline). Adding the two extra HIGH patches now would mean the 64/128T result reflects *four* fixes, not the *two* the analysis predicted. Cleaner to:
+
+1. Confirm the 2-pragma fix recovers the expected NUMA penalty at 64/128T (this is what the current jobs measure).
+2. Then apply patches #3 and #4, rebuild, and re-run a smaller sweep to attribute their incremental contribution.
+
+If the 64/128T result is *also* a regression (i.e. the two-pragma fix didn't fully close the cliff), that's the signal to land #3 and #4 immediately.
+
+### `xlarge_mf` `clang_omp_pin` job-queue update
+
+**Cancelled** (8/16T were redundant once 32T parity was already trending well; freeing the slots for the higher-thread runs the analysis actually predicts):
+
+```
+scancel 42399409 42399410   # 8T, 16T — entered CG state at 14:47:15
+```
+
+**Currently running / queued:**
+
+| Job ID | Threads | State | Unpatched baseline | Expected |
+|---|---|---|---|---|
+| 42399411 | 32T  | R (5+ min in)   | 1940.255 s | parity ±2 % |
+| 42400752 | 64T  | PD (Resources)  | 1905 s     | parity (still on socket 0) |
+| 42400753 | 128T | PD (Resources)  | 2368 s     | **fix should bite here** — half the threads on socket 1, doing `ptn_freq` reads from local socket-1 memory instead of remote socket-0 memory |
+
+The 128T number is the headline test. Unpatched 128T (2368 s) is *slower* than 64T (1905 s) — that's the classic NUMA cliff. If patched 128T lands ≤ 64T's wall time, the fix is doing what the analysis says it should.
+
+### Updated Pending
+
+| Priority | Task | Notes |
+|---|---|---|
+| **HIGH** | Harvest `xlarge_mf` 32T patched (job 42399411) | Compare to unpatched 1940 s. Parity expected. |
+| **HIGH** | Harvest `xlarge_mf` 64T patched (job 42400752) | Compare to unpatched 1905 s. Parity expected (single-socket). |
+| **HIGH** | Harvest `xlarge_mf` 128T patched (job 42400753) | Compare to unpatched 2368 s. **Fix-validation run.** Should beat 64T's wall time if the patch works as predicted. |
+| **HIGH** | If 128T result confirms the patch, apply HIGH bugs #3-#4 (`phylotreesse.cpp:1295`, `phylokernelsitemodel.cpp:593`) and run an incremental 64/128T sweep | Mechanical patch, same idiom. Only adds extra benefit if `_pattern_lh_cat` reads are also crossing the socket. |
+| **HIGH** | If 128T result is *not* a recovery, land #3-#4 immediately and re-test before chasing other causes | These are the only other HIGH-confidence remaining bugs on the LH hot path. |
+| **MEDIUM** | UFBoot `pattern_lh` memset (`iqtree.cpp:3868, 3877`) | Worth fixing once we add UFBoot to the benchmark matrix. Standard `xlarge_mf` ModelFinder doesn't run UFBoot, so won't show in current numbers. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T/104T (PBS **167520757–167520758**) | Unchanged from previous entry. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with `python3.11`-fixed `run_mega_profile.sh` | Unchanged. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Unchanged. |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Unchanged. |
+| **HIGH** | Update dashboard chart: `cache-miss-rate` → platform-aware `l2-miss-rate` / `l3-miss-rate`; primary memory-pressure plot → `L1d-mpki` | Unchanged. |
+| **LOW** | LOW-severity bugs above (legacy kernels, HMM-only) | Track but don't chase — they don't touch the production hot path. Worth a single bundled commit *after* the HIGH fixes are validated, for code-hygiene reasons rather than perf. |
+| **LOW** | `Setonix_xlarge_mf_1T.json` — `hotspots=0` | Unchanged. |
+
+---
+
+## 2026-05-07 — NUMA first-touch patch landed; `iqtree3` renamed; xlarge_mf 8/16/32T submitted
+
+### Patch — `src/iqtree3/tree/phylotreesse.cpp`
+
+Applied the two-pragma fix from `numa-first-touch.md` §5. Both buffers now first-touch in parallel so their pages land on the worker thread's NUMA node, not the master's:
+
+| Function | Line (pre-patch) | Change |
+|---|---|---|
+| `PhyloTree::computePtnFreq()` | `:537` | Two serial `for` loops collapsed into one parallel-static loop with branchless ternary, gated by `#ifdef _OPENMP`. |
+| `PhyloTree::computePtnInvar()` | `:571` | `memset(ptn_invar, 0, …)` replaced with a parallel-static fill (the rest of the function — state-dependent fill, dummy values — stays serial; only the first write needs to be parallel). |
+
+The pragmas mirror the existing `tree/phylotreesse.cpp:267` idiom (`#pragma omp parallel for schedule(static)` inside `#ifdef _OPENMP`) — no new build flags, no new dependencies.
+
+### Build artefact verification
+
+| Symbol | Pre-patch | Post-patch |
+|---|---|---|
+| `PhyloTree::computePtnFreq() [clone .omp_outlined]` | absent | **present** in `tree/CMakeFiles/tree.dir/phylotreesse.cpp.o` |
+| `PhyloTree::computePtnInvar() [clone .omp_outlined]` | absent | **present** |
+| `__kmpc_fork_call@plt` call site inside `computePtnFreq` | absent | **present** at `0x593ba1` in `iqtree3` |
+| `iqtree3` sha256 | `bd1ad710d7568f464bce12425b1a716db64a22a217e70227c98d75f507783c96` | `fa43971b6132412913b8a211de268fc481c7873116f5bf1bac05656944f3aefc` |
+| `ldd` libomp | `libomp.so → /opt/cray/pe/lib64/cce/libomp.so` | unchanged |
+
+Unpatched binary preserved at `build-profiling-aocc/iqtree3.unpatched` for direct A/B comparison.
+
+### Smoke test — `benchmarks/small_dna.fa` (20 taxa, AOCC, login node)
+
+| Run | Wall (s) | Tree log-likelihood | s.e. |
+|---|---|---|---|
+| Unpatched, JC, 1T | 2.111 | −12897.2018 | 230.3075 |
+| Patched, JC, 1T   | 1.921 | −12897.2018 | 230.3075 |
+| Unpatched, JC, 8T | 2.411 | −12897.2018 | 230.3075 |
+| Patched, JC, 8T   | 1.823 | −12897.2018 | 230.3075 |
+| Unpatched, JC+I, 8T | — | −12674.6629 (p_invar 0.1901) | 230.8534 |
+| Patched, JC+I, 8T   | — | −12674.6629 (p_invar 0.1901) | 230.8534 |
+
+**Bit-identical** at every printed digit, JC and JC+I, 1T and 8T, with and without `+I` (which exercises the `computePtnInvar` p_invar branch). Wall-time deltas at this scale are dominated by login-node noise; the dataset is too small to surface NUMA effects.
+
+### `iqtree3/` renamed → `iqtree3-numa-firsttouch/` (symlink preserved)
+
+Per user direction, the modified source tree was renamed to signal divergence from the upstream baseline:
+
+```
+/scratch/pawsey1351/asamuel/iqtree3 → iqtree3-numa-firsttouch  (symlink)
+/scratch/pawsey1351/asamuel/iqtree3-numa-firsttouch/           (real directory, modified source)
+```
+
+All hard-coded `IQTREE_DIR=/scratch/${PROJECT}/${USER}/iqtree3` references in `start.sh`, `setonix-ci/`, `gadi-ci/` continue to resolve via the symlink. Reversible: `rm iqtree3 && mv iqtree3-numa-firsttouch iqtree3`.
+
+### Build-pipeline gotcha (record so we don't re-discover)
+
+The IQ-TREE source tree exists at **two** paths under the project root, only one of which the build actually compiles:
+
+| Path | Compiled? | Use |
+|---|---|---|
+| `iqtree3-numa-firsttouch/tree/phylotreesse.cpp` | **No** | Top-level reference copy. Editing here has zero effect on the build. |
+| `iqtree3-numa-firsttouch/src/iqtree3/tree/phylotreesse.cpp` | **Yes** | Cloned by `bootstrap_iqtree_aocc.sh` from `github.com/iqtree/iqtree3`; this is what `build-profiling-aocc` reads. |
+
+`make VERBOSE=1` reveals the truth: the `clang++ -c …` line ends with `…/src/iqtree3/tree/phylotreesse.cpp`. Lost an iteration discovering this — the top-level edits silently produced byte-identical binaries because the compiler never saw them. Future patches must edit `src/iqtree3/…`.
+
+### Why the simple two-pragma form is safe
+
+Earlier pre-flight worry: AOCC clang's `-O3` optimizer might prove serial-equivalence and elide the parallel region (it can do this with manually-chunked `omp_get_thread_num()` constructs). Empirically **not the case** for the documented two-pragma form: `omp_outlined` symbols and `__kmpc_fork_call@plt` invocations are emitted as expected, mirroring the line-267 idiom that already works in this same translation unit. No memory clobbers, manual chunking, or `optnone` hacks needed.
+
+### Submitted: `xlarge_mf.fa` `clang_omp_pin` 8/16/32T
+
+```
+sbatch jobs (queued, PD as of 14:36):
+  42399409  iq-clang-xlarge_mf-8t   xlarge_mf.fa  THREADS=8
+  42399410  iq-clang-xlarge_mf-16t  xlarge_mf.fa  THREADS=16
+  42399411  iq-clang-xlarge_mf-32t  xlarge_mf.fa  THREADS=32
+build:        build-profiling-aocc/iqtree3 (patched, sha fa43971b)
+label:        clang_omp_pin
+runtime tag:  libomp, KMP_BLOCKTIME=200
+```
+
+### Why 8/16/32T (not 64/104/128T) for the first sweep
+
+The NUMA bottleneck activates at the socket boundary (>64T on the 128-logical Setonix node). Below 64T the patched and unpatched binaries should be **statistically indistinguishable** — that is the point: we want a *regression-free* baseline at 8/16/32T before re-running the cross-socket regime where the patch should bite. Existing AOCC unpatched baselines are 8T = 3830.6 s, 16T = 2640 s, 32T = 1940 s. Patched runs at the same thread counts within ±1–2 % wall-time of these is the success criterion.
+
+### Updated Pending
+
+| Priority | Task | Notes |
+|---|---|---|
+| ~~**HIGH**~~ | ~~NUMA first-touch patch — `tree/phylotreesse.cpp:537,571`~~ | ✅ Landed 2026-05-07. `omp_outlined` symbols + `__kmpc_fork_call` verified; smoke test bit-identical. |
+| **HIGH** | Harvest `xlarge_mf` 8/16/32T patched results (jobs 42399409–42399411) | Compare wall time and IPC vs unpatched AOCC baselines (8T = 3830.6 s, 16T = 2640 s, 32T = 1940 s). Patched should be neutral here; positive deltas would indicate a regression. |
+| **HIGH** | After 8/16/32T regression-free, submit patched 64/104/128T sweep | This is where the NUMA fix should actually pay off. Existing unpatched: 64T = 1905 s, 104T = 2305 s, 128T = 2368 s. Target: 128T below 128T-unpatched. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T/104T (PBS **167520757–167520758**) | Unchanged from previous entry. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with `python3.11`-fixed `run_mega_profile.sh` | Unchanged. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Unchanged. |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | Unchanged. |
+| **HIGH** | Update dashboard chart: `cache-miss-rate` → platform-aware `l2-miss-rate` / `l3-miss-rate`; primary memory-pressure plot → `L1d-mpki` | Unchanged. |
+| **LOW** | `Setonix_xlarge_mf_1T.json` — `hotspots=0` | Unchanged. |
+
+---
+
 ## 2026-05-07 — Analysis: `block:block:block` vs AOCC; real scaling bottlenecks identified
 
 ### Context
