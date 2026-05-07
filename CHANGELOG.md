@@ -2,7 +2,81 @@
 
 ---
 
-## 2026-05-08 — NUMA first-touch (R1+R2) ported from Setonix to Gadi; xlarge_mf 32/64/104T submitted
+## 2026-05-08 (b) — Gadi NUMA r2 sweep re-submitted under ICX/libiomp5 (full Setonix toolchain parity)
+
+The first attempt (entry above) used the gcc-built `build-profiling/iqtree3` so the binary's OpenMP runtime was libgomp. That breaks the cross-platform comparison with Setonix r2, which was built and benchmarked under AOCC 5.1.0 / libomp (LLVM-family OpenMP). Caught and corrected before any benchmark job ran — the four held jobs (`167864739–742`) were `qdel`-ed at queue time, so no SU was wasted.
+
+### Switched to the LLVM/Clang/icx toolchain on Gadi
+
+- New build job `167865536` invokes `gadi-ci/bootstrap_iqtree_clang.sh`, which prefers `intel-compiler-llvm` (icx/icpx → LLVM-based, links libiomp5 ABI-compatible with libomp).
+- Output binary: `${PROJECT_DIR}/build-profiling-clang/iqtree3` (kept separate from the gcc binary at `build-profiling/iqtree3`).
+- Build flags identical to the gcc build except for compiler choice: `-O3 -march=sapphirerapids -mtune=sapphirerapids -fopenmp -fno-omit-frame-pointer -g`. CMake type `RelWithDebInfo`. IPO disabled, unittest disabled (Gadi compute nodes have no internet for googletest FetchContent).
+
+### Worker patched to honour BUILD_DIR and KMP_BLOCKTIME
+
+`gadi-ci/_run_matrix_job.sh` previously hard-coded `module load gcc/14.2.0` because the in-flight matrix at the time was gcc-only. Replaced with a BUILD_DIR-aware module selector:
+
+```bash
+if [[ "${BUILD_DIR}" == *clang* || "${BUILD_DIR}" == *icx* ]]; then
+    module load intel-compiler-llvm 2>/dev/null || true   # libiomp5 at runtime
+else
+    module load gcc/14.2.0           2>/dev/null || true   # libgomp at runtime
+fi
+export KMP_BLOCKTIME="${KMP_BLOCKTIME:-200}"
+```
+
+`KMP_BLOCKTIME=200` is the Setonix r2 setting (per `numa-firsttouch-patches.md` provenance table). For the libgomp path it's a no-op; for libiomp5 it tunes the spin-wait window before the runtime parks idle threads. Setting it unconditionally keeps the env block deterministic across runs.
+
+### Resubmitted PBS chain
+
+| Job | ID | Depends on | Build / Runtime |
+|---|---|---|---|
+| `iqtree-clang-bootstrap` | 167865536 | — | icx/icpx + libiomp5 → `build-profiling-clang/iqtree3` |
+| `iqtree-smoke-icx-r2` | 167865584 | afterok 36 | run_pipeline.sh, BUILD_DIR=clang, KMP_BLOCKTIME=200 |
+| `iq-xlarge-32t-icx-r2` | 167865585 | afterok 36 | xlarge_mf @ 32T, label `xlarge_mf_32t_clang_omp_pin_numa_ft_r2` |
+| `iq-xlarge-64t-icx-r2` | 167865586 | afterok 36 | xlarge_mf @ 64T, label `xlarge_mf_64t_clang_omp_pin_numa_ft_r2` |
+| `iq-xlarge-104t-icx-r2` | 167865587 | afterok 36 | xlarge_mf @ 104T, label `xlarge_mf_104t_clang_omp_pin_numa_ft_r2` |
+
+Walltime cap 2 h per job (Setonix r2 ran in ~12–32 min wall at these thread counts; 2 h is generous). Total budget at full charge: ~5 jobs × 2 h × 208 SU/node-h ≈ 2080 SU max. Bootstrap already accounted for 79.68 SU.
+
+### Full parity matrix vs Setonix `numa-firsttouch-r2`
+
+| Axis | Setonix r2 | Gadi r2 (this run) | Status |
+|---|---|---|---|
+| Source patches (R1a, R1b, R2a, R2b ×5) | 8 sites | 8 sites, identical edits | ✅ |
+| Compiler family | AOCC 5.1.0 (LLVM-derived) | intel-compiler-llvm icx (LLVM) | ✅ same family |
+| OpenMP runtime | libomp | libiomp5 (ABI-compatible) | ✅ |
+| `-march` | znver3 | sapphirerapids | n/a — different hardware |
+| `-O3 -fopenmp -fno-omit-frame-pointer -g` | yes | yes | ✅ |
+| `OMP_PROC_BIND` | close | close | ✅ |
+| `OMP_PLACES` | cores | cores | ✅ |
+| `KMP_BLOCKTIME` | 200 | 200 (set in worker + -v env) | ✅ |
+| `numactl --localalloc` | yes | yes | ✅ |
+| Dataset | xlarge_mf.fa (200 taxa × 100 000 bp, AliSim seed 202, GTR+G4) | same file, sha256-gated | ✅ |
+| Expected lnL | −10956936.6117 | matches Gadi baseline (−10956936.612) | ✅ |
+| Thread sweep | 32 / 64 / 128 (Zen3, 128 logical) | 32 / 64 / 104 (SPR, 104 logical) | ⚠️ 104 ≠ 128 by hardware |
+| NUMA topology | 2 sockets × 8 CCDs (16 domains) | 2 sockets × 4 sub-NUMA (8 domains) | n/a — different hardware |
+
+Two genuine non-parity points are properties of the hardware itself: Gadi normalsr is 104-core SPR, not 128-thread Zen3, so the cliff threshold and scaling shape will differ. Everything *under our control* now matches Setonix r2.
+
+### Pre-flight check on the patched source
+
+```
+$ grep -c 'schedule(dynamic,1)' tree/{phylokernelnew.h,phylotreesse.cpp}
+0    0
+$ grep -n 'schedule(static) num_threads' tree/phylokernelnew.h
+1275:        #pragma omp parallel for schedule(static) num_threads(num_threads)
+2386:#pragma omp parallel for schedule(static) num_threads(num_threads) reduction(+:all_lh,...)
+2838:#pragma omp parallel for  schedule(static) num_threads(num_threads) // ...
+3005:#pragma omp parallel for schedule(static) num_threads(num_threads) // ...
+3595:#pragma omp parallel for schedule(static) num_threads(num_threads) reduction(+:...)
+```
+
+R1a/R1b/R2a are at `phylotreesse.cpp:546`, `:578`, `:1287` (the new comment-and-block insertions). Bootstrap log (`iqtree-bootstrap.o167864735`) confirmed the gcc build linked against libgomp via `ldd`; the icx build will be re-verified from the `167865536` log on completion (`grep 'libomp\|libiomp5' build_log`).
+
+---
+
+
 
 Cross-platform replication: applied the same NUMA first-touch source patches that eliminated the Setonix cross-socket cliff (see `numa-firsttouch-patches.md`) to the Gadi tree at `/scratch/rc29/as1708/iqtree3/src/iqtree3/`. Same eight edits, same line ranges, same comments calling out the R1a / R1b / R2a / R2b correspondence — zero behavioural divergence between platforms.
 
