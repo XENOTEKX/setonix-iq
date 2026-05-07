@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-07 — Harvest: `clang_bbblock` 64T result; NUMA first-touch verified in IQ-TREE source + plain-English explainer
+
+### `clang_bbblock` 64T harvest (SLURM 42390187)
+
+Job 42390187 completed in 1 h 1 min wall (`sacct` reports `COMPLETED 0:0`). Harvested into `logs/runs/xlarge_mf_64t_clang_bbblock_baseline.json`.
+
+| Metric | `clang_bbblock` 64T (new) | `clang_omp_pin` 64T (baseline) | Δ |
+|---|---|---|---|
+| Wall time | **1878.96 s** | 1905.22 s | −1.4 % |
+| IPC | 0.619 | 0.612 | +1.1 % |
+| Best model | GTR+R4 (log L = −10 956 932.34) | GTR+R4 | identical |
+| `build_tag` | `clang_bbblock` | `clang_omp_pin` | — |
+
+**Reading.** `-m block:block:block` shaved ≈26 s off the 64T wall time vs the matching `clang_omp_pin` AOCC/libomp baseline — within measurement noise (≈1.4 %). At 64T, the entire socket's 8 CCDs are already saturated regardless of per-thread placement, so the L3-locality benefit of contiguous packing is mostly washed out by the working-set spillover. The dominant factor at 64T remains compiler/OpenMP runtime: AOCC/libomp ≈ 1.86× faster than the GCC/libgomp `smtoff_pin` baseline (3547 s @ 64T), independent of distribution policy.
+
+The 8T job (`42390186`) is still running and will be harvested when complete. 8T is the cleaner test for distribution policy because it activates exactly one CCD when packed, and 1 thread per CCD when scattered — the largest possible delta.
+
+### NUMA first-touch — source-level verification
+
+Verified the 2026-05-05 hypothesis directly against the IQ-TREE 3 source at `/scratch/pawsey1351/asamuel/iqtree3/`:
+
+| Buffer | Allocator | First serial write (the bug) | Hot read site (parallel) |
+|---|---|---|---|
+| `ptn_freq` | `tree/phylotree.cpp:942` (`posix_memalign`, no zero) | `tree/phylotreesse.cpp:543-546` (master `for`, no `#pragma omp`) | `tree/phylokernelnew.h:2386, 3633, …` (~25 sites) |
+| `ptn_invar` | `tree/phylotree.cpp:948` | `tree/phylotreesse.cpp:571` (master `memset`) | LH kernels (e.g. `phylokernelnew.h:3182`) |
+| Pattern vector | `addPatternLazy` (`std::vector<Pattern>::push_back`) | `alignment/alignment.cpp:2376` (master `for`) | indirectly via `aln->getPattern()` |
+
+`grep` of `tree/` and `utils/` returns **zero** matches for `numa_alloc`, `first_touch`, or any other NUMA-aware allocation primitive. The codebase has no first-touch parallelisation. This is the same root cause discussed on 2026-05-05; the source confirms John was correct.
+
+`tree/phylotreesse.cpp:267` (`computeTipPartialLikelihood`) already uses the canonical `#pragma omp parallel for schedule(static)` idiom inside `#ifdef _OPENMP`, so the proposed fix would mirror an existing in-file pattern — no new build flags or dependencies.
+
+### New doc: `numa-first-touch.md`
+
+Repo-root `numa-first-touch.md` (~280 lines) is a plain-English walkthrough for anyone touching IQ-TREE OpenMP performance who hasn't lived inside its source. Sections:
+
+1. The cast of characters — what `buildPattern()` and `computePtnFreq()` do, what a "pattern" and "pattern frequency" mean.
+2. Linux first-touch policy and NUMA in two paragraphs.
+3. Step-by-step trace of the bug (master thread → socket 0 → all reads remote on socket 1).
+4. Why `OMP_PROC_BIND=close` + `numactl --localalloc` cannot fix data that was already serially first-touched.
+5. The two-pragma fix (`computePtnFreq` + the `ptn_invar` `memset`), with the rationale for `schedule(static)`.
+6. Verification plan: `numactl --interleave=all` first to confirm the diagnosis without code changes, then rebuild and re-measure.
+7. Glossary + file:line citation table.
+
+Intended audience: future-us at 2 a.m. trying to recall why 128T runs collapse, plus anyone reviewing a future patch upstream.
+
+### Updated Pending
+
+| Priority | Task |
+|----------|------|
+| **HIGH** | Harvest `clang_bbblock` 8T (SLURM 42390186) when it completes; add the 8T row to the comparison table |
+| **MED** | If the 8T comparison shows a meaningful gap, run the full `{8,16,32,64,104,128}` sweep with `clang_bbblock` |
+| **MED** | Empirical NUMA-first-touch verification on Setonix: rerun current 128T binary with `OMP_PROC_BIND=spread numactl --interleave=all` and compare wall time vs `--localalloc`. Recovery of any meaningful fraction of the 128T regression confirms the diagnosis without touching IQ-TREE source |
+| **LOW** | If the empirical test confirms it, write the two-pragma patch against `tree/phylotreesse.cpp:537,571`, rebuild from `build-profiling/`, and re-run the 128T sweep |
+
+---
+
 ## 2026-05-07 — Claude CLI installed on Setonix; home directory quota remediation
 
 ### Problem
@@ -107,8 +163,8 @@ Comparison of `clang_bbblock` vs `clang_omp_pin` at 8T and 64T will isolate the 
 
 | Priority | Task |
 |----------|------|
-| **HIGH** | Harvest `clang_bbblock` results and compare wall time + IPC vs `clang_omp_pin` at 8T and 64T |
-| **MED** | If 64T improves meaningfully, rerun the full `{8,16,32,64,104,128}` sweep with `clang_bbblock` to build a complete scaling curve |
+| ~~**HIGH**~~ | ~~Harvest `clang_bbblock` results and compare wall time + IPC vs `clang_omp_pin` at 8T and 64T~~ → **64T harvested 2026-05-07** (Δ −1.4 %, within noise). 8T still in queue; harvest tracked in the new top entry. |
+| **MED** | If 64T improves meaningfully, rerun the full `{8,16,32,64,104,128}` sweep with `clang_bbblock` to build a complete scaling curve → **deferred** (64T delta within noise; revisit pending 8T result) |
 | **LOW** | No action required on Gadi — SPR L3 is a coherent mesh, PBS Pro allocates contiguous cpusets automatically, no `-m` equivalent needed |
 
 ---
