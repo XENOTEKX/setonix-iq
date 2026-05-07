@@ -4,8 +4,17 @@ import { store } from './state.js';
 
 const BASE = 'data';
 
+// Read the ?v= cache-bust stamp injected by build.py into <meta name="site-version">.
+// When the version is present every data URL gets a stable query param, so the
+// browser can cache data files normally (no round-trip on repeated visits).
+// Falls back to '' during local development (no meta tag → no caching).
+const _v = (() => {
+  const m = document.querySelector('meta[name="site-version"]');
+  return m && m.content ? `?v=${m.content}` : '';
+})();
+
 async function getJson(path) {
-  const res = await fetch(`${BASE}/${path}`, { cache: 'no-cache' });
+  const res = await fetch(`${BASE}/${path}${_v}`);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${path}`);
   return res.json();
 }

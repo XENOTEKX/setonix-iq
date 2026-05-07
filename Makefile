@@ -144,9 +144,14 @@ dashboard:
 	$(call header,Validating + building dashboard)
 	$(PY) "$(AGENT_DIR)/tools/validate.py"
 	$(PY) "$(AGENT_DIR)/tools/build.py"
-	cd "$(AGENT_DIR)" && git add -A \
-	    && (git commit -m "dashboard update $$(date '+%Y-%m-%d %H:%M')" || true) \
-	    && git push origin "$$(git rev-parse --abbrev-ref HEAD)"
+	cd "$(AGENT_DIR)" && \
+	    git add docs/ web/data/ && \
+	    if git diff --cached --quiet; then \
+	        echo "[dashboard] data unchanged, nothing to push"; \
+	    else \
+	        git commit -m "dashboard: rebuild $$(date '+%Y-%m-%dT%H:%M')" && \
+	        git push origin "$$(git rev-parse --abbrev-ref HEAD)"; \
+	    fi
 
 .PHONY: test
 test:

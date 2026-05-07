@@ -12,6 +12,7 @@ Steps:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -161,6 +162,21 @@ def split_run_blobs(docs_runs: Path, web_runs: Path) -> tuple[int, int]:
     return split_count, bytes_saved
 
 
+# ── Version stamp ─────────────────────────────────────────────────────────────
+
+def _data_version(web_data: Path) -> str:
+    """12-char SHA-1 of run JSON content — stable when no runs change."""
+    h = hashlib.sha1()
+    runs_dir = web_data / "runs"
+    if runs_dir.is_dir():
+        for f in sorted(runs_dir.glob("*.json")):
+            h.update(f.read_bytes())
+    idx = web_data / "runs.index.json"
+    if idx.exists():
+        h.update(idx.read_bytes())
+    return h.hexdigest()[:12]
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -178,7 +194,7 @@ def main() -> int:
 
     # 3. Stamp build info
     built_at = datetime.now(timezone.utc).isoformat()
-    version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    version = _data_version(WEB / "data")
     (DOCS / "build-info.json").write_text(json.dumps({
         "built_at": built_at,
         "version": version,
