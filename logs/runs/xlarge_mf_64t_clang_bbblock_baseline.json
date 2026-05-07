@@ -2045,8 +2045,8 @@
     ]
   },
   "build_tag": "clang_bbblock",
-  "canonical": true,
-  "non_canonical": false,
+  "canonical": false,
+  "non_canonical": true,
   "non_canonical_label": "AOCC \u00b7 block:block:block",
   "platform": "setonix",
   "proposed_ref": "CHANGELOG.md \u00a7 2026-05-07: clang_bbblock label + block:block:block SLURM distribution; see numa-first-touch.md for IQ-TREE NUMA first-touch analysis"
