@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-07 — Harvest fix; run data corrections; 8T bbblock ref
+
+### Harvest script fix — `tools/harvest_scratch.py`
+
+`discover_new_profile_runs()` was creating duplicate stubs on every run. Fixed with two skip mechanisms:
+
+1. **slurm_id dedup** — before creating a stub, the script now scans all existing `logs/runs/*.json` and skips any profile directory whose job ID is already present (e.g. `xlarge_mf_8t_smtoff_pin_42181137` → already tracked as `Setonix_xlarge_mf_8T.json`). Catches 26 of the 32 spurious stubs.
+2. **`.harvest_skip`** — new file at `logs/runs/.harvest_skip` lists 15 failed `large_modelfinder_smtoff_pin` profile directories (SLURM 42179033–42179145, broken `--mem-per-cpu` + `--mem` conflict) that have no canonical counterpart and must never generate a stub.
+
+Running the fixed harvest against the full scratch profile tree now produces zero new stubs.
+
+### Run data corrections — 31 files
+
+Harvest refresh added `ipc_derived` to all runs and corrected `cpu_count_logical` in Setonix canonical and smton-baseline series: the field was stuck at 128 (full-node logical count) regardless of thread allocation. Now reflects actual allocated core count per run (8 / 16 / 32 / 64 / 104 / 128).
+
+Affected series: `Setonix_xlarge_mf_*T`, `Setonix_large_modelfinder_*T`, `xlarge_mf_*t_baseline_smton`, `large_modelfinder_*t_baseline_smton`, `mega_*t_baseline_smton`.
+
+### 8T `clang_bbblock` — `non_canonical_label` + `proposed_ref` added
+
+`xlarge_mf_8t_clang_bbblock_baseline.json` was harvested without the chart reference fields. Added to match the 64T run:
+- `non_canonical_label`: `"AOCC · block:block:block"`
+- `proposed_ref`: same CHANGELOG/numa-first-touch pointer as the 64T file
+
+---
+
 ## 2026-05-07 — Harvest: `clang_bbblock` 8T result; `canonical` flag fix
 
 ### `clang_bbblock` 8T harvest (SLURM 42390186)
