@@ -1818,7 +1818,12 @@
       "total_mb": 14.05
     }
   },
-  "summary": {},
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 1797.0,
+    "all_pass": true
+  },
   "dataset_info": {
     "file": "xlarge_mf.fa",
     "file_size_bytes": 20002400,
