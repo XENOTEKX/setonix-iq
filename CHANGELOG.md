@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-07 (later) — `numa-firsttouch-r2` results: cross-socket cliff eliminated
+
+### Results — 64T and 128T confirmed, 32T still running
+
+| Threads | Baseline (s) | R1 patch (s) | R2 patch (s) | R1 vs baseline | R2 vs baseline | Log-likelihood |
+|---|---|---|---|---|---|---|
+| 32T | 1940.3 | 1954.2 | pending | +0.7% | — | — |
+| 64T | 1905.2 | 1796.5 | **830.6** | −5.7% | **−56.4%** | −10956936.6117 ✓ |
+| 128T | 2368.4 | 2382.2 | **736.6** | +0.6% | **−68.9%** | −10956936.6117 ✓ |
+
+Log-likelihood is **bit-identical** across all R1 and R2 runs (`−10956936.6117`). The schedule changes produce identical numerical results — same tree topology, same model, same BIC ranking.
+
+**128T is now faster than 64T (736.6s vs 830.6s)** — the cross-socket cliff that was visible in both baseline and R1 data is gone. Socket-1 threads are now contributing instead of fighting for remote memory.
+
+### What R2 fixed that R1 didn't
+
+R1 only patched the one-time init arrays (`ptn_freq`, `ptn_invar`). Those pages are placed correctly once at startup and never moved, so R1 helped at 64T (intra-socket, cross-CCD NUMA) but had no effect at 128T where the dominant penalty was the per-call `_pattern_lh_cat` zero-fill and the dynamic scheduler randomly sending socket-1 threads to socket-0 pages thousands of times per tree-search iteration.
+
+R2 combined fixes:
+- `_pattern_lh_cat` zero-fill now parallel-static → the hot NNI-path buffer's pages land on the writing thread's NUMA node
+- 5 kernel `schedule(dynamic,1)` → `schedule(static)` sites → each thread always gets the same pattern packet, reads its own pages from the previous call
+
+The result confirms the theory: **static scheduling eliminates the NUMA round-trips on socket-1 that were the 128T cliff**.
+
+---
+
 ## 2026-05-07 (later) — `numa-firsttouch-r2` patches applied; 32/64/128T jobs submitted
 
 ### Patches applied to `iqtree3-numa-firsttouch` tree
