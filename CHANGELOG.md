@@ -2,6 +2,58 @@
 
 ---
 
+## 2026-05-07 (later) — `numa-firsttouch-r2` patches applied; 32/64/128T jobs submitted
+
+### Patches applied to `iqtree3-numa-firsttouch` tree
+
+**1. `phylotreesse.cpp:1294` — `_pattern_lh_cat` parallel-static zero-fill**
+
+Replaced the serial `memset(_pattern_lh_cat, 0, sizeof(double)*nptn*ncat_mix)` (called once per `computePatternLhCat`, hot in the NNI inner loop) with an `#pragma omp parallel for schedule(static)` zero-fill. The downstream consumers at `phylotreesse.cpp:1321` and `:1365` use `schedule(static)` reduction loops, so the page-to-thread mapping established by the zero-fill matches the threads that later read/write those pages — pages now first-touch on the worker NUMA node, not the master.
+
+```cpp
+{
+    size_t lh_cat_n = nptn*ncat_mix;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t k = 0; k < lh_cat_n; k++)
+        _pattern_lh_cat[k] = 0.0;
+}
+```
+
+**2. `phylokernelnew.h` — `schedule(dynamic,1)` → `schedule(static)` (5 sites)**
+
+Sites at lines 1275, 2386, 2838, 3005, 3595. All loop over `num_packets` (pre-sized via `computeBounds` to be roughly equal-cost). Static schedule gives each thread the same packet range every call, so pages allocated on first call are read locally on subsequent calls. Trade-off: dynamic was originally chosen for load balancing across heterogeneous packets; static may lose a few percent to imbalance at high thread counts. r2 will measure the net effect.
+
+### Functions changed — what & why
+
+| File:Line | Enclosing function | Change | Why |
+|---|---|---|---|
+| `phylotreesse.cpp:1294-1295` | `PhyloTree::computeLikelihoodBranchEigen` | Serial `memset` of `_pattern_lh_cat` → `#pragma omp parallel for schedule(static)` zero-fill | This buffer (~1.6 MB) is rezeroed on every `computePatternLhCat` call (hot in NNI inner loop). Serial memset first-touches all pages on the master thread's NUMA node; the static-scheduled reduction loops at `:1321` and `:1365` then have socket-1 threads read pages from socket 0. Parallel-static zero-fill places each page on the worker that later reads it. |
+| `phylokernelnew.h:1275` | `PhyloTree::computeTraversalInfo` (drives `computePartialLikelihoodSIMD`, hot func #2 — 18.3% of CPU) | `schedule(dynamic,1)` → `schedule(static)` over `num_packets` | Each thread gets the same packet range every traversal, so `partial_lh` and `scale_num` pages first-touched on call N are read locally on call N+1. Dynamic stealing was sending pages across CCDs/sockets. |
+| `phylokernelnew.h:2386` | `PhyloTree::computeLikelihoodDervGenericSIMD` (hot func #1 — 40.1% of CPU, the Newton-Raphson driver) | `schedule(dynamic,1)` → `schedule(static)` | Same packet→thread affinity argument. This is the highest-impact site because it dominates total wall time; any NUMA penalty here multiplies across thousands of branch-length optimizations per tree-search iteration. |
+| `phylokernelnew.h:2838` | `PhyloTree::computeLikelihoodBranchGenericSIMD` (hot func #4, also called by ModelFinder) | `schedule(dynamic,1)` → `schedule(static)` | Reads `theta_all` and `ptn_invar` per packet; static schedule pairs each thread with the same pattern range across the entire ModelFinder sweep. |
+| `phylokernelnew.h:3005` | `PhyloTree::computeLikelihoodBranchGenericSIMD` (second parallel-for in same function) | `schedule(dynamic,1)` → `schedule(static)` | Same function, separate parallel region used in the non-`SAFE_NUMERIC` fast path. |
+| `phylokernelnew.h:3595` | `PhyloTree::computeLikelihoodDervMixlenGenericSIMD` (mixed-branch-length variant of #1) | `schedule(dynamic,1)` → `schedule(static)` | Mirror change for the mixlen code path; otherwise mixlen models would re-introduce the dynamic-stealing penalty. |
+
+The `phylotreesse.cpp:267` static-schedule pragma already in upstream IQ-TREE (and the r1 patches at `phylotreesse.cpp:546` for `ptn_freq` and `:577` for `ptn_invar`) all use `schedule(static)`. The r2 set extends the same idiom to the *write-side* (`_pattern_lh_cat` zero-fill) and to the *kernel packet loops* (`phylokernelnew.h`), so the read-side pages and the write-side pages are now placed by the same `(thread → static range)` mapping. NUMA locality is consistent end-to-end.
+
+### Build
+
+`build-profiling-aocc` rebuilt with AOCC 5.1.0 / libomp; binary tagged on disk as `iqtree3.numa-firsttouch-r2` for provenance. `ldd` confirms `libomp.so` linkage (not libgomp).
+
+### SLURM jobs queued
+
+| Threads | Job | Label suffix |
+|---|---|---|
+| 32T  | 42422004 | `clang_omp_pin_numa_ft_r2` |
+| 64T  | 42422005 | `clang_omp_pin_numa_ft_r2` |
+| 128T | 42422006 | `clang_omp_pin_numa_ft_r2` |
+
+Submitted via `run_mega_profile.sh` with `BUILD_DIR=/scratch/.../iqtree3-numa-firsttouch/build-profiling-aocc`, `OMP_RUNTIME_TAG=libomp`, `KMP_BLOCKTIME=200` — identical observable axes to the r1 numa_ft and AOCC baseline runs. Results to be harvested on completion (~30–60 min wall each), bit-identical BIC verified, then dashboard updated with `non_canonical_label: "AOCC · NUMA patch r2"`.
+
+---
+
 ## 2026-05-07 (19:30 AWST) — Dashboard: NUMA-patched runs harvested; chart series fixed
 
 ### NUMA-patched runs — 3 real measurements now live
