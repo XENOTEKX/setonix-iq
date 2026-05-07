@@ -48,6 +48,19 @@ Even AOCC regresses above 64T: 1905 s (64T) → 2305 s (104T). This is the socke
 
 The response to Deva: the recommendation was followed and the experiment is conclusive. Distribution policy is not the bottleneck. The two real problems are (1) the OpenMP runtime (resolved by switching to AOCC) and (2) NUMA first-touch allocation in IQ-TREE source (proposed fix in `numa-first-touch.md`).
 
+### Current pending tasks (as of 2026-05-07)
+
+| Priority | Task | Notes |
+|---|---|---|
+| **HIGH** | NUMA first-touch patch — `tree/phylotreesse.cpp:537,571` | Two `#pragma omp parallel for schedule(static)` additions to first-touch `ptn_freq` and `ptn_invar` in parallel. Empirical test first: rerun 128T AOCC binary with `OMP_PROC_BIND=spread numactl --interleave=all` to confirm diagnosis without a rebuild. Recovery of any meaningful wall-time fraction confirms the hypothesis. |
+| **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T/104T (PBS **167520757–167520758**) | Jobs released from hold 2026-05-02 after inode cleanup — status on Gadi scratch not yet verified from Setonix. Canonical `sr_gcc_pin` series incomplete above 32T. |
+| **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with `python3.11`-fixed `run_mega_profile.sh` | Current `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` hotspot data profiles SLURM commands, not `iqtree3`. `perf stat` counters are valid; flamegraph/hotspot comparison is blocked until re-run. |
+| **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Only SMT-on reference runs exist (4 runs: 16/32/64/128T). No canonical SMT-off pinned Setonix `mega_dna` sweep. |
+| **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | No canonical Gadi `mega_dna` sweep — only older `sr_icx` reference runs (4 runs, 16T–104T). Cross-platform `mega_dna` comparison blocked. |
+| **HIGH** | Update dashboard chart: `cache-miss-rate` → platform-aware `l2-miss-rate` (Setonix) / `l3-miss-rate` (Gadi); primary memory-pressure plot → `L1d-mpki` | Data layer fixed (follow-up #15). Frontend `web/js/charts/*` and `web/js/pages/*` still use old field names. |
+| **LOW** | `Setonix_xlarge_mf_1T.json` — `hotspots=0` | By design: `run_mega_profile.sh` skips `perf record` at 1T. Wall time and IPC are correct. |
+| ~~**CLOSED**~~ | ~~`block:block:block` investigation~~ | ✅ Closed 2026-05-07 — zero effect at 8T and 64T. Full sweep not warranted. |
+
 ---
 
 ## 2026-05-07 — Harvest fix; run data corrections; 8T bbblock ref
@@ -265,7 +278,7 @@ Comparison of `clang_bbblock` vs `clang_omp_pin` at 8T and 64T will isolate the 
 | Priority | Task |
 |----------|------|
 | ~~**HIGH**~~ | ~~Harvest `clang_bbblock` results and compare wall time + IPC vs `clang_omp_pin` at 8T and 64T~~ → **64T harvested 2026-05-07** (Δ −1.4 %, within noise). 8T still in queue; harvest tracked in the new top entry. |
-| **MED** | If 64T improves meaningfully, rerun the full `{8,16,32,64,104,128}` sweep with `clang_bbblock` to build a complete scaling curve → **deferred** (64T delta within noise; revisit pending 8T result) |
+| ~~**MED**~~ | ~~If 64T improves meaningfully, rerun the full `{8,16,32,64,104,128}` sweep with `clang_bbblock`~~ | ✅ Closed 2026-05-07 — 8T delta zero, full sweep not warranted. |
 | **LOW** | No action required on Gadi — SPR L3 is a coherent mesh, PBS Pro allocates contiguous cpusets automatically, no `-m` equivalent needed |
 
 ---
@@ -493,7 +506,7 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 
 ## Critical & Pending Tasks
 
-> **Last audited: 2026-05-02 (follow-up #20 parity audit).** 73 run files tracked (45 Setonix, 28 Gadi). See data quality notes below. Four new data quality issues discovered in GCC xlarge series (corrupted hotspots, missing OMP env metadata, null IPC, cpu_count_logical artifact) — see follow-up #20 section above.
+> **Last audited: 2026-05-07.** Run files: 68 tracked (stale failed stubs deleted). `block:block:block` investigation closed — zero effect confirmed. NUMA first-touch patch elevated to HIGH. See 2026-05-07 analysis entry for full findings.
 
 ### 🔴 Harvest — blocking cross-platform analysis
 
@@ -504,10 +517,12 @@ The Setonix `xlarge_mf` thread-scaling regression above 8 T (first cross-CCD ste
 | ~~**HIGH**~~ | ~~Submit Gadi `xlarge_mf _sr_gcc_pin` matrix (same gcc/14.2.0 build, threads 1 4 8 16 32 64 104)~~ | ✅ **Submitted 2026-05-01** (follow-up #16) — PBS jobs **167520752–167520758**, sha256-gated against canonical `xlarge_mf.fa`. |
 | ~~**HIGH**~~ | ~~Harvest remaining `xlarge_mf _sr_gcc_pin` jobs (16T/32T/64T/104T, PBS 167520755–167520758) once complete~~ | ✅ **Partially done 2026-05-02** — 16T (PBS 167520755) and 32T (PBS 167520756) harvested. **64T and 104T still missing** — see data gap note below. |
 | ~~**HIGH**~~ | ~~Submit + harvest Setonix AOCC/libomp `xlarge_mf` sweep (follow-up #19)~~ | ✅ **Done 2026-05-02** — bootstrap **42225453** COMPLETED; matrix jobs **42225454–42225459** (8–128T) all COMPLETED and harvested. See 2026-05-02 entry. |
+| **HIGH** | NUMA first-touch patch — `tree/phylotreesse.cpp:537,571` | Two `#pragma omp parallel for schedule(static)` additions. Empirical test first (`numactl --interleave=all` on current 128T AOCC binary). Confirmed root cause 2026-05-07 — see analysis entry. |
 | **HIGH** | Harvest Gadi `xlarge_mf _sr_gcc_pin` 64T (PBS **167520757**) and 104T (PBS **167520758**) | Jobs were released from hold 2026-05-02 after inode cleanup — status on Gadi scratch unverified from Setonix |
 | **HIGH** | Submit Gadi `mega_dna _sr_gcc_pin` matrix | No canonical Gadi mega_dna sweep exists — only the earlier `sr_icx` reference runs (4 runs, 16T–104T). Cross-platform mega_dna comparison blocked. |
 | **HIGH** | Submit Setonix `mega_dna _smtoff_pin` canonical matrix | Only SMT-on reference runs exist (4 runs: 16/32/64/128T, `baseline_smton`, slurm 41849110–41849113). No canonical SMT-off pinned Setonix mega_dna data. |
 | **HIGH** | Re-run Setonix GCC `xlarge_mf` 8–128T with `python3.11`-fixed `run_mega_profile.sh` | Current `Setonix_xlarge_mf_{8,16,32,64,104,128}T.json` hotspot data profiles SLURM commands not iqtree3 — flamegraph/hotspot comparison blocked. See follow-up #20. |
+| ~~**CLOSED**~~ | ~~`block:block:block` distribution policy investigation~~ | ✅ Closed 2026-05-07 — zero effect at 8T (Δ +0.4 s) and 64T (Δ −1.4%, noise). See 2026-05-07 analysis entry. |
 
 ### 🟠 Data quality issues (discovered 2026-05-02 audit)
 
