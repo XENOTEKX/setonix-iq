@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-08 (o) — 2-node MPI socket result (PBS 167911421): **PASS — 25.7% speedup**
+
+The 2-node socket run is the first MPI placement to deliver a substantial wall-time win on xlarge_mf. Outcome **between (a) and (b)** from the hypothesis space — closer to (a) than to (b).
+
+### Result
+
+| run | wall | lnL | IPC | LLC miss | Δ vs canonical |
+|---|---|---|---|---|---|
+| canonical 1×104 (1 node) | 523.7 s | −10956936.612 | 1.377 | 75.8% | — |
+| socket 1-node 2×52 | 520.1 s | −10956936.607 | 1.315 | 72.1% | −0.7% |
+| **2-node socket 4×52** | **389.1 s** | **−10956936.607** | 1.303 | 75.7% | **−25.7%** |
+| l3rank 1-node 8×13 | 957.8 s | −10956936.612 | 1.366 | 55.8% | +83% |
+
+- **Hosts**: `gadi-cpu-spr-0287` (ranks 0–1) + `gadi-cpu-spr-0288` (ranks 2–3)
+- **lnL** is bit-identical to the single-node socket run (−10956936.607), confirming MPI doubled the bootstrap-replicate parallelism without changing the search trajectory.
+- **Per-rank IPC**: 1.27 (node A ranks 0,1) vs 1.33 (node B ranks 2,3). The asymmetry is small and consistent with the master rank doing extra bookkeeping; both nodes are healthy.
+
+### Interpretation
+
+Hypothesis (a) predicted ~262 s for *perfect* linear scaling; (b) predicted ~520 s if InfiniBand cancelled the gain. Actual 389 s sits about **75% of the way** from (b) to (a):
+
+- IQ-TREE 3 MPI's bootstrap-replicate distribution scales near-linearly across 4 ranks for this dataset.
+- Inter-node MPI traffic on tree-exchange is real but small relative to the per-rank work (each rank still owns 52 cores, so per-replicate compute time dominates over the MPI sync time).
+- LLC miss rate (75.7%) tracks the canonical 1×104 run (75.8%) — no cache regression from splitting work across nodes; each rank's 52-thread OMP team is still seeing the same per-replicate working-set behaviour.
+
+### Why this matters vs the l3rank result
+
+The l3rank experiment failed (+83%) because it shrank the OMP team to 13 threads. The 2-node socket experiment succeeds (−25.7%) because it **keeps the 52-thread OMP team that worked** and only adds parallelism *across* sockets via MPI. The right axis to scale on is *number of sockets running parallel replicates*, not *finer-grained pinning of the same total work*.
+
+### SU cost
+
+Wall 389.1 s on 2 nodes ≈ 22.5 SU (vs 25 SU for single-node canonical). Slightly cheaper *and* faster.
+
+### Run record
+
+- `logs/runs/gadi_xlarge_mf_208t_icx_mpi4x52_2node_socket_numa_ft_r2.json`
+
+### Where the sweep stands now
+
+| placement | nodes | ranks×OMP | wall | Δ vs canonical | verdict |
+|---|---|---|---|---|---|
+| canonical | 1 | 1×104 | 523.7 s | — | baseline |
+| socket | 1 | 2×52 | 520.1 s | −0.7% | neutral |
+| l3rank | 1 | 8×13 | 957.8 s | +83% | OMP team too small |
+| **2node-socket** | **2** | **4×52** | **389.1 s** | **−25.7%** | **best so far** |
+
+The natural next step (if more SU available) would be 4-node socket (8×52, 416 cores) to see whether the linear scaling continues or whether InfiniBand crosstalk dominates beyond 2 nodes.
+
+---
+
 ## 2026-05-08 (n) — 2-node MPI socket placement: scale the working topology
 
 The single-node sweep (entries (l)/(m)) showed clear directional results:
