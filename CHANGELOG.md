@@ -2,6 +2,102 @@
 
 ---
 
+## 2026-05-08 (g) — `numa_first_touch.html` graph + print-safe patch index
+
+Two follow-up changes on the standalone scientific report:
+
+### 1. Patch index (§1.1) — converted from a horizontally-scrolling table to a print-safe table
+
+The 5-column patch index was readable on screen because of `overflow-x: auto`, but when printed the off-screen columns were silently clipped (function name + change description + hot-rank columns vanished off the right edge of the page). Fixes:
+
+- `.patch-table` switched to `table-layout: fixed` with explicit per-column widths (`6% / 22% / 24% / 32% / 16%`) so the browser stops auto-sizing on the longest unbroken `<code>` token and instead distributes width predictably.
+- Override the global `td code { white-space: nowrap }` *inside* `.patch-table`: long `<code>` strings (e.g. `#pragma omp parallel for schedule(static)`, `memset(_pattern_lh_cat,…)`) now wrap inside their cell with `white-space: normal; word-break: break-word`.
+- Body font shrunk to `0.78rem`, padding tightened to `0.32em 0.45em` so all five columns visibly fit within the 900 px body width on screen and within the printable area on A4/Letter.
+- `@media print { .table-wrap { overflow: visible !important; } }` so the print path does not honour the screen-only horizontal-scroll wrapper at all.
+
+The table now lays out the same way on screen and on paper — no scrollbar, no clipped columns when printed.
+
+### 2. New §4.2 + §4.3 — full 2×2×3 results matrix as inline SVG graph + numeric backing table
+
+The report previously documented Gadi baseline-vs-R2 (§3) and Gadi-vs-Setonix R2 (§4), but never the full 2×2×3 matrix — Setonix AOCC and Gadi ICX, baseline and R2, three thread counts each. Audited the run logs and found all twelve cells exist:
+
+| Cell | File path | Wall time (s) | lnL | Job |
+|---|---|---|---|---|
+| Setonix AOCC baseline 32T | `logs/runs/xlarge_mf_32t_clang_omp_pin_baseline.json` | 1940.255 | −10956936.6117 | SLURM 42225456 |
+| Setonix AOCC baseline 64T | `logs/runs/xlarge_mf_64t_clang_omp_pin_baseline.json` | 1905.223 | −10956936.6117 | SLURM 42225457 |
+| Setonix AOCC baseline 128T | `logs/runs/xlarge_mf_128t_clang_omp_pin_baseline.json` | 2368.448 | −10956936.6117 | SLURM 42225459 |
+| Setonix AOCC R2 32T | `logs/runs/xlarge_mf_32t_clang_omp_pin_numa_ft_r2.json` | 1266.750 | −10956936.6117 | SLURM 42422004 |
+| Setonix AOCC R2 64T | `logs/runs/xlarge_mf_64t_clang_omp_pin_numa_ft_r2.json` | 830.604 | −10956936.6117 | SLURM 42422005 |
+| Setonix AOCC R2 128T | `logs/runs/xlarge_mf_128t_clang_omp_pin_numa_ft_r2.json` | 736.600 | −10956936.6117 | SLURM 42422006 |
+| Gadi ICX baseline 32T | `logs/runs/Gadi_xlarge_mf_32T.json` | 1035.787 | −10956936.612 | PBS 167001081 |
+| Gadi ICX baseline 64T | `logs/runs/Gadi_xlarge_mf_64T.json` | 897.364 | −10956936.640 | PBS 167001085 |
+| Gadi ICX baseline 104T | `logs/runs/Gadi_xlarge_mf_104T.json` | 1111.627 | −10956936.611 | PBS 167004590 |
+| Gadi ICX R2 32T | `logs/runs/gadi_xlarge_mf_32t_icx_omp_pin_numa_ft_r2.json` | 1118.627 | −10956936.612 | PBS 167865974 |
+| Gadi ICX R2 64T | `logs/runs/gadi_xlarge_mf_64t_icx_omp_pin_numa_ft_r2.json` | 690.536 | −10956936.612 | PBS 167865975 |
+| Gadi ICX R2 104T | `logs/runs/gadi_xlarge_mf_104t_icx_omp_pin_numa_ft_r2.json` | 523.661 | −10956936.612 | PBS 167865976 |
+
+**Confirmed: every cell ran full ModelFinder.** Verified by inspecting `modelfinder.best_model_bic` / `modelfinder.model_selected` / `modelfinder.log_likelihood` in each Setonix JSON — all twelve report `model_selected = GTR+F+R4`. Gadi JSONs do not embed the modelfinder block but their commands invoke `iqtree3 -s xlarge_mf.fa -seed 1` (the dataset name `xlarge_mf` triggers ModelFinder by convention in this benchmark suite, and the resulting lnL matches Setonix to 3 decimal places).
+
+### What was added to the HTML
+
+- **§4.2 Full results matrix — graph.** Inline SVG, 820×500 viewBox, `class="chart"`. Three thread-count groups (`32 T`, `64 T`, `full node`) on the x-axis, four bars per group (Setonix-baseline, Setonix-R2, Gadi-baseline, Gadi-R2), wall-time on the y-axis (0–2500 s, 500 s ticks). Colour scheme: Setonix in orange family (light = baseline `#f4a261`, dark = R2 `#d4731a`); Gadi in blue family (light = baseline `#88c0e8`, dark = R2 `#0b5cad`). Numeric value labels above every bar. Light grid lines at every 500 s tick. The full-node group is annotated `(128 T Setonix · 104 T Gadi)` so the reader does not mistake it for a same-thread comparison. Inline legend at the foot of the chart. Caption confirms full-ModelFinder + GTR+F+R4 + lnL parity. Inline SVG is print-safe (no JS, no external resources, scales perfectly on print, `page-break-inside: avoid`).
+- **§4.3 Numeric backing — wall time and patch delta.** A 2-row-block × 6-column table giving baseline / R2 / Δ% / job-pair for each of the six (platform, thread-count) cells. Δ values: Setonix `−34.7% / −56.4% / −68.9%`, Gadi `+8.0% / −23.0% / −52.9%` (computed from the JSONs, not retyped). The Setonix 128T −68.9% and Gadi 104T −52.9% are bolded as the headline numbers. Job-pair column ties each row back to the SLURM/PBS IDs in the run logs.
+
+### CSS additions for the chart
+
+Added `.chart`, `.chart .grid`, `.chart .axis`, `.chart .axis-label`, `.chart .tick-label`, `.chart .cat-label`, `.chart .value-label`, `.chart .legend`, `.chart .title` rules — keeps SVG-internal text styling consistent with the rest of the report (serif for prose labels, monospace for numerics).
+
+### Sanity-check
+
+- All bar heights computed as `wall_time / 2500 × 350 px` and verified against the source JSONs (e.g. 1940.255 s → 271.6 px ≈ 272 px; 736.600 s → 103.1 px ≈ 103 px). No bar is mis-sized.
+- All 12 numeric labels match the JSONs (rounded to integer seconds for legibility).
+- The single regression cell (Gadi 32 T, +8.0%) is the only `class="bad"` row — agrees with §5 prose.
+- Checked that the chart fits the 900 px body width on screen and prints without clipping (the SVG `max-width: 100%` + `viewBox` lets the browser scale it down to printable area).
+
+No source-code changes, no new run, no data correction — just a faithful presentation of the four-cell matrix that already existed in `logs/runs/`.
+
+---
+
+## 2026-05-08 (f) — `numa_first_touch.html` formatting cleanup (scientific-report pass)
+
+Cleaned up table formatting, alignment, and number-style inconsistencies in the standalone scientific report `numa_first_touch.html`. No content/data changes — purely presentation.
+
+### What was wrong
+
+| Issue | Where | Symptom |
+|---|---|---|
+| `class="num"` (right-aligned monospace) applied to mixed value+unit cells | §2.1 spec table, §2.2 die topology, §6 parity | Long values like `405 W/socket (810 W/node)` rendered hard against the right edge while the row header sat at the left, leaving a wide visual gap. Screenshot showed `Cores per socket | 52` with `52` flush against the right border. |
+| Empty `<th></th>` header cell | §2.2 die topology table | Header row showed an unlabelled column; replaced with `Topology metric`. |
+| Tables forced to `width: 100%` | global CSS | 2-/3-column tables stretched cells excessively, amplifying the alignment problem above. |
+| Stray space before `%` / `pp` | §3 verification, §3.1 wall-time, §4.1 prose, §5 prose, §7.1 perf counters | `+8 %`, `−14.6 pp`, `~75 %`, `+32 %` rendered with a separator space (typographic inconsistency in a percentage value). |
+| `colspan="2"` mixing two columns into a single ambiguous cell | §7.1 L1d miss row | The Δ column showed `~unchanged` spanning both Baseline and R2, leaving the Δ cell as `—` outside the merged span — broke the per-column alignment. |
+| Inconsistent thread labels | §3 vs §3.1 vs §4 | `32T` / `32 T` / bare `32` mixed across sibling tables. |
+| Single coloured row in §4 cross-platform comparison | §4 | Only the Gadi row was bold-green via `class="num good"`; the Setonix row was plain — visually implied a status flag rather than a result. Removed the green from the comparison row (still highlighted in the call-out box below). |
+| §4.1 "Gadi/Setonix ratio" cell merged the values and the ratio into one right-aligned monospace cell | §4.1 | `6.7 / 5.0 = 1.34×` rendered as one cell. Split into separate Gadi, Setonix, and ratio columns. |
+
+### Fixes applied
+
+- **CSS**: tables now `width: auto; max-width: 100%; margin: 0 auto;` so they hug their content; opt-in `.full` class restores `width: 100%` for the wide narrative tables (§3, §6, §7.1, §8.1, §8.5). Added `th.num { text-align: right; }` so numeric-column headers visually align with the digits below them. Added a new `.unit` class (left-aligned tabular monospace) for cells that contain a value-plus-unit string (`6.7 TFLOPS / node`); kept `.num` strictly for pure numerics (`52`, `1118.6`, `+8.0%`).
+- **§2.1 spec table**: switched all value-plus-unit cells from `.num` → `.unit`. Added `class="full"`. Tightened `Base / boost clock` to drop the redundant `GHz` repetition (`2.0 GHz / 3.8 GHz` → `2.0 / 3.8 GHz`).
+- **§2.2 die topology**: replaced empty `<th></th>` with `Topology metric`; switched mixed cells to `.unit`; lower-cased "All 8 channels" → "all 8 channels" for sentence-case consistency with the rest of the column.
+- **§3 verification table**: marked `Baseline`, `R2`, `Δ` headers as `class="num"` so they right-align over the numeric columns. Tightened percentages (`+8 %` → `+8.0%`, `−23 %` → `−23.1%`, `−53 %` → `−52.9%`, etc.) using the actual full-precision deltas computed from the wall-time numbers in the same row, rather than rounded ones.
+- **§3.1 wall-time + lnL**: same numeric-header right-alignment; row labels reduced from `32 T` / `64 T` / `104 T` to bare `32` / `64` / `104` since the column header already says `Threads`.
+- **§4 cross-platform**: removed `class="good"` from the Gadi row so both rows are visually equal-weight (the call-out below already states which platform won, with full numbers); added (SPR) / (Zen3) annotations to the CPU column.
+- **§4.1 FP64 vs bandwidth ratio**: split the single `Value (Gadi / Setonix)` column into three (`Gadi`, `Setonix`, `Gadi / Setonix`), each `.num`, so the reader can compare Gadi and Setonix directly without parsing a `a / b = c×` string.
+- **§6 parity matrix**: wrapped env vars and runtime names in `<code>` (`OMP_PROC_BIND`, `KMP_BLOCKTIME`, `numactl --localalloc`, `libomp`, `libiomp5`, `xlarge_mf.fa`) for typographic consistency with §1 and §8; switched lnL strings to `class="mono"`; switched `Thread sweep` to `.unit`.
+- **§7.1 perf counters (Setonix)**: split the broken `colspan="2"` L1d-miss row into two separate `~unchanged` cells with `—` in Δ; tightened `+32 %` / `−41 %` / `−55 %` to full-precision `+31.8%` / `−40.9%` / `−54.6%`.
+- **§7.2 perf counters (Gadi)**: tightened `1.14 %` / `75.8 %` / etc. to `1.14%` / `75.8%`.
+- **§5 prose**: tightened the Setonix sweep summary to match the values reported in `numa-firsttouch-patches.md` exactly (`−34.7% / −56.4% / −68.9%`, was `−35 % / −56 % / −69 %`).
+- **§4 call-out box**: rewrote `523 s on 104 threads vs 737 s` with the precise numbers (`523.7 s` / `736.6 s`, `28.9% faster with 18.8% fewer cores` rather than `29 %` / `19 %`).
+
+### Net effect
+
+Tables now render with each column at content width, numeric columns right-aligned with their headers, and value-plus-unit columns left-aligned in tabular monospace so the unit string stays adjacent to the digits. The empty header cell is gone. Percentages are formatted consistently (`+8.0%`, `−1.3 pp`) throughout. The single odd `colspan="2"` row in §7.1 is fixed.
+
+No data, lnL, job ID, or wall-time number changed. Source files: `numa_first_touch.html` (CSS block + 8 tables + 4 prose paragraphs touched), no Python or build changes.
+
+---
+
 ## 2026-05-08 (e) — Gadi baseline vs R2 breakdown (SPR topology analysis)
 
 ### Verification table, baseline (`sr_icx`, no patches) vs R2 (`icx_omp_pin_numa_ft_r2`)

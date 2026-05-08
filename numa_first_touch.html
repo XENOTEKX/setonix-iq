@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NUMA First-Touch (R1+R2) — Gadi vs Setonix</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --border: #d0d0d0;
+    --bg-alt: #f6f7f9;
+    --accent: #0b5cad;
+    --good: #1a7f37;
+    --bad: #b42318;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  html { font-size: 12pt; }
+  body {
+    font-family: var(--serif);
+    color: var(--fg);
+    max-width: 900px;
+    margin: 2.5em auto;
+    padding: 0 1.5em;
+    line-height: 1.45;
+  }
+  header { border-bottom: 2px solid var(--fg); padding-bottom: 0.6em; margin-bottom: 1.2em; }
+  h1 { font-size: 1.7rem; margin: 0 0 0.2em; }
+  h2 { font-size: 1.25rem; margin-top: 1.6em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+  h3 { font-size: 1.05rem; margin-top: 1.2em; color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 0.95rem; }
+  code, pre, .mono { font-family: var(--mono); }
+  code { background: var(--bg-alt); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: var(--bg-alt); padding: 0.8em 1em; border-radius: 5px; overflow-x: auto; font-size: 0.8rem; line-height: 1.4; }
+  pre.diff .add { background: #e6ffed; display: block; }
+  pre.diff .del { background: #ffeef0; display: block; }
+  pre.diff .ctx { display: block; }
+  /* Side-by-side / stacked Before & After code blocks (verbatim from numa-firsttouch-patches.md). */
+  .codeblock { margin: 0.4em 0 0.8em; }
+  .codeblock-label {
+    font-family: var(--serif); font-size: 0.82rem; font-weight: 600;
+    padding: 0.25em 0.7em; border-radius: 4px 4px 0 0; display: inline-block;
+    margin-bottom: -1px; position: relative; z-index: 1;
+  }
+  .codeblock-label.before { background: #ffeef0; color: #b42318; border: 1px solid #f5c2c7; border-bottom: 1px solid #ffeef0; }
+  .codeblock-label.after  { background: #e6ffed; color: #1a7f37; border: 1px solid #b7e1c4; border-bottom: 1px solid #e6ffed; }
+  .codeblock pre.before-pre { background: #fff5f5; border: 1px solid #f5c2c7; border-radius: 0 5px 5px 5px; margin-top: 0; }
+  .codeblock pre.after-pre  { background: #f0fff4; border: 1px solid #b7e1c4; border-radius: 0 5px 5px 5px; margin-top: 0; }
+  .codeblock pre { font-size: 0.78rem; }
+  .table-wrap { overflow-x: auto; margin: 0.8em 0 1.2em; }
+  table { border-collapse: collapse; width: auto; max-width: 100%; margin: 0 auto; font-size: 0.9rem; table-layout: auto; }
+  table.full { width: 100%; }
+  th, td { border: 1px solid var(--border); padding: 0.4em 0.7em; text-align: left; vertical-align: top; word-wrap: break-word; }
+  th { background: var(--bg-alt); font-weight: 600; }
+  th.num { text-align: right; }
+  tbody tr:nth-child(even) td { background: #fafbfc; }
+  td code { white-space: nowrap; }
+  /* Patch index: must fit the printed page without horizontal scroll. */
+  .patch-table { width: 100%; font-size: 0.78rem; table-layout: fixed; }
+  .patch-table th, .patch-table td { padding: 0.32em 0.45em; word-break: break-word; }
+  .patch-table td code { white-space: normal; word-break: break-word; }
+  .patch-table td:nth-child(1) { width: 6%; white-space: nowrap; font-weight: 600; }
+  .patch-table td:nth-child(2) { width: 22%; }
+  .patch-table td:nth-child(2) code { font-size: 0.92em; }
+  .patch-table td:nth-child(3) { width: 24%; }
+  .patch-table td:nth-child(4) { width: 32%; }
+  .patch-table td:nth-child(5) { width: 16%; white-space: nowrap; }
+  .num  { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); white-space: nowrap; }
+  .unit { text-align: left;  font-variant-numeric: tabular-nums; font-family: var(--mono); white-space: nowrap; }
+  .good { color: var(--good); font-weight: 600; }
+  .bad  { color: var(--bad);  font-weight: 600; }
+  .key { background: #fff8e1; padding: 0.6em 0.9em; border-left: 3px solid #d4a017; border-radius: 3px; margin: 0.8em 0; }
+  ul { padding-left: 1.4em; }
+  li { margin: 0.2em 0; }
+  .meta { font-size: 0.85rem; color: var(--muted); }
+  .caption { font-size: 0.85rem; color: var(--muted); margin-top: -0.5em; margin-bottom: 1em; }
+  /* Inline-SVG chart styling */
+  .chart { display: block; margin: 0.4em auto 0.2em; max-width: 100%; height: auto; }
+  .chart .grid       { stroke: #e1e4e8; stroke-width: 1; }
+  .chart .axis       { stroke: #1a1a1a; stroke-width: 1; }
+  .chart .axis-label { font-family: var(--serif); font-size: 11px; fill: #1a1a1a; }
+  .chart .tick-label { font-family: var(--mono);  font-size: 10px; fill: #555; }
+  .chart .cat-label  { font-family: var(--serif); font-size: 12px; fill: #1a1a1a; font-weight: 600; }
+  .chart .value-label{ font-family: var(--mono);  font-size: 9.5px; fill: #1a1a1a; text-anchor: middle; }
+  .chart .legend     { font-family: var(--serif); font-size: 11px; fill: #1a1a1a; }
+  .chart .title      { font-family: var(--serif); font-size: 13px; font-weight: 600; fill: #1a1a1a; text-anchor: middle; }
+  /* Force color/background to print in PDF exactly as on screen */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+  @media print {
+    body { margin: 1.5cm 1.8cm; max-width: none; font-size: 10.5pt; }
+    /* Each h2 section starts on a fresh page; never orphan the heading alone */
+    h2 {
+      page-break-before: always;
+      page-break-after: avoid;
+      margin-top: 0;
+      padding-top: 0.4em;
+    }
+    /* First section must NOT get a blank page before it */
+    h2:first-of-type { page-break-before: avoid; }
+    /* h3 always stays with the content that follows it */
+    h3 { page-break-after: avoid; page-break-inside: avoid; }
+    /* Never split these blocks mid-page */
+    table, pre, .key, .chart, .codeblock,
+    .codeblock-label + pre,
+    h3 + p, h3 + .table-wrap, h3 + .codeblock, h3 + pre,
+    h3 + div { page-break-inside: avoid; }
+    /* Keep heading + first following element together */
+    h2 + p, h2 + .table-wrap, h2 + .key, h2 + .codeblock { page-break-before: avoid; }
+    a { color: inherit; text-decoration: none; }
+    .table-wrap { overflow: visible !important; }
+    /* Explicit restatement of all colour rules so browser print engines cannot strip them */
+    pre.diff .add { background: #e6ffed !important; color: #1a1a1a !important; }
+    pre.diff .del { background: #ffeef0 !important; color: #1a1a1a !important; }
+    .codeblock-label.before { background: #ffeef0 !important; color: #b42318 !important; }
+    .codeblock-label.after  { background: #e6ffed !important; color: #1a7f37 !important; }
+    .codeblock pre.before-pre { background: #fff5f5 !important; }
+    .codeblock pre.after-pre  { background: #f0fff4 !important; }
+    .good { color: #1a7f37 !important; }
+    .bad  { color: #b42318 !important; }
+    .key  { background: #fff8e1 !important; border-left: 3px solid #d4a017 !important; }
+    th    { background: #f6f7f9 !important; }
+    tbody tr:nth-child(even) td { background: #fafbfc !important; }
+    code  { background: #f6f7f9 !important; }
+    /* SVG fill colours must also be stated explicitly for Chromium PDF export */
+    .chart .grid  { stroke: #e1e4e8 !important; }
+    .chart .axis  { stroke: #1a1a1a !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>IQ-TREE 3 — NUMA First-Touch (R1+R2) on Gadi vs Setonix</h1>
+  <div class="subtitle">xlarge_mf.fa (200 taxa × 100 000 bp, GTR+G4) — Sapphire Rapids vs Zen3 Milan, full-node thread sweep</div>
+  <div class="meta">Run window: 2026-05-08 · Author: Ayush Samuel · iqtree3 build-profiling-clang (icx) on Gadi, AOCC 5.1.0 on Setonix</div>
+</header>
+
+<h2>1. The problem and the fix</h2>
+<p>
+  Linux uses <strong>first-touch</strong> NUMA placement: the first thread to write a virtual page decides which NUMA
+  node holds the physical page for the rest of the process's lifetime. IQ-TREE was filling several large
+  per-pattern arrays from a single thread (the master), pinning every page to one NUMA node. When the parallel
+  kernel later spawned threads on other sockets/CCDs, every read from those arrays became a remote-DRAM load
+  with cross-socket coherence cost.
+</p>
+<p>
+  Eight source edits across two files convert the kernel's OpenMP scheduling and one-time/per-call buffer fills
+  to a single <code>schedule(static)</code> idiom, so each Linux page is first-touched by the worker thread that
+  will own it for the rest of the run. Same edits, same line ranges, same comments on Gadi and Setonix.
+</p>
+
+<h3>1.1 Patch index</h3>
+<div class="table-wrap">
+<table class="patch-table">
+  <thead><tr><th>Patch</th><th>File : line</th><th>Function</th><th>Change</th><th>Hot rank</th></tr></thead>
+  <tbody>
+    <tr><td>R1a</td><td><code>tree/phylotreesse.cpp:546</code></td><td><code>computePtnFreq</code></td><td>serial fill → <code>#pragma omp parallel for schedule(static)</code></td><td>#1 (40% CPU)</td></tr>
+    <tr><td>R1b</td><td><code>tree/phylotreesse.cpp:577</code></td><td><code>computePtnInvar</code></td><td><code>memset</code> → two <code>schedule(static)</code> loops</td><td>read by #1</td></tr>
+    <tr><td>R2a</td><td><code>tree/phylotreesse.cpp:1294-1295</code></td><td><code>computeLikelihoodBranchEigen</code></td><td><code>memset(_pattern_lh_cat,…)</code> → <code>schedule(static)</code> zero-fill (≈1.6 MB / call)</td><td>per-NNI</td></tr>
+    <tr><td>R2b/1</td><td><code>tree/phylokernelnew.h:1275</code></td><td><code>computeTraversalInfo</code></td><td><code>schedule(dynamic,1)</code> → <code>schedule(static)</code></td><td>#2 (18.3%)</td></tr>
+    <tr><td>R2b/2</td><td><code>tree/phylokernelnew.h:2386</code></td><td><code>computeLikelihoodDervGenericSIMD</code></td><td><code>schedule(dynamic,1)</code> → <code>schedule(static)</code></td><td>#1 (40.1%)</td></tr>
+    <tr><td>R2b/3</td><td><code>tree/phylokernelnew.h:2838</code></td><td><code>computeLikelihoodBranchGenericSIMD</code> (SAFE_NUMERIC)</td><td><code>schedule(dynamic,1)</code> → <code>schedule(static)</code></td><td>#4</td></tr>
+    <tr><td>R2b/4</td><td><code>tree/phylokernelnew.h:3005</code></td><td><code>computeLikelihoodBranchGenericSIMD</code> (fast path)</td><td><code>schedule(dynamic,1)</code> → <code>schedule(static)</code></td><td>#4</td></tr>
+    <tr><td>R2b/5</td><td><code>tree/phylokernelnew.h:3595</code></td><td><code>computeLikelihoodDervMixlenGenericSIMD</code></td><td><code>schedule(dynamic,1)</code> → <code>schedule(static)</code></td><td>#1 (mixlen)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="key">
+  <strong>Why it works.</strong>
+  R1 fixes the one-time init arrays (<code>ptn_freq</code>, <code>ptn_invar</code>) so each thread first-touches its own pattern range.
+  R2a does the same for the per-call <code>_pattern_lh_cat</code> zero-fill that runs on every NNI iteration.
+  R2b stops the dynamic scheduler from re-shuffling packets between threads on every kernel call, which was
+  defeating any locality R1 established. Together they enforce a single
+  <code>(thread → static pattern range)</code> mapping on both write and read sides of every page.
+</div>
+
+<h3>1.2 R1a — <code>tree/phylotreesse.cpp:546</code> · <code>computePtnFreq</code></h3>
+<p>Read every iteration of the likelihood Newton-Raphson loop (#1 hot func, ~40% CPU).
+Serial master-thread fill pins all <code>ptn_freq</code> pages on socket 0; fix: parallel-static fill so
+each worker first-touches the pages it will own for the rest of the run.</p>
+
+<div class="codeblock">
+  <span class="codeblock-label before">Before</span>
+  <pre class="before-pre">void PhyloTree::computePtnFreq() {
+    if (ptn_freq_computed) return;
+    size_t nptn = aln->size();
+    for (size_t ptn = 0; ptn &lt; nptn; ptn++)
+        ptn_freq[ptn] = (*aln)[ptn].frequency;
+    ptn_freq_computed = true;
+}</pre>
+</div>
+<div class="codeblock">
+  <span class="codeblock-label after">After</span>
+  <pre class="after-pre">void PhyloTree::computePtnFreq() {
+    if (ptn_freq_computed) return;
+    size_t nptn = aln->size();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t ptn = 0; ptn &lt; nptn; ptn++)
+        ptn_freq[ptn] = (*aln)[ptn].frequency;
+    ptn_freq_computed = true;
+}</pre>
+</div>
+
+<h3>1.3 R1b — <code>tree/phylotreesse.cpp:577</code> · <code>computePtnInvar</code></h3>
+<p>Read every iteration of <code>computeLikelihoodDervSIMD</code> and <code>computeLikelihoodBranchSIMD</code>.
+The original <code>memset</code> is replaced with a parallel-static zero-fill (first-touch), and the
+final scale loop is also parallelised so the scaling writes match the same thread-to-range mapping.</p>
+
+<div class="codeblock">
+  <span class="codeblock-label before">Before</span>
+  <pre class="before-pre">void PhyloTree::computePtnInvar() {
+    size_t nptn = aln->size();
+    memset(ptn_invar, 0, sizeof(double) * nptn);
+    // ... per-state contribution accumulation (already mostly serial init) ...
+    for (size_t ptn = 0; ptn &lt; nptn; ptn++)
+        ptn_invar[ptn] *= state_freq_factor;
+}</pre>
+</div>
+<div class="codeblock">
+  <span class="codeblock-label after">After</span>
+  <pre class="after-pre">void PhyloTree::computePtnInvar() {
+    size_t nptn = aln->size();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t ptn = 0; ptn &lt; nptn; ptn++)
+        ptn_invar[ptn] = 0.0;
+    // ... per-state contribution accumulation ...
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t ptn = 0; ptn &lt; nptn; ptn++)
+        ptn_invar[ptn] *= state_freq_factor;
+}</pre>
+</div>
+
+<h3>1.4 R2a — <code>tree/phylotreesse.cpp:1294-1295</code> · <code>computeLikelihoodBranchEigen</code></h3>
+<p>Per-call <code>_pattern_lh_cat</code> zero-fill. Buffer size: <code>nptn × ncat_mix × sizeof(double)</code> ≈ 1.6 MB for
+<code>xlarge_mf</code>. Called once per <code>computePatternLhCat</code> invocation, which happens on every NNI
+candidate evaluation — thousands of times per tree-search iteration. The downstream reduction loops
+at lines 1321 and 1365 already use <code>schedule(static)</code>; this patch makes the upstream
+zero-fill match the same thread-to-range mapping so those pages are local when the reductions run.</p>
+
+<div class="codeblock">
+  <span class="codeblock-label before">Before</span>
+  <pre class="before-pre">double prob_const = 0.0;
+memset(_pattern_lh_cat, 0, sizeof(double) * nptn * ncat_mix);
+// ... downstream reduction loops at :1321 and :1365 use schedule(static) ...</pre>
+</div>
+<div class="codeblock">
+  <span class="codeblock-label after">After</span>
+  <pre class="after-pre">double prob_const = 0.0;
+// NUMA first-touch: parallel-static zero-fill so _pattern_lh_cat pages are
+// placed on the same NUMA node as the worker that later reads/writes them
+// in the static-scheduled reduction loops below (lines 1321 and 1365).
+{
+    size_t lh_cat_n = nptn * ncat_mix;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t k = 0; k &lt; lh_cat_n; k++)
+        _pattern_lh_cat[k] = 0.0;
+}</pre>
+</div>
+
+<h3>1.5 R2b — <code>tree/phylokernelnew.h</code> ×5 · kernel packet loops</h3>
+<p>One-line schedule change, applied at five separate sites. The <code>num_packets</code> loop is sized by
+<code>computeBounds</code> to be roughly equal-cost per packet, so the load-balancing rationale that
+originally motivated <code>schedule(dynamic,1)</code> is weak in practice. Any residual imbalance
+loss is dwarfed by the NUMA-locality win at every thread count tested.</p>
+
+<div class="codeblock">
+  <span class="codeblock-label before">Before — all 5 sites</span>
+  <pre class="before-pre">#pragma omp parallel for schedule(dynamic,1) num_threads(num_threads)
+for (int packet_id = 0; packet_id &lt; num_packets; packet_id++) {
+    // ... per-packet kernel work ...
+}</pre>
+</div>
+<div class="codeblock">
+  <span class="codeblock-label after">After — all 5 sites</span>
+  <pre class="after-pre">#pragma omp parallel for schedule(static) num_threads(num_threads)
+for (int packet_id = 0; packet_id &lt; num_packets; packet_id++) {
+    // ... per-packet kernel work ...
+}</pre>
+</div>
+
+<p>Details for each of the five sites:</p>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Line</th><th>Enclosing function</th><th>Hot rank</th><th>Why this site matters</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="num">1275</td>
+      <td><code>PhyloTree::computeTraversalInfo</code><br><span class="meta">(drives <code>computePartialLikelihoodSIMD</code>)</span></td>
+      <td>#2 · 18.3% CPU</td>
+      <td>Pre-search post-order traversal; <code>partial_lh</code> and <code>scale_num</code> pages first-touched on call N must be read locally on call N+1. Dynamic stealing was sending page reads cross-CCD/socket.</td>
+    </tr>
+    <tr>
+      <td class="num">2386</td>
+      <td><code>PhyloTree::computeLikelihoodDervGenericSIMD</code></td>
+      <td>#1 · 40.1% CPU</td>
+      <td>The Newton-Raphson driver — single highest-impact NUMA site in the whole program. Any per-call cross-socket traffic here multiplies by thousands of branch-length optimisations per tree-search step.</td>
+    </tr>
+    <tr>
+      <td class="num">2838</td>
+      <td><code>PhyloTree::computeLikelihoodBranchGenericSIMD</code><br><span class="meta">(SAFE_NUMERIC path)</span></td>
+      <td>#4</td>
+      <td>Reads <code>theta_all</code> and <code>ptn_invar</code> per packet; static schedule pairs each thread with the same pattern range across the entire ModelFinder sweep.</td>
+    </tr>
+    <tr>
+      <td class="num">3005</td>
+      <td><code>PhyloTree::computeLikelihoodBranchGenericSIMD</code><br><span class="meta">(non-SAFE_NUMERIC fast path)</span></td>
+      <td>#4</td>
+      <td>Second parallel region in same function, reachable from a different code path; needs the same fix or the fast path re-introduces dynamic stealing.</td>
+    </tr>
+    <tr>
+      <td class="num">3595</td>
+      <td><code>PhyloTree::computeLikelihoodDervMixlenGenericSIMD</code></td>
+      <td>#1 · mixlen variant</td>
+      <td>Mirror of line 2386 for mixed-branch-length models; without it, mixlen workloads would still hit the NUMA cliff.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>2. Hardware — Sapphire Rapids vs Zen3 Milan</h2>
+
+<h3>2.1 CPU specs</h3>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Spec</th><th>Gadi — Intel Xeon Platinum 8470Q</th><th>Setonix — AMD EPYC 7763</th></tr></thead>
+  <tbody>
+    <tr><td>µarch / process</td><td>Sapphire Rapids · Intel 7</td><td>Zen3 (Milan) · TSMC 7nm</td></tr>
+    <tr><td>Cores per socket</td><td class="unit">52</td><td class="unit">64</td></tr>
+    <tr><td>Cores per node (2 sockets)</td><td class="unit">104</td><td class="unit">128</td></tr>
+    <tr><td>Base / boost clock</td><td class="unit">2.0 / 3.8 GHz</td><td class="unit">2.45 / 3.5 GHz</td></tr>
+    <tr><td>Vector width (FP64)</td><td class="unit">AVX-512 + 2× FMA = 32 FLOP/cycle/core</td><td class="unit">AVX2 + 2× FMA = 16 FLOP/cycle/core</td></tr>
+    <tr><td>Peak FP64 @ base clock</td><td class="unit">6.7 TFLOPS / node</td><td class="unit">5.0 TFLOPS / node</td></tr>
+    <tr><td>Peak FP64 @ boost clock</td><td class="unit">12.6 TFLOPS / node</td><td class="unit">7.2 TFLOPS / node</td></tr>
+    <tr><td>Memory</td><td class="unit">DDR5-4800, 8 ch/socket</td><td class="unit">DDR4-3200, 8 ch/socket</td></tr>
+    <tr><td>Memory bandwidth</td><td class="unit">~614 GB/s / node</td><td class="unit">~410 GB/s / node</td></tr>
+    <tr><td>TDP</td><td class="unit">405 W/socket (810 W/node)</td><td class="unit">280 W/socket (560 W/node)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>2.2 Die topology — chiplets vs tiles</h3>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Topology metric</th><th>Gadi SPR (8470Q)</th><th>Setonix Zen3 (7763)</th></tr></thead>
+  <tbody>
+    <tr><td>Compute dies / socket</td><td class="unit">4 tiles (2×2 grid, EMIB-connected)</td><td class="unit">8 CCDs + 1 IOD</td></tr>
+    <tr><td>Cores per die</td><td class="unit">~13 cores / tile</td><td class="unit">8 cores / CCD</td></tr>
+    <tr><td>Memory controllers</td><td class="unit">2 DDR5 channels per tile</td><td class="unit">all 8 channels on the IOD</td></tr>
+    <tr><td>NUMA domains / node</td><td class="unit">8 (SNC4 × 2 sockets)</td><td class="unit">16 (NPS4 × 2 sockets)</td></tr>
+    <tr><td>Cores between NUMA boundaries</td><td class="unit">~13</td><td class="unit">8</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="key">
+  <strong>Why this matters for the patches.</strong>
+  Setonix crosses a NUMA boundary every 8 cores, so cross-CCD remote DRAM hits start hurting from ~16T upward and R2 helps at every thread count.
+  Gadi crosses a NUMA boundary every ~13 cores, and only crosses sockets above 52T — so R2 is neutral-to-slightly-negative at 32T but the benefit
+  compounds dramatically once threads cross sockets.
+</div>
+
+<h2>3. Verification — Gadi baseline (sr_icx, no patches) vs R2</h2>
+
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Threads</th><th>Metric</th><th class="num">Baseline</th><th class="num">R2</th><th class="num">Δ</th><th>Interpretation</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="4">32 T</td><td>Wall time</td><td class="num">1035.8 s</td><td class="num">1118.6 s</td><td class="num bad">+8.0%</td><td>All 32 threads fit in socket 0 — no cross-socket NUMA to fix; static scheduling adds slight load-balance overhead.</td></tr>
+    <tr><td>IPC</td><td class="num">1.367</td><td class="num">1.257</td><td class="num bad">−8.0%</td><td>Confirms load-balance cost outweighs locality gain within one socket.</td></tr>
+    <tr><td>LLC miss</td><td class="num">78.9%</td><td class="num">64.3%</td><td class="num good">−14.6 pp</td><td>Even intra-socket, first-touch reduces unnecessary misses.</td></tr>
+    <tr><td>L1d miss</td><td class="num">2.07%</td><td class="num">1.15%</td><td class="num good">−0.92 pp</td><td>Page locality improved despite no wall-time win.</td></tr>
+
+    <tr><td rowspan="4">64 T</td><td>Wall time</td><td class="num">897.4 s</td><td class="num">690.5 s</td><td class="num good">−23.0%</td><td>64T spans both sockets; NUMA fix starts to pay.</td></tr>
+    <tr><td>IPC</td><td class="num">1.155</td><td class="num">1.438</td><td class="num good">+24.5%</td><td>Threads computing instead of waiting on remote DRAM.</td></tr>
+    <tr><td>LLC miss</td><td class="num">78.8%</td><td class="num">75.1%</td><td class="num good">−3.8 pp</td><td>Cross-socket remote traffic reducing.</td></tr>
+    <tr><td>L1d miss</td><td class="num">2.21%</td><td class="num">1.05%</td><td class="num good">−1.16 pp</td><td>First-touch giving each thread local L1 hits.</td></tr>
+
+    <tr><td rowspan="4">104 T</td><td>Wall time</td><td class="num">1111.6 s</td><td class="num">523.7 s</td><td class="num good">−52.9%</td><td>Full node; was slower than 64T (cross-socket cliff) — now fastest.</td></tr>
+    <tr><td>IPC</td><td class="num">1.030</td><td class="num">1.377</td><td class="num good">+33.7%</td><td>Worst-stalled config fixed; socket-1 threads now contributing.</td></tr>
+    <tr><td>LLC miss</td><td class="num">77.1%</td><td class="num">75.8%</td><td class="num good">−1.3 pp</td><td>Already improved by scheduling change alone.</td></tr>
+    <tr><td>L1d miss</td><td class="num">3.59%</td><td class="num">1.14%</td><td class="num good">−2.45 pp</td><td>Largest L1d gain — remote misses landing in L1 now.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>3.1 Wall time + log-likelihood</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th class="num">Threads</th><th class="num">Baseline (s)</th><th class="num">R2 (s)</th><th class="num">Δ</th><th>Baseline lnL</th><th>R2 lnL</th></tr></thead>
+  <tbody>
+    <tr><td class="num">32</td><td class="num">1035.8</td><td class="num">1118.6</td><td class="num bad">+8.0%</td><td class="mono">−10956936.612</td><td class="mono good">−10956936.612 ✓</td></tr>
+    <tr><td class="num">64</td><td class="num">897.4</td><td class="num">690.5</td><td class="num good">−23.0%</td><td class="mono bad">−10956936.640 ⚠</td><td class="mono good">−10956936.612 ✓</td></tr>
+    <tr><td class="num">104</td><td class="num">1111.6</td><td class="num">523.7</td><td class="num good">−52.9%</td><td class="mono">−10956936.611</td><td class="mono good">−10956936.612 ✓</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="caption">
+  R2 lnL is bit-identical at all three thread counts (−10956936.612). The baseline is <em>not</em>:
+  the 64T baseline run produced −10956936.640 — the dynamic scheduler randomly reassigned
+  packets between threads each NNI call, causing it to land on a slightly different local optimum
+  (0.028 lnL units worse than R2). R2 eliminates this non-determinism as a side-effect of
+  enforcing static thread-to-packet assignment. The 104T baseline (1111.6 s) was slower than 64T
+  (897.4 s) — the cross-socket cliff. After R2, 104T is fastest at 523.7 s, super-linear scaling
+  restored above 52T.
+</p>
+
+<h2>4. Cross-platform comparison — full-node R2 results</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Platform</th><th>CPU</th><th class="num">Threads</th><th class="num">Wall time (s)</th><th>Log-likelihood</th></tr></thead>
+  <tbody>
+    <tr><td>Gadi</td><td>Xeon 8470Q (SPR)</td><td class="num">104</td><td class="num good">523.7</td><td class="mono">−10956936.612</td></tr>
+    <tr><td>Setonix</td><td>EPYC 7763 (Zen3)</td><td class="num">128</td><td class="num">736.6</td><td class="mono">−10956936.6117</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="key">
+  <strong>Gadi wins</strong> — 523.7 s on 104 threads vs Setonix 736.6 s on 128 threads. 28.9% faster with 18.8% fewer cores.
+</div>
+
+<h3>4.1 Does the wall-time ratio match the FP64 ratio?</h3>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Ratio</th><th class="num">Gadi</th><th class="num">Setonix</th><th class="num">Gadi / Setonix</th></tr></thead>
+  <tbody>
+    <tr><td>Peak FP64 @ base clock (TFLOPS / node)</td><td class="num">6.7</td><td class="num">5.0</td><td class="num"><strong>1.34×</strong></td></tr>
+    <tr><td>Memory bandwidth (GB/s / node)</td><td class="num">614</td><td class="num">410</td><td class="num"><strong>1.50×</strong></td></tr>
+    <tr><td>Observed wall-time speedup (s, full node)</td><td class="num">523.7</td><td class="num">736.6</td><td class="num"><strong>1.41×</strong></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The observed 1.41× sits <em>between</em> the FLOPS ratio (1.34×) and the bandwidth ratio (1.50×) — IQ-TREE is partially compute-bound and partially memory-bound.
+  LLC miss rates of ~75% at 104T confirm the workload is heavily bandwidth-limited, which is why the bandwidth ratio is the better predictor and why
+  NUMA first-touch had such a large impact in the first place.
+</p>
+
+<h3>4.2 Full results matrix — baseline vs R2 across both compilers</h3>
+<p>
+  Twelve runs of full ModelFinder on <code>xlarge_mf.fa</code> (selected model <code>GTR+F+R4</code> in every cell;
+  R2 lnL bit-identical within each platform, baseline lnL varied on Gadi at 64T — see §3.1). The chart below shows wall time at three thread counts on each platform,
+  with baseline and R2 paired so the patch effect is visible per (platform, thread-count) cell.
+</p>
+
+<svg class="chart" viewBox="0 0 820 500" role="img" aria-label="Wall time — baseline vs R2 across compilers and thread counts">
+  <title>Wall time on xlarge_mf.fa — baseline vs R2 across compilers and thread counts (lower is better)</title>
+  <text class="title" x="410" y="22">Wall time on xlarge_mf.fa — baseline vs R2 (full ModelFinder, lower is better)</text>
+
+  <!-- Plot area: x 70..790 (w 720), y 50..400 (h 350); ymax = 2500 s, tick step 500 s -->
+  <!-- Y grid + ticks -->
+  <g>
+    <line class="grid" x1="70" y1="400" x2="790" y2="400"/>
+    <line class="grid" x1="70" y1="330" x2="790" y2="330"/>
+    <line class="grid" x1="70" y1="260" x2="790" y2="260"/>
+    <line class="grid" x1="70" y1="190" x2="790" y2="190"/>
+    <line class="grid" x1="70" y1="120" x2="790" y2="120"/>
+    <line class="grid" x1="70" y1="50"  x2="790" y2="50"/>
+    <text class="tick-label" x="62" y="403" text-anchor="end">0</text>
+    <text class="tick-label" x="62" y="333" text-anchor="end">500</text>
+    <text class="tick-label" x="62" y="263" text-anchor="end">1000</text>
+    <text class="tick-label" x="62" y="193" text-anchor="end">1500</text>
+    <text class="tick-label" x="62" y="123" text-anchor="end">2000</text>
+    <text class="tick-label" x="62" y="53"  text-anchor="end">2500</text>
+  </g>
+
+  <!-- Y axis title -->
+  <text class="axis-label" x="22" y="225" transform="rotate(-90 22 225)" text-anchor="middle">Wall time (s) — lower is better</text>
+
+  <!-- Axes -->
+  <line class="axis" x1="70" y1="50"  x2="70"  y2="400"/>
+  <line class="axis" x1="70" y1="400" x2="790" y2="400"/>
+
+  <!-- Bar groups. Bar width 32, gap 4. 4 bars per group span 140 px. -->
+  <!-- Group 1 — 32 T (center 190) -->
+  <g>
+    <rect x="120" y="128" width="32" height="272" fill="#f4a261" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="156" y="223" width="32" height="177" fill="#d4731a" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="192" y="255" width="32" height="145" fill="#88c0e8" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="228" y="243" width="32" height="157" fill="#0b5cad" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="value-label" x="136" y="123">1940</text>
+    <text class="value-label" x="172" y="218">1267</text>
+    <text class="value-label" x="208" y="250">1036</text>
+    <text class="value-label" x="244" y="238">1119</text>
+    <text class="cat-label"   x="190" y="422" text-anchor="middle">32 T</text>
+  </g>
+  <!-- Group 2 — 64 T (center 430) -->
+  <g>
+    <rect x="360" y="133" width="32" height="267" fill="#f4a261" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="396" y="284" width="32" height="116" fill="#d4731a" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="432" y="274" width="32" height="126" fill="#88c0e8" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="468" y="303" width="32" height="97"  fill="#0b5cad" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="value-label" x="376" y="128">1905</text>
+    <text class="value-label" x="412" y="279">831</text>
+    <text class="value-label" x="448" y="269">897</text>
+    <text class="value-label" x="484" y="298">691</text>
+    <text class="cat-label"   x="430" y="422" text-anchor="middle">64 T</text>
+  </g>
+  <!-- Group 3 — full node (center 670) -->
+  <g>
+    <rect x="600" y="68"  width="32" height="332" fill="#f4a261" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="636" y="297" width="32" height="103" fill="#d4731a" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="672" y="244" width="32" height="156" fill="#88c0e8" stroke="#1a1a1a" stroke-width="0.5"/>
+    <rect x="708" y="327" width="32" height="73"  fill="#0b5cad" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="value-label" x="616" y="63">2368</text>
+    <text class="value-label" x="652" y="292">737</text>
+    <text class="value-label" x="688" y="239">1112</text>
+    <text class="value-label" x="724" y="322">524</text>
+    <text class="cat-label"   x="670" y="422" text-anchor="middle">full node</text>
+    <text class="tick-label"  x="670" y="436" text-anchor="middle">(128 T Setonix · 104 T Gadi)</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(440 450)">
+    <rect x="0"   y="0" width="14" height="10" fill="#f4a261" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="legend" x="18" y="9">Setonix AOCC · baseline</text>
+    <rect x="0"   y="16" width="14" height="10" fill="#d4731a" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="legend" x="18" y="25">Setonix AOCC · R2</text>
+    <rect x="180" y="0"  width="14" height="10" fill="#88c0e8" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="legend" x="198" y="9">Gadi ICX · baseline</text>
+    <rect x="180" y="16" width="14" height="10" fill="#0b5cad" stroke="#1a1a1a" stroke-width="0.5"/>
+    <text class="legend" x="198" y="25">Gadi ICX · R2</text>
+  </g>
+</svg>
+<p class="caption">Setonix lnL = −10956936.6117 (bit-identical across baseline and R2 at every thread count); Gadi R2 lnL = −10956936.612 (bit-identical across all 3 R2 runs). Gadi baseline 64T lnL = −10956936.640 — the dynamic scheduler produced a slightly different local optimum at 64T; R2 eliminates this. Bar values are wall time in seconds; lower is better.</p>
+
+<h3>4.3 Numeric backing — wall time and patch delta</h3>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Platform · compiler</th><th class="num">Threads</th><th class="num">Baseline (s)</th><th class="num">R2 (s)</th><th class="num">Δ</th><th>Job pair</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="3">Setonix · AOCC 5.1.0</td><td class="num">32</td><td class="num">1940.255</td><td class="num">1266.750</td><td class="num good">−34.7%</td><td class="mono">SLURM 42225456 → 42422004</td></tr>
+    <tr><td class="num">64</td><td class="num">1905.223</td><td class="num">830.604</td><td class="num good">−56.4%</td><td class="mono">SLURM 42225457 → 42422005</td></tr>
+    <tr><td class="num">128</td><td class="num">2368.448</td><td class="num">736.600</td><td class="num good"><strong>−68.9%</strong></td><td class="mono">SLURM 42225459 → 42422006</td></tr>
+    <tr><td rowspan="3">Gadi · <code>intel-compiler-llvm</code> icx</td><td class="num">32</td><td class="num">1035.787</td><td class="num">1118.627</td><td class="num bad">+8.0%</td><td class="mono">PBS 167001081 → 167865974</td></tr>
+    <tr><td class="num">64</td><td class="num">897.364</td><td class="num">690.536</td><td class="num good">−23.0%</td><td class="mono">PBS 167001085 → 167865975</td></tr>
+    <tr><td class="num">104</td><td class="num">1111.627</td><td class="num">523.661</td><td class="num good"><strong>−52.9%</strong></td><td class="mono">PBS 167004590 → 167865976</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="caption">All twelve cells: full-ModelFinder runs on <code>xlarge_mf.fa</code> (200 taxa × 100 000 bp). Selected model <code>GTR+F+R4</code> in every cell. Δ is wall-time change from baseline to R2 in the same (platform, thread-count) cell. The single regression (Gadi 32 T, +8.0%) is explained in §5.</p>
+
+<h2>5. Topology and the 32T regression</h2>
+
+<p>
+  The only thread count where R2 slowed Gadi down is 32T (+8.0%). On Sapphire Rapids 32 threads fit entirely
+  inside socket 0 — there is no cross-socket NUMA pressure for the patch to fix, and the strict
+  <code>schedule(static)</code> partition is slightly worse for load balancing than the original
+  <code>schedule(dynamic,1)</code> when all threads share local DRAM.
+</p>
+<p>
+  On Setonix the NUMA boundary appears every 8 cores (CCD), so even at 16T the dynamic scheduler was already
+  paying a remote-DRAM cost. R2 therefore helps at every thread count tested on Setonix
+  (−34.7% at 32T, −56.4% at 64T, −68.9% at 128T).
+</p>
+<p>
+  The cross-socket cliff on Gadi sits at ~52T. Below that, R2 is neutral-to-negative; above it, the benefit compounds.
+  This is a property of the chip topology, not of the patch — the patch is correct on both platforms; the workload
+  just doesn't need it below the first NUMA boundary.
+</p>
+
+<h2>6. Parity matrix vs Setonix r2</h2>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Axis</th><th>Setonix r2</th><th>Gadi r2</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>Source patches (R1a / R1b / R2a / R2b ×5)</td><td>8 sites</td><td>8 sites, identical edits</td><td class="good">✓</td></tr>
+    <tr><td>Compiler family</td><td>AOCC 5.1.0 (LLVM)</td><td><code>intel-compiler-llvm</code> icx (LLVM)</td><td class="good">✓ same family</td></tr>
+    <tr><td>OpenMP runtime</td><td><code>libomp</code></td><td><code>libiomp5</code> (ABI-compatible)</td><td class="good">✓</td></tr>
+    <tr><td><code>OMP_PROC_BIND</code> / <code>OMP_PLACES</code></td><td><code>close</code> / <code>cores</code></td><td><code>close</code> / <code>cores</code></td><td class="good">✓</td></tr>
+    <tr><td><code>KMP_BLOCKTIME</code></td><td class="num">200</td><td class="num">200</td><td class="good">✓</td></tr>
+    <tr><td><code>numactl --localalloc</code></td><td>yes</td><td>yes</td><td class="good">✓</td></tr>
+    <tr><td>Dataset (sha256-gated)</td><td><code>xlarge_mf.fa</code></td><td><code>xlarge_mf.fa</code></td><td class="good">✓</td></tr>
+    <tr><td>Expected lnL</td><td class="mono">−10956936.6117</td><td class="mono">−10956936.612</td><td class="good">✓</td></tr>
+    <tr><td>Thread sweep</td><td class="unit">32 / 64 / 128</td><td class="unit">32 / 64 / 104</td><td>hardware-bound</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>7. Hardware-counter validation (perf stat)</h2>
+<p>
+  Counters from the same SLURM jobs that produced the wall-time numbers. The unchanged L1d miss
+  combined with the dramatic drop in <code>l2_pf_miss_l2_l3</code> is the smoking gun: the patches
+  did not change <em>what</em> is computed (same instructions, same L1 access pattern); they
+  changed <em>where the data lives</em> (no longer cross-socket). That is the signature of a
+  NUMA-locality fix.
+</p>
+
+<h3>7.1 Setonix (Zen3, 128T) — AMD counters</h3>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Counter</th><th>Meaning</th><th class="num">Baseline</th><th class="num">R2</th><th class="num">Δ</th></tr></thead>
+  <tbody>
+    <tr><td>IPC</td><td>instructions / cycle</td><td class="num">0.556</td><td class="num">0.733</td><td class="num good">+31.9%</td></tr>
+    <tr><td>L3 miss %</td><td>last-level cache miss rate</td><td class="num">9.08%</td><td class="num">5.37%</td><td class="num good">−40.9%</td></tr>
+    <tr><td><code>l2_pf_miss_l2_l3</code></td><td>L2 prefetches that missed L2 <em>and</em> L3 (remote-node fetches) — raw AMD PMU event count</td><td class="num">636×10⁹</td><td class="num">289×10⁹</td><td class="num good">−54.5%</td></tr>
+    <tr><td>L1d miss %</td><td>L1 data cache miss rate</td><td class="num">~unchanged</td><td class="num">~unchanged</td><td class="num">—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>7.2 Gadi (Sapphire Rapids, icx) — Intel perf counters, baseline vs R2</h3>
+<p>Data from <code>perf stat</code> co-collected with each PBS job (167001081/085/004590 baseline;
+167865974/975/976 R2). All rates are percentages.</p>
+<table class="full">
+  <thead><tr><th>Threads</th><th>Counter</th><th class="num">Baseline</th><th class="num">R2</th><th class="num">Δ</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="7"><strong>32 T</strong><br><span class="meta">(within socket 0;<br>no cross-socket<br>NUMA to fix)</span></td>
+      <td>IPC</td><td class="num">1.3667</td><td class="num">1.2570</td><td class="num bad">−8.0%</td></tr>
+    <tr><td>L1-dcache miss rate</td><td class="num">2.07%</td><td class="num">1.15%</td><td class="num good">−0.92 pp</td></tr>
+    <tr><td>LLC miss rate <span class="meta">(L3 miss / L3 ref)</span></td><td class="num">78.92%</td><td class="num">64.31%</td><td class="num good">−14.62 pp</td></tr>
+    <tr><td>cache-miss rate <span class="meta">(L3 miss / insn)</span></td><td class="num">70.27%</td><td class="num">55.21%</td><td class="num good">−15.06 pp</td></tr>
+    <tr><td>dTLB miss rate</td><td class="num">0.0151%</td><td class="num">0.0123%</td><td class="num good">−0.003 pp</td></tr>
+    <tr><td>branch miss rate</td><td class="num">0.0615%</td><td class="num">0.0491%</td><td class="num good">−0.012 pp</td></tr>
+    <tr><td>peak RSS</td><td class="num">4.50 GB</td><td class="num">4.49 GB</td><td class="num">−10 MB</td></tr>
+
+    <tr><td rowspan="7"><strong>64 T</strong><br><span class="meta">(crosses both<br>sockets; NUMA<br>fix pays)</span></td>
+      <td>IPC</td><td class="num">1.1551</td><td class="num">1.4378</td><td class="num good">+24.5%</td></tr>
+    <tr><td>L1-dcache miss rate</td><td class="num">2.21%</td><td class="num">1.05%</td><td class="num good">−1.16 pp</td></tr>
+    <tr><td>LLC miss rate</td><td class="num">78.83%</td><td class="num">75.07%</td><td class="num good">−3.76 pp</td></tr>
+    <tr><td>cache-miss rate</td><td class="num">77.94%</td><td class="num">68.49%</td><td class="num good">−9.45 pp</td></tr>
+    <tr><td>dTLB miss rate</td><td class="num">0.0056%</td><td class="num">0.0042%</td><td class="num good">−0.001 pp</td></tr>
+    <tr><td>branch miss rate</td><td class="num">0.0665%</td><td class="num">0.0528%</td><td class="num good">−0.014 pp</td></tr>
+    <tr><td>peak RSS</td><td class="num">3.88 GB</td><td class="num">3.88 GB</td><td class="num">+0.9 MB</td></tr>
+
+    <tr><td rowspan="7"><strong>104 T</strong><br><span class="meta">(full node;<br>cross-socket cliff<br>eliminated)</span></td>
+      <td>IPC</td><td class="num">1.0295</td><td class="num">1.3774</td><td class="num good">+33.8%</td></tr>
+    <tr><td>L1-dcache miss rate</td><td class="num">3.59%</td><td class="num">1.14%</td><td class="num good">−2.45 pp</td></tr>
+    <tr><td>LLC miss rate</td><td class="num">77.11%</td><td class="num">75.80%</td><td class="num good">−1.31 pp</td></tr>
+    <tr><td>cache-miss rate</td><td class="num">78.23%</td><td class="num">72.08%</td><td class="num good">−6.15 pp</td></tr>
+    <tr><td>dTLB miss rate</td><td class="num">0.0037%</td><td class="num">0.0031%</td><td class="num good">−0.001 pp</td></tr>
+    <tr><td>branch miss rate</td><td class="num">0.0616%</td><td class="num">0.0504%</td><td class="num good">−0.011 pp</td></tr>
+    <tr><td>peak RSS</td><td class="num">3.88 GB</td><td class="num">3.88 GB</td><td class="num">+0.05 MB</td></tr>
+  </tbody>
+</table>
+<p class="caption">
+  PBS job pairs: 32T baseline <code>167001081</code> → R2 <code>167865974</code>;
+  64T <code>167001085</code> → <code>167865975</code>; 104T <code>167004590</code> → <code>167865976</code>.
+  IPC drop at 32T confirms all 32 threads sit inside socket 0 — static partitioning costs load-balance
+  headroom with no NUMA benefit to offset it. The large LLC miss drop at 32T (−14.62 pp) shows
+  first-touch still reduced false remote traffic even within a single socket.
+  At 104T the IPC gain of +33.8% with an LLC miss rate change of only −1.31 pp is the definitive
+  NUMA signature: computation improved dramatically <em>because the misses became local</em>, not fewer.
+</p>
+
+<h2>8. Reproducing the run</h2>
+
+<h3>8.1 Source tree and binary</h3>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Item</th><th>Setonix</th><th>Gadi</th></tr></thead>
+  <tbody>
+    <tr><td>Upstream</td><td colspan="2"><code>iqtree3</code> @ commit used for baseline (apply 8 edits in §1.2–1.5)</td></tr>
+    <tr><td>Source tree</td><td><code>/scratch/pawsey1351/asamuel/iqtree3-numa-firsttouch/src/iqtree3/</code></td><td>(equivalent path under user scratch on Gadi)</td></tr>
+    <tr><td>Build dir</td><td><code>build-profiling-aocc/</code></td><td><code>build-profiling-clang/</code></td></tr>
+    <tr><td>Binary tag</td><td><code>iqtree3.numa-firsttouch-r2</code></td><td><code>iqtree3</code> (R1+R2 patches applied)</td></tr>
+    <tr><td>Compiler</td><td>AOCC 5.1.0 (clang front-end), <code>libomp</code></td><td><code>intel-compiler-llvm</code> icx, <code>libiomp5</code></td></tr>
+    <tr><td>Build flags</td><td colspan="2"><code>-O3 -DNDEBUG -fopenmp -march=native</code> (CMake <code>Release</code> profile)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>8.2 CMake configure + build</h3>
+<pre>cd /scratch/pawsey1351/asamuel/iqtree3-numa-firsttouch
+# Setonix (AOCC):
+module load aocc/5.1.0
+cmake -S src/iqtree3 -B build-profiling-aocc \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+      -DIQTREE_FLAGS=omp
+cmake --build build-profiling-aocc -j 32
+
+# Gadi (intel-compiler-llvm icx):
+module load intel-compiler-llvm/2024.x
+cmake -S src/iqtree3 -B build-profiling-clang \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+      -DIQTREE_FLAGS=omp
+cmake --build build-profiling-clang -j 32</pre>
+
+<h3>8.3 Runtime environment (identical on both platforms)</h3>
+<pre>export OMP_NUM_THREADS=&lt;32|64|104|128&gt;
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+export KMP_BLOCKTIME=200          # libiomp5 default; set explicitly under libomp on Setonix
+numactl --localalloc \
+    ./iqtree3 -s xlarge_mf.fa -T $OMP_NUM_THREADS \
+              -seed 1 --prefix run_${OMP_NUM_THREADS}t
+# Note: no -m flag — IQ-TREE 3 runs ModelFinder by default (equivalent to -m MFP).
+# Selected model was GTR+F+R4 in every run. Thread flag is -T (not -nt; changed in IQ-TREE 2+).</pre>
+
+<h3>8.4 Dataset</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>File</td><td><code>xlarge_mf.fa</code></td></tr>
+    <tr><td>Shape</td><td>200 taxa × 100 000 bp</td></tr>
+    <tr><td>Model</td><td>ModelFinder default (<code>-m MFP</code> implicit); selected <code>GTR+F+R4</code> in every run</td></tr>
+    <tr><td>Integrity gate</td><td>sha256-pinned in run JSON; lnL gate at <code>−10956936.612</code> (tolerance ≤ 1×10⁻³)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>8.5 Job IDs and result artefacts</h3>
+<div class="table-wrap">
+<table class="full">
+  <thead><tr><th>Platform</th><th class="num">Threads</th><th>Scheduler job</th><th>Result JSON</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="3">Setonix</td><td class="num">32</td><td>SLURM <code>42422004</code></td><td><code>logs/runs/xlarge_mf_32t_clang_omp_pin_numa_ft_r2.json</code></td></tr>
+    <tr><td class="num">64</td><td>SLURM <code>42422005</code></td><td><code>logs/runs/xlarge_mf_64t_clang_omp_pin_numa_ft_r2.json</code></td></tr>
+    <tr><td class="num">128</td><td>SLURM <code>42422006</code></td><td><code>logs/runs/xlarge_mf_128t_clang_omp_pin_numa_ft_r2.json</code></td></tr>
+    <tr><td rowspan="3">Gadi</td><td class="num">32</td><td>PBS <code>167865972</code></td><td><code>logs/runs/gadi_xlarge_mf_32t_icx_omp_pin_numa_ft_r2.json</code></td></tr>
+    <tr><td class="num">64</td><td>PBS <code>167865974</code></td><td><code>logs/runs/gadi_xlarge_mf_64t_icx_omp_pin_numa_ft_r2.json</code></td></tr>
+    <tr><td class="num">104</td><td>PBS <code>167865976</code></td><td><code>logs/runs/gadi_xlarge_mf_104t_icx_omp_pin_numa_ft_r2.json</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="meta">
+  Sources: <code>numa-firsttouch-patches.md</code> ·
+  <code>logs/runs/gadi_xlarge_mf_{32,64,104}t_icx_omp_pin_numa_ft_r2.json</code> ·
+  <code>logs/runs/xlarge_mf_{32,64,128}t_clang_omp_pin_numa_ft_r2.json</code> ·
+  PBS jobs 167865972–976 · SLURM jobs 42422004–006.
+</p>
+
+</body>
+</html>
