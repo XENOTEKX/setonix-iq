@@ -20,3 +20,9 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# PBS output files (.o<jobid> and .e<jobid>)
+gadi-ci/*.o[0-9]*
+gadi-ci/*.e[0-9]*
+*.o[0-9]*
+*.e[0-9]*

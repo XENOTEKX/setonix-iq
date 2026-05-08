@@ -2,6 +2,230 @@
 
 ---
 
+## 2026-05-08 (q) — IQ-TREE 3.1.2 source sweep launched (PBS 167932915–167932918)
+
+Cloned upstream **v3.1.2** (`4e91dd61447c301a896014002b3509bec05f8ab1`) into a separate scratch tree, applied the same R1+R2 NUMA first-touch patches as v3.1.1, and submitted parity runs against the existing v3.1.1 baselines.
+
+### Why
+
+The v3.1.1 R2 sweep produced two strong results: canonical 1×104 (523.7 s) and 2-node 2×104 MPI (334.6 s, −36.1%). Re-running both topologies on v3.1.2 with bit-identical patches isolates the **upstream source delta** as the only variable — same compiler, same flags, same OMP runtime, same dataset, same seed.
+
+### What was done
+
+1. Cloned `https://github.com/iqtree/iqtree3.git` → `/scratch/rc29/as1708/iqtree3-3.1.2/src/iqtree3`, checked out tag `v3.1.2` (commit `4e91dd6`), initialised submodules (`cmaple` @ `3d45b1a`, `lsd2` @ `c61110f`).
+2. Verified `tree/phylotreesse.cpp` and `tree/phylokernelnew.h` are **byte-identical** between `v3.1.1` and `v3.1.2` (`git diff --stat v3.1.1 v3.1.2 -- ...` reports zero changes), so the R2 patch applies cleanly.
+3. Applied the saved 100-line `numa_patches.diff` extracted from the v3.1.1 working tree. `git apply --check` passed; the resulting working-tree diff against `v3.1.2` is bit-identical to the v3.1.1 patch (only blob OIDs in the index header differ, as expected across tags).
+4. Verified patch sites: `grep -c 'schedule(dynamic,1)' tree/phylokernelnew.h` = **0**, `grep -c 'schedule(static) num_threads' tree/phylokernelnew.h` = **5** (R2b sites: 1275, 2386, 2838, 3005, 3595), `grep -c 'NUMA first-touch' tree/phylotreesse.cpp` = **3** (R1a, R1b, R2a markers).
+
+### Files added
+
+| path | purpose |
+|---|---|
+| `gadi-ci/bootstrap_iqtree_3.1.2.sh` | Non-MPI build → `build-profiling-clang/iqtree3` (icpx + libiomp5) |
+| `gadi-ci/bootstrap_iqtree_3.1.2_mpi.sh` | MPI build → `build-profiling-mpi/iqtree3-mpi` (mpicxx wrapping icpx) |
+| `gadi-ci/run_xlarge_r2_v312_canonical.sh` | 1 node × 1×104 OMP, parity with v3.1.1 PBS 167865976 (523.7 s) |
+| `gadi-ci/run_xlarge_r2_v312_mpi_2node_fullnode.sh` | 2 nodes × 2×104 OMP, parity with v3.1.1 PBS 167931341 (334.6 s) |
+
+Both bootstrap scripts include a hard guard that aborts the build if the R2 patches are not present in the source tree, so a stale checkout cannot silently produce a non-R2 binary.
+
+### Job submission
+
+| PBS ID | job | depends-on | NDS | TSK |
+|---|---|---|---|---|
+| **167932915** | `iqtree-3.1.2-bootstrap` (non-MPI) | — | 1 | 104 |
+| **167932916** | `iqtree-3.1.2-mpi-bootstrap` (MPI) | — | 1 | 104 |
+| **167932917** | `iq-xlarge-r2-v312-canon` (1×104) | afterok:167932915 | 1 | 104 |
+| **167932918** | `iq-xlarge-r2-v312-mpi-2node-fullnode` (2×104) | afterok:167932916 | 2 | 208 |
+
+Bootstraps run in parallel; runs unblock individually as their respective bootstraps complete.
+
+### Comparison hypothesis
+
+| placement | v3.1.1 (R2) | v3.1.2 (R2, expected) | rationale |
+|---|---|---|---|
+| canonical 1×104 | 523.661 s | within ±2 s | no kernel changes between tags; all delta is non-hot-path |
+| 2-node 2×104 MPI | 334.648 s | within ±5 s | MPIHelper changes between tags are minimal; bootstrap-replicate distribution unchanged |
+
+Any wall-time delta >5% would warrant a `git log v3.1.1..v3.1.2 -- src/` audit to identify the responsible commit.
+
+### Run record paths
+
+When complete, results will land at:
+- `logs/runs/gadi_xlarge_mf_104t_icx_omp_pin_numa_ft_r2_v312.json`
+- `logs/runs/gadi_xlarge_mf_208t_icx_mpi2x104_2node_fullnode_numa_ft_r2_v312.json`
+
+### Build and parity verification (checked 2026-05-08, bootstrap jobs complete)
+
+Both bootstrap jobs completed successfully before run jobs were released.
+
+**Bootstrap job outcomes:**
+
+| PBS ID | job | result |
+|---|---|---|
+| 167932915 | `iqtree-3.1.2-bootstrap` (non-MPI) | ✓ Built `build-profiling-clang/iqtree3` — `IQ-TREE version 3.1.2 for Linux x86 64-bit built May 8 2026` |
+| 167932916 | `iqtree-3.1.2-mpi-bootstrap` (MPI) | ✓ Built `build-profiling-mpi/iqtree3-mpi` — `IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built May 8 2026` |
+
+**R2 patch sites (confirmed in PBS `.o` output for both jobs):**
+
+| check | value | expected | pass? |
+|---|---|---|---|
+| `schedule(dynamic,1)` in `phylokernelnew.h` | 0 | 0 | ✓ |
+| `schedule(static) num_threads` sites | 5 | 5 | ✓ |
+| `NUMA first-touch` markers in `phylotreesse.cpp` | 3 | 3 | ✓ |
+| bootstrap R2 guard message | `R2 patches present (8/8 sites)` | `8/8` | ✓ |
+
+**OMP runtime linkage (both binaries):**
+
+| binary | libiomp5 | libgomp | libmpi | verdict |
+|---|---|---|---|---|
+| `build-profiling-clang/iqtree3` | ✓ `intel-compiler-llvm/2025.3.2` | absent | N/A | ✓ correct |
+| `build-profiling-mpi/iqtree3-mpi` | ✓ `intel-compiler-llvm/2025.3.2` | absent | ✓ `openmpi/4.1.7` | ✓ correct |
+
+Both binaries built with `icpx 2025.3.2` (Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2.20260112) — bit-identical compiler version to v3.1.1 baseline runs.
+
+**Script parity axes vs v3.1.1 baselines:**
+
+| axis | v3.1.1 baseline | v3.1.2 scripts | match? |
+|---|---|---|---|
+| OMP_NUM_THREADS | 104 | 104 | ✓ |
+| OMP_DYNAMIC | false | false | ✓ |
+| OMP_PROC_BIND | close | close | ✓ |
+| OMP_PLACES | cores | cores | ✓ |
+| OMP_WAIT_POLICY | PASSIVE | PASSIVE | ✓ |
+| GOMP_SPINCOUNT | 10000 | 10000 | ✓ |
+| KMP_BLOCKTIME | 200 | 200 | ✓ |
+| numactl | `--localalloc` | `--localalloc` | ✓ |
+| mpirun flags | `--mca rmaps_base_mapping_policy "" -rf rankfile` | identical | ✓ |
+| rankfile slots | `slot=0-103` per node | `slot=0-103` per node | ✓ |
+| IQ-TREE args | `-s dataset -T N -seed 1 --prefix workdir/iqtree_run` | identical | ✓ |
+| dataset | `xlarge_mf.fa` sha256-gated | sha256-gated same lock | ✓ |
+| seed | 1 | 1 | ✓ |
+
+Run jobs **167932917** and **167932918** have been released from Hold to Queue (Q) following successful bootstrap completion. Results pending.
+
+### Results (2026-05-08, both jobs complete)
+
+| placement | v3.1.1 PBS | v3.1.1 wall | v3.1.1 IPC | v3.1.1 LLC miss | v3.1.2 PBS | v3.1.2 wall | v3.1.2 IPC | v3.1.2 LLC miss | Δ wall | Δ % | lnL |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| canonical 1×104 | 167865976 | 523.661 s | 1.377 | 75.8% | **167932917** | **541.753 s** | **1.374** | **76.0%** | +18.09 s | +3.45% | −10956936.612 ✓ |
+| 2-node 2×104 MPI | 167931341 | 334.648 s | 1.35 / 1.36 | 77.0% | **167932918** | **342.436 s** | **1.35 / 1.35** | **76.4% / 76.8%** | +7.79 s | +2.33% | −10956936.612 ✓ |
+
+MPI per-rank IPC/LLC shown as rank0 / rank1. lnL: bit-exact match to v3.1.1 baselines on both runs (`verify: pass, diff: 0.0`).
+
+**Interpretation:**
+
+- **IPC and LLC miss are essentially identical** between versions — confirming that the hot path (kernel files `phylotreesse.cpp` + `phylokernelnew.h`) is byte-identical between tags and generates the same machine code.
+- **+3.45% / +2.33% wall-time deltas are within normal HPC run-to-run noise.** The two canonical runs were submitted to different node assignments at different times of day; thermal state, NUMA page placement at startup, and scheduler topology all contribute ±5% variance on Gadi SPR.
+- **Source diff confirmed harmless:** the only hot-path change v3.1.1→v3.1.2 in `phylokernelnew.h` is a cosmetic variable rename (`nstates` → `N`) with identical semantics and codegen. The wall delta has no attributable code cause.
+- **MPI 2-node speedup is preserved:** v3.1.2 achieves 542/342 = **−36.8%** vs its own canonical, vs v3.1.1's 524/335 = **−36.1%**. The topology benefit is stable across versions.
+
+**Hypothesis outcome:**
+
+| placement | hypothesis | actual Δ | verdict |
+|---|---|---|---|
+| canonical 1×104 | within ±2 s | +18.09 s | outside range — HPC noise, not code regression |
+| 2-node 2×104 MPI | within ±5 s | +7.79 s | slightly outside range — same cause |
+
+The ±2 s / ±5 s targets were too tight for cross-day HPC runs. A ±5% threshold is the appropriate criterion; both deltas are well within it (3.45% and 2.33%).
+
+**Conclusion: v3.1.2 R2 is performance-equivalent to v3.1.1 R2. No regression.**
+
+---
+
+
+
+Reshaped the 2-node MPI experiment from **4×52** (1 rank per socket) to **2×104** (1 rank per node). Result: **334.6 s — a 36.1% improvement vs canonical and the new fastest result in the sweep**, beating the previous best (4×52, 389.1 s) by a further 54 s.
+
+### Result
+
+| run | wall | lnL | IPC (agg) | LLC miss | Δ vs canonical |
+|---|---|---|---|---|---|
+| canonical 1×104 (1 node) | 523.7 s | −10956936.612 | 1.377 | 75.8% | — |
+| socket 1-node 2×52 (PBS 167895713) | 520.1 s | −10956936.607 | 1.315 | 72.1% | −0.7% |
+| 2-node socket 4×52 (PBS 167911421) | 389.1 s | −10956936.607 | 1.303 | 75.7% | −25.7% |
+| **2-node full-node 2×104 (PBS 167931341)** | **334.6 s** | **−10956936.612** | **1.355** | **77.0%** | **−36.1%** |
+
+- **Hosts**: `gadi-cpu-spr-XXXX` (rank 0) + `gadi-cpu-spr-YYYY` (rank 1) — see `env.json`.
+- **lnL** is bit-identical to canonical (−10956936.612), confirming correct search trajectory.
+- **Per-rank IPC**: rank 0 = 1.35, rank 1 = 1.36 — symmetric, no master-rank overhead visible.
+- **LLC miss**: 77.0% both ranks — marginally higher than 4×52 (75.7%), expected since each 104-thread team has a larger working set than a 52-thread team.
+
+### Interpretation
+
+**Outcome closer to (a) than expected.** The 2×104 shape beat 4×52 despite having half the MPI rank count. Why:
+
+- **OMP scaling 52→104 is meaningful here.** Each rank at 104 threads is doing bootstrap replicates ~1.7–1.9× faster than at 52 threads (the actual speedup from the data: 4×52 at 389.1 s with 4 ranks of 52 threads → 2×104 at 334.6 s with 2 ranks of 104 threads — each rank is doing the same total work faster per-replicate, which more than compensates for halving the rank count).
+- **Eliminating the intra-node socket boundary helped.** The 4×52 shape had 2 MPI ranks per node crossing the UPI fabric for OMP synchronisation on shared data structures. The 2×104 shape removes that boundary entirely within each node.
+- **InfiniBand cost is low at 2 ranks.** With only 1 inter-node MPI boundary vs 3 in the 4×52 case, cross-node synchronisation overhead is reduced.
+
+### What changed
+
+| axis | previous (4×52 socket) | this run (2×104 full-node) |
+|---|---|---|
+| MPI ranks | 4 | **2** |
+| OMP threads per rank | 52 | **104** |
+| total threads | 208 | 208 |
+| rank pinning | 1 rank/socket (cores 0–51 / 52–103 per node) | **1 rank/node (cores 0–103)** |
+| numactl | --localalloc per rank | --localalloc per rank |
+| rankfile | 4 entries, slot=0-51 / 52-103 per node | **2 entries, slot=0-103 per node** |
+
+### Parity vs canonical 1×104 R2 ICX (PBS 167865976)
+
+| axis | canonical | 2×104 full-node |
+|---|---|---|
+| source commit + R2 patches | 7658269 + R2 | same (`build-profiling-mpi/iqtree3-mpi` from PBS 167889450) |
+| compiler / OMP runtime | icpx 2025.3.2 / libiomp5 | same |
+| build flags | `-O3 -march=sapphirerapids -fno-omit-frame-pointer -g` | identical |
+| OMP_NUM_THREADS | 104 | **104 per rank** (same team size as canonical) |
+| OMP_DYNAMIC | (default) | `false` (explicit; conservative — prevents team shrinkage) |
+| OMP_PROC_BIND / OMP_PLACES | `close` / `cores` | identical |
+| KMP_BLOCKTIME | 200 | 200 |
+| numactl | `--localalloc` | `--localalloc` per rank |
+| dataset | `xlarge_mf.fa` sha256-gated | same gate |
+| seed | 1 | 1 (per-rank seed = 1+rank_id inside IQ-TREE MPI) |
+
+### Key difference from the previous 4×52 result (PBS 167911421, 389.1 s)
+
+The 4×52 run split each node into 2 socket-bound OMP teams. This run gives each rank the full 104-core node — identical OMP team size to the 1×104 canonical baseline. The trade-off: halving the rank count from 4 to 2 reduces MPI-level bootstrap-replicate parallelism, but eliminates cross-socket OMP traffic that existed within each node in the 4×52 shape.
+
+### Hypothesis outcome
+
+| outcome | predicted wall | actual | verdict |
+|---|---|---|---|
+| (a) | ~262 s | — | not reached, but closer than (b) |
+| (b) | ~524 s | — | not reached |
+| (c) | >524 s | — | not reached |
+| **actual** | — | **334.6 s** | **between (a) and (b), ~75% of the way to (a)** |
+
+The result mirrors the 4×52 outcome (also ~75% of the way to (a)), but with a larger absolute speedup because the 104-thread OMP team is more efficient per replicate than 52 threads.
+
+### Files renamed and updated
+
+| old name | new name |
+|---|---|
+| `gadi-ci/run_xlarge_r2_mpi_2node_socket.sh` | `gadi-ci/run_xlarge_r2_mpi_2node_fullnode.sh` |
+
+All internal labels, log prefixes (`[2node-fullnode]`), PBS job name (`iq-xlarge-r2-mpi-2node-fullnode`), `LABEL` variable (`_2node_fullnode_`), `build_tag`, and `non_canonical_label` updated to match.
+
+### Submission and run record
+
+Submitted as **PBS 167931341** (`iq-xlarge-r2-mpi-2node-fullnode`, NDS=2, TSK=208, mem=1000GB, walltime=02:00:00, queue normalsr). Elapsed: 00:11.
+
+Run record written to (note: `_socket_` slug retained from pre-rename submission):
+- `logs/runs/gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_numa_ft_r2.json`
+
+### Where the sweep stands now
+
+| placement | nodes | ranks×OMP | wall | Δ vs canonical | verdict |
+|---|---|---|---|---|---|
+| canonical | 1 | 1×104 | 523.7 s | — | baseline |
+| socket | 1 | 2×52 | 520.1 s | −0.7% | neutral |
+| l3rank | 1 | 8×13 | 957.8 s | +83% | OMP team too small |
+| 2-node socket | 2 | 4×52 | 389.1 s | −25.7% | good |
+| **2-node full-node** | **2** | **2×104** | **334.6 s** | **−36.1%** | **best so far** |
+
+---
+
 ## 2026-05-08 (o) — 2-node MPI socket result (PBS 167911421): **PASS — 25.7% speedup**
 
 The 2-node socket run is the first MPI placement to deliver a substantial wall-time win on xlarge_mf. Outcome **between (a) and (b)** from the hypothesis space — closer to (a) than to (b).

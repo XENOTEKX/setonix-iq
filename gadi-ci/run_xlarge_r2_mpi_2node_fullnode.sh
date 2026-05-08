@@ -1,7 +1,7 @@
 #!/bin/bash
-# run_xlarge_r2_mpi_2node_socket.sh — IQ-TREE 3 (R2-patched, MPI build) on
-# xlarge_mf.fa across **2 Gadi normalsr SPR nodes**, with **4 MPI ranks ×
-# 52 OpenMP threads each**. One rank per socket, scaled across 2 nodes.
+# run_xlarge_r2_mpi_2node_fullnode.sh — IQ-TREE 3 (R2-patched, MPI build) on
+# xlarge_mf.fa across **2 Gadi normalsr SPR nodes**, with **2 MPI ranks ×
+# 104 OpenMP threads each**. One rank per node, scaled across 2 nodes.
 #
 # This is alternate placement #3 in the 2026-05-08 sweep, replacing the
 # (abandoned) 2-node L3-rankfile design after the single-node l3rank result
@@ -12,50 +12,44 @@
 #                                                  → conclusion: 13-thread OMP
 #                                                  is the bottleneck, not L3
 #                                                  cache pressure
-#   #3 2node-socket 4×52 (this script)         → 2 nodes × 2 sockets, each
-#                                                 rank still owns a full 52-
-#                                                 core socket OMP team
+#   #3 2node-fullnode 2×104 (this script)       → 2 nodes × 1 rank each,
+#                                                 each rank owns all 104
+#                                                 cores on its node
 #
-# This is "scale the socket experiment to 2 nodes" — the only single-node
-# placement that matched canonical wall time. Each rank still has 52 OMP
-# threads (the team size that *worked*), and we now run 4 ranks in parallel
-# on bootstrap-replicate distribution.
+# This is "scale to 2 nodes with full-node OMP teams" — same 104-thread OMP
+# team size as the canonical 1×104 run, just split across 2 nodes with MPI
+# coordinating bootstrap-replicate distribution between ranks.
 #
 #                   2 × Sapphire Rapids 8470Q:
-#                   2 nodes × 2 sockets × 52 cores = 208 cores
+#                   2 nodes × 104 cores each = 208 cores
 #
 #         ┌─── node A ──────────────┐  ┌─── node B ──────────────┐
-#         │ socket 0 │ socket 1 │      │ socket 0 │ socket 1 │
-#   cores 0..51     │ 52..103  │      │ 0..51    │ 52..103  │
-#   rank  0         │ 1        │      │ 2        │ 3        │
-#   OMP   52        │ 52       │      │ 52       │ 52       │
+#         │       all 104 cores     │  │       all 104 cores     │
+#   rank  0                         │  │ 1                       │
+#   OMP   104                       │  │ 104                     │
 #
-# Inside each socket, the 52 OMP threads run with OMP_PROC_BIND=close so
+# Inside each node, the 104 OMP threads run with OMP_PROC_BIND=close so
 # they stay packed on physical cores (Gadi normalsr SMT is off at user
 # level, so OMP_PLACES=cores keeps each thread on one core).  Each rank's
-# numactl --localalloc keeps its mallocs on the rank's bound socket; cross-
-# socket coordination is now a 4-rank MPI message graph instead of cache-
-# coherence traffic.  Cross-node coordination (rank 0,1 ↔ rank 2,3) goes
-# over the InfiniBand fabric.
+# numactl --localalloc keeps its mallocs local to its node.  Cross-node
+# coordination (rank 0 ↔ rank 1) goes over the InfiniBand fabric.
 #
 # Hypothesis — three outcomes possible:
 #   (a) Roughly half of the 1×104 canonical wall (~262 s) → IQ-TREE 3 MPI
-#       bootstrap distribution scales linearly across 4 ranks, inter-node
+#       bootstrap distribution scales linearly across 2 ranks, inter-node
 #       cost is small relative to the halving of per-rank work.
-#   (b) Same as 1-node socket (~520 s) → InfiniBand round-trip on every
-#       tree-exchange cancels the doubled parallelism. The 2-rank ceiling
-#       was already MPI-coordination-bound; doubling rank count just
-#       doubles overhead.
-#   (c) Slower than 1-node socket (>520 s) → Cross-node MPI traffic
-#       dominates this dataset; xlarge_mf doesn't have enough independent
-#       work to amortise inter-node communication.  The right scope is ≤
-#       1 node.
+#   (b) Same as 1-node 1×104 canonical (~524 s) → InfiniBand round-trip on
+#       every tree-exchange cancels the doubled node count; 2 ranks provide
+#       no speedup over a single 104-thread process.
+#   (c) Slower than canonical (>524 s) → Cross-node MPI traffic dominates;
+#       xlarge_mf doesn't have enough independent work to amortise inter-
+#       node communication.  The right scope is a single node.
 #
 # Full parity with canonical 1×104 R2 ICX (PBS 167865976):
 #   • Same source build (build-profiling-mpi/iqtree3-mpi, R2-patched, icpx)
 #   • Same OpenMP runtime (libiomp5)
 #   • Same OMP env: OMP_PROC_BIND=close, OMP_PLACES=cores, KMP_BLOCKTIME=200,
-#                   OMP_DYNAMIC=false (mandatory for socket-bound cpusets)
+#                   OMP_DYNAMIC=false (mandatory for full-node cpusets)
 #   • Same numactl --localalloc per rank
 #   • Same dataset (xlarge_mf.fa, sha256-gated)
 #   • Same -seed 1 (per-rank seed becomes 1+rank_id inside IQ-TREE MPI)
@@ -65,7 +59,7 @@
 #   gadi-ci/run_xlarge_r2_mpi_l3rank.sh   (1 node, 8×13 — abandoned at 2 nodes)
 #   gadi-ci/_run_matrix_job.sh             (1 node, single-process baseline)
 #
-#PBS -N iq-xlarge-r2-mpi-2node-socket
+#PBS -N iq-xlarge-r2-mpi-2node-fullnode
 #PBS -P rc29
 #PBS -q normalsr
 #PBS -l ncpus=208
@@ -87,15 +81,14 @@ BENCHMARKS="${PROJECT_DIR}/benchmarks"
 RUNS_DIR="${REPO_DIR}/logs/runs"
 PROFILES_DIR="${PROJECT_DIR}/gadi-ci/profiles"
 
-# Fixed shape: 4 ranks × 52 OMP = 208 = 2 full SPR nodes (104 cores each).
-# Rank 0 = node A socket 0,  rank 1 = node A socket 1,
-# rank 2 = node B socket 0,  rank 3 = node B socket 1.
+# Fixed shape: 2 ranks × 104 OMP = 208 = 2 full SPR nodes (104 cores each).
+# Rank 0 = node A (all 104 cores),  rank 1 = node B (all 104 cores).
 DATASET_NAME="${DATASET:-xlarge_mf}"
-NRANKS="${NRANKS:-4}"
-OMP_PER_RANK="${OMP_PER_RANK:-52}"
+NRANKS="${NRANKS:-2}"
+OMP_PER_RANK="${OMP_PER_RANK:-104}"
 TOTAL_THREADS=$(( NRANKS * OMP_PER_RANK ))
 SEED="${SEED:-1}"
-LABEL="${LABEL:-${DATASET_NAME}_${TOTAL_THREADS}t_icx_mpi${NRANKS}x${OMP_PER_RANK}_2node_socket_numa_ft_r2}"
+LABEL="${LABEL:-${DATASET_NAME}_${TOTAL_THREADS}t_icx_mpi${NRANKS}x${OMP_PER_RANK}_2node_fullnode_numa_ft_r2}"
 
 DATA_PATH="${BENCHMARKS}/${DATASET_NAME}.fa"
 [[ -f "${DATA_PATH}" ]] || DATA_PATH="${BENCHMARKS}/${DATASET_NAME}"
@@ -180,44 +173,40 @@ HOSTFILE="${WORK_DIR}/hostfile.txt"
 awk '{c[$1]++} END {for (h in c) print h, "slots=" c[h]}' "${PBS_NODEFILE}" > "${HOSTFILE}"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  IQ-TREE 3 R2 — MPI 2-node socket placement"
+echo "║  IQ-TREE 3 R2 — MPI 2-node full-node placement"
 echo "║  run_id:        ${RUN_ID}"
 echo "║  dataset:       ${DATA_PATH}"
 echo "║  ranks × OMP:   ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS} total threads, 2 nodes)"
-echo "║  node A:        ${HOST_A}  (ranks 0–1, sockets 0+1)"
-echo "║  node B:        ${HOST_B}  (ranks 2–3, sockets 0+1)"
+echo "║  node A:        ${HOST_A}  (rank 0, all 104 cores)"
+echo "║  node B:        ${HOST_B}  (rank 1, all 104 cores)"
 echo "║  binary:        ${IQTREE}"
 echo "║  work_dir:      ${WORK_DIR}"
 echo "╚══════════════════════════════════════════════════════════════╝"
-echo "[2node-socket] hostfile:"
+echo "[2node-fullnode] hostfile:"
 cat "${HOSTFILE}" | sed 's/^/    /'
 
 # ── Build the rankfile for both nodes ──────────────────────────────────
-# OpenMPI rankfile syntax: "rank N=<host> slot=<cpu-list>".  Hardcoded SPR
-# layout: socket 0 = cores 0–51, socket 1 = cores 52–103.  Same numbering
-# scheme on every Gadi normalsr node (verified across all single-node R2
-# JSON records — they share the same numa_topology string).  If a future
-# Gadi maintenance round changes the per-node CPU map, the lscpu cross-
-# check below catches it before submitting work.
+# OpenMPI rankfile syntax: "rank N=<host> slot=<cpu-list>".  Full-node
+# binding: slot=0-103 gives each rank all 104 physical cores on its node.
+# The lscpu cross-check below confirms we have exactly 104 physical cores
+# before writing the rankfile.
 LSCPU_SOCKETS="$(lscpu | awk -F: '/Socket\(s\)/{gsub(/^ +| +$/,"",$2); print $2; exit}')"
 LSCPU_COREPS="$(lscpu  | awk -F: '/Core\(s\) per socket/{gsub(/^ +| +$/,"",$2); print $2; exit}')"
 PHYSICAL_CORES="$(( ${LSCPU_SOCKETS:-2} * ${LSCPU_COREPS:-52} ))"
-echo "[2node-socket] head node topology: sockets=${LSCPU_SOCKETS} cores/socket=${LSCPU_COREPS} → physical_cores=${PHYSICAL_CORES}"
+echo "[2node-fullnode] head node topology: sockets=${LSCPU_SOCKETS} cores/socket=${LSCPU_COREPS} → physical_cores=${PHYSICAL_CORES}"
 if [[ "${PHYSICAL_CORES}" -ne 104 ]]; then
-    echo "ERROR: head-node topology is not 2×52 SPR (got ${PHYSICAL_CORES} cores)." >&2
-    echo "       This script's hardcoded socket layout (0-51 / 52-103) assumes that." >&2
+    echo "ERROR: head-node has ${PHYSICAL_CORES} physical cores, expected 104 (2×52 SPR)." >&2
+    echo "       Rankfile uses slot=0-103; adjust OMP_PER_RANK and slot range if topology differs." >&2
     exit 10
 fi
 
 RANKFILE="${WORK_DIR}/rankfile.txt"
 cat > "${RANKFILE}" <<EOF
-rank 0=${HOST_A} slot=0-51
-rank 1=${HOST_A} slot=52-103
-rank 2=${HOST_B} slot=0-51
-rank 3=${HOST_B} slot=52-103
+rank 0=${HOST_A} slot=0-103
+rank 1=${HOST_B} slot=0-103
 EOF
 
-echo "[2node-socket] rankfile:"
+echo "[2node-fullnode] rankfile:"
 cat "${RANKFILE}" | sed 's/^/    /'
 
 # ── Environment snapshot (env.json) ─────────────────────────────────────
@@ -239,7 +228,7 @@ env = {
   "run_id": "${RUN_ID}", "label": "${LABEL}",
   "threads": ${TOTAL_THREADS},
   "mpi_ranks": ${NRANKS}, "omp_per_rank": ${OMP_PER_RANK},
-  "placement": "mpi_2node_socket",
+  "placement": "mpi_2node_fullnode",
   "nodes": 2,
   "hosts": ["${HOST_A}", "${HOST_B}"],
   "rankfile": open("${RANKFILE}").read() if os.path.isfile("${RANKFILE}") else None,
@@ -278,10 +267,10 @@ PYENV
 echo "  → ${ENV_JSON}"
 
 # ── OMP env (forwarded into each rank via mpirun -x) ────────────────────
-# Identical to single-node socket: OMP_NUM_THREADS=52, OMP_DYNAMIC=false to
-# stop libiomp5 shrinking the team when it observes the rank's 52-core
-# cpuset is "fully utilised", OMP_PROC_BIND=close + OMP_PLACES=cores so the
-# 52 threads stay on physical cores within the rank's bound socket.
+# OMP_NUM_THREADS=104 — one thread per physical core per node (rank).
+# OMP_DYNAMIC=false stops libiomp5 shrinking the team when it observes the
+# rank's 104-core cpuset is "fully utilised", OMP_PROC_BIND=close +
+# OMP_PLACES=cores so the 104 threads stay on physical cores per node.
 OMP_ENV=(
     -x "OMP_NUM_THREADS=${OMP_PER_RANK}"
     -x "OMP_DYNAMIC=false"
@@ -381,7 +370,7 @@ SAMPLER_EOF
 
 # ── Pass 1: clean timing run (no perf) ────────────────────────────────
 echo ""
-echo "[2node-socket] Pass 1: ${NRANKS} ranks × ${OMP_PER_RANK} OMP, rankfile-bound across 2 nodes"
+echo "[2node-fullnode] Pass 1: ${NRANKS} ranks × ${OMP_PER_RANK} OMP, rankfile-bound across 2 nodes"
 START_EPOCH=$(date +%s)
 
 # Multi-node mpirun:
@@ -392,8 +381,8 @@ START_EPOCH=$(date +%s)
 #                 RANK_FILE without the BYCORE conflict.  This is the
 #                 round-6-validated form from the single-node l3rank script
 #                 (CHANGELOG entries (h)–(m), 2026-05-08).
-#   -rf <file>  → applies the 4-rank socket pinning (1 rank per socket × 4
-#                 sockets = 2 nodes).
+#   -rf <file>  → applies the 2-rank full-node pinning (1 rank per node ×
+#                 2 nodes).
 #   --report-bindings → echo actual binding map to stderr for audit.
 #
 # OpenMPI 4.1.7 on Gadi auto-selects InfiniBand transport (UCX or openib).
@@ -430,13 +419,13 @@ END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
 kill "${SAMPLER_PID}" 2>/dev/null || true
 wait "${SAMPLER_PID}" 2>/dev/null || true
-echo "[2node-socket] Pass 1 done: rc=${IQRC} wall=${WALL}s"
+echo "[2node-fullnode] Pass 1 done: rc=${IQRC} wall=${WALL}s"
 
 # ── Pass 2: per-rank perf stat ────────────────────────────────────────
 # perf is on every Gadi compute node, so each rank writes its own
 # perf_stat.rank<N>.txt into the shared scratch work_dir.
 if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
-    echo "[2node-socket] Pass 2: ${NRANKS} ranks × ${OMP_PER_RANK} OMP under perf stat"
+    echo "[2node-fullnode] Pass 2: ${NRANKS} ranks × ${OMP_PER_RANK} OMP under perf stat"
     mpirun -np "${NRANKS}" \
         --hostfile "${HOSTFILE}" \
         --mca rmaps_base_mapping_policy "" \
@@ -518,7 +507,7 @@ for rk, pm in perf_per_rank.items():
     c, i = pm.get("cycles"), pm.get("instructions")
     if c and i: per_rank_ipc[rk] = round(i/c, 4)
 
-per_rank_host = {str(rk): (host_a if rk < 2 else host_b) for rk in range(nranks)}
+per_rank_host = {str(rk): (host_a if rk == 0 else host_b) for rk in range(nranks)}
 
 proc_summary = None
 sjf = os.path.join(work, "samples.jsonl")
@@ -569,8 +558,8 @@ if rep_ll is not None:
 record = {
   "run_id": rid, "pbs_id": "${PBS_ID_SHORT}",
   "platform": "gadi", "run_type": "profile", "label": label,
-  "description": (f"Gadi SPR R2 — MPI 2-node socket placement: {nranks} ranks × "
-                  f"{omp_per} OMP, 1 rank per socket, 2 sockets per node × 2 nodes"),
+  "description": (f"Gadi SPR R2 — MPI 2-node full-node placement: {nranks} ranks × "
+                  f"{omp_per} OMP, 1 rank per node × 2 nodes"),
   "timing": [{
     "command": (f"mpirun -np {nranks} "
                 f"--hostfile hostfile.txt "
@@ -616,7 +605,7 @@ record = {
   "profile": {
     "dataset":    os.path.basename(dpath),
     "threads":    total_thr,
-    "placement":  "mpi_2node_socket",
+    "placement":  "mpi_2node_fullnode",
     "mpi_ranks":  nranks,
     "omp_per_rank": omp_per,
     "nodes":      2,
@@ -630,14 +619,14 @@ record = {
     "proc_summary": proc_summary,
     "artefacts":    artefacts,
   },
-  "build_tag":           f"icx_mpi{nranks}x{omp_per}_2node_socket_numa_ft_r2",
+  "build_tag":           f"icx_mpi{nranks}x{omp_per}_2node_fullnode_numa_ft_r2",
   "non_canonical":       True,
-  "non_canonical_label": f"ICX · MPI {nranks}×{omp_per} 2-node socket · R2",
+  "non_canonical_label": f"ICX · MPI {nranks}×{omp_per} 2-node full-node · R2",
 }
 out_path = os.path.join(runs, rid + ".json")
 json.dump(record, open(out_path,"w"), indent=2, default=str)
-print(f"[2node-socket] wrote {out_path}")
+print(f"[2node-fullnode] wrote {out_path}")
 PYEOF
 
-echo "[2node-socket] done."
+echo "[2node-fullnode] done."
 exit "${IQRC}"
