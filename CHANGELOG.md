@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-08 (m) — MPI L3-rankfile result (PBS 167899378): PASS — full sweep summary
+
+Both MPI placement experiments are now complete. All three R2 runs share the same source commit, icpx 2025.3.2 / libiomp5, build flags, dataset sha256, and seed.
+
+### Final three-way comparison
+
+| scheme | ranks × OMP | wall time | lnL | vs canonical | IPC | LLC miss rate |
+|---|---|---|---|---|---|---|
+| canonical 1×104 | 1×104 | 523.7 s | −10956936.612 | — | ~1.30 | — |
+| socket 2×52 (PBS 167895713) | 2×52 | 520.059 s | −10956936.607 | **−3.6 s (−0.7%)** | 1.315 | 72.08% |
+| l3rank 8×13 (PBS 167899378) | 8×13 | 957.805 s | −10956936.612 | **+434 s (+83%)** | 1.366 | 55.85% |
+
+### Interpretation
+
+**Outcome (c) confirmed for l3rank:** IQ-TREE's MPI tree-exchange overhead at 8 ranks dominates the per-rank L3 cache benefit.
+
+The perf metrics tell an interesting story: the L3-grain binding *did* work. LLC miss rate dropped from 72.08% → 55.85% (−22.5% relative) and IPC rose from 1.315 → 1.366 (+3.9%), both consistent with each rank's 13-thread OMP pool fitting cleanly inside a single L3 quadrant without cross-NUMA cache traffic. But these gains were completely overwhelmed by the wall-time cost of running 13-thread OMP teams instead of 52-thread teams:
+
+- **OMP scaling at 13 threads is weak for xlarge_mf.** The alignment is ~60K sites; with 13 threads each replicate takes roughly 4× longer per rank than at 52 threads (OMP speedup at 13 < 4× the speedup at 52 for this workload).
+- **8-rank MPI coordination is 4× the synchronisation** of the 2-rank case. IQ-TREE 3 MPI distributes bootstrap replicates; each rank must wait for the slowest rank at the end of every round.
+- **Per-rank IPC is remarkably uniform** (1.348–1.376 across all 8 ranks), confirming the rankfile binding placed work evenly and there was no straggler from a bad NUMA assignment.
+
+**Socket 2×52 is the sweet spot for this workload:** making cross-socket traffic explicit via a single MPI message boundary is essentially free (−0.7%) while preserving 52-thread OMP efficiency.
+
+**lnL note:** socket reported −10956936.607 (delta +0.005 from canonical), l3rank reported −10956936.612 (exact canonical match). Both are within MPI-mode numerical tolerance; the per-rank seed offset (`seed + rank_id`) changes the search path slightly without affecting correctness or the lnL to any scientifically meaningful degree.
+
+### Run records
+
+- `logs/runs/gadi_xlarge_mf_104t_icx_mpi2x52_socket_numa_ft_r2.json`
+- `logs/runs/gadi_xlarge_mf_104t_icx_mpi8x13_l3rank_numa_ft_r2.json`
+
+---
+
 ## 2026-05-08 (l) — MPI socket placement result (PBS 167895713): PASS
 
 Socket job completed clean (exit 0, 520.059 s wall).
