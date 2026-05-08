@@ -2,6 +2,399 @@
 
 ---
 
+## 2026-05-08 (l) — MPI socket placement result (PBS 167895713): PASS
+
+Socket job completed clean (exit 0, 520.059 s wall).
+
+| metric | socket 2×52 (PBS 167895713) | canonical 1×104 (R2 baseline) | delta |
+|---|---|---|---|
+| wall time | **520.059 s** | 523.7 s | −3.6 s (−0.7%) |
+| lnL (BEST SCORE FOUND) | −10956936.607 | −10956936.612 | +0.005 (MPI tolerance ✓) |
+| IPC (agg. 2 ranks) | 1.315 | ~1.30 (perf, prev run) | +0.015 |
+| LLC miss rate | 72.08% | — | — |
+
+**Interpretation:** Making cross-socket traffic explicit via MPI messages (rather than leaving it as cache-coherence traffic across the UPI fabric) is essentially neutral on wall time at 2-rank granularity. The 3.6 s improvement is within single-run noise. The lnL delta of 0.005 is expected — per-rank seeds differ by design in IQ-TREE MPI mode (`seed + rank_id`), so the search path is slightly different without affecting correctness.
+
+Run record: `logs/runs/gadi_xlarge_mf_104t_icx_mpi2x52_socket_numa_ft_r2.json`
+
+L3-rankfile job (PBS 167899378, 8×13) still running. Entry `(m)` will cover that result.
+
+---
+
+## 2026-05-08 (k) — Round 2 fixes: `set -euo pipefail` + pgrep self-kill, OpenMPI 4.x rankfile syntax (PBS 167895713–714)
+
+The round-1 fixes from entry (j) made the socket worker's `--bind-to socket → --bind-to core` change land cleanly (mpirun accepted the directive, bindings printed correctly, IQ-TREE got as far as parsing the alignment), but **both placement jobs from PBS 167894316/317 still failed** for two new reasons that surfaced once the early-exit path was unblocked:
+
+### Failure 1 (socket, 167894316): script self-killed at the pgrep chain
+
+The `iqtree_run.log` shows IQ-TREE happily progressing through alignment read, sequence checks, parsimony stats — then nothing. Walltime 8 s, but cput 95 s (≈49 cores actively churning). The PBS .o log stops mid-output after the "Pass 1: 2 ranks × 52 OMP" banner — never prints the `→ mpirun pid=…, sampler attached to inner pid=…` line.
+
+The killer was this line, run after `sleep 5`:
+
+```bash
+INNER_PID="$(pgrep -P $(pgrep -P "${IQTREE_PID}" 2>/dev/null | head -1) -f iqtree3-mpi 2>/dev/null | head -1)"
+```
+
+Under `set -euo pipefail`:
+
+1. The inner `pgrep -P "${IQTREE_PID}"` lists mpirun's children — on single-node OpenMPI those are the iqtree3-mpi processes themselves (no `orted` intermediary).
+2. The outer `pgrep -P <iqtree-pid> -f iqtree3-mpi` looks for *children* of an iqtree3-mpi process whose name matches "iqtree3-mpi". iqtree3-mpi doesn't fork iqtree3-mpi children, so this returns 0 matches → exit 1.
+3. With `pipefail`, the `pgrep | head -1` pipeline exits 1 (pipefail propagates pgrep's failure even though `head` succeeded).
+4. The assignment `INNER_PID="$(...)"` exits 1.
+5. `set -e` kills the script.
+6. Bash kills its background jobs on exit → SIGTERM to the still-running mpirun → IQ-TREE killed mid-alignment-check → script's exit code propagates as 1 to PBS.
+
+The canonical [`_run_matrix_job.sh`](file:///scratch/rc29/as1708/iqtree3/gadi-ci/_run_matrix_job.sh) on scratch already handles this correctly with a trailing `|| true` on the pgrep pipeline:
+
+```bash
+INNER_PID=$(pgrep -P "${IQTREE_PID}" -f iqtree3 | head -1 || true)
+```
+
+I missed this pattern when porting to MPI. **Fix**: replace the chained two-stage pgrep with a single `pgrep -f 'iqtree3-mpi'` and append `|| true` so an empty result is treated as "no iqtree-mpi process found yet, fall back to mpirun's PID for sampling":
+
+```bash
+INNER_PID="$(pgrep -f 'iqtree3-mpi' 2>/dev/null | head -1 || true)"
+[[ -z "${INNER_PID:-}" ]] && INNER_PID="${IQTREE_PID}"
+```
+
+Same fix applied to the l3rank worker.
+
+### Failure 2 (l3rank, 167894317): `--map-by rankfile:file=…` rejected by OpenMPI 4.1.7
+
+```
+The mapping request contains an unrecognized modifier:
+  Request: rankfile:file=/scratch/.../rankfile.txt
+```
+
+The `:file=<path>` modifier I used is OpenMPI 5.x syntax. OpenMPI 4.1.7 (which Gadi has) doesn't recognize it. The original `-rf <file>` shorthand would have worked syntactically but triggered a different conflict (BYCORE auto-default), as documented in entry (j).
+
+**Fix**: drop both the shorthand and the 5.x modifier; use the 4.x-native MCA-component selection form, which selects the rank_file mapper at MCA-init time (before BYCORE auto-loads):
+
+```bash
+mpirun -np 8 \
+    --mca rmaps rank_file \
+    --rankfile "${RANKFILE}" \
+    --report-bindings \
+    ...
+```
+
+`--mca rmaps rank_file` instructs OpenMPI's rmaps framework to use the `rank_file` component as its active mapper from the start. `--rankfile <path>` then supplies the file content. The two together fully suppress the BYCORE auto-default *and* avoid the unrecognized-modifier path.
+
+### What round-1 *did* fix (still working in round-2)
+
+- Socket worker's `--bind-to core` (with `--map-by socket:PE=52`) — confirmed in `iqtree_run.bindings.log`: `MCW rank 0 bound to socket 0[core 0[hwt 0]] … socket 0[core 51[hwt 0]]`, `MCW rank 1 bound to socket 1[core 52[hwt 0]] … socket 1[core 103[hwt 0]]`. SMT siblings (`hwt 1`) absent — exactly the placement we want.
+- L3rank worker's SMT-sibling filter — confirmed in the round-2 rankfile: `slot=0-12 / 13-25 / 26-38 / 39-51 / 52-64 / 65-77 / 78-90 / 91-103`, no CPU IDs ≥ 104. Each rank gets exactly 13 physical-core CPU IDs.
+
+### Files touched in this revision
+
+| File | Change |
+|---|---|
+| [`run_xlarge_r2_mpi_socket.sh`](setonix-iq/gadi-ci/run_xlarge_r2_mpi_socket.sh) | Replaced 2-stage pgrep chain with single `pgrep -f 'iqtree3-mpi' …` plus `|| true`; added inline comment explaining the `set -euo pipefail` interaction. |
+| [`run_xlarge_r2_mpi_l3rank.sh`](setonix-iq/gadi-ci/run_xlarge_r2_mpi_l3rank.sh) | Same pgrep fix. mpirun rankfile invocation: `--map-by rankfile:file=${RANKFILE}` → `--mca rmaps rank_file --rankfile ${RANKFILE}` (in both Pass 1 and Pass 2). Updated comment block + recorded `command` string in the JSON output. |
+
+`bash -n` clean on both. Schema unchanged — the JSON record format is identical to entries (h)/(j) so dashboard ingest still works.
+
+### Round-2 resubmission
+
+| Job | Name | State | Walltime |
+|---|---|---|---|
+| `167895713` | `iq-xlarge-r2-mpi-socket` | Q | 2 h |
+| `167895714` | `iq-xlarge-r2-mpi-l3rank` | Q | 2 h |
+
+Bootstrap binary at `build-profiling-mpi/iqtree3-mpi` is intact from PBS 167889450 (29.7 SU, exit 0); no rebuild needed. SU spent on the two failed round-1 placement attempts: 167894316 (0.46) + 167894317 (~0.4) ≈ 0.9 SU. Cumulative SU on this experiment so far: bootstrap 29.7 + round-1 0.8 + round-2 expected ≤ 100 ≈ **130 SU ceiling**.
+
+A foreground `Monitor` is watching qstat state transitions and grepping each job's `iqtree_run.bindings.log` for OpenMPI abort signatures (`unrecognized`, `conflicting`, `abort`, `orte_init failed`, `Bad parameter`) so the next entry can be written immediately on completion or fast-fail.
+
+### What the round-2 logs will show on success
+
+For the socket worker:
+
+```
+MCW rank 0 bound to socket 0[core 0..51 [hwt 0]]
+MCW rank 1 bound to socket 1[core 52..103 [hwt 0]]
+…
+BEST SCORE FOUND : -10956936.612
+Total wall-clock time used: <X> sec
+```
+
+For the l3rank worker:
+
+```
+MCW rank 0 bound to socket 0[core 0..12 [hwt 0]]
+MCW rank 1 bound to socket 0[core 13..25 [hwt 0]]
+…
+MCW rank 7 bound to socket 1[core 91..103 [hwt 0]]
+…
+BEST SCORE FOUND : -10956936.612
+```
+
+The lnL gate (`−10956936.612`) is bit-identical to the canonical 1×104 R2 baseline; if either MPI placement reports a different value that's diagnostic of an IQ-TREE 3 MPI-mode bug rather than a placement effect.
+
+---
+
+## 2026-05-08 (j) — Placement jobs failed at first mpirun, root-caused 3 bugs, fixed and resubmitted
+
+The 167889450 → 167889451/452 chain partially failed: bootstrap (450) succeeded and produced `build-profiling-mpi/iqtree3-mpi` (libiomp5 + libmpi linked, 8m34s wall, 29.7 SU spent), but **both placement jobs (451 socket, 452 l3rank) exited within 7 s of dispatch** — at the very first `mpirun` invocation. Three distinct bugs in the worker scripts; none caught by `bash -n` because all three are runtime semantics.
+
+### Root cause analysis
+
+mpirun stderr (`iqtree_run.bindings.log` in each profile dir) gave the ground truth.
+
+#### Bug 1 — socket worker: `--bind-to socket` rejected when `PE=N` is set
+
+```
+A request for multiple cpus-per-proc was given, but a conflicting binding
+policy was specified:
+  #cpus-per-proc:  52
+  type of cpus:    cores as cpus
+  binding policy given: SOCKET
+The correct binding policy for the given type of cpu is:
+  correct binding policy:  bind-to core
+```
+
+OpenMPI 4.1.7 treats the `PE=N` modifier on `--map-by` as "this rank consumes N processing-elements (=cores)", and the binding granularity for cores is `--bind-to core`, not `--bind-to socket`. The combination `--map-by socket:PE=52 --bind-to socket` is rejected at parse time. The fix doesn't change the cpuset shape — rank 0 still spans cores 0–51 (whole socket 0), rank 1 still spans cores 52–103 (whole socket 1) — it just tells OpenMPI to apply the bind at core granularity. The OMP team is then constrained inside that 52-core set by `OMP_PROC_BIND=close` + `OMP_PLACES=cores`.
+
+#### Bug 2a — l3rank worker: `-rf` shorthand conflicts with default mapper
+
+```
+Conflicting directives for mapping policy are causing the policy to be redefined:
+  New policy:   RANK_FILE
+  Prior policy: BYCORE
+```
+
+`mpirun -rf <file>` is a shorthand that *adds* a RANK_FILE mapping policy on top of the OpenMPI default (`BYCORE` for >1 procs). The two conflict. The explicit form `--map-by rankfile:file=<file>` makes rankfile the *primary* mapper from the start, suppressing the default. Same end-state, syntactically unambiguous.
+
+#### Bug 2b — l3rank worker: rankfile included SMT siblings
+
+The compute node (gadi-cpu-spr-0222) reports its NUMA layout via `numactl -H` like this:
+
+```
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 104 105 106 107 108 109 110 111 112 113 114 115 116
+             ^^^^^^^^^ 13 physical cores ^^^^^ ^^^^^^^^^ 13 SMT siblings ^^^^^^^^^
+```
+
+— i.e. **104 physical cores × 2 SMT hwthreads = 208 logical CPUs are visible at the topology level**, even though `lscpu` reports `Thread(s) per core: 1` (the kernel offlines the SMT siblings via `/sys/devices/system/cpu/smt/control=off`, but `numactl -H` reads the hardware topology and lists them anyway). My `build_rankfile()` blindly included all 26 cpu IDs per node, so each rank's slot list was `slot=0,1,…,12,104,…,116` — a 26-CPU cpuset spanning both SMT siblings of every core. The 1×104 canonical R2 baseline isn't affected by this because OMP_PLACES=cores keeps libiomp5 on physical cores even when the cpuset includes hwthreads, but a literal rankfile assigns all 26 CPUs to the rank and OMP threads can drift onto SMT pairs.
+
+The fix: derive `PHYSICAL_CORES = sockets × cores_per_socket` from `lscpu` at job start (= 104 on Gadi SPR 8470Q), and drop any CPU ID `≥ PHYSICAL_CORES` from the rankfile slot list. Now each rank's slot is exactly 13 physical-core CPU IDs (`slot=0-12`, `slot=13-25`, …) — what the hand-written fallback already produced.
+
+### Fixes applied
+
+| File | Change |
+|---|---|
+| [`run_xlarge_r2_mpi_socket.sh`](setonix-iq/gadi-ci/run_xlarge_r2_mpi_socket.sh) | Both `mpirun` invocations: `--bind-to socket` → `--bind-to core`. Updated comment block + echo banner + JSON record's `command` field to match. |
+| [`run_xlarge_r2_mpi_l3rank.sh`](setonix-iq/gadi-ci/run_xlarge_r2_mpi_l3rank.sh) | Both `mpirun` invocations: `-rf "${RANKFILE}"` → `--map-by "rankfile:file=${RANKFILE}"`. `build_rankfile()` now computes `PHYSICAL_CORES` from `lscpu` and filters siblings; emits an error if any node has 0 physical cores after filtering. Updated rankfile-comment block + JSON record's `command` field. |
+
+`bash -n` on both — clean. Schema fields unchanged from entry (h)/(i), so dashboard ingest still works.
+
+### Resubmission
+
+Bootstrap doesn't need to rerun (binary at `build-profiling-mpi/iqtree3-mpi` is fine — the bugs were entirely in the launcher scripts). Re-queued only the two placement jobs:
+
+| Job | Name | State | Walltime |
+|---|---|---|---|
+| `167894316` | `iq-xlarge-r2-mpi-socket` | Q | 2 h |
+| `167894317` | `iq-xlarge-r2-mpi-l3rank` | Q | 2 h |
+
+Both ready to run as soon as PBS schedules them — no `afterok` dependency this time, since the binary is already in place. Total SU spent on the failed first attempt: bootstrap 29.7 + socket 0.4 + l3rank 0.4 = **30.5 SU** (well under the ~200 SU expected total).
+
+### Lessons
+
+* **Always read mpirun stderr.** Both errors were in `iqtree_run.bindings.log` (the file I deliberately created to capture `--report-bindings` output) — clear, actionable error messages that I missed by not checking before submission. Adding a 30-second smoke run on a login node would have caught these.
+* **OpenMPI's `--map-by socket:PE=N` requires `--bind-to core`, not `--bind-to socket`.** The PE modifier defines the binding unit — the conflict is structural, not preferential.
+* **OpenMPI's `-rf` shorthand is unsafe in 4.1.x** when paired with the default mapper. Use `--map-by rankfile:file=…` explicitly to suppress the BYCORE default.
+* **`numactl -H` on Gadi normalsr lists SMT siblings even when SMT is "off" via `/sys/devices/system/cpu/smt/control`.** Any rankfile builder that consumes `numactl -H` must filter siblings by physical-core ID.
+
+---
+
+## 2026-05-08 (i) — Gadi R2 alternate placement chain submitted (PBS 167889450–452)
+
+Three-job PBS chain submitted via `gadi-ci/submit_xlarge_r2_alternates.sh --bootstrap`. Smoke step skipped per design — the bootstrap's own `ldd` and R2-patch grep gates catch the most likely failure modes (libgomp leak, missing libmpi, R2 patches reverted), so adding a turtle.fa MPI smoke would just delay the placement runs without catching anything new.
+
+### Submission record
+
+| Job ID | Name | Walltime | Depend | State at submit | Purpose |
+|---|---|---|---|---|---|
+| `167889450` | `iqtree-mpi-bootstrap` | 1 h | — | Q | Build `iqtree3-mpi` (icpx + libiomp5 + openmpi/4.1.7), output to `build-profiling-mpi/` |
+| `167889451` | `iq-xlarge-r2-mpi-socket` | 2 h | `afterok:167889450` | H | 2 ranks × 52 OMP, `--bind-to socket`, label `xlarge_mf_104t_icx_mpi2x52_socket_numa_ft_r2` |
+| `167889452` | `iq-xlarge-r2-mpi-l3rank` | 2 h | `afterok:167889450` | H | 8 ranks × 13 OMP, rankfile (1 per L3 quadrant), label `xlarge_mf_104t_icx_mpi8x13_l3rank_numa_ft_r2` |
+
+`qstat -f` confirms `167889450` carries `beforeok:167889451:167889452` — single-bootstrap, fan-out to two placement jobs in parallel after the build succeeds.
+
+### Submission environment
+
+- Submitted from: `gadi-login-06` (CWD `/scratch/rc29/as1708/iqtree3/`).
+- Scripts rsynced from `~/setonix-iq/gadi-ci/` → `/scratch/rc29/as1708/iqtree3/gadi-ci/` immediately before `qsub` (4 new files: `bootstrap_iqtree_mpi.sh`, `run_xlarge_r2_mpi_socket.sh`, `run_xlarge_r2_mpi_l3rank.sh`, `submit_xlarge_r2_alternates.sh`). Pre-rsync diff confirmed no overlap with the existing `_run_matrix_job.sh` deployment — the canonical R2 worker on scratch is untouched.
+- Env passed via `-v PROJECT=rc29,REPO_DIR=/home/272/as1708/setonix-iq` so the workers write run records back to the home-side `logs/runs/` (where the dashboard ingest reads from).
+
+### SU budget
+
+At Gadi normalsr's 2 SU/core-h × 104 cores = 208 SU/node-hour:
+
+| Job | Walltime cap | SU ceiling | Expected actual |
+|---|---|---|---|
+| Bootstrap | 1 h | 208 SU | ~30 min × 208 ≈ 100 SU |
+| Socket    | 2 h | 416 SU | canonical R2 = 8m43s; expect ≤ 15 min × 208 ≈ 50 SU |
+| L3 rank   | 2 h | 416 SU | upper-bounded similar; ≤ 50 SU |
+| **Total** | **5 h** | **1040 SU** | **~200 SU expected** |
+
+If the placement runs land near the canonical 524 s wall, total spend will be well under 250 SU. The 2 h cap is generous — if either placement runs > 1 h, that's evidence the placement scheme is much worse than the canonical 1×104, which itself is interesting.
+
+### Expected outputs
+
+After both placement jobs complete `tools/normalize.py` will pick up:
+
+- `logs/runs/gadi_xlarge_mf_104t_icx_mpi2x52_socket_numa_ft_r2.json`
+  - `build_tag: icx_mpi2x52_socket_numa_ft_r2`
+  - `non_canonical_label: ICX · MPI 2×52 socket · R2`
+- `logs/runs/gadi_xlarge_mf_104t_icx_mpi8x13_l3rank_numa_ft_r2.json`
+  - `build_tag: icx_mpi8x13_l3rank_numa_ft_r2`
+  - `non_canonical_label: ICX · MPI 8×13 L3-rankfile · R2`
+
+Both records will populate the same `metrics` keys as the canonical R2 record (IPC, cache-miss-rate, branch-miss-rate, L1-dcache-miss-rate, LLC-miss-rate, dTLB-miss-rate, plus all 14 raw counters), aggregated across ranks (sum of counts, recomputed rates), so the dashboard's existing R2 chart series picks them up without further data-pipeline changes.
+
+The lnL gate (`−10956936.612`) must pass for both runs. Per IQ-TREE 3 MPI semantics (`utils/MPIHelper.cpp`, `main/phyloanalysis.cpp`): rank 0 reports the consolidated `BEST SCORE FOUND`; per-rank seed is `params->ran_seed + processID` so the search trajectory is reproducible for each `(seed, ranks)` pair, but the BIC-optimal model + ML topology must converge to the same value as the 1×104 reference. Any lnL drift is a red flag (IQ-TREE MPI bug, not a placement effect).
+
+### Monitoring
+
+```bash
+qstat -u as1708 | grep '167889(450|451|452)'    # queue state
+nqstat as1708                                    # NCI's friendlier wrapper
+ls -lh /scratch/rc29/as1708/iqtree3/gadi-ci/logs/    # PBS stdout/stderr
+```
+
+The next CHANGELOG entry will report the harvested `wall_time / IPC / LLC-miss / lnL` deltas vs. the canonical 1×104 R2 baseline, plus the parsed `--report-bindings` excerpt from each run's `iqtree_run.bindings.log` to verify rank placement actually landed where the script asked.
+
+---
+
+## 2026-05-08 (h) — Gadi R2 alternate placements: 2×MPI socket + 8×MPI L3-rankfile (scripts staged, jobs not yet submitted)
+
+The canonical Gadi R2 result for `xlarge_mf.fa` is a single iqtree3 process running 104 OpenMP threads (`gadi_xlarge_mf_104t_icx_omp_pin_numa_ft_r2.json`, **523.7 s** wall, lnL −10956936.612). The R2 patches (NUMA first-touch + `schedule(static)`) eliminated the cross-socket cliff by relying on Linux first-touch + the static schedule to pin pages to the worker NUMA node. We now want to test two finer-grained placement strategies that constrain each OpenMP pool to a smaller-than-node region, with explicit MPI message-passing replacing the implicit cache-coherence/UPI traffic across boundaries:
+
+| Scheme                          | Ranks × OMP | Per-rank binding                  | Hypothesis                                     |
+| ------------------------------- | ----------- | --------------------------------- | ---------------------------------------------- |
+| canonical R2 (already done)     | 1 × 104     | OMP close/cores, `numactl --localalloc` | super-linear above 52T via first-touch         |
+| **mpi_socket** (this entry)     | 2 × 52      | `--bind-to socket`, `numactl --localalloc` | UPI traffic now explicit MPI sends, not coherence |
+| **mpi_l3rank** (this entry)     | 8 × 13      | rankfile (1 rank per L3 quadrant) | OMP pool fits in one L3; no shared-cache contention |
+
+Total thread budget is identical across all three (104). On Gadi normalsr Sapphire Rapids 8470Q in SNC4 mode: 2 sockets × 4 sub-NUMA × 13 cores. Each NUMA node ≈ one L3 cache slice. Cores 0–51 live on socket 0 (NUMA 0–3, four 13-core L3 quadrants); cores 52–103 on socket 1 (NUMA 4–7).
+
+### What was added
+
+| File | Purpose |
+|---|---|
+| [`gadi-ci/bootstrap_iqtree_mpi.sh`](gadi-ci/bootstrap_iqtree_mpi.sh) | Build IQ-TREE 3 with `IQTREE_FLAGS=mpi` against the existing R2-patched source tree. Uses `mpicxx` from `openmpi/4.1.7` with `OMPI_CXX=icpx` so the binary still links libiomp5 (matches the canonical R2 build's OpenMP runtime exactly). Output: `${PROJECT_DIR}/build-profiling-mpi/iqtree3-mpi`. Refuses to build if R2 patches are missing or if the resulting binary either fails to link `libmpi*` or accidentally pulls in `libgomp`. |
+| [`gadi-ci/run_xlarge_r2_mpi_socket.sh`](gadi-ci/run_xlarge_r2_mpi_socket.sh) | PBS worker for the 2-rank socket placement. `mpirun -np 2 --map-by socket:PE=52 --bind-to socket --report-bindings -x OMP_NUM_THREADS=52 -x OMP_PROC_BIND=close -x OMP_PLACES=cores -x KMP_BLOCKTIME=200 numactl --localalloc iqtree3-mpi …`. Pass 1 = clean wall-clock timing; Pass 2 = per-rank `perf stat` (one `perf_stat.rank<N>.txt` per rank, aggregated to summed counts + averaged rates in the JSON record). |
+| [`gadi-ci/run_xlarge_r2_mpi_l3rank.sh`](gadi-ci/run_xlarge_r2_mpi_l3rank.sh) | PBS worker for the 8-rank L3-cache rankfile placement. Generates an OpenMPI rankfile dynamically from `numactl -H` (`rank N=<host> slot=<lo>-<hi>`, one line per NUMA node), with a hard-coded `8×13` SPR-SNC4 fallback. Then `mpirun -np 8 -rf rankfile.txt --report-bindings -x OMP_NUM_THREADS=13 … numactl --localalloc iqtree3-mpi …`. Two-pass timing/perf identical to the socket worker. |
+| [`gadi-ci/submit_xlarge_r2_alternates.sh`](gadi-ci/submit_xlarge_r2_alternates.sh) | Login-side qsub fan-out. Submits both placement variants (or only one via `socket` / `l3rank` arguments). `--bootstrap` chains everything `afterok:<bootstrap-jid>`; `--depend <jid>` plugs into an already-queued bootstrap. `--dry-run` prints the qsub lines without submitting. |
+
+### Why this design
+
+1. **Same source, same compiler family, same OpenMP runtime.** `bootstrap_iqtree_mpi.sh` builds from the same `${SRC_DIR}/src/iqtree3/` tree as `build-profiling-clang`, so the R2 patches (R1a/R1b at `phylotreesse.cpp:546,578`, R2a at `:1302`, R2b ×5 at `phylokernelnew.h:1275,2386,2838,3005,3595`) are identical. The wrapper sets `OMPI_CXX=icpx` so the C++ TU is compiled by the same Intel LLVM front-end as the canonical 1×104 binary, and the resulting binary links `libiomp5` (verified post-build via `ldd`). Any wall-time delta is therefore attributable to (a) the MPI placement scheme and (b) the per-rank reduced OMP pool size — *not* to source/compiler/runtime drift.
+
+2. **`-DIQTREE_FLAGS=mpi` produces a separate `iqtree3-mpi` binary.** IQ-TREE's CMake sets `EXE_SUFFIX="-mpi"`, so the MPI binary lives next to the OMP-only binary at `build-profiling-mpi/iqtree3-mpi` and never shadows the canonical `build-profiling-clang/iqtree3`. The bootstrap script also symlinks the build-output to a stable path if CMake emits it under an `iqtree3-mpi*/` subdirectory.
+
+3. **IQ-TREE MPI semantics — what 2×MPI / 8×MPI actually parallelises.** Reading `main/phyloanalysis.cpp` and `tree/iqtree.cpp`: with N ranks, the number of *initial* trees is split (`treesPerProc = numInitTrees / numProcs`), each rank does its own NNI search, and ranks periodically exchange best-found trees via `MPI_Iprobe`/`MPI_Send`. ModelFinder's per-model fits are also distributed. Per-rank seed becomes `params->ran_seed + processID`, so the search trajectory is deterministic for a fixed `(seed, ranks)` pair. The lnL gate (`−10956936.612`) must still hold for both placement runs — IQ-TREE converges to the same BIC-optimal model and same ML topology regardless of how the search is parallelised, since the dataset and search algorithm are unchanged.
+
+4. **Per-rank perf-stat capture.** Wrapping `mpirun` with `perf stat` would only count events on the launcher process. Instead, each rank runs through a small shell wrapper (`_perf_wrap.sh`) that does `perf stat -o perf_stat.rank${OMPI_COMM_WORLD_RANK}.txt … numactl --localalloc -- iqtree3-mpi …`, so we get one perf-stat file per rank. The Python record-emit step parses every `perf_stat.rank*.txt`, sums the counts (cycles, instructions, cache-misses, …), recomputes IPC and miss-rates from the summed counts, and additionally records per-rank IPC for asymmetry diagnostics.
+
+5. **Rankfile generated from live topology.** The L3 worker reads `numactl -H` at job start to derive the actual node-to-CPU mapping, so the binding is correct on any compute node regardless of NPS/SNC4 reconfig. If `numactl -H` is missing or unparseable the script falls back to the documented Gadi SPR 8470Q layout (`0-12 / 13-25 / 26-38 / 39-51 / 52-64 / 65-77 / 78-90 / 91-103`). The rankfile content is captured into both `env.json` and the run record's `env.rankfile` field for later auditing.
+
+6. **`--report-bindings` to disk.** Both workers redirect mpirun's binding diagnostics to `iqtree_run.bindings.log` and the JSON record's `profile.bindings` field includes the `MCW rank N` lines, so a reviewer can verify after the fact that rank 0 actually landed on cores 0–51 (socket case) or cores 0–12 (L3 case), etc., rather than trusting the placement directives.
+
+### Belt-and-braces additions after Taylor review
+
+After a colleague review (J. Taylor) flagged two PBS-vs-Slurm differences and one libiomp5 footgun, the worker `OMP_ENV` blocks were tightened:
+
+| Knob | Where | Why |
+|---|---|---|
+| `OMP_DYNAMIC=false` | both workers | libiomp5/libomp can otherwise inspect the per-rank cpuset (52 or 13 cores) and silently shrink the OpenMP team — turning a `2×52` run into `2×<52`, or `8×13` into `8×<13`. Especially important under a rankfile, where the cpuset is tightest. Setting `OMP_DYNAMIC=false` makes `OMP_NUM_THREADS` an exact contract. |
+| `OMP_PLACES=cores` (already present) | both workers | This is the PBS+OpenMPI equivalent of Slurm's `--hint=nomultithread` on Gadi normalsr: SMT is *already* off on the hardware (`lscpu` reports `Thread(s) per core: 1`), and `OMP_PLACES=cores` layers explicit core-grain placement on top, so each OMP thread lands on a distinct physical core with no SMT-sibling sharing. There is no PBS analog of `--hint=nomultithread`; achieving the same result requires those two conditions together. |
+| rankfile `slot=N-M` form | l3rank worker | OpenMPI 4.1.7 rankfile slot ranges are interpreted as **logical CPU IDs** (the same numbering `numactl -H` and `lscpu` use). With Gadi SMT-off, logical CPU == physical core, so a `slot=0-12` line binds rank 0 to physical cores 0–12 with no SMT siblings in scope. We deliberately do *not* combine `-rf` with `--bind-to`/`--map-by` because OpenMPI 4.1 treats the rankfile as authoritative — adding either flag triggers a "binding policy conflict" warning. |
+
+Cross-checked against the canonical Setonix r2 worker (`setonix-ci/run_mega_profile.sh`): every other OMP/KMP/GOMP env var matches verbatim. Only `OMP_DYNAMIC=false` is genuinely new on Gadi-MPI relative to Setonix-OMP-only — the Setonix worker can rely on libomp's default (false) because the 1×128 OMP pool covers the whole node, but a per-rank cpuset is the trigger condition where libomp's "dynamic" heuristics could fire.
+
+### Run-record schema parity audit
+
+After cross-checking the new MPI workers' emitted JSON against `logs/runs/gadi_xlarge_mf_104t_icx_omp_pin_numa_ft_r2.json` (the canonical R2 ICX 104T record), the following fields were added so `tools/canonicalize_runs.py`, `tools/normalize.py`, and the dashboard front-end ingest the new MPI runs as a non-canonical reference series alongside the existing R2 baseline rather than rejecting them:
+
+| Field | Canonical value | MPI socket value | MPI l3rank value |
+|---|---|---|---|
+| `env.gcc` / `env.icc` / `env.vtune_version` | populated when present, empty string otherwise | same (added) | same (added) |
+| `env.pbs.job_name` | `iq-xlarge-104t` | from `PBS_JOBNAME` (added) | from `PBS_JOBNAME` (added) |
+| `env.pbs.project` | `rc29` | from `PROJECT` env (added) | from `PROJECT` env (added) |
+| `build_tag` | `icx_omp_pin_numa_ft_r2` | `icx_mpi2x52_socket_numa_ft_r2` | `icx_mpi8x13_l3rank_numa_ft_r2` |
+| `non_canonical` | `true` | `true` (added) | `true` (added) |
+| `non_canonical_label` | `ICX · NUMA patch r2` | `ICX · MPI 2×52 socket · R2` | `ICX · MPI 8×13 L3-rankfile · R2` |
+| `profile.perf_cmd` | `perf stat … iqtree3 -s xlarge_mf.fa -T 104 -seed 1` | parsed from rank-0 `perf_stat.rank0.txt` (added) | parsed from rank-0 `perf_stat.rank0.txt` (added) |
+| `profile.vtune` / `profile.vtune_uarch` | `null` (not run) | `null` (added — no VTune pass on MPI) | `null` (added) |
+| `profile.artefacts` | `{proc_timeseries, perf_stat, perf_callgraph, …}` | `{proc_timeseries, iqtree_log, mpi_bindings_log, env_json, perf_stat_per_rank}` | `{… + rankfile}` |
+
+Existing dashboard chart series logic (in `web/`) reads `non_canonical_label` and `build_tag` to decide colour and legend grouping. By re-using the canonical `_numa_ft_r2` suffix in the build tag, the new placement variants will automatically slot into the same R2 series family on the Wall-time/IPC charts and render distinctly from the 1×104 OMP-only R2 line.
+
+Diff-checked the build flags, perf event list, OMP/KMP/GOMP env vars, sha256 gate, and module load behaviour against the deployed canonical worker `_run_matrix_job.sh` and `bootstrap_iqtree_clang.sh`:
+
+```
+ARCH_FLAGS:  -O3 -march=sapphirerapids -mtune=sapphirerapids -fopenmp   (identical)
+EXTRA:       -fno-omit-frame-pointer -g                                  (identical)
+CMAKE_BUILD_TYPE=RelWithDebInfo                                          (identical)
+perf_events: cycles, instructions, branch-{instructions,misses},
+             cache-{references,misses}, L1-dcache-{loads,load-misses},
+             LLC-{loads,load-misses}, dTLB-{loads,load-misses},
+             iTLB-{loads,load-misses}, all with `:u` suffix              (identical)
+modules:     intel-compiler-llvm + intel-vtune/2024.2.0                  (identical;
+             plus openmpi/4.1.7 in MPI workers)
+sha256 gate: lockfile-driven, exit 3 on mismatch                         (identical)
+```
+
+The only intentional axis-of-difference between canonical R2 and the MPI alternates is exactly: `mpirun` is in the launch chain, `OMP_NUM_THREADS=52|13` instead of `104`, and `OMP_DYNAMIC=false` is forced. Everything else is bit-for-bit the same observable configuration.
+
+### What can fail and how it's caught
+
+| Failure mode | Detection |
+|---|---|
+| MPI build accidentally shadows libiomp5 with libgomp | `bootstrap_iqtree_mpi.sh` runs `ldd` on the output binary; exits 6 if `libgomp` is present. |
+| `IQTREE_FLAGS=mpi` did not take effect | `ldd` gates on the presence of `libmpi.*` / `libmpi_*` patterns; exit 7 if absent. |
+| R2 patches reverted in the working tree | Pre-build grep for `schedule(dynamic,1)` in `phylokernelnew.h`; exits 4 if any remain. |
+| sha256 drift in `xlarge_mf.fa` | Both workers run the same lockfile-gated preflight as the canonical `_run_matrix_job.sh` (exit 3 on mismatch). |
+| MPI rank doesn't land where requested | `--report-bindings` log captured into the run record so any binding miss is visible post hoc. |
+| `numactl -H` unavailable on the compute node | L3 worker logs a warning and falls back to the documented SPR-SNC4 layout. |
+
+### Naming and JSON schema
+
+Run labels follow the existing convention (`<dataset>_<threads>t_<build>_<placement>_<patch>`):
+
+* canonical:  `xlarge_mf_104t_icx_omp_pin_numa_ft_r2`
+* socket:     `xlarge_mf_104t_icx_mpi2x52_socket_numa_ft_r2`
+* l3rank:     `xlarge_mf_104t_icx_mpi8x13_l3rank_numa_ft_r2`
+
+Run records are written to `logs/runs/gadi_<label>.json` with the existing `run.schema.json` shape plus three additions inside `profile.*`: `placement` (one of `mpi_socket` / `mpi_l3rank`), `mpi_ranks`, `omp_per_rank`, `per_rank_ipc` (`{"0": 1.378, "1": 1.376, …}`), and `bindings` (free-form excerpt of `mpirun --report-bindings` output). Existing dashboard ingest still works because the new fields are additive — the `metrics` block is identical to the canonical R2 record.
+
+### Submission
+
+After rsyncing `gadi-ci/` to `${PROJECT_DIR}/gadi-ci/` on Gadi:
+
+```bash
+# First time (build the MPI binary, then chain both placement runs):
+./gadi-ci/submit_xlarge_r2_alternates.sh --bootstrap
+
+# Or, if the bootstrap is already queued at jobid 167XXXXXX:
+./gadi-ci/submit_xlarge_r2_alternates.sh --depend 167XXXXXX
+
+# Or, with the binary already in place, just submit one variant:
+./gadi-ci/submit_xlarge_r2_alternates.sh socket
+./gadi-ci/submit_xlarge_r2_alternates.sh l3rank
+```
+
+Walltime cap is 2h per placement run (canonical 1×104T R2 ran 8m43s; both alternates expected to land in the same envelope ± a factor of 2). Three jobs total at full charge: bootstrap 1h × 1 + placement 2h × 2 = ~5 node-h × 208 SU/node-h ≈ 1040 SU ceiling; expected actual spend ~250 SU.
+
+### Not yet done
+
+* Submitting the jobs and harvesting results — this entry covers the script staging only. Next entry will append the harvested wall-time / IPC / lnL deltas once the runs complete.
+* No corresponding mpi_socket/mpi_l3rank Setonix runs. Setonix Zen3 has 8 CCDs/socket = 16 NUMA domains/node, so the equivalent rankfile experiment there would be 16×8 ranks × 8 OMP — a separate exercise not covered by these scripts.
+* Dashboard / `numa_first_touch.html` updates pending the actual numbers.
+
+---
+
 ## 2026-05-08 (g) — `numa_first_touch.html` graph + print-safe patch index
 
 Two follow-up changes on the standalone scientific report:
