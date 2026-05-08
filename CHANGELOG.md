@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-05-08 (n) — 2-node MPI socket placement: scale the working topology
+
+The single-node sweep (entries (l)/(m)) showed clear directional results:
+
+| placement | wall | result |
+|---|---|---|
+| 1×104 (canonical) | 523.7 s | baseline |
+| 2×52 (socket, 1 node) | 520.1 s | **−0.7%** — neutral, validates the topology |
+| 8×13 (l3rank, 1 node) | 957.8 s | +83% — 13-thread OMP teams are too small |
+
+**Conclusion of the single-node sweep:** the bottleneck of the l3rank run was *OMP team size*, not L3 cache locality. (Per-rank IPC 1.366 vs socket 1.315 and LLC miss rate 55.85% vs 72.08% confirm the L3 binding worked — the 13-thread teams just couldn't drive the per-replicate computation fast enough to justify halving the OMP team and doubling MPI overhead.)
+
+The natural follow-up is therefore **scale the topology that worked** — the 2×52 socket experiment — to 2 nodes. A 2-node L3-rankfile run (16×13) would have made the same OMP-team-size mistake at twice the cost; it has been abandoned.
+
+### New script: `run_xlarge_r2_mpi_2node_socket.sh`
+
+- 2 Gadi normalsr nodes (208 cores total, ncpus=208, mem=1000GB)
+- **4 MPI ranks × 52 OMP threads each** = 208 total threads
+- 1 rank per socket, 2 sockets per node × 2 nodes
+- Rank 0 → node A socket 0 (cores 0–51)
+- Rank 1 → node A socket 1 (cores 52–103)
+- Rank 2 → node B socket 0 (cores 0–51)
+- Rank 3 → node B socket 1 (cores 52–103)
+- Rankfile + hostfile (the OpenMPI 4.x form that needs both)
+- Same R2-validated mpirun shape: `--mca rmaps_base_mapping_policy "" -rf …`
+
+### Parity vs canonical 1×104 R2 ICX (PBS 167865976)
+
+| axis | canonical | 2node-socket |
+|---|---|---|
+| source commit + R2 patches | 7658269 + R2 | same (build-profiling-mpi/iqtree3-mpi from bootstrap PBS 167889450) |
+| compiler / OMP runtime | icpx 2025.3.2 / libiomp5 | same |
+| build flags | -O3 -march=sapphirerapids -fno-omit-frame-pointer -g | identical |
+| OMP_DYNAMIC | (default) | **false** (mandatory under socket-bound cpuset) |
+| OMP_PROC_BIND / OMP_PLACES | close / cores | identical |
+| KMP_BLOCKTIME | 200 | 200 |
+| numactl | --localalloc | --localalloc per rank |
+| dataset | xlarge_mf.fa sha256-gated | same gate |
+| seed | 1 | 1 (per-rank seed = 1+rank_id inside MPI) |
+
+### Hypotheses
+
+| outcome | wall | mechanism |
+|---|---|---|
+| (a) | ~262 s (½ canonical) | Bootstrap-replicate distribution scales linearly across 4 ranks; InfiniBand overhead is small compared to the halved per-rank work. |
+| (b) | ~520 s (= 1-node socket) | InfiniBand round-trip on tree-exchange cancels the 2× parallelism — the 2-rank ceiling was already MPI-coordination-bound. |
+| (c) | >520 s | Cross-node MPI traffic dominates xlarge_mf; the right scope for this dataset is ≤ 1 node. |
+
+### Submission
+
+Submitted as **PBS 167911421** (NDS=2, TSK=208, mem=1000GB, walltime=02:00:00, queue normalsr). State: Q at submission. Estimated SU: ~200–400 depending on which outcome lands (2 nodes × actual walltime × 104 cores × charge_factor). qstat snapshot:
+
+```
+167911421.gadi-pbs   as1708   normals* iq-xlarge*    --    2 208  1000g 02:00 Q   --
+```
+
+**Note on user spec interpretation:** the user wrote "2 mpi × 54 threads"; "54" was read as a typo for "52" (= one full SPR socket on Gadi 8470Q). If the intent was actually 1 rank per node × 104 OMP, or some other shape, this script can be adjusted before resubmitting.
+
+---
+
 ## 2026-05-08 (m) — MPI L3-rankfile result (PBS 167899378): PASS — full sweep summary
 
 Both MPI placement experiments are now complete. All three R2 runs share the same source commit, icpx 2025.3.2 / libiomp5, build flags, dataset sha256, and seed.
