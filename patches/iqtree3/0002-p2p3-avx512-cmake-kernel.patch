@@ -1,0 +1,103 @@
+From 07966e40623f8607734edfcd88132efa0beae356 Mon Sep 17 00:00:00 2001
+From: Ayush Samuel <as1708@gadi-login-09.gadi.nci.org.au>
+Date: Sat, 9 May 2026 21:28:06 +1000
+Subject: [PATCH iqtree3] gadi-spr: AVX-512 cmake + kernel patches for
+ icpx/Sapphire Rapids (P2+P3)
+
+Builds on gadi-spr-r2-numa (NUMA first-touch R1+R2 patches).
+Requires build flag: -DIQTREE_FLAGS="mpi KNL" (P1, applied in bootstrap script).
+
+P2 -- CMakeLists.txt: icpx compiler detection for AVX-512 flags
+  icpx (Intel oneAPI DPC++) reports CMAKE_CXX_COMPILER_ID="IntelLLVM".
+  Prior code matched "Intel" -> ICC=TRUE -> set AVX512_FLAGS=-xMIC-AVX512
+  (a Xeon Phi/KNL flag, invalid on Sapphire Rapids and rejected by icpx).
+  Fix: new elseif(CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM") branch before
+  the ICC branch, sets AVX512_FLAGS=-mavx512f -mfma (Clang-compatible).
+
+P3 -- tree/phylokernelavx512.cpp: nonrev dispatch block template-arity fixes
+  Three bugs in the nonrev switch block (lines 91-129):
+  - case 4: called <Vec8d, 4, true> (3 args); correct is <Vec8d, SAFE_LH, 4, true>
+  - default: called <Vec8d> (1 arg); correct is <Vec8d, SAFE_LH, true>
+  - missing if(safe_numeric)/else structure and case 20: (amino acid nonrev)
+  Rewritten to mirror phylokernelfma.cpp with Vec4d->Vec8d substitution.
+
+Result on Gadi SPR (Xeon 8470Q), xlarge_mf dataset (200 taxa, 100K sites):
+  2-node 2x104 FMA (PBS 167931341): 334.6s
+  2-node 2x104 AVX-512 (PBS 167973941): 324.5s  (-3.0%)
+  BW-bound at full thread count; AVX-512 confirmed active (ZMM: 35521).
+
+See setonix-iq/docs/avx512-cmake-icpx-patch.md for full analysis.
+---
+ CMakeLists.txt             |  3 +++
+ tree/phylokernelavx512.cpp | 36 ++++++++++++++++++++++++++++++------
+ 2 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d0a9b009..fbd9792e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -725,6 +725,9 @@ elseif (CLANG)
+     set(AVX512_FLAGS "${AVX512_FLAGS} -mavx512f -mfma")
+ elseif (GCC)
+     set(AVX512_FLAGS "${AVX512_FLAGS} -mavx512f -mfma")
++elseif (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
++    # icpx (Intel oneAPI DPC++) is Clang-based; use -mavx* flags, not -xMIC-AVX512
++    set(AVX512_FLAGS "${AVX512_FLAGS} -mavx512f -mfma")
+ elseif (ICC)
+     if (WIN32)
+          set(AVX512_FLAGS "${AVX512_FLAGS} /QxMIC-AVX512")
+diff --git a/tree/phylokernelavx512.cpp b/tree/phylokernelavx512.cpp
+index 8bddf872..888be969 100644
+--- a/tree/phylokernelavx512.cpp
++++ b/tree/phylokernelavx512.cpp
+@@ -90,17 +90,41 @@ void PhyloTree::setLikelihoodKernelAVX512() {
+ 
+     if ((model_factory && !model_factory->model->isReversible()) || params->kernel_nonrev) {
+         // if nonreversible model
++        if (safe_numeric)
+         switch (aln->num_states) {
+         case 4:
+-            computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchSIMD <Vec8d, 4, true>;
+-            computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervSIMD   <Vec8d, 4, true>;
+-            computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodSIMD<Vec8d, 4, true>;
++            computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchSIMD <Vec8d, SAFE_LH, 4, true>;
++            computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervSIMD   <Vec8d, SAFE_LH, 4, true>;
++            computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodSIMD<Vec8d, SAFE_LH, 4, true>;
++            break;
++        case 20:
++            computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchSIMD <Vec8d, SAFE_LH, 20, true>;
++            computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervSIMD   <Vec8d, SAFE_LH, 20, true>;
++            computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodSIMD<Vec8d, SAFE_LH, 20, true>;
+             break;
+         default:
+-            computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchGenericSIMD <Vec8d>;
+-            computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervGenericSIMD   <Vec8d>;
+-            computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodGenericSIMD<Vec8d>;
++            computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchGenericSIMD <Vec8d, SAFE_LH, true>;
++            computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervGenericSIMD   <Vec8d, SAFE_LH, true>;
++            computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodGenericSIMD<Vec8d, SAFE_LH, true>;
+             break;
++        } else {
++            switch (aln->num_states) {
++                case 4:
++                    computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchSIMD <Vec8d, NORM_LH, 4, true>;
++                    computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervSIMD   <Vec8d, NORM_LH, 4, true>;
++                    computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodSIMD<Vec8d, NORM_LH, 4, true>;
++                    break;
++                case 20:
++                    computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchSIMD <Vec8d, NORM_LH, 20, true>;
++                    computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervSIMD   <Vec8d, NORM_LH, 20, true>;
++                    computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodSIMD<Vec8d, NORM_LH, 20, true>;
++                    break;
++                default:
++                    computeLikelihoodBranchPointer  = &PhyloTree::computeNonrevLikelihoodBranchGenericSIMD <Vec8d, NORM_LH, true>;
++                    computeLikelihoodDervPointer    = &PhyloTree::computeNonrevLikelihoodDervGenericSIMD   <Vec8d, NORM_LH, true>;
++                    computePartialLikelihoodPointer = &PhyloTree::computeNonrevPartialLikelihoodGenericSIMD<Vec8d, NORM_LH, true>;
++                    break;
++            }
+         }
+         computeLikelihoodFromBufferPointer = NULL;
+         return;        
+-- 
+2.43.7
+

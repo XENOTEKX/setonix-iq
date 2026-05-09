@@ -1,0 +1,91 @@
+{
+  "run_id": "gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2",
+  "label": "xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2",
+  "time_s": 329,
+  "iqtree_wall_s": 324.526,
+  "best_score": -10956936.64,
+  "kernel": "Kernel:  AVX-512 - 104 threads (104 CPU cores detected)",
+  "zmm_instructions": 35521,
+  "avx512": true,
+  "exit_code": 0,
+  "threads": 208,
+  "mpi_ranks": 2,
+  "omp_per_rank": 104,
+  "placement": "mpi_2node_fullnode_avx512",
+  "nodes": 2,
+  "hosts": [
+    "gadi-cpu-spr-0711.gadi.nci.org.au",
+    "gadi-cpu-spr-0712.gadi.nci.org.au"
+  ],
+  "dataset": {
+    "path": "/scratch/um09/as1708/iqtree3-3.1.2/benchmarks/xlarge_mf.fa",
+    "file": "xlarge_mf",
+    "sha256": "66eaf64b9b7e561f52dc515198c0b7db6d68cd37ada9498b254777f2dde94c44"
+  },
+  "pbs": {
+    "job_id": "167973941.gadi-pbs",
+    "queue": "normalsr-exec",
+    "ncpus": "208",
+    "project": "um09"
+  },
+  "perf_per_rank": {
+    "0": {
+      "cycles": 75634328404913,
+      "instructions": 83283088931197,
+      "branch-instructions": 18272553074038,
+      "branch-misses": 8963023254,
+      "cache-references": 457537274211,
+      "cache-misses": 337092645006,
+      "L1-dcache-loads": 32440413265906,
+      "L1-dcache-load-misses": 686623080409,
+      "LLC-loads": 44291614422,
+      "LLC-load-misses": 34518888356,
+      "dTLB-loads": 32344968764796,
+      "dTLB-load-misses": 1609387352,
+      "iTLB-load-misses": 38796965
+    },
+    "1": {
+      "cycles": 74616853913511,
+      "instructions": 82676451906334,
+      "branch-instructions": 18154226496666,
+      "branch-misses": 8899374543,
+      "cache-references": 451635735759,
+      "cache-misses": 331870740463,
+      "L1-dcache-loads": 32214545249457,
+      "L1-dcache-load-misses": 660332806906,
+      "LLC-loads": 43322939628,
+      "LLC-load-misses": 33677902241,
+      "dTLB-loads": 32037023694421,
+      "dTLB-load-misses": 1410383260,
+      "iTLB-load-misses": 36618612
+    }
+  },
+  "perf_aggregate": {
+    "cycles": 150251182318424,
+    "instructions": 165959540837531,
+    "branch-instructions": 36426779570704,
+    "branch-misses": 17862397797,
+    "cache-references": 909173009970,
+    "cache-misses": 668963385469,
+    "L1-dcache-loads": 64654958515363,
+    "L1-dcache-load-misses": 1346955887315,
+    "LLC-loads": 87614554050,
+    "LLC-load-misses": 68196790597,
+    "dTLB-loads": 64381992459217,
+    "dTLB-load-misses": 3019770612,
+    "iTLB-load-misses": 75415577
+  },
+  "metrics": {
+    "IPC": 1.1045,
+    "cache-miss-rate": 73.5793,
+    "LLC-miss-rate": 77.8373,
+    "L1-dcache-miss-rate": 2.0833,
+    "branch-miss-rate": 0.049
+  },
+  "binary": "/scratch/um09/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi",
+  "cmake_flags": "IQTREE_FLAGS='mpi KNL'",
+  "simd_kernel": "AVX-512 Vec8d (512-bit, 8 doubles/instruction)",
+  "baseline_fma_pbs": "167931341",
+  "baseline_fma_wall_s": 334.648,
+  "work_dir": "/scratch/um09/as1708/iqtree3-3.1.2/gadi-ci/profiles/xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2_167973941"
+}
