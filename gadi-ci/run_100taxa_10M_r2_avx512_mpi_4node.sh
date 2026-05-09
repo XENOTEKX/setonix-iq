@@ -204,13 +204,14 @@ echo "  → ${ENV_JSON}"
 # OpenMPI 4.1.7 on Gadi is built against MOFED 5.8 + UCX 1.17.0 (rc_mlx5/dc_mlx5
 # on mlx5_0 ConnectX HDR).  Without explicit flags OpenMPI auto-selects UCX (it
 # wins the PML priority race at 60 vs ob1 10), but we pin it to prevent any
-# silent fallback to ob1+TCP if UCX init is slow.  rc_mlx5 is preferred over
-# dc_mlx5 for a small 4-rank communicator (fewer queue pairs, lower latency).
+# silent fallback to ob1+TCP if UCX init is slow.
+# UCX_TLS: rc_mlx5 requires ud_mlx5 as auxiliary transport for endpoint
+# address resolution (UCX 1.17.0 select.c); omitting ud_mlx5 causes
+# "no auxiliary transport" → NULL endpoint → SIGSEGV in OpenMPI poll loop.
 MPI_OPTS=(
     --mca pml ucx
-    -x "UCX_TLS=rc_mlx5,sm,self"
+    -x "UCX_TLS=rc_mlx5,ud_mlx5,sm,self"
     -x "UCX_NET_DEVICES=mlx5_0:1"
-    -x "UCX_IB_ADDR_TYPE=ib_local"
 )
 
 # ── OMP env forwarded into each rank ─────────────────────────────────
