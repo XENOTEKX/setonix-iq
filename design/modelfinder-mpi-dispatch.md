@@ -49,7 +49,135 @@ being computed by other ranks.
 
 ---
 
-## 2. Source Code Architecture — What Really Happens Today
+## 2. How the Model Count Is Determined (Not Fixed)
+
+The "968 models" figure is **not a hard-coded constant** — it is the product of three
+independent axes computed at runtime in `CandidateModelSet::generate()`:
+
+```
+Total models = |substitution set| × |frequency variants| × |rate heterogeneity models|
+```
+
+### 2.1 Substitution Model Set (Axis 1) — `getModelSubst()`
+
+Controlled by `--mset` flag (`params.model_set`). For DNA the key arrays at the top
+of `phylotesting.cpp` are:
+
+| `--mset` value | Array | Count |
+|---|---|---|
+| *(default)* | `dna_model_names` | **22** |
+| `partitionfinder` / `phyml` | `dna_model_names_old` | 14 |
+| `raxml` | `dna_model_names_rax` | 1 (GTR only) |
+| `mrbayes` | `dna_model_names_mrbayes` | 6 |
+| `beast1` | `dna_model_names_beast1` | 3 |
+| `beast2` | `dna_model_names_beast2` | 4 |
+| `non-reversible` | `dna_model_names_nonrev` | 30 |
+| `liemarkov` | fullsym + RY + WS + MK | ~99 |
+| custom `--mset GTR,HKY,...` | user list | varies |
+
+Default 22: `JC F81 K80 HKY TNe TN K81 K81u TPM2 TPM2u TPM3 TPM3u TIMe TIM TIM2e TIM2
+TIM3e TIM3 TVMe TVM SYM GTR`
+
+For protein: 28 models in `aa_model_names[]` by default.
+
+### 2.2 Frequency Variants (Axis 2) — `getStateFreqs()`
+
+Controlled by `--mfreq` flag (`params.state_freq_set`). For DNA:
+
+| `--mfreq` value | Array | Count |
+|---|---|---|
+| *(default)* | `dna_freq_names = {"+FQ", "+F"}` | **2** |
+| `FULL` | `dna_freq_names_full = {"+FQ", "+F", "+FO"}` | 3 |
+| custom `--mfreq F` | user list | 1 |
+
+Each substitution model is combined with every frequency variant:
+`JC+FQ`, `JC+F`, `F81+FQ`, `F81+F`, ..., `GTR+FQ`, `GTR+F` → 22 × 2 = **44 subst×freq combos**.
+
+**Historical note:** IQ-TREE 1.x used `{""}` (no suffix) as the only freq variant,
+giving 22 × 1 = 22 subst combos. The `+FQ` vs `+F` split was introduced in IQ-TREE 2.x,
+which is why the same `-m TEST` command now produces 176 models rather than the 88 that
+users familiar with IQ-TREE 1.x may remember.
+
+### 2.3 Rate Heterogeneity Models (Axis 3) — `getRateHet()`
+
+Controlled by:
+- `-m` mode (`MF`/`MFNEW` vs `TEST`/`TESTONLY`) — `with_new` flag
+- `--mrate` flag (`params.ratehet_set`)
+- `frac_invariant_sites` — whether alignment has invariant sites
+- `--min-rate-cats` / `--max-rate-cats` (default: 2–10)
+
+The base rate options defined in `getRateHet()`:
+```
+rate_options = {"", "+I", "+ASC", "+G", "+I+G", "+ASC+G", "+R", "+ASC+R", "+I+R"}
+```
+
+Active set per scenario (from boolean arrays in source):
+
+| Scenario | Active base rates | +R/+I+R expansion | Total rate models |
+|---|---|---|---|
+| `-m MF` + normal data (frac_inv > 0) | `"" +I +G +I+G` + `+R +I+R` | +R2..+R10, +I+R2..+I+R10 | **22** |
+| `-m TEST` + normal data | `"" +I +G +I+G` (no +R) | none | **4** |
+| `-m MF` + 0% invariant sites (SNP/ASC) | `"" +ASC +G +ASC+G` + `+R +ASC+R` | +Rx, +ASC+Rx | **22** |
+| `-m MF` + `--mrate G,I+G` | user override | none | **2** |
+| fast mode (`-m TESTONLY` ratehet_set="1") | `+I+G` only | none | **1** |
+| all-invariant (`frac_inv == 1.0`) | `""` only | none | **1** |
+
+The `+R` and `+I+R` entries expand by category count: with default `min_rate_cats=2`,
+`max_rate_cats=10`, each generates 9 entries (+R2 through +R10). That is the main
+driver of the large model count in MF mode:
+
+```
+4 base rates   +  9 (+R2..+R10)  +  9 (+I+R2..+I+R10) = 22 rate models
+```
+
+### 2.4 The Full Arithmetic — Why 968
+
+```
+22 subst models   (dna_model_names, default --mset)
+× 2 freq variants (+FQ, +F — introduced in IQ-TREE 2.x)
+= 44 subst×freq combinations
+
+× 22 rate models:
+     4 base  : equal rates "", +I, +G, +I+G
+   + 9 +Rx   : +R2, +R3, +R4, +R5, +R6, +R7, +R8, +R9, +R10
+   + 9 +I+Rx : +I+R2, +I+R3, ..., +I+R10
+= 22 rate models
+
+= 44 × 22 = 968 total candidate models
+```
+
+### 2.5 Common Model Counts in Practice
+
+| Command / scenario | Total |
+|---|---|
+| `-m MF` (default, DNA, IQ-TREE 2.x, frac_inv > 0) | **968** |
+| `-m MF` (DNA, 0% invariant sites / SNP data) | **968** (different rate mix: +ASC replaces +I) |
+| `-m MF --mset partitionfinder` (DNA) | 14×2×22 = **616** |
+| `-m MF --mset mrbayes` (DNA) | 6×2×22 = **264** |
+| `-m MF --mrate G,I+G` (DNA, 2 rates only) | 44×2 = **88** |
+| `-m TEST` (DNA, IQ-TREE 2.x, no +R) | 44×4 = **176** |
+| `-m TEST` (DNA, IQ-TREE 1.x, single freq) | 22×4 = **88** |
+| `-m MF` (protein, default, IQ-TREE 2.x) | 28×2×22 = **1232** |
+| `-m MF` (protein, `--msub nuclear`) | 10×2×22 = **440** |
+| `-m MF --max-rate-cats 4` (DNA) | 44×(4+3+3) = **440** |
+
+**The 88 models you saw:** Almost certainly an IQ-TREE 1.x run (single freq variant,
+4 rate models: 22×1×4 = 88) or a IQ-TREE 2.x run with `--mrate G,I+G` or `--mset`
+restricted to 2 freq variants and 2 rate models (44×2 = 88).
+
+### 2.6 Implication for MPI Dispatch Patch
+
+The dispatch patch divides whatever `candidate_models.size()` is across ranks — it is
+not tied to 968 specifically. Any model count produced by `generate()` is partitioned
+by `i % nranks`. This means the patch is equally valid for a 264-model run
+(`--mset mrbayes`) or a 1232-model protein run.
+
+---
+
+## 3. Source Code Architecture — What Really Happens Today
+
+> **See also Section 2** for how the 968 model count is derived from the three axes
+> (substitution set × frequency variants × rate heterogeneity).
 
 All ModelFinder code lives in **`main/phylotesting.cpp`** (7021 lines) and its
 header `main/phylotesting.h` (845 lines). There is no `model/modelfinder.cpp`.
@@ -195,7 +323,7 @@ uses 416 CPU cores but the 4-way redundancy means the SU cost is 4× what it sho
 
 ---
 
-## 3. The Pattern Parallelism Hierarchy (Existing)
+## 4. The Pattern Parallelism Hierarchy (Existing)
 
 Understanding what already exists inside a single model evaluation:
 
@@ -242,7 +370,7 @@ Level 3 — MPI   :  currently wasted (all ranks duplicate all work)
 
 ---
 
-## 4. Proposed Architecture: Rank-Striped Model Dispatch
+## 5. Proposed Architecture: Rank-Striped Model Dispatch
 
 ### 4.1 Core Idea
 
@@ -370,7 +498,7 @@ For typical empirical compressed data (~100K unique patterns from 1M sites):
 
 ---
 
-## 5. Key Files to Modify
+## 6. Key Files to Modify
 
 All paths relative to `/scratch/um09/as1708/iqtree3-mf2/src/iqtree3/`.
 
@@ -407,7 +535,7 @@ entirely inside `runModelFinder()` / `evaluateAll()`.
 
 ---
 
-## 6. Patch Style — Matching Existing Conventions
+## 7. Patch Style — Matching Existing Conventions
 
 All existing MPI-conditional code uses the pattern:
 ```cpp
@@ -435,7 +563,7 @@ outside ModelFinder (tree search MPI path is untouched).
 
 ---
 
-## 7. Three-Level Parallelism After the Patch
+## 8. Three-Level Parallelism After the Patch
 
 ```
 Level 3 — MPI ranks:
@@ -459,7 +587,7 @@ IQ-TREE's existing MPI/OMP/SIMD hierarchy**, not a standalone tool.
 
 ---
 
-## 8. Step-by-Step Implementation Plan
+## 9. Step-by-Step Implementation Plan
 
 ### Step 0 — Baseline measurement ✅
 - 968 models, 729 s/model at 4 nodes × 104 OMP (PBS 167977883)
@@ -555,7 +683,7 @@ Compare wall times, verify best-fit model is identical, record scaling vs model 
 
 ---
 
-## 9. Related Files Summary
+## 10. Related Files Summary
 
 | File | Lines | Role | Change |
 |------|-------|------|--------|
@@ -571,7 +699,7 @@ Compare wall times, verify best-fit model is identical, record scaling vs model 
 
 ---
 
-## 10. Risk & Mitigation
+## 11. Risk & Mitigation
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
@@ -584,7 +712,7 @@ Compare wall times, verify best-fit model is identical, record scaling vs model 
 
 ---
 
-## 11. References
+## 12. References
 
 1. Darriba D et al. (2012) jModelTest 2. *Nat Methods* 9(8):772. doi:10.1038/nmeth.2109
 2. Darriba D et al. (2020) ModelTest-NG. *Mol Biol Evol* 37(1):291. doi:10.1093/molbev/msz189
