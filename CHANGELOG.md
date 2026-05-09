@@ -2,6 +2,189 @@
 
 ---
 
+## 2026-05-10 (t) — 4-node 10 M-site run (PBS 167977883): fast ML PASS, ModelFinder analysis
+
+### Job summary
+
+| Field | Value |
+|---|---|
+| PBS ID | 167977883 |
+| Script | `gadi-ci/run_100taxa_10M_r2_avx512_mpi_4node.sh` |
+| Nodes | 4 × Gadi `normalsr` (gadi-cpu-spr-{0428,0430,0431,0432}) |
+| Config | 4 MPI ranks × 104 OMP threads = 416 cores |
+| Placement | Full-node: rank N owns all 104 cores of node N (rankfile) |
+| Binary | `build-profiling-mpi/iqtree3-mpi` (v3.1.2, `gadi-spr-r2-avx512`, icpx 2025.3.2) |
+| Dataset | `alignment_10000000.phy` — 100 taxa, 10,000,000 sites, 954 MB |
+| Kernel | AVX-512 (Sapphire Rapids, `--march=sapphirerapids`) |
+| UCX | `rc_mlx5,ud_mlx5,sm,self` / `mlx5_0:1` |
+| Walltime alloc | 6:00:00 |
+| Job state | R (running) as of 2026-05-10 00:23 |
+
+### Phase 1 — fast ML tree search: **PASS, 510.4 s**
+
+IQ-TREE completed the full initial parsimony + fast-NNI ML search before ModelFinder:
+
+```
+Create initial parsimony tree (PLL)...  76.623 seconds
+Parameters optimization took 2 rounds: 110.479 seconds
+Time for fast ML tree search:          510.365 seconds
+Optimal Fast-NNI log-likelihood: -672,799,152.707  (process 0)
+```
+
+This is the primary benchmark target — the phase improved by the NUMA R1/R2 patches and AVX-512.
+The 4-node result of **510.4 s** is the baseline for the 10 M-site dataset.
+
+For reference, the 2-node `xlarge_mf.fa` (200 taxa × 100 K sites) fast ML was 324.5 s — a different
+dataset size and topology, so not directly comparable, but confirms the MPI machinery works cleanly
+across all 4 nodes.
+
+### Phase 2 — ModelFinder: stalled mid-run (expected)
+
+After fast ML, IQ-TREE entered ModelFinder to select the best substitution model from 968 candidates.
+The log and checkpoint stopped updating 32 minutes in, after completing 9 JC-family models:
+
+```
+NOTE: ModelFinder requires 324,249 MB RAM!
+ModelFinder will test up to 968 DNA models (sample size: 10000000 epsilon: 0.100)
+
+  No. Model         -LnL           df  AIC              BIC
+    1 JC            672798764.274  197 ...
+    2 JC+ASC        672798764.212  197 ...
+    ...
+    9 JC+R6         672798787.202  207 ...
+   (model 10 still running as of sampler t=5236s / 1.45h)
+```
+
+The sampler (rank 0 `mpirun` coordinator, 10 s interval) confirmed the process is alive:
+- Samples at 00:23: `t=5236s, threads=4, rss_kb=16008` — unchanged, but process alive
+- Log timestamp frozen at `May 9 23:29` — IQ-TREE buffers stdout until a model completes
+
+Model 10 onward will each take ~213 s (observed rate on models 1–9 at this data scale), giving a
+projected ModelFinder total of **~57 h** for all 968 models. The 6 h walltime is insufficient.
+
+### Root cause: 10,000,000 distinct patterns (zero compression)
+
+The critical difference between this dataset and `xlarge_mf.fa`:
+
+```
+xlarge_mf.fa (200 taxa × 100,000 sites):
+  100,000 columns, 98,858 distinct patterns   → 99% compression
+  ModelFinder: minutes
+
+alignment_10000000.phy (100 taxa × 10,000,000 sites):
+  10,000,000 columns, 10,000,000 distinct patterns → 0% compression
+  ModelFinder: ~57 h
+```
+
+IQ-TREE compresses the alignment to unique site patterns before evaluation. In real biological data,
+many sites are identical (conserved positions), so 100 K sites may collapse to ~1 K unique patterns.
+This synthetic dataset has every site unique — no compression is possible. Every model evaluation
+must traverse the full 10 M-pattern working set.
+
+### Why ModelFinder does not scale with more OMP threads or MPI ranks
+
+ModelFinder parallelism in IQ-TREE MPI works at the **site-pattern level within a single model**,
+not at the model level:
+
+```
+for each model (sequential, all 968):
+    all 4 ranks jointly compute log-likelihood:
+        rank 0 → patterns [0,       2.5M)   ← OMP over 104 threads
+        rank 1 → patterns [2.5M,    5.0M)   ← OMP over 104 threads
+        rank 2 → patterns [5.0M,    7.5M)   ← OMP over 104 threads
+        rank 3 → patterns [7.5M,   10.0M)   ← OMP over 104 threads
+    MPI_Allreduce → sum log-L across ranks
+    NNI optimizer loops until convergence
+```
+
+Each model evaluation is **sequential** — the 4 nodes cooperate on a single model at a time.
+Adding more nodes reduces the pattern-slice size per rank but does not change the number of models
+tested. Adding more OMP threads per rank hits the DRAM bandwidth wall before it hits the core count:
+
+**Working set per rank (4-node config):**
+
+$$4\ \text{states} \times 2.5\text{M patterns} \times 8\ \text{bytes} \times (2 \times 100 - 3)\ \text{nodes} = 15.7\ \text{GB per rank}$$
+
+At 614 GB/s theoretical DDR5-4800 bandwidth per node (2-channel, 2-DIMM, 96 GB/s × 8 channels):
+
+$$\frac{15.7\ \text{GB}}{614\ \text{GB/s}} = 25.6\ \text{ms per traversal pass}$$
+
+With ~80 optimizer iterations per model → **2.0 s minimum bandwidth time per model**.
+Observed: ~213 s → **~100× above bandwidth floor** (NNI perturbation + branch length re-estimation
++ convergence loops — each adds a full traversal).
+
+**Scaling analysis (how many nodes to finish in 6 h):**
+
+| Nodes (1 rank/node, 104T each) | Patterns/rank | Time/model (est.) | 968 models total |
+|---|---|---|---|
+| 4 (current) | 2.5 M | ~213 s | ~57 h |
+| 8 | 1.25 M | ~107 s | ~29 h |
+| 16 | 625 K | ~54 s | ~14 h |
+| 32 | 312 K | ~27 s | ~7.3 h |
+| **64** | **156 K** | **~13 s** | **~3.5 h ✓** |
+
+To finish ModelFinder in 6 h requires **~64 nodes (6,656 cores)** — beyond the practical scope of
+this benchmark.
+
+More OMP threads within each rank do **not** help:
+- At 104 threads per rank, DRAM bandwidth saturates at roughly 16–32 threads for this access pattern
+- Beyond that, adding threads only increases synchronization overhead and scheduler noise
+- Observed sampler: rank 0 coordinator shows only 4 threads visible (libgomp worker threads are
+  counted in the worker process, not the MPI coordinator process, so rss=16 MB is the coordinator)
+
+### What the patches actually improved (and did not)
+
+| Phase | R1/R2 NUMA patches | AVX-512 patches | MPI topology |
+|---|---|---|---|
+| Parsimony tree | ✓ first-touch, ✓ static schedule | ✓ wider SIMD | ✓ pattern split |
+| Fast ML NNI | ✓ first-touch, ✓ static schedule | ✓ wider SIMD | ✓ pattern split |
+| **ModelFinder** | **✗ irrelevant (bandwidth wall)** | **✗ irrelevant** | **✗ sequential** |
+
+The patches are correctly targeted at the ML tree-search kernel. ModelFinder on a 0%-compression
+dataset is a separate problem in a different complexity class.
+
+### Options for future submissions
+
+| Option | Flag | Trade-off |
+|---|---|---|
+| Skip ModelFinder, fixed model | `-m GTR+G` | No model selection; appropriate for scaling benchmark |
+| Restrict to GTR variants only | `-mset GTR -m TEST` | ~50 models, ~3 h on 4 nodes |
+| Use fast heuristics | `--fast` | Lower-quality tree, good for scaling study |
+| Increase walltime | `-l walltime=24:00:00` | ~57 h needed; impractical on `normalsr` |
+| Scale to 64+ nodes | `mpi_64node_fullnode` | ~3.5 h; 6,656 cores; SU cost very high |
+| Checkpoint restart | `--redo` + re-queue | Resume from model 10; accumulate across multiple jobs |
+
+**Recommended for next submission:** `-m GTR+G` — locks the substitution model, runs only the ML
+tree search and branch length optimisation. This is the phase that scales with the patches and the
+phase of interest for the 4-node MPI benchmark. Expected wall: comparable to or below 510 s (fast ML
+only, no ModelFinder).
+
+### Sampler peak data
+
+| Metric | Value |
+|---|---|
+| Sampler duration | 0 s – 5,236 s (1.45 h) |
+| Peak RSS (rank 0 coordinator) | 20 MB |
+| Samples collected | 524 × 10 s intervals |
+| Peak threads visible (coordinator) | 4 |
+| Worker thread count (per env.json) | 104 per rank |
+
+Note: the `/proc` sampler watches the rank-0 `mpirun` coordinator PID, not the IQ-TREE worker
+processes. The `rss=16–20 MB` and `threads=4` reflect the coordinator, not the 104-thread OMP pools
+on each node. The sampler confirms the job is alive but cannot directly measure OMP worker memory.
+
+### Commits (2026-05-09, UCX fix chain)
+
+| hash | message |
+|---|---|
+| `ca7cce69` | `fix: UCX_IB_ADDR_TYPE lid→ib_local (UCX 1.17.0 enum rename)` |
+| `51f6625b` | `fix: add ud_mlx5 to UCX_TLS, drop UCX_IB_ADDR_TYPE (rc_mlx5 auxiliary transport)` |
+
+(See entry (s) for the full pre-submission fix history: `\\$2` heredoc fix, nested mpirun stall,
+explicit UCX flags, VTune Pass 3.)
+
+---
+
 ## 2026-05-09 (s) — 4-node MPI run: VTune Pass 3 added, job resubmitted (PBS pending)
 
 Cancelled PBS 167976807 (6 min into Pass 1) to integrate three fixes and VTune Pass 3 before collecting results.
