@@ -200,6 +200,19 @@ print(json.dumps(env, indent=2))
 PYENV
 echo "  → ${ENV_JSON}"
 
+# ── MPI/UCX transport: explicit IB path (rc_mlx5 for 4-rank communicator) ────
+# OpenMPI 4.1.7 on Gadi is built against MOFED 5.8 + UCX 1.17.0 (rc_mlx5/dc_mlx5
+# on mlx5_0 ConnectX HDR).  Without explicit flags OpenMPI auto-selects UCX (it
+# wins the PML priority race at 60 vs ob1 10), but we pin it to prevent any
+# silent fallback to ob1+TCP if UCX init is slow.  rc_mlx5 is preferred over
+# dc_mlx5 for a small 4-rank communicator (fewer queue pairs, lower latency).
+MPI_OPTS=(
+    --mca pml ucx
+    -x "UCX_TLS=rc_mlx5,sm,self"
+    -x "UCX_NET_DEVICES=mlx5_0:1"
+    -x "UCX_IB_ADDR_TYPE=lid"
+)
+
 # ── OMP env forwarded into each rank ─────────────────────────────────
 OMP_ENV=(
     -x "OMP_NUM_THREADS=${OMP_PER_RANK}"
@@ -288,6 +301,7 @@ mpirun -np "${NRANKS}" \
     --mca rmaps_base_mapping_policy "" \
     -rf "${RANKFILE}" \
     --report-bindings \
+    "${MPI_OPTS[@]}" \
     "${OMP_ENV[@]}" \
     "${TIME_WRAP}" \
         "${IQTREE}" -s "${DATA_PATH}" -T "${OMP_PER_RANK}" -seed "${SEED}" \
@@ -317,6 +331,7 @@ if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
         --hostfile "${HOSTFILE}" \
         --mca rmaps_base_mapping_policy "" \
         -rf "${RANKFILE}" \
+        "${MPI_OPTS[@]}" \
         "${OMP_ENV[@]}" \
         "${PERF_WRAP}" \
             "${IQTREE}" -s "${DATA_PATH}" -T "${OMP_PER_RANK}" -seed "${SEED}" \
