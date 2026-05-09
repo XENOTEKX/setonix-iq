@@ -2,6 +2,89 @@
 
 ---
 
+## 2026-05-10 (u) — ModelFinder MPI dispatch: branch + scratch setup
+
+### Summary
+
+Established the development environment for the ModelFinder MPI model-level dispatch
+patch, based on the analysis of PBS 167977883 (entry t) which confirmed that
+ModelFinder is the sole bottleneck: 968 DNA models evaluated sequentially at ~729 s/model
+= ~196 h projected runtime on 4 Gadi normalsr nodes.
+
+### Branch
+
+Created `modelfinder2` branch on `setonix-iq` repository from `main` (commit
+`2f516538`). All ModelFinder patch work will be committed here before merging to
+`main` when a stable, benchmarked version exists.
+
+```
+git checkout -b modelfinder2
+# Branch point: 2f516538 changelog(t): update PBS 167977883 with final post-cancel data
+```
+
+### Scratch working directory
+
+Copied the IQ-TREE 3.1.2 R2 source (with NUMA first-touch R1+R2 patches and
+AVX-512 icpx/Sapphire Rapids patches applied) to a new working directory:
+
+```
+cp -a /scratch/um09/as1708/iqtree3-3.1.2 /scratch/um09/as1708/iqtree3-mf2
+```
+
+The new directory `/scratch/um09/as1708/iqtree3-mf2` is the **sole working tree for
+all modelfinder2 changes**. The original `iqtree3-3.1.2` is preserved unchanged as a
+reference. If the working tree is corrupted or development goes in a wrong direction,
+delete `iqtree3-mf2` and re-copy from `iqtree3-3.1.2`.
+
+| Directory | Role | Branch |
+|-----------|------|--------|
+| `iqtree3-3.1.2/src/iqtree3` | Reference (frozen) | `gadi-spr-r2-avx512` |
+| `iqtree3-mf2/src/iqtree3` | Working copy (modelfinder2) | `gadi-spr-r2-avx512` |
+
+The working copy inherits:
+- **Patch P1** (NUMA first-touch R1+R2): `tree/phylotreesse.cpp` + `tree/phylokernelnew.h`
+- **Patch P2+P3** (AVX-512 cmake + kernel for icpx/SPR): `CMakeLists.txt` + `tree/phylokernelnew.h`
+
+### Design document
+
+Full implementation plan committed at `design/modelfinder-mpi-dispatch.md`. Covers:
+
+- Problem statement with measured numbers (729 s/model, 196 h projected)
+- Prior art: jModelTest2 (Darriba 2012), ModelTest-NG (Darriba 2020), RAxML-NG MOOSE
+- Architecture: replace `MPI_Allreduce`-per-model with rank-striped evaluation +
+  single `MPI_Allreduce(MPI_MAX)` gather after all local models complete
+- Memory analysis: full-alignment per rank = ~190 GB for 0%-compression xlarge_mf;
+  feasible on Gadi normalsr (256 GB) at 1 rank/node; typical compressed datasets
+  10–100× smaller allowing 8–26 ranks/node
+- Key files: `model/modelfinder.cpp`, `tree/phylotree.cpp`, `utils/MPIHelper.h`
+- 8-step implementation plan through correctness test → memory profiling → PBS benchmark
+- Scaling projections: ~3.2 h at 64 ranks (4 nodes × 16 ranks/node × 6 OMP) for
+  compressed datasets
+
+### Scaling context (from entry t)
+
+| Config | Ranks | Models/rank | Projected MF time |
+|--------|-------|-------------|-------------------|
+| Current MPI (4 nodes) | 4 (pattern-split) | 968 | ~196 h |
+| Model dispatch, 4 nodes, 4 ranks | 4 | 242 | ~49 h |
+| Model dispatch, 4 nodes, 64 ranks | 64 | 16 | ~3.2 h |
+| Model dispatch, 8 nodes, 208 ranks | 208 | 5 | ~1.0 h |
+
+Memory per rank (xlarge_mf 0% compression): ~190 GB → 1 rank/node max on normalsr.  
+Memory per rank (typical 1% compression, ~100K patterns): ~2 GB → 26 ranks/node feasible.
+
+### Next steps
+
+1. `grep` the model loop in `model/modelfinder.cpp` to locate `findBestFitModel()`
+2. Trace MPI pattern-split path: `distributePatterns()` → `MPI_Scatterv` calls
+3. Implement `modelfinder_mode` flag in `PhyloTree` to disable pattern-split during MF
+4. Implement `evaluateModelLocal()` wrapper in `modelfinder.cpp`
+5. Replace sequential loop with rank-striped iteration + `MPI_Allreduce(MPI_MAX)` gather
+6. Unit test on `example/example.phy`: 4-rank output must match 1-rank output
+7. Submit PBS benchmark with new script `gadi-ci/run_xlarge_r2_mf2_model_dispatch.sh`
+
+---
+
 ## 2026-05-10 (t) — 4-node 10 M-site run (PBS 167977883): fast ML PASS, ModelFinder cancelled
 
 ### Job summary
