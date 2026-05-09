@@ -248,6 +248,23 @@ exec perf stat -e '${PERF_EVENTS}' \\
 EOF
 chmod +x "${PERF_WRAP}"
 
+VTUNE_WRAP="${WORK_DIR}/_vtune_wrap.sh"
+cat > "${VTUNE_WRAP}" <<EOF
+#!/bin/bash
+RANK="\${OMPI_COMM_WORLD_RANK:-\${PMI_RANK:-0}}"
+RDIR="${WORK_DIR}/vtune_uarch.rank\${RANK}"
+exec vtune \\
+    -collect uarch-exploration \\
+    -knob collect-memory-bandwidth=true \\
+    -knob pmu-collection-mode=summary \\
+    -data-limit=2000 \\
+    -finalization-mode=deferred \\
+    -result-dir "\${RDIR}" \\
+    -no-summary \\
+    -- numactl --localalloc -- "\$@"
+EOF
+chmod +x "${VTUNE_WRAP}"
+
 # /proc sampler (rank 0, node A only)
 cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
 #!/usr/bin/env python3
@@ -337,6 +354,36 @@ if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
             "${IQTREE}" -s "${DATA_PATH}" -T "${OMP_PER_RANK}" -seed "${SEED}" \
                         --prefix "${WORK_DIR}/iqtree_perf" \
         > "${WORK_DIR}/iqtree_perf.log" 2>&1 || true
+fi
+
+# ── Pass 3: VTune uarch-exploration (rank 0 only, summary mode) ──────
+# Collects Top-Down Microarchitecture Analysis (TMAM) breakdown:
+# FrontEnd-Bound, Bad-Speculation, BackEnd-Bound (Memory/Core), Retiring,
+# plus cross-socket memory bandwidth (collect-memory-bandwidth=true).
+# pmu-collection-mode=summary avoids per-sample overhead (~5-8% vs ~15%).
+# finalization-mode=deferred: checksum only on compute nodes; finalize
+# later on login node with: vtune -finalize -r vtune_uarch.rankN/
+# Only rank 0 is profiled (representative; IQ-TREE ranks are symmetric).
+VTUNE_DIR="${WORK_DIR}/vtune_uarch.rank0"
+if [[ "${IQRC}" -eq 0 ]] && command -v vtune >/dev/null 2>&1; then
+    echo "[4node] Pass 3: VTune uarch-exploration rank-0 only (summary, deferred)"
+    VTUNE_RC=0
+    mpirun -np "${NRANKS}" \
+        --hostfile "${HOSTFILE}" \
+        --mca rmaps_base_mapping_policy "" \
+        -rf "${RANKFILE}" \
+        "${MPI_OPTS[@]}" \
+        "${OMP_ENV[@]}" \
+        "${VTUNE_WRAP}" \
+            "${IQTREE}" -s "${DATA_PATH}" -T "${OMP_PER_RANK}" -seed "${SEED}" \
+                        --prefix "${WORK_DIR}/iqtree_vtune" \
+        > "${WORK_DIR}/iqtree_vtune.log" 2>&1 || VTUNE_RC=$?
+    echo "[4node] Pass 3 done: vtune_rc=${VTUNE_RC}"
+    # Finalize rank 0 result now (deferred → full on scratch)
+    if [[ -d "${VTUNE_DIR}" ]]; then
+        vtune -finalize -result-dir "${VTUNE_DIR}" >> "${WORK_DIR}/iqtree_vtune.log" 2>&1 || true
+        echo "[4node] Pass 3 finalized: ${VTUNE_DIR}"
+    fi
 fi
 
 # ── Emit run record ───────────────────────────────────────────────────
@@ -448,6 +495,9 @@ for fname, key in [
 rank_perf_files = sorted(glob.glob(os.path.join(work, "perf_stat.rank*.txt")))
 if rank_perf_files:
     artefacts["perf_stat_per_rank"] = rank_perf_files
+vtune_dirs = sorted(glob.glob(os.path.join(work, "vtune_uarch.rank*")))
+if vtune_dirs:
+    artefacts["vtune_uarch_dirs"] = vtune_dirs
 
 verify = []
 if rep_ll is not None:
@@ -511,8 +561,8 @@ record = {
     "per_rank_ipc": per_rank_ipc,
     "per_rank_host": {str(i): hosts[i] for i in range(nranks)},
     "bindings":     bindings_excerpt,
-    "vtune":        None,
-    "vtune_uarch":  None,
+    "vtune":        vtune_dirs[0] if vtune_dirs else None,
+    "vtune_uarch":  vtune_dirs,
     "proc_summary": proc_summary,
     "artefacts":    artefacts,
   },

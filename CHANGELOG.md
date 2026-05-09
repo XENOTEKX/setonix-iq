@@ -2,7 +2,87 @@
 
 ---
 
-## 2026-05-08 (q) — IQ-TREE 3.1.2 source sweep launched (PBS 167932915–167932918)
+## 2026-05-09 (s) — 4-node MPI run: VTune Pass 3 added, job resubmitted (PBS pending)
+
+Cancelled PBS 167976807 (6 min into Pass 1) to integrate three fixes and VTune Pass 3 before collecting results.
+
+### Changes in this entry
+
+**Fix 1: `\\$2` unbound variable (`set -u`) — PBS 167976747 failure root cause**
+
+The first 4-node submission failed after 3 seconds (`Exit_status=1`). The `<<PYENV` heredoc used `\\$2` (double-backslash) inside an unquoted here-doc; bash expanded `$2` as an unbound positional parameter under `set -euo pipefail` before Python ever ran. Fixed: `\\$2` → `\$2` (single backslash, consumed by bash, passes literal `$2` to Python/awk).
+
+**Fix 2: Nested `mpirun` stall in `env.json` generation**
+
+`sh("mpirun -n 1 ${IQTREE} --version ...")` inside a `subprocess.check_output()` call (no timeout) inside the `<<PYENV` heredoc would stall inside a PBS execution environment where nested `mpirun` cannot acquire a process slot. Changed to `sh("${IQTREE} --version ...")` — IQ-TREE prints version without MPI initialisation. Applied to both `run_100taxa_10M_r2_avx512_mpi_4node.sh` and `run_xlarge_r2_v312_mpi_2node_fullnode.sh`.
+
+**Fix 3: Explicit UCX/InfiniBand transport flags**
+
+Added `MPI_OPTS` array to both `mpirun` calls:
+```
+--mca pml ucx
+-x UCX_TLS=rc_mlx5,sm,self
+-x UCX_NET_DEVICES=mlx5_0:1
+-x UCX_IB_ADDR_TYPE=lid
+```
+OpenMPI 4.1.7 on Gadi (MOFED 5.8 + UCX 1.17.0, `rc_mlx5`/`dc_mlx5` on ConnectX HDR) auto-selects UCX correctly (priority 60 vs ob1 10), but without explicit flags a slow UCX init can fall back silently to ob1+TCP. Pinning to `rc_mlx5` eliminates that risk. For a 4-rank communicator, `rc_mlx5` is preferred over `dc_mlx5` (fewer queue-pairs, lower latency).
+
+**VTune Pass 3: `uarch-exploration` on rank 0**
+
+Added Pass 3 after the `perf stat` Pass 2. Uses Intel VTune 2024.2.0 (`intel-vtune/2024.2.0` module, `/apps/intel-tools/intel-vtune/2024.2.0/bin64/vtune`).
+
+Collection type: `uarch-exploration` with:
+- `-knob collect-memory-bandwidth=true` — cross-socket DRAM bandwidth via uncore IMC PMU
+- `-knob pmu-collection-mode=summary` — counting-based overview (~5–8% overhead vs ~15% for `detailed`); avoids per-sample stack noise for this throughput-oriented workload
+- `-data-limit=2000` — 2 GB cap per rank result dir
+- `-finalization-mode=deferred` — compute checksums only on the compute node; finalize on login node with `vtune -finalize -r vtune_uarch.rank0/`
+
+Only rank 0 is profiled (ranks are symmetric; rank 0 is representative). The `_vtune_wrap.sh` is deployed per-rank but only rank 0 collects data (the `RANK` variable in the wrapper selects the result directory name; all ranks run VTune but rank 0's `vtune_uarch.rank0/` is the primary result).
+
+TMAM metrics collected: FrontEnd-Bound, Bad-Speculation, BackEnd-Bound (Memory-Bound / Core-Bound), Retiring, memory bandwidth per channel.
+
+**Run record updates**
+
+- `profile.vtune` → path to `vtune_uarch.rank0/` dir (or `null` if VTune not available)
+- `profile.vtune_uarch` → list of all rank VTune dirs
+- `profile.artefacts.vtune_uarch_dirs` → list of all `vtune_uarch.rankN/` paths found
+
+### Files changed
+
+| file | change |
+|---|---|
+| `gadi-ci/run_100taxa_10M_r2_avx512_mpi_4node.sh` | Fixes 1–3, VTune Pass 3, run record VTune fields |
+| `gadi-ci/run_xlarge_r2_v312_mpi_2node_fullnode.sh` | Fix 2 (nested mpirun in env.json) |
+
+### Commits
+
+| hash | message |
+|---|---|
+| `afa11df8` | `fix: \\$2 → \$2 in PYENV heredoc (unbound variable with set -u)` |
+| `a1ae7867` | `perf: explicit --mca pml ucx + UCX_TLS=rc_mlx5 for deterministic IB path` |
+| `47ab6049` | `fix: use direct binary for iqtree_version in env.json (avoid nested mpirun stall)` |
+| (this) | `feat: VTune uarch-exploration Pass 3 for 4-node run + CHANGELOG` |
+
+### Job submission
+
+Resubmitted after fixes — PBS ID to be filled on completion. Expected profiling output:
+
+| artefact | description |
+|---|---|
+| `iqtree_run.log` | Pass 1 clean timing |
+| `iqtree_run.bindings.log` | MPI rank→core binding report |
+| `samples.jsonl` | RSS / thread-count every 10 s (rank 0 only) |
+| `perf_stat.rank{0..3}.txt` | Per-rank Linux `perf stat` hardware counters |
+| `iqtree_perf.*` | Pass 2 IQ-TREE outputs |
+| `env.json` | System + PBS environment snapshot |
+| `vtune_uarch.rank0/` | VTune uarch-exploration result (TMAM + mem BW) |
+| `iqtree_vtune.log` | Pass 3 VTune + IQ-TREE combined stdout |
+
+---
+
+## 2026-05-09 (r) — 4-node MPI: AVX-512 on 100 taxa / 10 M site dataset (script created)
+
+
 
 Cloned upstream **v3.1.2** (`4e91dd61447c301a896014002b3509bec05f8ab1`) into a separate scratch tree, applied the same R1+R2 NUMA first-touch patches as v3.1.1, and submitted parity runs against the existing v3.1.1 baselines.
 
