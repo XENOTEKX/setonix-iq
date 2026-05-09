@@ -1,310 +1,590 @@
-# ModelFinder MPI Model-Level Dispatch — Architecture & Implementation Plan
+# ModelFinder MPI Model-Level Dispatch — Deep Source Analysis & Implementation Plan
 
 **Branch:** `modelfinder2`  
 **IQ-TREE base:** `gadi-spr-r2-avx512` (v3.1.2 + NUMA R1/R2 + AVX-512 patches)  
 **Working source:** `/scratch/um09/as1708/iqtree3-mf2/src/iqtree3`  
 **Date:** 2026-05-10  
+**Revised:** 2026-05-10 — complete source analysis of `main/phylotesting.cpp`
 
 ---
 
 ## 1. Problem Statement
 
-IQ-TREE's ModelFinder evaluates substitution models **sequentially**: all MPI ranks
-cooperate on a single model at a time via `MPI_Allreduce` to sum partial-likelihood
-contributions across pattern slices. Adding more nodes reduces time-per-model but
-**does not reduce the number of models evaluated** — model count stays fixed at 968 for
-a standard DNA search.
+IQ-TREE's ModelFinder evaluates substitution models **sequentially in a plain for
+loop**. With a standard DNA candidate set, 968 models are tested one at a time,
+each consuming the full OMP thread pool. In MPI mode **every rank evaluates every
+model redundantly** — there is no model-level MPI dispatch of any kind in the current
+code for single-alignment runs.
 
-Observed on Gadi 4-node run (PBS 167977883, 416 cores):
+Confirmed on Gadi 4-node run (PBS 167977883, 416 cores):
+
+```
+IQ-TREE MPI version 3.1.2  — Host: gadi-cpu-spr-0428 (AVX512, FMA3, 503 GB RAM)
+Command: iqtree3-mpi -s alignment_10000000.phy -T 104 -seed 1
+MPI: 4 processes
+Alignment: 100 sequences, 10,000,000 columns, 10,000,000 distinct patterns
+  (0% site-pattern compression — worst-case synthetic dataset)
+
+Time for fast ML tree search:  510.365 seconds
+NOTE: ModelFinder requires 324,249 MB RAM!
+ModelFinder will test up to 968 DNA models (sample size: 10,000,000) ...
+  1  JC         -LnL 672798764.274  ... BIC 1345600703.813
+  2  JC+ASC     ...
+  ...
+  9  JC+R6      -LnL 672798787.202  ... BIC 1345600910.850
+[PBS walltime limit 2:00:00 reached; Exit_status=271]
+```
 
 | Metric | Value |
 |--------|-------|
 | Models tested | 9 / 968 (0.93%) |
-| Rate | ~729 s/model |
-| Projected full run | ~196 h |
-| Nodes that help | Adding nodes reduces s/model but **not** model count |
+| Wall rate | ~729 s/model |
+| Projected total | ~196 h |
+| Peak RAM declared | 324 GB per node |
+| MPI contribution | 0 — all 4 ranks evaluated the same 9 models |
 
-At 10 M distinct patterns (0% compression on `xlarge_mf.fa`), each per-model tree
-optimisation is bandwidth-limited at ~15.7 GB of partial-LH data per rank, giving a
-hard floor even with perfect OMP scaling.
-
----
-
-## 2. Prior Art & Scientific Basis
-
-### 2.1 jModelTest 2 (Darriba et al. 2012, *Nat. Methods*)
-
-The original proof-of-concept for **model-level MPI dispatch** in phylogenetics.
-jModelTest 2 assigns disjoint subsets of candidate models to MPI ranks. Each rank
-evaluates its own subset independently using its local alignment copy; results are
-gathered to rank 0 for BIC selection. Demonstrated near-linear scaling with rank count.
-
-> Darriba D, Taboada GL, Doallo R, Posada D (2012) jModelTest 2: more models, new
-> heuristics and parallel computing. *Nat Methods* 9(8):772.
-> doi:10.1038/nmeth.2109
-
-### 2.2 ModelTest-NG (Darriba et al. 2020, *Mol. Biol. Evol.*)
-
-Full reimplementation of jModelTest/ProtTest in C++ using libpll-2/pll-modules with
-AVX2 SIMD kernels. Supports PThreads + MPI with model-level dispatch. Results:
-
-- **DNA accuracy**: 81% true-model recovery vs ModelFinder's 70% on simulated data
-- **Speed**: similar to ModelFinder per thread, but MPI-scales with rank count
-- **Scalability**: near-linear from 1 to N ranks on model count axis
-
-Build with MPI: `cmake -DENABLE_MPI=ON ..`  
-GitHub: <https://github.com/ddarriba/modeltest>  
-Paper: doi:10.1093/molbev/msz189
-
-### 2.3 RAxML-NG v2.0 MOOSE
-
-MOOSE (MOdel Optimization and SElection) was merged into RAxML-NG v2.0 from the
-`modeltest2` development branch (2024). Uses the same coraxlib/libpll backend as
-ModelTest-NG. The "Parallelization" section of the MOOSE wiki is marked TODO,
-so the MPI dispatch path may not be fully exposed in the CLI yet.
-
-Reference: <https://codeberg.org/amkozlov/raxml-ng/wiki/Automatic-model-selection-(MOOSE)>
-
-### 2.4 IQ-TREE3 ModelFinder2 (upstream, active)
-
-GitHub issues #130–134 on `iqtree/iqtree3` are all labelled `modelfinder2`, covering
-new model types and documentation. The IQ-TREE team is aware of the scaling limitation
-and developing ModelFinder2, but no timeline or parallel-architecture description is
-published. This work proceeds independently and may be upstreamed.
+**The core issue is not MPI communication overhead but MPI underutilisation.** Each
+MPI rank wastes its 416-core allocation on redundant computation of models already
+being computed by other ranks.
 
 ---
 
-## 3. Architecture of the Proposed Patch
+## 2. Source Code Architecture — What Really Happens Today
 
-### 3.1 Current Communication Pattern (Serial Model Loop)
+All ModelFinder code lives in **`main/phylotesting.cpp`** (7021 lines) and its
+header `main/phylotesting.h` (845 lines). There is no `model/modelfinder.cpp`.
 
-```
-for each model_i in candidate_models:               ← sequential, 968 iterations
-    foreach MPI rank r:
-        evaluate partial_lh for pattern_slice[r]    ← O(nptn/nranks * nstates * ncats)
-    MPI_Allreduce(partial_lh_sum)                    ← barrier per model
-    rank 0: update BIC table
-```
-
-Each model evaluation forces a global synchronisation. With 0% pattern compression,
-this is ~729 s/model at 4 nodes.
-
-### 3.2 Target Communication Pattern (Model-Level Dispatch)
+### 2.1 Class Hierarchy
 
 ```
-Phase 1 — distribute models:
-    rank r evaluates models: { i | i % nranks == r }  ← embarrassingly parallel
-    no inter-rank communication during evaluation
+CandidateModel              ← one substitution + rate model
+  .subst_name               ← "JC", "GTR", etc.
+  .rate_name                ← "+G4", "+R3", etc.
+  .logl, .df                ← filled by evaluate()
+  .AIC_score, .BIC_score    ← computed by computeICScores()
+  .flag                     ← MF_IGNORED | MF_RUNNING | MF_DONE | MF_WAITING
+  .evaluate()               ← line 1895: creates IQTree, optimises, returns lnL
 
-Phase 2 — gather results:
-    MPI_Gather( {model_name, lnL, df, BIC}, ... ) → rank 0
-    rank 0 selects best BIC
-    MPI_Bcast(best_model_index)
+CandidateModelSet : vector<CandidateModel>
+  .generate()               ← line ~1640: fills 968 models from dna_model_names[]
+  .test()                   ← line 2911: SEQUENTIAL for-loop (default path)
+  .evaluateAll()            ← line 3357: OMP parallel loop (--openmp-by-model path)
+  .getNextModel()           ← line ~3330: thread-safe model queue pop (OMP only)
 
-Phase 3 — tree search uses best_model (existing code, unchanged)
+ModelCheckpoint : Checkpoint
+  ← gzip checkpoint (.model.gz), stores all lnL/BIC results
+  ← on restart: previously-computed models are skipped via restoreCheckpoint()
 ```
 
-No `MPI_Allreduce` inside the model loop. Each rank runs its OMP threads over the
-**full** alignment (not a pattern slice). One `MPI_Gather` + `MPI_Bcast` at the end.
+### 2.2 Entry Point Call Graph
 
-### 3.3 Scaling Projection
+```
+runModelFinder()                        ← line 1325, called from phyloanalysis.cpp
+  │
+  ├─ computeFastMLTree()                ← line ~720, one NNI pass for initial tree
+  │    └─ MPI_Allreduce(MPI_MAXLOC)    ← line 825, winner broadcasts initial tree
+  │         (ONLY MPI CALL IN MF PHASE)
+  │
+  ├─ candidate_models.generate()       ← builds 968 CandidateModel objects
+  │
+  └─ if params.openmp_by_model:
+  │    candidate_models.evaluateAll()  ← OMP parallel, 1 thread/model
+  └─ else (default, used in all PBS runs):
+       candidate_models.test()         ← sequential, all threads on 1 model
+```
 
-With model-level dispatch and N ranks, each rank evaluates `ceil(968/N)` models.
-Per-model time stays at ~729 s (same OMP threads, same data), but models run in
-parallel across ranks.
+### 2.3 `CandidateModelSet::test()` — The Sequential Loop (line 2911)
 
-| Config | Ranks | Models/rank | Projected MF time |
-|--------|-------|-------------|-------------------|
-| 4 nodes, 1 rank/node, 104 OMP | 4 | 242 | ~49 h |
-| 4 nodes, 8 ranks/node, 13 OMP | 32 | 31 | ~6.2 h |
-| 4 nodes, 16 ranks/node, 6 OMP | 64 | 16 | ~3.2 h |
-| 4 nodes, 26 ranks/node, 4 OMP | 104 | 10 | ~2.0 h |
-| 8 nodes, 26 ranks/node, 4 OMP | 208 | 5 | ~1.0 h |
+This is the bottleneck. Simplified structure:
 
-Best operating point: **~26 ranks/node × 4 OMP threads** on Gadi normalsr (104 cores/node).  
-Memory per rank: 200 taxa × 10 M patterns × 4 states × 8 bytes × ~3 buffers ≈ **~190 GB/rank**.
+```cpp
+// line 3013 — THE SEQUENTIAL FOR LOOP
+for (model = 0; model < size(); model++) {
+    if (at(model).hasFlag(MF_IGNORED)) {
+        model_scores.push_back(DBL_MAX);
+        continue;
+    }
+    // creates new IQTree, calls optimizeParameters → computeLikelihood
+    tree_string = at(model).evaluate(params, model_info, out_model_info,
+                                     models_block, num_threads, brlen_type);
+    at(model).computeICScores(ssize);
+    at(model).setFlag(MF_DONE);
 
-> **Memory is the binding constraint.** Gadi normalsr nodes have 256 GB RAM, so
-> `ceil(190/256) = 1` rank per node. With pattern compression on a real dataset,
-> the per-rank memory is typically 10–100× lower.
+    // early-stop: if +R_k is worse than +R_{k-1}, mark all +R_{k+1..} MF_IGNORED
+    if (skip_model) {
+        for (int next = model+1; ...) at(next).setFlag(MF_IGNORED);
+    }
+    model_info.dump();       // checkpoint to disk
+}
+```
 
-For the `xlarge_mf.fa` 0%-compression worst case: 1 rank/node (4 ranks total) →
-242 models/rank → ~49 h. Not a breakthrough at 4 nodes for this pathological dataset,
-but scales linearly to ~3 h at 64 nodes.
+In MPI mode: **all N ranks enter this loop and execute it identically.** The ranks
+are not coordinated inside the loop. Each rank creates its own IQTree, runs all 968
+evaluations, and writes the same checkpoint. No MPI calls inside the loop.
 
-For a typical compressed dataset (e.g. 1–5% compression, ~10K–50K distinct patterns):
-- Per-rank memory drops to ~1–5 GB
-- Can run 8–26 ranks/node → 3 h at 4 nodes for standard analyses
+### 2.4 `CandidateModelSet::evaluateAll()` — The OMP Parallel Loop (line 3357)
+
+Activated only with `--openmp-by-model` flag. Uses `getNextModel()` (OMP-critical,
+atomic-like queue) to dispatch models to OMP threads:
+
+```cpp
+#pragma omp parallel num_threads(num_threads)
+{
+    int64_t model;
+    do {
+        model = getNextModel();       // pops next un-evaluated model
+        if (model == -1) break;
+        at(model).evaluate(..., 1 OMP thread per model);
+        // OMP critical section: update best_score, dump checkpoint
+    } while (model != -1);
+}
+```
+
+Each model gets 1 OMP thread. With 104 threads and 968 models: ~10 concurrent
+evaluations. **No early-stop logic** (unlike `test()`). Also not MPI-aware.
+
+### 2.5 `CandidateModel::evaluate()` — Single Model Kernel (line 1895)
+
+```cpp
+string CandidateModel::evaluate(Params &params, ...) {
+    IQTree *iqtree = new IQTree(in_aln);       // full alignment copy
+    iqtree->setLikelihoodKernel(params.SSE);   // selects AVX-512 dispatch
+    iqtree->setNumThreads(num_threads);        // sets OMP thread count
+    iqtree->initializeModel(params, getName(), models_block);
+    iqtree->initializeAllPartialLh();
+
+    new_logl = iqtree->getModelFactory()->optimizeParameters(
+        brlen_type, false, params.modelfinder_eps, TOL_GRADIENT_MODELTEST);
+    // ↑ calls computeLikelihood() → computeLikelihoodBranch() → SIMD kernel
+    // ↑ in standard MPI mode: NO MPI inside here for single-aln runs
+
+    delete iqtree;   // ← tree is created and destroyed per model
+    return tree_string;
+}
+```
+
+Key: `new IQTree(in_aln)` — each model gets its own tree object sharing the alignment
+pointer but with independent partial-likelihood buffers. The **alignment is not split
+across MPI ranks** during this phase; each rank holds the full alignment in memory.
+
+### 2.6 MPI Usage Map — Where MPI Actually Fires
+
+| Location | MPI calls | When |
+|---|---|---|
+| `computeFastMLTree()` line 825 | `MPI_Allreduce(MPI_MAXLOC)` | After NNI: pick winner process |
+| `computeFastMLTree()` line 834–867 | `MPIHelper::sendCheckpoint` / `recvCheckpoint` | Broadcast winning tree to all ranks |
+| `ModelFactory::optimizeParameters()` lines 1617–1714 | `syncChkPoint->masterSyncOtherChkpts()` | **Only if `syncChkPoint != nullptr`** — set for PartitionFinder only |
+| `PartitionFinder::getBestModelforPartitionsMPI()` | `MPI_Scatter`, `MPI_Gather`, `MPI_Send`/`Recv` | PartitionFinder (-p flag); distributes **partitions** across ranks |
+| `PartitionFinder::consolidPartitionResults()` | `MPI_Bcast` (lhvec, dfvec, lenvec) | PartitionFinder result broadcast |
+| Tree search (IQTree::doNNISearch) | `MPI_Send`/`Recv` trees | After ModelFinder completes |
+
+**For single-alignment ModelFinder (`-m MF` without `-p`): only the initial tree
+NNI MPI call fires.** Everything else is serial or OMP.
+
+### 2.7 Why MPI Is Wasted Today
+
+```
+Rank 0: JC → JC+ASC → JC+G4 → ... → GTR+R10   (968 models, 104 OMP threads each)
+Rank 1: JC → JC+ASC → JC+G4 → ... → GTR+R10   (same 968 models, redundant)
+Rank 2: JC → JC+ASC → JC+G4 → ... → GTR+R10   (same 968 models, redundant)
+Rank 3: JC → JC+ASC → JC+G4 → ... → GTR+R10   (same 968 models, redundant)
+```
+
+Adding a 5th node adds 0 speedup to ModelFinder. At 4 nodes × 104 OMP, each model
+uses 416 CPU cores but the 4-way redundancy means the SU cost is 4× what it should be.
 
 ---
 
-## 4. Key Files to Modify
+## 3. The Pattern Parallelism Hierarchy (Existing)
+
+Understanding what already exists inside a single model evaluation:
+
+```
+CandidateModel::evaluate()
+  └─ IQTree::computeLikelihood()
+       └─ computeLikelihoodBranch()   ← function pointer to SIMD specialisation
+            └─ phylokernelnew.h::computeLikelihoodBranchSIMD<AVX512>()
+                 │
+                 │  // OMP dispatch over site-pattern packets:
+                 │  // num_packets = num_threads × PACKETS_PER_THREAD
+                 │
+                 ├─ #pragma omp parallel for num_threads(num_threads)
+                 │    for packet_id in [0, num_packets):
+                 │      ptn_lower = limits[packet_id]
+                 │      ptn_upper = limits[packet_id+1]
+                 │      // AVX-512: process 8 doubles per cycle
+                 │      for ptn in [ptn_lower, ptn_upper) step 8:
+                 │        __m512d partial_lh = ...
+                 │
+                 └─ // final sum across packets: serial reduction
+                    double lnL = sum(pattern_lh[0..nptn])
+```
+
+OMP threads each own a contiguous slice of site patterns (`ptn_lower..ptn_upper`).
+The kernel is `AVX-512` width (8 doubles/cycle) on Sapphire Rapids with the icpx build.
+**No MPI communication inside the kernel.**
+
+`setNumThreads(n)` controls how fine the packet split is:
+```cpp
+// phylotreesse.cpp line 51
+this->num_packets = (num_threads==1) ? 1 : (num_threads * PACKETS_PER_THREAD);
+```
+
+The existing three-level hierarchy per model:
+
+```
+Level 1 — SIMD  :  AVX-512, 8× double/cycle  (hardware)
+Level 2 — OMP   :  104 threads × pattern packets  (intra-node)
+Level 3 — MPI   :  currently wasted (all ranks duplicate all work)
+```
+
+**The patch adds genuine content to Level 3.**
+
+---
+
+## 4. Proposed Architecture: Rank-Striped Model Dispatch
+
+### 4.1 Core Idea
+
+Mark each model with its owning rank before the loop starts. Each rank evaluates only
+its own subset. After all ranks finish, collect scores with a single `MPI_Allreduce`.
+
+The `MF_IGNORED` flag mechanism already exists and is respected by both `test()` and
+`evaluateAll()`. We exploit it:
+
+```cpp
+// After candidate_models.generate(), before test()/evaluateAll()
+// New function: markRankModels(candidate_models, my_rank, num_ranks)
+#ifdef _IQTREE_MPI
+if (MPIHelper::getInstance().getNumProcesses() > 1) {
+    int my_rank  = MPIHelper::getInstance().getProcessID();
+    int nranks   = MPIHelper::getInstance().getNumProcesses();
+    for (int i = 0; i < (int)candidate_models.size(); i++) {
+        if (i % nranks != my_rank)
+            candidate_models[i].setFlag(MF_IGNORED_MPI);  // new flag value
+    }
+}
+#endif
+```
+
+Then after `test()` / `evaluateAll()` returns:
+
+```cpp
+// New function: gatherModelScores(candidate_models)
+#ifdef _IQTREE_MPI
+if (MPIHelper::getInstance().getNumProcesses() > 1) {
+    // Build local score vectors (DBL_MAX sentinel for uncomputed models)
+    int n = candidate_models.size();
+    vector<double> local_lnL(n, -DBL_MAX);
+    vector<double> local_BIC(n, DBL_MAX);
+    vector<double> local_AIC(n, DBL_MAX);
+    vector<double> local_AICc(n, DBL_MAX);
+
+    for (int i = 0; i < n; i++)
+        if (candidate_models[i].hasFlag(MF_DONE)) {
+            local_lnL[i]  = candidate_models[i].logl;
+            local_BIC[i]  = candidate_models[i].BIC_score;
+            local_AIC[i]  = candidate_models[i].AIC_score;
+            local_AICc[i] = candidate_models[i].AICc_score;
+        }
+
+    // Global reduce: each slot has exactly one real value, rest are sentinels
+    // MPI_MIN for BIC/AIC (lower is better), MPI_MAX for lnL
+    vector<double> global_lnL(n), global_BIC(n), global_AIC(n), global_AICc(n);
+    MPI_Allreduce(local_lnL.data(),  global_lnL.data(),  n, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(local_BIC.data(),  global_BIC.data(),  n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(local_AIC.data(),  global_AIC.data(),  n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(local_AICc.data(), global_AICc.data(), n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+
+    // Fill in the models this rank did NOT evaluate
+    for (int i = 0; i < n; i++)
+        if (!candidate_models[i].hasFlag(MF_DONE)) {
+            candidate_models[i].logl       = global_lnL[i];
+            candidate_models[i].BIC_score  = global_BIC[i];
+            candidate_models[i].AIC_score  = global_AIC[i];
+            candidate_models[i].AICc_score = global_AICc[i];
+            candidate_models[i].setFlag(MF_DONE);   // mark as filled
+        }
+
+    // Consolidate checkpoint: each rank sends its portion to rank 0
+    MPIHelper::getInstance().gatherCheckpoint(&model_info);
+}
+#endif
+```
+
+### 4.2 Why `evaluateAll()` Is the Better Target (Not `test()`)
+
+`test()` has interleaved early-stopping logic: after model `i`, it may set `MF_IGNORED`
+on models `i+1..i+k` based on +R category score comparisons. With striped dispatch,
+rank 0 evaluates models 0, N, 2N... and rank 1 evaluates 1, N+1, 2N+1... The early-stop
+comparisons across adjacent models will see `DBL_MAX` sentinels from uncomputed slots
+and will incorrectly filter or not filter models.
+
+`evaluateAll()` has **no early-stop logic** — it runs all models and selects the best
+at the end. This is exactly what model-level dispatch requires. The activation path:
+
+```
+runModelFinder()
+  → if (params.openmp_by_model || nranks > 1):    ← ADD: || nranks > 1
+      candidate_models.evaluateAll(...)
+  → else:
+      candidate_models.test(...)
+```
+
+With MPI + multiple ranks, force the `evaluateAll()` path. Each OMP thread still
+handles one model (as today), but now the `num_threads` passed to `evaluate()` should
+scale: `rank_threads = total_cores_per_node / nranks_per_node`.
+
+### 4.3 Checkpoint Consolidation
+
+Each rank's `out_model_info` (per-model checkpoint) needs to reach rank 0 to write
+the `.model.gz` file. The existing `MPIHelper::gatherCheckpoint()` does this for
+PartitionFinder. We reuse it:
+
+```cpp
+// In evaluateAll() at the end, inside #ifdef _IQTREE_MPI:
+MPIHelper::getInstance().gatherCheckpoint(&model_info);
+// Now rank 0 has the full checkpoint; workers already have partial results
+// from the MPI_Allreduce above
+```
+
+### 4.4 Scaling Projection (Corrected)
+
+With `xlarge_mf.fa` (10M patterns, 0% compression, 100 taxa):
+- RAM per rank: 324 GB (from actual IQ-TREE log output)
+- Gadi normalsr: 503 GB RAM/node → max **1 rank/node** feasible
+- Per-model time: ~729 s/model at 4 nodes × 104 OMP
+
+| Config | Nodes | Ranks | OMP/rank | Models/rank | MF wall time |
+|--------|-------|-------|----------|-------------|--------------|
+| Current (wasted) | 4 | 4 | 104 | 968 (redundant) | ~196 h |
+| MF2 dispatch | 4 | 4 | 104 | 242 | ~49 h |
+| MF2 dispatch | 16 | 16 | 104 | 61 | ~12 h |
+| MF2 dispatch | 64 | 64 | 104 | 16 | ~3.2 h |
+| MF2 dispatch | 121 | 121 | 104 | 9 | ~1.8 h |
+
+For typical empirical compressed data (~100K unique patterns from 1M sites):
+- RAM per rank drops to ~3.5 GB
+- Can fit 26 ranks/node (104 cores ÷ 4 OMP)
+- 4 nodes × 26 = 104 ranks: 968 ÷ 104 ≈ 10 models/rank → **~2 h wall time**
+
+---
+
+## 5. Key Files to Modify
 
 All paths relative to `/scratch/um09/as1708/iqtree3-mf2/src/iqtree3/`.
 
-### 4.1 Primary target — `model/modelfinder.cpp`
+### 5.1 Primary Target — `main/phylotesting.cpp`
 
-Contains the main model evaluation loop. Search for:
+**This is the only file containing ModelFinder logic.**
+
+| Location | Change | Detail |
+|---|---|---|
+| Line ~1370 in `runModelFinder()` | Force `evaluateAll()` path when `nranks > 1` | Add `\|\| MPIHelper::getInstance().getNumProcesses() > 1` to the `openmp_by_model` condition |
+| After `generate()` call (~line 1450) | New: `markRankModels()` | Stripe `MF_IGNORED_MPI` flag based on `rank % nranks` |
+| End of `evaluateAll()` (~line 3530) | New: `gatherModelScores()` | `MPI_Allreduce` + fill uncomputed slots + `gatherCheckpoint` |
+| `evaluateAll()` per-model `evaluate()` call (~line 3430) | Pass `rank_threads` | `num_threads / nranks_per_node` instead of full `num_threads` |
+
+### 5.2 `main/phylotesting.h`
+
+Add new flag constant beside existing ones (line 29–33):
 ```cpp
-// The candidate model loop that calls optimizeModelParameters / computeLikelihood
-// and records BIC/AIC scores in the model checkpoint.
+const int MF_IGNORED_MPI = 32;   // model assigned to a different MPI rank
 ```
 
-The model loop is in `ModelFinder::findBestFitModel()` (or equivalent). The dispatch
-change replaces the sequential loop with rank-striped iteration:
+### 5.3 `utils/MPIHelper.h` / `utils/MPIHelper.cpp`
 
-```cpp
-// BEFORE (conceptual):
-for (int i = 0; i < (int)model_names.size(); i++) {
-    double score = evaluateModel(model_names[i]);
-    recordScore(i, score);
-}
+Existing: `gatherCheckpoint()` — already does what we need for consolidation.
+Existing: `broadcastCheckpoint()` — already broadcasts from rank 0 to all.
 
-// AFTER:
-int my_rank, num_ranks;
-MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-MPI_Comm_size(MPI_COMM_WORLD, &num_ranks);
+No new functions needed. The `MPI_Allreduce` calls are made directly in
+`phylotesting.cpp` (matching the style of the existing calls at line 825).
 
-for (int i = my_rank; i < (int)model_names.size(); i += num_ranks) {
-    double score = evaluateModelLocal(model_names[i]);  // full alignment, local OMP only
-    local_results[i] = score;
-}
+### 5.4 `main/phyloanalysis.cpp`
 
-// Gather phase:
-MPI_Allreduce(local_results, global_results, model_names.size(),
-              MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-// MPI_MAX works because only one rank writes each slot (others leave at -∞ sentinel)
-if (my_rank == 0) selectBestModel(global_results);
-MPI_Bcast(&best_model_idx, 1, MPI_INT, 0, MPI_COMM_WORLD);
-```
-
-### 4.2 Secondary target — `tree/phylotree.cpp` / `phylotreesse.cpp`
-
-**Current MPI mode**: `MPI_Allreduce` inside `computeLikelihoodBranchNaive()` sums
-partial-LH over pattern slices held by different ranks. The alignment is split across
-ranks (`MPI_Scatterv` at startup).
-
-**Required change for model-level dispatch**: each rank must hold the **full alignment**
-during the ModelFinder phase, then resume split-alignment mode for tree search.
-
-Two implementation options:
-
-1. **Mode flag** (preferred): add `bool modelfinder_mode` to `PhyloTree`. When true,
-   disable pattern-splitting in `distributePatterns()` and disable the `MPI_Allreduce`
-   inside `computeLikelihoodBranch`. Each rank computes lnL independently.
-
-2. **Separate tree object**: create a lightweight `PhyloTree` clone per rank for the
-   model-selection phase with `setNumThreads(omp_rank_threads)` and no MPI comms,
-   then destroy it and re-enter standard MPI mode for tree search.
-
-Option 2 is safer for a first implementation — it avoids touching the hot path of the
-existing MPI likelihood kernel.
-
-### 4.3 `main/iqtreemain.cpp` / `main/modelfinder_main.cpp`
-
-Entry points that call `ModelFinder::findBestFitModel()`. May need to restructure the
-MPI initialisation so all ranks enter the ModelFinder phase before splitting patterns
-for tree search.
-
-### 4.4 `utils/MPIHelper.h` / `utils/MPIHelper.cpp`
-
-Helper classes wrapping `MPI_Bcast`, `MPI_Gather`, etc. New helpers needed:
-- `MPIHelper::gatherDouble(local_arr, n)` — returns global array on rank 0
-- `MPIHelper::broadcastInt(val)` — broadcast best model index
+Entry into `runModelFinder()`. No change needed — the MPI-awareness is encapsulated
+entirely inside `runModelFinder()` / `evaluateAll()`.
 
 ---
 
-## 5. Step-by-Step Implementation Plan
+## 6. Patch Style — Matching Existing Conventions
 
-### Step 0 — Baseline measurement (already done)
-- ✅ Confirmed 968 models, 729 s/model at 4 nodes × 104 OMP
-- ✅ Checkpoint shows 9 JC models completed before cancellation
-- ✅ Identified sequential loop as bottleneck
+All existing MPI-conditional code uses the pattern:
+```cpp
+#ifdef _IQTREE_MPI
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        // ... MPI logic ...
+    }
+#endif
+```
 
-### Step 1 — Understand current ModelFinder call graph
+The `MPIHelper::getInstance()` singleton is the standard accessor.
+
+Existing checkpoint sync pattern (from `modelfactory.cpp` line 1617):
+```cpp
+#ifdef _IQTREE_MPI
+    if (syncChkPoint != nullptr) {
+        syncChkPoint->masterSyncOtherChkpts();
+    }
+#endif
+```
+
+Our additions follow the same `#ifdef _IQTREE_MPI` / `getInstance()` / guarded
+block pattern. No new preprocessor macros. No changes to the MPI communication model
+outside ModelFinder (tree search MPI path is untouched).
+
+---
+
+## 7. Three-Level Parallelism After the Patch
+
+```
+Level 3 — MPI ranks:
+    Rank 0 evaluates models { 0, N, 2N, ... }
+    Rank 1 evaluates models { 1, N+1, 2N+1, ... }
+    ...  (embarrassingly parallel — zero inter-rank comm during evaluation)
+    One MPI_Allreduce (4× n_model doubles) at the end
+
+Level 2 — OMP threads (per rank):
+    rank_threads = ncores_per_node / nranks_per_node
+    Each model: OMP parallel over site-pattern packets
+    #pragma omp parallel for num_threads(rank_threads)
+
+Level 1 — AVX-512 SIMD (per OMP thread):
+    8 doubles per cycle in phylokernelnew.h
+    Sapphire Rapids ZMM register width
+```
+
+This is the genuinely novel contribution: **model-level MPI dispatch integrated into
+IQ-TREE's existing MPI/OMP/SIMD hierarchy**, not a standalone tool.
+
+---
+
+## 8. Step-by-Step Implementation Plan
+
+### Step 0 — Baseline measurement ✅
+- 968 models, 729 s/model at 4 nodes × 104 OMP (PBS 167977883)
+- 9 JC models completed, all MPI ranks ran identical computation
+- 324 GB RAM required per node (10M patterns, 0% compression)
+
+### Step 1 — Read and annotate `phylotesting.cpp`
 ```bash
 cd /scratch/um09/as1708/iqtree3-mf2/src/iqtree3
-grep -rn "findBestFitModel\|ModelFinder\|MF_TESTNEW" model/ main/ --include="*.cpp" | head -40
-grep -rn "MPI_Allreduce\|MPI_Scatter\|distributePattern" tree/ utils/ --include="*.cpp" | head -20
-```
-Trace from `main()` → ModelFinder entry → model loop → likelihood call → MPI barrier.
-
-### Step 2 — Implement `evaluateModelLocal()` in `modelfinder.cpp`
-A wrapper that sets `modelfinder_mode = true` on the tree before calling the standard
-`evaluateModel()`, disabling the MPI pattern-scatter and using local full-alignment
-likelihood. Unit test: single rank, result must match existing output.
-
-### Step 3 — Add rank-striped model loop
-Replace the sequential `for (int i = 0; i < n; i++)` with the striped version.
-Add `local_score_arr[n]` initialised to `-1e300` (sentinel). After the loop,
-`MPI_Allreduce` with `MPI_MAX` to reconstruct the complete score array on all ranks.
-
-### Step 4 — Verify correctness on small dataset
-```bash
-mpirun -np 4 ./iqtree3 -s example/example.phy -m MF --prefix mf_test_4ranks
-# Compare best-fit model to 1-rank reference:
-mpirun -np 1 ./iqtree3 -s example/example.phy -m MF --prefix mf_test_1rank
-diff mf_test_4ranks.log mf_test_1rank.log | grep "Best-fit model"
+# Trace the exact evaluateAll() code path
+grep -n "evaluateAll\|openmp_by_model\|getNextModel\|MF_DONE\|MF_IGNORED" \
+    main/phylotesting.cpp | head -40
+# Confirm no MPI inside evaluate()
+grep -n "MPI_\|_IQTREE_MPI" main/phylotesting.cpp | grep -v "PartitionFinder\|Partition"
 ```
 
-### Step 5 — Memory profiling at scale
-Run with Valgrind massif or `/usr/bin/time -v` on `xlarge_mf.fa` with 1 rank to
-measure peak RSS in full-alignment mode. Compare with existing 4-rank split mode.
-Determine feasible ranks-per-node for Setonix (256 GB) and Gadi normalsr (256 GB).
+### Step 2 — Add `MF_IGNORED_MPI = 32` flag to `phylotesting.h`
+One line. Verify existing flag values don't collide (existing: 2, 4, 8, 16 → 32 is next).
 
-### Step 6 — Integrate with checkpoint
-The existing `.model.gz` checkpoint stores per-model lnL values. In model-level
-dispatch mode, each rank writes only its own models' entries. On restart, all ranks
-read the full checkpoint and skip already-evaluated models regardless of which rank
-originally computed them. The checkpoint format is unchanged.
+### Step 3 — Add `markRankModels()` block in `runModelFinder()` (line ~1450)
+After `candidate_models.generate()` returns, before the `evaluateAll()` / `test()` branch:
+```cpp
+#ifdef _IQTREE_MPI
+if (MPIHelper::getInstance().getNumProcesses() > 1 && !params.model_test_and_tree) {
+    int my_rank = MPIHelper::getInstance().getProcessID();
+    int nranks  = MPIHelper::getInstance().getNumProcesses();
+    for (int i = 0; i < (int)candidate_models.size(); i++)
+        if (i % nranks != my_rank)
+            candidate_models[i].setFlag(MF_IGNORED_MPI);
+    // Force evaluateAll() path — test() has early-stop that breaks with gaps
+    params.openmp_by_model = true;
+    // Adjust thread count so total cores/node is preserved
+    // (caller sets num_threads = total OMP; here we share across ranks on same node)
+    // NOTE: thread count adjustment is handled in evaluateAll() via rank_threads
+}
+#endif
+```
 
-### Step 7 — PBS submission script
-New script `gadi-ci/run_xlarge_r2_mf2_model_dispatch.sh`:
+### Step 4 — Add `gatherModelScores()` block at end of `evaluateAll()`
+After the OMP parallel block closes and the final `model_info.dump()` call:
+```cpp
+#ifdef _IQTREE_MPI
+if (MPIHelper::getInstance().getNumProcesses() > 1) {
+    // ... MPI_Allreduce for lnL, BIC, AIC, AICc as shown in Section 4.1 ...
+    MPIHelper::getInstance().gatherCheckpoint(&model_info);
+    MPIHelper::getInstance().broadcastCheckpoint(&model_info);
+}
+#endif
+```
+
+### Step 5 — Correctness test on example.phy
 ```bash
-#PBS -l ncpus=416,mem=1000GB,walltime=4:00:00
+cd /scratch/um09/as1708/iqtree3-mf2/build-profiling-mpi
+make -j8
+
+# 1-rank reference
+mpirun -np 1 ./iqtree3-mpi -s ../example/example.phy -m MF -T 4 --prefix ref_1rank -seed 42
+
+# 4-rank dispatch
+mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF -T 4 --prefix test_4rank -seed 42
+
+# Must match:
+grep "Best-fit model\|BIC" ref_1rank.log test_4rank.log
+```
+
+### Step 6 — Memory measurement at scale
+```bash
+# RSS at 1 rank (full-alignment mode, no sharing)
+/usr/bin/time -v mpirun -np 1 ./iqtree3-mpi \
+    -s benchmarks/xlarge_mf/xlarge_mf.fa -m MF -T 104 --prefix mem_test 2>&1 \
+    | grep "Maximum resident"
+# Compare to 4-rank run: should be ~4× total (4× independent full-aln copies)
+```
+
+### Step 7 — PBS submission script `gadi-ci/run_xlarge_r2_mf2_dispatch.sh`
+```bash
+#!/bin/bash
+#PBS -N iq-mf2-dispatch
+#PBS -l ncpus=416,mem=2048GB,walltime=6:00:00
 #PBS -l storage=scratch/um09+gdata/um09
+#PBS -q normalsr
+cd /scratch/um09/as1708/iqtree3-mf2/gadi-ci
 module load intel-mpi/2021.13.1 intel/2024.2.0
-mpirun -np 208 --map-by slot:pe=2 \
-  ./iqtree3-mf2 -s xlarge_mf.fa -m MF -T 2 --prefix mf2_dispatch
+# 4 ranks × 104 OMP = 416 cores; each rank holds full 324 GB alignment
+mpirun -np 4 --hostfile hostfile.txt \
+    /scratch/um09/as1708/iqtree3-mf2/build-profiling-mpi/iqtree3-mpi \
+    -s /scratch/um09/as1708/iqtree3-mf2/benchmarks/xlarge_mf/xlarge_mf.fa \
+    -m MF -T 104 --prefix mf2_dispatch_4r -seed 1
 ```
-208 ranks × 2 OMP = 416 cores. Per-rank data = full alignment at ~2 OMP threads.
 
-### Step 8 — Benchmark & CHANGELOG entry
-Compare:
-- Wall time for ModelFinder phase: dispatch vs sequential
-- Model selection accuracy: same best-fit model?
-- Memory overhead: N × full_alignment vs existing 1 × full_alignment
+### Step 8 — Benchmark and CHANGELOG entry
+Compare wall times, verify best-fit model is identical, record scaling vs model count.
 
 ---
 
-## 6. Related Files Summary
+## 9. Related Files Summary
 
-| File | Role | Change needed |
-|------|------|---------------|
-| `model/modelfinder.cpp` | Model loop | Rank-striped iteration + MPI_Allreduce gather |
-| `model/modelfinder.h` | Header | Add `evaluateModelLocal()` declaration |
-| `tree/phylotree.cpp` | Tree setup | `modelfinder_mode` flag, disable pattern-split |
-| `tree/phylotree.h` | Header | `bool modelfinder_mode` member |
-| `tree/phylotreesse.cpp` | Likelihood kernel | Respect `modelfinder_mode` in `setNumThreads` |
-| `utils/MPIHelper.h` | MPI wrappers | `gatherDouble`, `broadcastInt` helpers |
-| `main/iqtreemain.cpp` | Entry point | Ensure all ranks enter MF phase with full aln |
-| `gadi-ci/run_xlarge_r2_mf2_model_dispatch.sh` | PBS script | New benchmark submission |
+| File | Lines | Role | Change |
+|------|-------|------|--------|
+| `main/phylotesting.cpp` | 7021 | **All** ModelFinder code | Core patch — Steps 3+4 |
+| `main/phylotesting.h` | 845 | Class declarations + flag constants | Add `MF_IGNORED_MPI = 32` |
+| `utils/MPIHelper.h` | 211 | MPI singleton wrappers | No change needed |
+| `utils/MPIHelper.cpp` | 221 | `gatherCheckpoint`, `broadcastCheckpoint` impl | No change needed |
+| `main/phyloanalysis.cpp` | 6299 | Calls `runModelFinder()` | No change needed |
+| `model/modelfactory.cpp` | ~1800 | `optimizeParameters()` (per-model loop body) | No change needed |
+| `tree/phylotreesse.cpp` | ~580 | `setNumThreads()` | No change needed |
+| `tree/phylokernelnew.h` | ~3600 | AVX-512 SIMD kernel | No change needed |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | new | PBS benchmark script | Create in Step 7 |
 
 ---
 
-## 7. Risk & Mitigation
+## 10. Risk & Mitigation
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| Memory exceeds node capacity (0% compression) | High | Use `-mset GTR -mrate G,I+G` to reduce models; or split into model subsets across PBS jobs |
-| Model score divergence between ranks | Low | Each rank uses identical alignment + starting tree; only OMP non-determinism is a risk — test with `--seed` |
-| Checkpoint incompatibility | Low | Checkpoint format is unchanged; ranks write only their own models' entries, rank 0 holds master index |
-| Upstream ModelFinder2 makes this redundant | Medium | Track IQ-TREE3 issues #130–134; this patch can be upstreamed or superseded |
-| Build system conflict with existing MPI build | Low | All changes isolated to `modelfinder.cpp` + `phylotree.cpp`; existing `cmake -DIQTREE_FLAGS=mpi` path unchanged |
+| Early-stop in `test()` breaks with strided gaps | **Eliminated** | Force `evaluateAll()` path when `nranks > 1` (no early-stop in that path) |
+| Memory exceeds node capacity (0% compression) | High for xlarge | 324 GB/rank × 4 ranks = 1296 GB; need `mem=2048GB` PBS request; limit to 1 rank/node |
+| Score mismatch across ranks | Low | Identical alignment + identical starting tree + `--seed`; only OMP non-determinism in last digit |
+| Checkpoint race: workers write to same `.model.gz` | **Eliminated** | Workers call `model_info.setFileName("")` at line ~1405 (already in code for MPI workers) |
+| `gatherCheckpoint` is slow for large checkpoints | Low | 968 models × ~200 bytes = ~200 KB total; negligible vs 729 s/model |
+| Upstream ModelFinder2 supersedes this | Medium | Track issues #130–134; patch can be upstreamed or rebased |
 
 ---
 
-## 8. References
+## 11. References
 
 1. Darriba D et al. (2012) jModelTest 2. *Nat Methods* 9(8):772. doi:10.1038/nmeth.2109
 2. Darriba D et al. (2020) ModelTest-NG. *Mol Biol Evol* 37(1):291. doi:10.1093/molbev/msz189
