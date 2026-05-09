@@ -41,12 +41,16 @@ SCHEMA_VERSION = 1
 # on 2026-04-21. Use `dataset_info` on the run record itself when available;
 # this lookup is only a fallback for runs that predate the harvest step.
 DATASET_INFO: dict[str, dict] = {
-    "turtle.fa":            {"taxa": 16,  "sites": 20820,  "kind": "dna"},
-    "large_modelfinder.fa": {"taxa": 100, "sites": 50000,  "kind": "dna"},
-    "xlarge_dna.fa":        {"taxa": 200, "sites": 100000, "kind": "dna"},
-    "medium_dna.fa":        {"taxa": 50,  "sites": 4559,   "kind": "dna"},
-    "example.phy":          {"taxa": 17,  "sites": 1998,   "kind": "dna"},
-    "mega_dna.fa":          {"taxa": 500, "sites": 100000, "kind": "dna"},
+    "turtle.fa":              {"taxa": 16,  "sites":   20820, "kind": "dna"},
+    "large_modelfinder.fa":   {"taxa": 100, "sites":   50000, "kind": "dna"},
+    "xlarge_mf.fa":           {"taxa": 100, "sites":   50000, "kind": "dna"},
+    "xlarge_dna.fa":          {"taxa": 200, "sites":  100000, "kind": "dna"},
+    "medium_dna.fa":          {"taxa": 50,  "sites":    4559, "kind": "dna"},
+    "example.phy":            {"taxa": 17,  "sites":    1998, "kind": "dna"},
+    "mega_dna.fa":            {"taxa": 500, "sites":  100000, "kind": "dna"},
+    # 100 taxa × 10 M sites — 954 MB PHY (Gadi 4-node MPI benchmark)
+    "alignment_10000000.phy": {"taxa": 100, "sites": 10000000, "kind": "dna",
+                               "size_mb": 954.0, "size_estimated": False},
 }
 
 
@@ -68,8 +72,11 @@ def dataset_lookup(name: str | None) -> dict | None:
     if not info:
         return None
     enriched = dict(info)
-    enriched["size_mb"] = _compute_size_mb(info)
-    enriched["size_estimated"] = True
+    # Honour pre-computed size if present (e.g. PHY files where FASTA heuristic
+    # overestimates), otherwise derive from geometry.
+    if "size_mb" not in enriched:
+        enriched["size_mb"] = _compute_size_mb(info)
+        enriched["size_estimated"] = True
     return enriched
 
 
