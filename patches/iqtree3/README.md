@@ -25,7 +25,7 @@ Effect on xlarge_mf (200 taxa, 100K sites), Gadi SPR, MPI 2×52 (1 node):
 | Baseline 1×104T | 1111.6 s | — |
 | R1+R2 2×52T | 523.7 s | −53% |
 
-See [numa-first-touch.md](../numa-first-touch.md) for full analysis.
+See [numa-first-touch.md](../../docs/numa-first-touch.md) for full analysis.
 
 ---
 
@@ -34,7 +34,7 @@ See [numa-first-touch.md](../numa-first-touch.md) for full analysis.
 **Apply on top of R1+R2 to enable AVX-512 double-precision kernels.**
 
 > **Requires build flag P1:** `-DIQTREE_FLAGS="mpi KNL"` at cmake time.
-> See [avx512-cmake-icpx-patch.md](../avx512-cmake-icpx-patch.md).
+> See [avx512-cmake-icpx-patch.md](../../docs/avx512-cmake-icpx-patch.md).
 
 | File | Change |
 |------|--------|
@@ -51,7 +51,7 @@ Effect on xlarge_mf (200 taxa, 100K sites), Gadi SPR, MPI 2×104 (2 nodes):
 AVX-512 confirmed active: `ZMM = 35 521` (perf stat). BW-bound at full
 thread count — larger gains expected on smaller datasets or partial trees.
 
-See [avx512-audit.md](../avx512-audit.md) for full analysis.
+See [avx512-audit.md](../../docs/avx512-audit.md) for full analysis.
 
 ---
 
@@ -98,7 +98,7 @@ These patches were generated from local branches on top of `v3.1.2`:
 | Branch | Commits above v3.1.2 | Contents |
 |--------|----------------------|----------|
 | `gadi-spr-r2-numa` | 1 | R1 + R2 NUMA first-touch |
-| `gadi-spr-avx512` | 2 | R1 + R2 + P2 + P3 AVX-512 |
+| `gadi-spr-r2-avx512` | 2 | R1 + R2 + P2 + P3 AVX-512 |
 
 The `iqtree3` upstream is `https://github.com/iqtree/iqtree3.git`.
 To push branches there you would need a fork and PR.
