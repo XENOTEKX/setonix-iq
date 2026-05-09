@@ -65,7 +65,7 @@ TMAM metrics collected: FrontEnd-Bound, Bad-Speculation, BackEnd-Bound (Memory-B
 
 ### Job submission
 
-Resubmitted after fixes — PBS ID to be filled on completion. Expected profiling output:
+Resubmitted as **PBS 167977268** after fixes. Expected profiling output:
 
 | artefact | description |
 |---|---|
