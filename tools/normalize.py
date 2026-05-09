@@ -43,7 +43,7 @@ SCHEMA_VERSION = 1
 DATASET_INFO: dict[str, dict] = {
     "turtle.fa":              {"taxa": 16,  "sites":   20820, "kind": "dna"},
     "large_modelfinder.fa":   {"taxa": 100, "sites":   50000, "kind": "dna"},
-    "xlarge_mf.fa":           {"taxa": 100, "sites":   50000, "kind": "dna"},
+    "xlarge_mf.fa":           {"taxa": 200, "sites":  100000, "kind": "dna"},
     "xlarge_dna.fa":          {"taxa": 200, "sites":  100000, "kind": "dna"},
     "medium_dna.fa":          {"taxa": 50,  "sites":    4559, "kind": "dna"},
     "example.phy":            {"taxa": 17,  "sites":    1998, "kind": "dna"},
