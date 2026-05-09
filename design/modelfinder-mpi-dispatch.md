@@ -269,7 +269,59 @@ atomic-like queue) to dispatch models to OMP threads:
 ```
 
 Each model gets 1 OMP thread. With 104 threads and 968 models: ~10 concurrent
-evaluations. **No early-stop logic** (unlike `test()`). Also not MPI-aware.
+evaluations. Also not MPI-aware.
+
+**Source-verified (confirmed by IQ-TREE postdoc + line 3455 inspection):**
+`evaluateAll()` *does* contain a cross-model pruning dependency — it is different
+from `test()`'s early-stop but still reads a neighbouring model's score:
+
+```cpp
+// line 3452–3461 inside the OMP parallel loop
+at(model).setFlag(MF_DONE);
+
+int lower_model = getLowerKModel(model);
+if (lower_model >= 0 && at(lower_model).getScore() < at(model).getScore()) {
+    // +Rk is worse than +G / +R(k-1): skip all +R(k+1)..+R(max)
+    for (int higher_model = model; higher_model != -1;
+         higher_model = getHigherKModel(higher_model))
+        at(higher_model).setFlag(MF_IGNORED);
+}
+```
+
+After evaluating `+Rk`, it reads the score of the `+G` / `+R(k-1)` neighbour
+returned by `getLowerKModel()`. If the lower-k model is better, all higher-k models
+are marked `MF_IGNORED` and skipped. This is a genuine cross-model dependency.
+
+| Aspect | `test()` | `evaluateAll()` |
+|--------|----------|-----------------|
+| Pruning basis | previous model in sequential order | `getLowerKModel()` rate-category neighbour |
+| Dependency type | strictly sequential | by model structure (rate axis) |
+| Blocks future work | yes — marks before model is reached | yes — set in OMP critical, affects queue |
+
+**Impact on the patch:** With striped dispatch, rank 0 evaluates `+R2` (index 0)
+and `+R6` (index 4); rank 1 evaluates `+R3` (index 1). When rank 0 finishes `+R2`,
+`getLowerKModel(+R2)` points at `+G` — which is on rank 2 and has `MF_IGNORED` set
+(not yet evaluated, `getScore()` returns 0 or garbage). The pruning decision is
+based on an uncomputed score → incorrect skipping of valid models.
+
+**Fix:** Guard the pruning step to fire only when the lower-k model was evaluated
+by this rank (i.e., does not have `MF_IGNORED` set):
+
+```cpp
+int lower_model = getLowerKModel(model);
+if (lower_model >= 0
+    && !at(lower_model).hasFlag(MF_IGNORED)   // ← guard: only prune if we own lower_model
+    && at(lower_model).getScore() < at(model).getScore()) {
+    for (int higher_model = model; higher_model != -1;
+         higher_model = getHigherKModel(higher_model))
+        at(higher_model).setFlag(MF_IGNORED);
+}
+```
+
+This means each rank evaluates all `+Rk` models in its stripe regardless of
+neighbouring ranks' results — slightly more work than the sequential case (no
+cross-rank early-stop), but the `MPI_Allreduce` in Phase 2 produces the globally
+correct best-fit model regardless.
 
 ### 2.5 `CandidateModel::evaluate()` — Single Model Kernel (line 1895)
 
@@ -377,19 +429,28 @@ Level 3 — MPI   :  currently wasted (all ranks duplicate all work)
 Mark each model with its owning rank before the loop starts. Each rank evaluates only
 its own subset. After all ranks finish, collect scores with a single `MPI_Allreduce`.
 
-The `MF_IGNORED` flag mechanism already exists and is respected by both `test()` and
-`evaluateAll()`. We exploit it:
+The `MF_IGNORED` flag mechanism already exists and is respected by `getNextModel()`.
+We reuse it directly — **no new flag constant is needed or safe to add**.
+
+**Why not a new `MF_IGNORED_MPI = 32` flag:** `getNextModel()` (line 3343) skips
+models via a bitmask:
+```cpp
+if (!at(next_model).hasFlag(MF_IGNORED + MF_WAITING + MF_RUNNING))
+```
+The bitmask is `2 + 4 + 8 = 14`. A new flag `= 32` is **not** in this mask, so
+`getNextModel()` would not skip cross-rank models — every rank would still evaluate
+all 968 models, defeating the entire patch. Reusing `MF_IGNORED = 2` is the correct
+and safe approach; the flag is already tested everywhere that matters.
 
 ```cpp
 // After candidate_models.generate(), before test()/evaluateAll()
-// New function: markRankModels(candidate_models, my_rank, num_ranks)
 #ifdef _IQTREE_MPI
 if (MPIHelper::getInstance().getNumProcesses() > 1) {
     int my_rank  = MPIHelper::getInstance().getProcessID();
     int nranks   = MPIHelper::getInstance().getNumProcesses();
     for (int i = 0; i < (int)candidate_models.size(); i++) {
         if (i % nranks != my_rank)
-            candidate_models[i].setFlag(MF_IGNORED_MPI);  // new flag value
+            candidate_models[i].setFlag(MF_IGNORED);  // reuse existing flag — see bitmask note above
     }
 }
 #endif
@@ -515,10 +576,10 @@ All paths relative to `/scratch/um09/as1708/iqtree3-mf2/src/iqtree3/`.
 
 ### 5.2 `main/phylotesting.h`
 
-Add new flag constant beside existing ones (line 29–33):
-```cpp
-const int MF_IGNORED_MPI = 32;   // model assigned to a different MPI rank
-```
+**No change required.** We reuse the existing `MF_IGNORED = 2` flag directly.
+Adding a new flag value (e.g. `MF_IGNORED_MPI = 32`) would not be picked up by
+the `getNextModel()` bitmask check (`MF_IGNORED + MF_WAITING + MF_RUNNING = 14`)
+and would silently fail to skip cross-rank models. See Section 5.1 for analysis.
 
 ### 5.3 `utils/MPIHelper.h` / `utils/MPIHelper.cpp`
 
@@ -610,13 +671,7 @@ must be established before the hot path runs.
 
 **Changes:**
 
-1. **`main/phylotesting.h`** — add the new flag constant after `MF_DONE = 16`:
-   ```cpp
-   const int MF_IGNORED_MPI = 32;  // model assigned to a different MPI rank
-   ```
-   Verify no collision (existing: 1, 2, 4, 8, 16 → 32 is the next power of two).
-
-2. **`main/phylotesting.cpp` — `runModelFinder()`** — add `markRankModels()` block
+1. **`main/phylotesting.cpp` — `runModelFinder()`** — add `markRankModels()` block
    immediately after `candidate_models.generate()` returns and before the
    `evaluateAll()`/`test()` branch (~line 1450):
    ```cpp
@@ -627,7 +682,7 @@ must be established before the hot path runs.
        int my_count = 0;
        for (int i = 0; i < (int)candidate_models.size(); i++) {
            if (i % nranks != my_rank)
-               candidate_models[i].setFlag(MF_IGNORED_MPI);
+               candidate_models[i].setFlag(MF_IGNORED);  // reuse existing flag
            else
                my_count++;
        }
@@ -639,10 +694,29 @@ must be established before the hot path runs.
    }
    #endif
    ```
+   **Flag note:** We use `MF_IGNORED = 2` (the existing flag). A new `MF_IGNORED_MPI`
+   value would not appear in `getNextModel()`'s bitmask (`MF_IGNORED + MF_WAITING +
+   MF_RUNNING = 14`) and would silently evaluate all models on every rank.
 
-3. **Verify `MF_IGNORED_MPI` is respected** by `evaluateAll()` — read `getNextModel()`
-   to confirm `hasFlag(MF_IGNORED)` check covers all flag values ≥ 2, or add
-   an explicit `hasFlag(MF_IGNORED_MPI)` check if needed.
+2. **`main/phylotesting.cpp` — pruning guard inside `evaluateAll()`** — add the
+   `!hasFlag(MF_IGNORED)` guard to the `getLowerKModel()` pruning step (~line 3455):
+   ```cpp
+   int lower_model = getLowerKModel(model);
+   if (lower_model >= 0
+       && !at(lower_model).hasFlag(MF_IGNORED)   // ← Phase 1 addition
+       && at(lower_model).getScore() < at(model).getScore()) {
+       for (int higher_model = model; higher_model != -1;
+            higher_model = getHigherKModel(higher_model))
+           at(higher_model).setFlag(MF_IGNORED);
+   }
+   ```
+   Without this guard, rank 0 evaluating `+R2` would read the uncomputed score of
+   `+G` (assigned to another rank, `MF_IGNORED` set, score = 0 or garbage) and
+   incorrectly prune or not prune `+R3..+R10`. With the guard, each rank skips
+   cross-rank pruning decisions entirely — a small amount of extra +Rk evaluations
+   per rank, corrected by the Phase 2 `MPI_Allreduce`.
+
+3. **`main/phylotesting.h`** — no change needed. `MF_IGNORED = 2` is already defined.
 
 **Build command:**
 ```bash
@@ -938,7 +1012,9 @@ documented. The design doc `Section 4.4` scaling table is updated with measured
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| Early-stop in `test()` breaks with strided gaps | **Eliminated** | Force `evaluateAll()` path when `nranks > 1` (no early-stop in that path) |
+| Early-stop in `test()` breaks with strided gaps | **Eliminated** | Force `evaluateAll()` path when `nranks > 1` |
+| Pruning dependency in `evaluateAll()` reads cross-rank neighbour score | **Eliminated** | Add `!at(lower_model).hasFlag(MF_IGNORED)` guard in Phase 1; unguarded pruning reads uncomputed score (= 0 or garbage) from cross-rank slot → incorrect `+Rk` skipping |
+| New `MF_IGNORED_MPI` flag not picked up by `getNextModel()` bitmask | **Eliminated** | Reuse `MF_IGNORED = 2` directly; `getNextModel()` bitmask is `2+4+8=14` which already covers it; a new flag `= 32` would silently fail and evaluate all 968 models on every rank |
 | Memory exceeds node capacity (0% compression) | High for xlarge | 324 GB/rank × 4 ranks = 1296 GB; need `mem=2048GB` PBS request; limit to 1 rank/node |
 | Score mismatch across ranks | Low | Identical alignment + identical starting tree + `--seed`; only OMP non-determinism in last digit |
 | Checkpoint race: workers write to same `.model.gz` | **Eliminated** | Workers call `model_info.setFileName("")` at line ~1405 (already in code for MPI workers) |
