@@ -210,7 +210,7 @@ MPI_OPTS=(
     --mca pml ucx
     -x "UCX_TLS=rc_mlx5,sm,self"
     -x "UCX_NET_DEVICES=mlx5_0:1"
-    -x "UCX_IB_ADDR_TYPE=lid"
+    -x "UCX_IB_ADDR_TYPE=ib_local"
 )
 
 # ── OMP env forwarded into each rank ─────────────────────────────────
