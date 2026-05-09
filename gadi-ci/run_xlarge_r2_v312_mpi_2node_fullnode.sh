@@ -254,7 +254,7 @@ env = {
   "mpi_version": sh("mpirun --version 2>&1 | head -1"),
   "icx":   sh("icx --version 2>/dev/null | head -1"),
   "iqtree_binary":  "${IQTREE}",
-  "iqtree_version": sh("mpirun -n 1 ${IQTREE} --version 2>&1 | head -1"),
+  "iqtree_version": sh("${IQTREE} --version 2>&1 | head -1"),
   "date": sh("date -Iseconds"),
   "dataset": {
     "path": ds, "file": os.path.basename(ds),
