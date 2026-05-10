@@ -82,6 +82,34 @@ TVMe+I+R2    logL -28,067,498.30   BIC 56,146,555.58   w-BIC 0
 
 `/home/272/as1708/setonix-iq/iq-mega-mf2-4node-aps.o168015597`
 
+### Post-run analysis: model cost distribution
+
+119 per-model wall times extracted from `iqtree_clean.model.gz` checkpoint,
+revealing the distribution is **bimodal**, not normal or lognormal.
+
+| Cluster | Models | Mean | Range | Rate suffixes |
+|---|---|---|---|---|
+| Fast | 47 / 119 | 93.6s | 82–95s | base, +I, +R2 |
+| Slow | 72 / 119 | 102.0s | 98–103s | +G, +R3, +R4, +R5, +R6 |
+
+Overall: n=119, mean=98.7s, CV=4.6%, Max/Min=1.25×, skewness=−0.88.
+
+**Why so narrow?** 99,999/100,000 distinct patterns means per-site likelihood
+evaluation dominates every model — extra rate categories add only marginal overhead.
+The bimodal gap shrinks to insignificance compared to the total per-model compute.
+
+**Dispatch imbalance at 100K sites**: All strategies within 0.5% (LPT ≈ naive ≈
+dynamic) — distribution is too uniform to show meaningful differences at ≤16 ranks.
+
+**Extrapolated 10M-site distribution**: Estimated ratio grows to ~2.7× (JC ≈96 min,
+GTR+R6 ≈258 min) because JC converges faster (fewer params) while GTR+R6 requires
+more optimisation rounds on a larger likelihood surface. At 16 ranks, LPT wastes 1.6%
+vs naive's 6.9%; at 32 ranks LPT wastes 3.8% vs naive's 14.5%. LPT is the practical
+optimum — no MPI communication overhead while achieving 4× better balance than naive.
+
+See [design/modelfinder-mpi-dispatch.md](design/modelfinder-mpi-dispatch.md) §13
+for full analysis and simulation tables.
+
 ---
 
 ## 2026-05-10 (ac) — Performance Research: CPU/MPI bottlenecks for 10M full-sweep

@@ -1231,6 +1231,112 @@ values.
 
 ---
 
+## 13. Model Cost Distribution Analysis (Empirical, mega_dna 104T/rank)
+
+**Date:** 2026-05-10 — PBS 168015597 (4× SPR, 4× 104T, 968-model full MF)
+
+### 13.1 Observed distribution
+
+Wall times extracted from the clean-timing checkpoint (`iqtree_clean.model.gz`)
+for 119 model evaluations on `mega_dna.fa` (500 taxa × 100,000 sites, 99,999
+distinct patterns, 104T per rank):
+
+| Statistic | Value |
+|---|---|
+| N models measured | 119 / 968 |
+| Min | 82.4s (JC bare) |
+| Max | 102.9s (GTR+R5, SYM+R6) |
+| Max/Min ratio | **1.25×** |
+| Mean | 98.7s |
+| Median | 102.5s |
+| Std dev | 4.5s |
+| CV (σ/μ) | 4.6% |
+| Skewness | −0.88 |
+
+**Distribution shape: bimodal, not normal or lognormal.**
+
+```
+  82.4- 84.5s | ██                              2   (JC bare + JC+I)
+  90.6- 94.7s | █████████████████████████████████ 45   (+R2 class)
+  98.8-102.9s | ███████████████████████████████████████████████████ 71   (+R4/R5/R6 class)
+```
+
+Two distinct clusters driven by **rate heterogeneity complexity**:
+
+| Cluster | Rate suffix | N | Mean | Range |
+|---|---|---|---|---|
+| Fast | base, +I, +R2 | 47 | 93.6s | 82–95s |
+| Slow | +G, +R3, +R4, +R5, +R6 | 72 | 102.0s | 98–103s |
+
+**Why the gap is narrow (only 1.25×):** At 100,000 sites with 99,999 distinct
+patterns (zero compression), per-site likelihood evaluation completely dominates
+runtime. Extra rate categories add only marginal cost from additional optimisation
+rounds — the bottleneck is the same memory-bandwidth-limited pattern traversal for
+every model regardless of complexity.
+
+### 13.2 Implications for dispatch strategy
+
+For `mega_dna`-class data (large N, zero compression), all dispatch strategies
+produce near-identical imbalance because the distribution is so tight:
+
+| Ranks | Strategy | Bottleneck | Imbalance |
+|---|---|---|---|
+| 4 | naive | ~399 min | +0.2% |
+| 4 | LPT | ~398 min | +0.0% |
+| 4 | dynamic | ~398 min | +0.0% |
+
+**LPT is not the bottleneck solver for this dataset** — the near-uniform distribution
+means any strategy gives <0.5% imbalance. The real gain from LPT is for datasets with
+high model cost variance (see §13.3).
+
+### 13.3 Extrapolation to 10M-site dataset
+
+At 10M sites (100 taxa, 0% pattern compression), cost differences compound:
+- **JC-class** models converge faster (fewer parameters, shallower optimisation
+  landscape) → scales sublinearly: ~0.7× raw site scaling → ~96 min/model
+- **GTR+R6-class** models require more optimisation rounds at larger N → scales
+  superlinearly: ~1.5× raw site scaling → ~258 min/model
+- **Estimated ratio: ~2.7×** (vs 1.25× at 100K sites)
+
+Dispatch simulation with this extrapolated bimodal distribution:
+
+| Ranks | Strategy | Bottleneck | Ideal | Waste |
+|---|---|---|---|---|
+| 4 | naive | 793h | 777h | +2.0% |
+| 4 | LPT | 779h | 777h | +0.3% |
+| 4 | dynamic | 777h | 777h | +0.0% |
+| 16 | naive | 206h | 194h | **+6.9%** |
+| 16 | LPT | 197h | 194h | +1.6% |
+| 16 | dynamic | 195h | 194h | +0.3% |
+| 32 | naive | 110h | 97h | **+14.5%** |
+| 32 | LPT | 101h | 97h | +3.8% |
+| 32 | dynamic | 98h | 97h | +0.7% |
+
+**Key findings:**
+1. **Imbalance worsens with rank count** for naive dispatch — at 32 ranks, 14.5%
+   of walltime is wasted from idle ranks.
+2. **LPT reduces imbalance ~4× vs naive** at any rank count.
+3. **Dynamic work-stealing (heap-based)** achieves near-ideal balance (<1%) and is
+   the theoretical ceiling. The LPT static schedule gets within 4× of dynamic for
+   free (no MPI communication overhead), making it the practical optimum.
+4. **For the actual 10M run**: at 16 nodes LPT wastes ~3h vs naive's ~12h — a
+   meaningful difference at 26 KSU cost.
+
+### 13.4 Recommendation
+
+For datasets with **low pattern compression and many sites** (10M case), LPT gives
+sufficient balance without requiring dynamic work-stealing (which needs MPI
+communication per model). The cost model used in `abd98764` (sort by number of
+free parameters df) is a good proxy — df correlates strongly with the fast/slow
+cluster membership observed empirically.
+
+To improve the cost estimate for future work: use a two-factor cost model
+`cost = df × rate_categories` where rate_categories counts the number of free
+rate bins (R2=2, R4=4, etc.). This would perfectly separate the observed bimodal
+clusters.
+
+---
+
 ## 12. References
 
 1. Darriba D et al. (2012) jModelTest 2. *Nat Methods* 9(8):772. doi:10.1038/nmeth.2109
