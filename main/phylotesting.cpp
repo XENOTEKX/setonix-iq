@@ -1521,8 +1521,17 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
 #ifdef _IQTREE_MPI
             // Phase 1: force evaluateAll() for MPI dispatch — dispatch marks happen
             // inside evaluateAll() after generate() populates the model list.
+            // Phase 3: partition the OMP thread budget across ranks sharing a node.
+            int orig_num_threads = params.num_threads;
             if (MPIHelper::getInstance().getNumProcesses() > 1) {
                 params.openmp_by_model = true;
+                int rank_threads = max(1, params.num_threads / params.mpi_ranks_per_node);
+                if (rank_threads != params.num_threads) {
+                    cout << "MF-MPI: thread budget per rank = " << rank_threads
+                         << " (" << params.num_threads << " total / "
+                         << params.mpi_ranks_per_node << " ranks/node)" << endl;
+                    params.num_threads = rank_threads;
+                }
             }
 #endif
             if (params.openmp_by_model)
@@ -1532,6 +1541,10 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
             else
                 best_model = model_set.test(params, &iqtree,
                                                       model_info, models_block, params.num_threads, BRLEN_OPTIMIZE);
+#ifdef _IQTREE_MPI
+            // Phase 3: restore thread count so subsequent tree search is unaffected.
+            params.num_threads = orig_num_threads;
+#endif
             iqtree.aln->model_name = best_model.getName();
             best_subst_name = best_model.subst_name;
             best_rate_name = best_model.rate_name;

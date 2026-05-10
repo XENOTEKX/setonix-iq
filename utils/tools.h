@@ -2367,6 +2367,11 @@ public:
     /** true to parallel ModelFinder by models instead of sites */
     bool openmp_by_model;
 
+    /** number of MPI ranks sharing each physical node during ModelFinder;
+     *  used to partition OMP thread budget: rank_threads = num_threads / mpi_ranks_per_node.
+     *  Default 1 (each rank owns the full node — the xlarge 1-rank/node case). */
+    int mpi_ranks_per_node;
+
     /** either MTC_AIC, MTC_AICc, MTC_BIC */
     ModelTestCriterion model_test_criterion;
 

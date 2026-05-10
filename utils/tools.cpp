@@ -4586,6 +4586,16 @@ void parseArg(int argc, char *argv[], Params &params) {
                 continue;
             }
 
+            if (strcmp(argv[cnt], "--mpi-ranks-per-node") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --mpi-ranks-per-node <N>";
+                params.mpi_ranks_per_node = convert_int(argv[cnt]);
+                if (params.mpi_ranks_per_node < 1)
+                    throw "--mpi-ranks-per-node must be >= 1";
+                continue;
+            }
+
             if (strcmp(argv[cnt], "--weighted-perturbation") == 0 || strcmp(argv[cnt], "-weighted-perturbation") == 0) {
                 params.weightedPerturbation = true;
                 continue;
@@ -7365,6 +7375,7 @@ void Params::setDefault() {
     num_threads = 1;
     num_threads_max = 10000;
     openmp_by_model = false;
+    mpi_ranks_per_node = 1;
     model_test_criterion = MTC_BIC;
 //    model_test_stop_rule = MTC_ALL;
     model_test_sample_size = 0;
