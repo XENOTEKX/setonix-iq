@@ -2,13 +2,15 @@
 
 ---
 
-## 2026-05-10 (x) — Phase 5 correctness pre-test: Issue 4 found + fix
+## 2026-05-10 (x) — Phase 5 correctness pre-test: Issues 4+5 found + fixed
 
 ### Summary
 
-PBS **167997082** completed (7 minutes wall time). np=1 reference ran correctly
-(`GTR+R4`, 118 s MF wall). np=4 MPI dispatch **crashed (SIGSEGV, exit 139)** —
-new Issue 4 found and fixed. Script corrected, PBS **167997083** resubmitted.
+PBS **167997082** → crash (exit 139, wrong `-T` arg — **Issue 4**, fixed).  
+PBS **167997487** → crash (exit 139, heap corruption in MF2 code — **Issue 5**, fixed).  
+PBS **167998162** → submitted with both fixes, queued.
+
+np=1 reference confirmed correct in PBS 167997487: `GTR+R4`, MF wall = 120 s.
 
 ### PBS 167997082 — np=1 result (correct)
 
@@ -16,63 +18,78 @@ new Issue 4 found and fixed. Script corrected, PBS **167997083** resubmitted.
 |-------|-------|
 | Best-fit model | `GTR+R4` (BIC) |
 | MF wall clock | **118.3 s** (968 models, 104 OMP, `-te fixed_xlarge_tree.nwk`) |
-| Total wall clock | 119.0 s (MF-only run, no tree search after fixed tree) |
-| MF-MPI lines | None (np=1, expected) |
+| Total wall clock | 119.0 s |
 
-New baseline data point: MF wall at 104 OMP on xlarge_mf.fa = **118 s** (vs 126 s
-from PBS 167932917 with a different binary build — consistent within run-to-run variance).
+### Issue 4 — Phase 3 thread-count validation ordering (PBS 167997082)
 
-### Issue 4 — Phase 3 thread-count validation ordering
+**Root cause:** IQ-TREE validates `-T N` against visible CPU cores at **startup**,
+before `runModelFinder()` where `--mpi-ranks-per-node` would have divided the budget.
+With `--map-by node:PE=26`, each rank sees 26 cores; passing `-T 104` triggered
+`"more threads than CPU cores available"` → SIGSEGV (exit 139).
 
-**Root cause:** IQ-TREE validates `-T N` against available CPU cores at **startup**,
-before `runModelFinder()` is entered. Phase 3 (`--mpi-ranks-per-node`) divides the
-thread budget *inside* `runModelFinder()` — after the validation has already fired.
+**Fix:** `test_xlarge_mf2_correctness.sh` — pass `-T 26` and `OMP_NUM_THREADS=26`
+directly (not `-T 104`). Phase 3 already tested via `test_mf_mpi_dispatch.sh` Test 3.
 
-**Symptom:** With 4 ranks on 1 node and `--map-by node:PE=26`, each rank is bound to
-26 CPU cores by the MPI launcher. Passing `-T 104` (total node threads) triggers:
+### Issue 5 — evaluateAll() data race on shared model_info checkpoint (PBS 167997487)
+
+**Root cause:** `evaluateAll()` parallelises across models using `#pragma omp parallel
+num_threads(26)`. Inside each concurrent `evaluate()` call, `initializeModel()` creates
+a new `ModelFactory()` which writes to the shared `model_info` (`std::map`) through the
+`iqtree` checkpoint pointer. Concurrent `std::map` writes = undefined behaviour; on
+xlarge datasets (98,858 patterns) the collision window is wide enough to corrupt
+glibc's tcache: `malloc(): unaligned tcache chunk detected` → SIGSEGV (exit 139).
+
+This did not trigger on `example.phy` (tiny dataset, collision window negligible).
+It did not trigger on np=1 runs because np=1 uses `model_set.test()` (sequential)
+not `evaluateAll()`.
+
+**Fix** (commit `60f5cd1f` on `gadi-spr-r2-avx512`): in `CandidateModelSet::evaluateAll()`,
+add a sequential model-evaluation path for MPI mode (`nranks > 1`). Instead of the
+`#pragma omp parallel num_threads(N)` outer section, each model is evaluated in a
+plain sequential loop, allowing `evaluate()` to use the full `num_threads` OMP budget
+for within-model (site-level) parallelism without races. The OMP across-models path
+is preserved unchanged for the non-MPI case.
+
 ```
-ERROR: You have specified more threads than CPU cores available
-Kernel: AVX+FMA - 104 threads (26 CPU cores detected)
+#ifdef _IQTREE_MPI
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        // sequential loop — each evaluate() uses full num_threads OMP
+        do { model = getNextModel(); ... evaluate(); ... } while (model != -1);
+    } else
+#endif
+    {
+        #pragma omp parallel num_threads(num_threads)
+        { ... }  // original OMP-across-models path unchanged
+    }
 ```
-IQ-TREE then issues a SIGABRT which OpenMPI converts to SIGSEGV (exit 139).
 
-**Fix:** Pass `-T OMP_PER_RANK` (26) and `OMP_NUM_THREADS=OMP_PER_RANK` (26) directly
-in the correctness test. Phase 3 (`--mpi-ranks-per-node`) is the right tool for the
-*production* scenario (4 ranks on 4 separate nodes, each with 104 cores and `-T 104`)
-where no oversubscription occurs and the thread validation passes. The 4-ranks-on-1-node
-correctness test is a different shape that must set the per-rank budget explicitly.
-
-**Scope of fix:** `gadi-ci/test_xlarge_mf2_correctness.sh` only. No IQ-TREE source
-change required. Phase 3 source code (`--mpi-ranks-per-node`) is correct as-is for
-the production case; the issue is purely in the test script's `-T` argument.
-
-**Phase 3 test coverage:** The `--mpi-ranks-per-node` path is exercised by
-`test_mf_mpi_dispatch.sh` Test 3 (submitted via PBS), which uses `example.phy` — a
-tiny alignment where 4 ranks can each fit in 1 OMP thread with -T 8 / --mpi-ranks-per-node 4.
-The xlarge correctness test focuses on Phase 1+2 correctness only.
-
-### PBS 167997082 — np=1 result vs baselines
-
-| Config | MF wall (s) | Best-fit | PBS |
-|--------|-------------|---------|-----|
-| v3.1.2 R2 ICX, 1 node (rc29 build) | 126.2 | GTR+R4 | 167932917 |
-| mf2 R2 ICX, 1 node (um09 build, no MF2 active) | 125.7 | GTR+R4 | 167969243 |
-| **mf2 Phase 1+2+3, np=1 reference** | **118.3** | **GTR+R4** | **167997082** |
-
-All three: consistent `GTR+R4` best-fit model. MF wall variance (~7%) is within
-expected run-to-run noise from CPU frequency boost state and LLC warming.
-
-### PBS 167997487 — correctness re-test (np=4, fixed script)
+### PBS 167997482 — np=1 result (second correctness job, np=1 reference)
 
 | Field | Value |
 |-------|-------|
-| Job ID | 167997487 |
-| Fix applied | `-T 26` and `OMP_NUM_THREADS=26` per rank (not `-T 104`) |
+| Best-fit model | `GTR+R4` (BIC) |
+| MF wall clock | **120.2 s** (968 models, 104 OMP, `-te`) |
+| Total wall clock | 121.0 s |
+
+### PBS 167998162 — correctness re-test (np=4, both fixes applied)
+
+| Field | Value |
+|-------|-------|
+| Job ID | **167998162** |
+| Fix applied | Issue 4: `-T 26` per rank; Issue 5: sequential model eval in MPI mode |
 | Expected: Phase 1 | `MF-MPI: rank N/4 assigned 242/968 models` (all 4 ranks) |
 | Expected: Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` |
 | Expected: model | `GTR+R4` — must match np=1 reference |
-| Expected: MF wall | ~32 s (118 s / 4 ranks, each evaluating 242 models with 26 OMP) |
-| Status | **Queued — PBS 167997487** |
+| Expected: MF wall | ~120 s (sequential per-rank eval of 242 models with 26 OMP) |
+| Status | **Queued — PBS 167998162** |
+
+Note: MF wall with sequential dispatch ≈ MF wall at 104 OMP / 4 ranks × 26 OMP overhead
+factor. Since model eval scales with OMP threads (site-level parallelism), 26 OMP per
+rank vs 104 OMP = ~4× slower per model. But 242 models per rank vs 968 = 4× fewer.
+Net effect: MF wall ≈ same as np=1 baseline (~120 s). This is correct for a single-node
+test (4 ranks sharing 104 cores, 26 cores each). The speedup will be real in the 4-node
+production benchmark (4 ranks on separate nodes, 104 OMP each, 242 models each → ~120 s
+instead of 480 s + gather overhead).
 ---
 
 ## 2026-05-10 (w) — ModelFinder MPI dispatch: Phase 4 plan + Phase 5 preparation
