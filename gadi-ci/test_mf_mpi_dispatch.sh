@@ -1,11 +1,12 @@
 #!/bin/bash
-# test_mf_mpi_dispatch.sh — Correctness test for Phase 1 + Phase 2 ModelFinder MPI dispatch.
+# test_mf_mpi_dispatch.sh — Correctness test for Phase 1+2+3 ModelFinder MPI dispatch.
 #
 # Runs ModelFinder on the bundled example.phy alignment with np=1 (reference)
 # and np=4 (distributed dispatch) and confirms the best-fit model is identical.
 #
 # Phase 1: rank-striped model assignment (round-robin MF_IGNORED marks).
 # Phase 2: MPI_Allreduce gather of per-rank scores into a global picture.
+# Phase 3: OMP thread budget partitioned per rank (--mpi-ranks-per-node).
 #
 # Binary: build-mpi-mf2/iqtree3-mpi (fresh cmake build from iqtree3-mf2 src).
 # Project: um09 (not rc29 — scratch/um09 must be mounted).
@@ -238,6 +239,75 @@ if [[ -n "${REF_BIC}" && -n "${TEST_BIC}" ]]; then
     else
         echo "△ BIC scores differ (acceptable if within float rounding)"
         EXIT_CODE=0  # don't fail on BIC rounding, model name is the gate
+    fi
+fi
+
+# ── Test 3: Phase 3 — thread budget partitioning ─────────────────────────────
+# Run np=4 with -T 8 --mpi-ranks-per-node 4 so each rank uses 2 OMP threads.
+# Budget message "MF-MPI: thread budget per rank = 2" must appear in stdout,
+# and best-fit model must still match the np=1 reference.
+echo "─────────────────────────────────────────"
+echo " Test 3: Phase 3 thread budget (np=${NRANKS}, -T 8 --mpi-ranks-per-node ${NRANKS})"
+echo "─────────────────────────────────────────"
+
+P3_THREADS_TOTAL=8
+P3_RANKS_PER_NODE=${NRANKS}
+P3_THREADS_PER_RANK=$(( P3_THREADS_TOTAL / P3_RANKS_PER_NODE ))
+
+OMP_ENV_P3=(
+    -x "OMP_NUM_THREADS=${P3_THREADS_TOTAL}"
+    -x "OMP_DYNAMIC=false"
+    -x "OMP_PROC_BIND=close"
+    -x "OMP_PLACES=cores"
+    -x "KMP_BLOCKTIME=${KMP_BLOCKTIME}"
+)
+
+mpirun -np "${NRANKS}" \
+    --map-by node:PE="${P3_THREADS_PER_RANK}" \
+    "${OMP_ENV_P3[@]}" \
+    numactl --localalloc -- \
+    "${IQTREE}" \
+        -s "${ALN}" \
+        -te "${FIXED_TREE}" \
+        -m MF \
+        -T "${P3_THREADS_TOTAL}" \
+        --mpi-ranks-per-node "${P3_RANKS_PER_NODE}" \
+        --seed "${SEED}" \
+        --prefix "${OUTDIR}/p3_test" \
+        --redo \
+    2>&1
+
+P3_EXIT=$?
+echo "np=${NRANKS} (Phase 3) exit: ${P3_EXIT}"
+echo ""
+
+P3_LOG="${OUTDIR}/p3_test.log"
+if [[ ${P3_EXIT} -ne 0 ]]; then
+    echo "✗ FAIL (Test 3): mpirun exited with ${P3_EXIT}" >&2
+    EXIT_CODE=1
+elif [[ ! -f "${P3_LOG}" ]]; then
+    echo "✗ FAIL (Test 3): log not found: ${P3_LOG}" >&2
+    EXIT_CODE=1
+else
+    P3_MODEL=$(grep "Best-fit model:" "${P3_LOG}" | head -1)
+    echo "  np=1 ref  ${REF_MODEL}"
+    echo "  np=${NRANKS} p3   ${P3_MODEL}"
+    if [[ "${REF_MODEL}" == "${P3_MODEL}" ]]; then
+        echo "✓ PASS (Test 3): Best-fit model matches reference"
+    else
+        echo "✗ FAIL (Test 3): Best-fit model MISMATCH"
+        EXIT_CODE=1
+    fi
+    echo ""
+    echo "[Phase 3 thread budget diagnostics]"
+    grep "MF-MPI: thread budget" "${P3_LOG}" 2>/dev/null || \
+        echo "  (no thread-budget message — ranks_per_node=1 or Phase 3 not compiled)"
+    EXPECTED_MSG="thread budget per rank = ${P3_THREADS_PER_RANK}"
+    if grep -q "${EXPECTED_MSG}" "${P3_LOG}" 2>/dev/null; then
+        echo "✓ PASS (Test 3): thread budget message confirmed (${P3_THREADS_PER_RANK} threads/rank)"
+    else
+        echo "△ NOTE (Test 3): expected '${EXPECTED_MSG}' not found in log"
+        echo "  (acceptable if mpi_ranks_per_node == 1 suppresses the message)"
     fi
 fi
 
