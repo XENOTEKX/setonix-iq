@@ -638,7 +638,12 @@ def enrich_run(run: dict) -> bool:
     if not pdir.is_dir():
         return False
 
-    iqtree_report = pdir / "iqtree_run.iqtree"
+    # Multi-pass runs (e.g. run_mega_mf2dispatch_4node_aps.sh) use
+    # iqtree_aps.iqtree / iqtree_clean.iqtree instead of iqtree_run.iqtree.
+    for _candidate in ("iqtree_run.iqtree", "iqtree_clean.iqtree", "iqtree_aps.iqtree"):
+        iqtree_report = pdir / _candidate
+        if iqtree_report.exists():
+            break
     parsed = parse_iqtree_report(iqtree_report)
 
     # ── dataset_info ──────────────────────────────────────────────────────
