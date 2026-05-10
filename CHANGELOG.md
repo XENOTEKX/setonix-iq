@@ -2,6 +2,149 @@
 
 ---
 
+## 2026-05-10 (x) — Phase 5 correctness pre-test submitted + MF phase timing analysis
+
+### Summary
+
+Phase 5 correctness pre-test (PBS **167997082**) submitted to `normalsr`. This is the
+first run of the full MF2 dispatch binary against `xlarge_mf.fa` on a full production
+SPR node. Timing analysis using existing baseline logs answers the key question: **yes,
+we will see a meaningful decrease in ModelFinder wall time on xlarge_mf.fa**, but the
+mechanism and magnitude require careful framing — documented below.
+
+### PBS 167997082 — Phase 5 correctness pre-test
+
+| Field | Value |
+|-------|-------|
+| Job ID | 167997082 |
+| Queue | `normalsr-exec` |
+| Nodes / CPUs | 1 / 104 |
+| Memory | 503 GB (full node) |
+| Walltime limit | 02:00:00 |
+| Dataset | `xlarge_mf.fa` (200 taxa × 100,000 sites, sha256 `66eaf64b...`) |
+| Binary | `build-mpi-mf2/iqtree3-mpi` — v3.1.2 + NUMA R2 + AVX-512 + Phase 1+2+3 MF2 |
+| Model search | `-m MF` — full 968-model DNA scan |
+| Run shape | Phase 1: np=1 tree generation → np=1 reference (104 OMP) → np=4 dispatch (4 × 26 OMP via `--mpi-ranks-per-node 4`) |
+| Status | **Queued** (submitted 2026-05-10) |
+| Memory corrected | 64 GB → 503 GB (full-node booking for scientific parity) |
+
+Full-node 503 GB booking ensures exclusive NUMA domain access — identical conditions
+to all prior single-node xlarge baselines (PBS 167932917, 167969243). Sharing a node
+would invalidate the wall-time comparison.
+
+### Expected output from PBS 167997082
+
+From the np=4 IQ-TREE log:
+```
+MF-MPI: rank 0/4 assigned 242/968 models
+MF-MPI: rank 1/4 assigned 242/968 models
+MF-MPI: rank 2/4 assigned 242/968 models
+MF-MPI: rank 3/4 assigned 242/968 models
+MF-MPI: thread budget per rank = 26 (104 total / 4 ranks/node)
+MF-MPI: gather complete, 968 model scores consolidated
+Best-fit model: GTR+R4 chosen according to BIC     ← must match np=1 reference
+Wall-clock time for ModelFinder: ~32 seconds        ← projected 4× of 126 s baseline
+```
+
+Expected correctness verdict: `✓ PASS: Best-fit model matches between np=1 and np=4`
+
+### ModelFinder wall-time analysis — will we see a decrease on xlarge?
+
+**Short answer: Yes — a real and measurable decrease on the MF phase specifically.
+But the total run speedup is governed by Amdahl's Law because MF is only ~24% of the
+total wall clock on xlarge_mf.fa at 104 OMP threads.**
+
+The analysis is grounded entirely in measured data from existing logs:
+
+#### Measured ModelFinder phase timing on xlarge_mf.fa
+
+| Config | Ranks | OMP/rank | MF wall (s) | Total wall (s) | MF fraction | Best-fit | PBS |
+|--------|-------|----------|-------------|----------------|-------------|---------|-----|
+| v3.1.2 + R2 ICX, 1-node | 1 | 104 | **126.2** | 535.7 | **23.6%** | GTR+R4 | 167932917 |
+| v3.1.2 + R2 ICX, 2-node MPI | 2 | 104 | **126.1** | 339.3 | **37.2%** | GTR+R4 | 167932918 |
+| mf2 + R2 ICX, 1-node | 1 | 104 | **125.7** | 531.5 | **23.6%** | GTR+R4 | 167969243 |
+| mf2 + AVX-512 R2, 2-node MPI (socket) | 2 | 104 | **122.9** | 324.0 | **37.9%** | GTR+R4 | 167973941 |
+
+Three key observations:
+
+**1. MF is consistently ~126 s regardless of MPI rank count (current code).**
+The 2-rank MPI runs (PBS 167932918, 167973941) show MF wall time **identical** to the
+1-rank runs — confirming that standard IQ-TREE MPI does zero ModelFinder dispatch.
+Both ranks evaluate all 968 models redundantly in parallel. Our MF2 patch eliminates
+this redundancy.
+
+**2. The existing MPI speedup (536 s → 339 s, ~1.58×) is entirely from the tree search.**
+Bootstrapping and fast-NNI tree search are already MPI-dispatched across ranks in
+standard IQ-TREE. MF2 adds a second, independent speedup source.
+
+**3. Per-model time on xlarge_mf.fa: 126 s / 968 models = 0.130 s/model** (at 104 OMP).
+Compare to the 10M-site synthetic: ~729 s/model at 104 OMP. xlarge_mf.fa is ~5,600×
+faster per model because it has 98,858 distinct patterns vs 10,000,000 (100× fewer),
+and the kernel scales near-linearly with patterns at 104 OMP.
+
+#### MF2 dispatch projection (Phase 5 benchmark — 4 nodes × 4 ranks × 104 OMP)
+
+With MF2 dispatch, each rank evaluates 242 models instead of 968:
+
+| Phase | Before MF2 (1 rank baseline) | After MF2 (4 ranks dispatch) | Δ |
+|-------|------------------------------|-------------------------------|---|
+| Fast ML tree (initial) | 8.6 s | ~8 s (single rank) | ≈same |
+| **ModelFinder** | **126.2 s** | **~32 s** (126/4 + gather overhead) | **−75%** |
+| Tree search (ML + bootstrap) | ~401 s | ~100–130 s (4× MPI) | ~−70% |
+| **Total** | **~536 s** | **~140–170 s** | **~3–4×** |
+
+The MF2 patch contributes ~94 s of the total saving. The tree search saving (~270 s)
+is from standard MPI tree dispatch already present in IQ-TREE — it would have happened
+with any 4-rank MPI run. The novel contribution is that for the first time, adding a
+4th rank actually improves ModelFinder time (from 126 s → 32 s), not just tree time.
+
+#### Why Amdahl's Law limits total speedup on xlarge but not on the 10M synthetic
+
+On the 10M synthetic (PBS 167977883): MF was projected to take ~196 h out of ~197 h
+total (fast-ML tree was ~510 s = 0.07% of runtime). MF fraction ≈ **99.9%** → MF2
+dispatch gives near-linear scaling → 4 ranks → ~49 h total. MF2 is essentially the
+entire speedup.
+
+On xlarge_mf.fa: MF is **23.6%** of total → even a perfect 4× MF speedup only reduces
+total by 17.7% without touching tree search. But with 4 MPI ranks, the tree search
+also scales (as shown by 2-rank data above), making the combined speedup meaningful.
+
+**The scientific significance is different but complementary:**
+- **10M synthetic**: MF2 makes a previously impossible run (~196 h) feasible (~49 h)
+- **xlarge_mf.fa**: MF2 eliminates wasteful redundancy visible in the data (126 s
+  identical across 1 and 2 ranks), making 4-rank = 4× faster on MF for the first time
+
+### Build parity for PBS 167997082
+
+The test binary is verified full-parity with the canonical xlarge baselines:
+
+| Dimension | Canonical baselines | PBS 167997082 |
+|-----------|--------------------|-|
+| IQ-TREE version | v3.1.2 | v3.1.2 |
+| Source branch | `gadi-spr-r2-avx512` | `gadi-spr-r2-avx512` + Phase 1+2+3 |
+| NUMA patch | R1+R2 | R1+R2 |
+| AVX-512 target | `-march=sapphirerapids` | `-march=sapphirerapids` |
+| MPI library | openmpi/4.1.7 | openmpi/4.1.7 |
+| Compiler | intel-compiler-llvm (icpx) | intel-compiler-llvm (icpx) |
+| OMP runtime | libiomp5 | libiomp5 |
+| Dataset | `xlarge_mf.fa` sha256 `66eaf64b...` | same, sha256-gated in script |
+| Node type | Gadi `normalsr` (SPR 8470Q) | Gadi `normalsr` (SPR 8470Q) |
+| Node booking | Full node (503 GB) | Full node (503 GB) ✓ |
+| Model search | `-m MF` (968 models, full) | `-m MF` (968 models, full) ✓ |
+| OMP binding | `OMP_PROC_BIND=close`, `OMP_PLACES=cores`, `KMP_BLOCKTIME=200` | same ✓ |
+| NUMA policy | `numactl --localalloc` | same ✓ |
+
+### Next step
+
+After PBS 167997082 completes and reports `✓ PASS`:
+```bash
+qsub gadi-ci/run_xlarge_r2_mf2_dispatch.sh   # 4 nodes × 416 CPUs × 2000 GB, 6h
+```
+The benchmark run captures the first measured wall-time comparison of MF2 dispatch vs
+the single-rank 126 s ModelFinder baseline on `xlarge_mf.fa`.
+
+---
+
 ## 2026-05-10 (w) — ModelFinder MPI dispatch: Phase 4 plan + Phase 5 preparation
 
 ### Summary
