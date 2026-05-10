@@ -12,21 +12,30 @@
 # │  Service Units: 1674.40  (416 cores × 2.013 h × 2 SU/core-h)      │
 # └─────────────────────────────────────────────────────────────────────┘
 #
-# ┌─ This run (MF2 dispatch, commit 1ac3c0a8) ─────────────────────────┐
-# │  Rank 0 → models { 0, 4, 8, 12, … }  (242 models, every 4th)     │
-# │  Rank 1 → models { 1, 5, 9, 13, … }  (242 models)                │
-# │  Rank 2 → models { 2, 6, 10, 14, … } (242 models)                │
-# │  Rank 3 → models { 3, 7, 11, 15, … } (242 models)                │
-# │  In ~2 h wall: ~9 models per rank → ~36 unique models (4× coverage)│
-# │  Service Units: ~1674 (same cost — same cores × same wall × 2 SU) │
+# ┌─ PBS 168000932 (MF2 dispatch, commit 1ac3c0a8 — BROKEN i%nranks) ──┐
+# │  Rank 0 evaluated only 24/242 assigned models then sat IDLE.        │
+# │  MF_WAITING cross-rank blocking: +Rk models blocked permanently     │
+# │  because +R(k-1) belonged to a different rank and was never eval'd. │
+# │  Job killed at 3h wall, exit -29. No Best-fit model produced.       │
+# │  Service Units: 2514.03 SU wasted.  (Issue 7)                       │
 # └─────────────────────────────────────────────────────────────────────┘
 #
-# MF2 patch inventory in binary (commit 1ac3c0a8, branch gadi-spr-r2-avx512):
-#   Phase 1: round-robin MF_IGNORED stripe (rank evaluates ~1/N models)
+# ┌─ This run (MF2 dispatch, commit abd98764 — LPT + MF_WAITING fix) ───┐
+# │  LPT cost-sort: models sorted by rate-category cost desc,           │
+# │  assigned p%nranks.  Rank gets mix of cheap+expensive models.       │
+# │  MF_WAITING cleared: each rank evals full 242-model stripe without  │
+# │  cross-rank promotion dependencies blocking +Rk models.             │
+# │  --mrate G,I+G: 88 models (~11×) to complete in 3h on 4 nodes.     │
+# │  For full 968-model sweep: use 16 nodes or 6h+ walltime.            │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# MF2 patch inventory in binary (commit abd98764, branch gadi-spr-r2-avx512):
+#   Phase 1: LPT cost-sorted stripe + MF_WAITING clear (Issue 7 fix)
 #   Phase 2: MPI_Allreduce gather + checkpoint merge + model name restore
 #   Phase 3: --mpi-ranks-per-node OMP thread budget (default 1 rank/node)
 #   Issue 5: sequential model eval in MPI builds (eliminates OMP data race)
 #   Issue 6: always use evaluateAll() in MPI builds (np=1 ≡ np=N code path)
+#   Issue 7: LPT cost-sort + resetFlag(MF_WAITING) (this binary)
 #
 # mpirun mapping: --map-by node:PE=104
 #   NOT hostfile+rankfile — conflicts with PBS BYCORE on normalsr.
@@ -44,7 +53,7 @@
 #PBS -q normalsr
 #PBS -l ncpus=416
 #PBS -l mem=2000GB
-#PBS -l walltime=03:00:00
+#PBS -l walltime=06:00:00
 #PBS -l wd
 #PBS -l storage=scratch/um09
 #PBS -j oe
@@ -92,10 +101,19 @@ fi
 if ldd "${IQTREE}" 2>/dev/null | grep -q 'libgomp'; then
     echo "ERROR: ${IQTREE} links libgomp — expected libiomp5 (icpx build)." >&2; exit 7
 fi
-# MF2 dispatch confirmation: 'MF-MPI:' is a format string with a space so
-# 'strings' won't find it as a single token — this is a known false negative.
-# The actual dispatch is verified by the MF-MPI: lines in the run log.
+# LPT fix verification (Issue 7): confirm binary contains the MF_WAITING clear string.
+# The broken i%nranks binary (commit 1ac3c0a8) does NOT contain this string.
+# PBS 168000932 was killed at 3h because it used the broken binary — rank 0 evaluated
+# only 24/242 models, all others blocked by MF_WAITING cross-rank dependency.
+if ! strings "${IQTREE}" 2>/dev/null | grep -q 'cost-sorted LPT stripe'; then
+    echo "ERROR: ${IQTREE} is missing the LPT fix (Issue 7)." >&2
+    echo "       This binary uses the broken i%nranks stripe — rank 0 will evaluate" >&2
+    echo "       only ~24/242 models then sit idle (see PBS 168000932)." >&2
+    echo "       Rebuild from commit abd98764 on gadi-spr-r2-avx512." >&2
+    exit 11
+fi
 echo "[preflight] binary: ${IQTREE}"
+echo "[preflight] LPT fix: CONFIRMED (cost-sorted LPT stripe + MF_WAITING clear)"
 echo "[preflight] MPI:    $(mpirun --version 2>&1 | head -1)"
 echo "[preflight] dataset: ${DATA_PATH} ($(du -sh "${DATA_PATH}" | cut -f1))"
 
@@ -171,17 +189,27 @@ env = {
   "run_id": "${RUN_ID}", "label": "${LABEL}",
   "threads": ${TOTAL_THREADS}, "mpi_ranks": ${NRANKS}, "omp_per_rank": ${OMP_PER_RANK},
   "mf2_dispatch": True,
-  "mf2_commit": "1ac3c0a8",
+  "mf2_commit": "abd98764",
   "mf2_branch": "gadi-spr-r2-avx512",
   "mf2_patches": [
-    "phase1_stripe", "phase2_allreduce", "phase3_thread_budget",
-    "issue5_sequential_eval", "issue6_evaluateall_always"
+    "phase1_lpt_stripe", "phase2_allreduce", "phase3_thread_budget",
+    "issue5_sequential_eval", "issue6_evaluateall_always",
+    "issue7_lpt_mf_waiting_fix"
   ],
   "comparison_baseline": {
     "pbs_job": "167977883",
     "binary": "v3.1.1 no dispatch",
     "models_in_2h": 9,
     "su_used": 1674.40,
+  },
+  "broken_run_reference": {
+    "pbs_job": "168000932",
+    "binary_commit": "1ac3c0a8",
+    "issue": "Issue 7 — MF_WAITING cross-rank blocking",
+    "models_rank0": 24,
+    "models_assigned_rank0": 242,
+    "exit": -29,
+    "su_wasted": 2514.03,
   },
   "mpirun_mapping": "--map-by node:PE=${OMP_PER_RANK}",
   "seed": ${SEED},
@@ -318,7 +346,7 @@ chmod +x "${TIME_WRAP}"
 # ~2h run, including partial data if killed at walltime.
 echo ""
 echo "[mf2-4node] Pass 1: ${NRANKS} ranks × ${OMP_PER_RANK} OMP + perf stat"
-echo "[mf2-4node] Expected: MF-MPI: rank 0/4 assigned 242/968 models (per rank)"
+echo "[mf2-4node] Expected: MF-MPI: rank 0/4 assigned 242/968 models (cost-sorted LPT stripe, MF_WAITING cleared)"
 START_EPOCH=$(date +%s)
 IQRC=0
 
@@ -329,6 +357,7 @@ mpirun -np "${NRANKS}" \
     "${OMP_ENV[@]}" \
     "${PERF_WRAP}" \
         "${IQTREE}" -s "${DATA_PATH}" -m MF -T "${OMP_PER_RANK}" -seed "${SEED}" \
+                    --mrate "${MRATE:-G,I+G}" \
                     --prefix "${WORK_DIR}/iqtree_run" \
     > "${WORK_DIR}/iqtree_run.log" 2> "${WORK_DIR}/iqtree_run.bindings.log" &
 IQTREE_PID=$!
@@ -368,6 +397,7 @@ if [[ "${IQRC}" -eq 0 ]]; then
         "${OMP_ENV[@]}" \
         "${TIME_WRAP}" \
             "${IQTREE}" -s "${DATA_PATH}" -m MF -T "${OMP_PER_RANK}" -seed "${SEED}" \
+                        --mrate "${MRATE:-G,I+G}" \
                         --prefix "${WORK_DIR}/iqtree_clean" \
         > "${WORK_DIR}/iqtree_clean.log" 2>&1 || true
     echo "[mf2-4node] Pass 2 done."
@@ -584,8 +614,8 @@ record = {
     "proc_summary":  proc_summary,
     "artefacts":     artefacts,
   },
-  "build_tag":           "mf2dispatch_icx_mpi4x104_4node_fullnode_avx512_r2_v312",
-  "mf2_commit":          "1ac3c0a8",
+  "build_tag":           "mf2dispatch_lpt_icx_mpi4x104_4node_fullnode_avx512_r2_v312",
+  "mf2_commit":          "abd98764",
   "non_canonical":       True,
   "non_canonical_label": f"MF2 dispatch · MPI {nranks}×{omp_per} 4-node",
 }
