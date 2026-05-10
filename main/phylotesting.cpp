@@ -1518,6 +1518,13 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
             cout << "Best-fit model: " << iqtree.aln->model_name << " chosen according to neural network" << endl;
         } else {
 #endif
+#ifdef _IQTREE_MPI
+            // Phase 1: force evaluateAll() for MPI dispatch — dispatch marks happen
+            // inside evaluateAll() after generate() populates the model list.
+            if (MPIHelper::getInstance().getNumProcesses() > 1) {
+                params.openmp_by_model = true;
+            }
+#endif
             if (params.openmp_by_model)
                 best_model = model_set.evaluateAll(params, &iqtree,
                                                              model_info, models_block, params.num_threads,
@@ -3428,6 +3435,31 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     }
 
     int64_t num_models = size();
+
+#ifdef _IQTREE_MPI
+    // Phase 1: stripe models across ranks so each rank evaluates only its share.
+    // generate() has already populated this CandidateModelSet — size() is now the
+    // full model count (e.g. 968 for DNA). We mark every model that is NOT ours
+    // with MF_IGNORED so getNextModel() skips it.
+    // Use MF_IGNORED (bitmask value 2) — already in the bitmask checked by
+    // getNextModel() (MF_IGNORED+MF_WAITING+MF_RUNNING = 14).  A new flag value
+    // outside 14 would silently evaluate all models on every rank.
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        int my_rank = MPIHelper::getInstance().getProcessID();
+        int nranks  = MPIHelper::getInstance().getNumProcesses();
+        int my_count = 0;
+        for (int i = 0; i < (int)num_models; i++) {
+            if (i % nranks != my_rank)
+                at(i).setFlag(MF_IGNORED);
+            else
+                my_count++;
+        }
+        cout << "MF-MPI: rank " << my_rank << "/" << nranks
+             << " assigned " << my_count << "/" << num_models
+             << " models" << endl;
+    }
+#endif
+
 #ifdef _OPENMP
 #pragma omp parallel num_threads(num_threads)
 #endif
@@ -3452,13 +3484,17 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         at(model).setFlag(MF_DONE);
         
         int lower_model = getLowerKModel(model);
-        if (lower_model >= 0 && at(lower_model).getScore() < at(model).getScore()) {
+        // Phase 1 guard: skip pruning if the lower-k neighbour belongs to another
+        // MPI rank (MF_IGNORED). Without this, its score is 0 / uncomputed and the
+        // comparison produces incorrect +Rk skipping across the entire series.
+        if (lower_model >= 0
+            && !at(lower_model).hasFlag(MF_IGNORED)
+            && at(lower_model).getScore() < at(model).getScore()) {
             // ignore all +R_k model with higher category
             for (int higher_model = model; higher_model != -1;
                 higher_model = getHigherKModel(higher_model)) {
                 at(higher_model).setFlag(MF_IGNORED);
             }
-            
         }
 #ifdef _OPENMP
 #pragma omp critical
@@ -3496,6 +3532,15 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
             filterRates(model); // auto filter rate models
         if (model >= subst_block)
             filterSubst(model); // auto filter substitution model
+#ifdef _IQTREE_MPI
+        // Save post-evaluation subst_name and rate_name so Phase 2 can propagate
+        // correct names (e.g. +G4 instead of +G) to ranks that did not evaluate
+        // this model.
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            model_info.put("mf_subst_" + convertIntToString(model), at(model).subst_name);
+            model_info.put("mf_rate_"  + convertIntToString(model), at(model).rate_name);
+        }
+#endif
 #ifdef _OPENMP
         }
 #endif
@@ -3526,6 +3571,58 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     
     model_info.putBestModelList(model_list);
     model_info.dump();
+
+#ifdef _IQTREE_MPI
+    // Phase 2: gather per-rank scores into a single global picture via Allreduce,
+    // then merge checkpoints so rank 0 has the complete .model.gz.
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        int n = (int)num_models;
+        // Sentinels: uncomputed slots stay at extreme values so MPI_MIN / MPI_MAX
+        // never selects them over a real computed value.
+        vector<double> local_lnL(n, -DBL_MAX), local_BIC(n, DBL_MAX),
+                       local_AIC(n, DBL_MAX),  local_AICc(n, DBL_MAX);
+        for (int i = 0; i < n; i++)
+            if (at(i).hasFlag(MF_DONE)) {
+                local_lnL[i]  = at(i).logl;
+                local_BIC[i]  = at(i).BIC_score;
+                local_AIC[i]  = at(i).AIC_score;
+                local_AICc[i] = at(i).AICc_score;
+            }
+        vector<double> g_lnL(n), g_BIC(n), g_AIC(n), g_AICc(n);
+        // Each slot has exactly one real value (its owning rank); sentinels are beaten
+        // by any real score in the reduce.
+        MPI_Allreduce(local_lnL.data(),  g_lnL.data(),  n, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        MPI_Allreduce(local_BIC.data(),  g_BIC.data(),  n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(local_AIC.data(),  g_AIC.data(),  n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(local_AICc.data(), g_AICc.data(), n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        // Fill slots this rank did not evaluate so getBestModelID() works correctly
+        // on every rank with a complete 968-model picture.
+        for (int i = 0; i < n; i++)
+            if (!at(i).hasFlag(MF_DONE)) {
+                at(i).logl       = g_lnL[i];
+                at(i).BIC_score  = g_BIC[i];
+                at(i).AIC_score  = g_AIC[i];
+                at(i).AICc_score = g_AICc[i];
+                at(i).setFlag(MF_DONE);
+            }
+        // Merge per-rank checkpoint entries into rank 0's model_info.
+        // Workers already have setFileName("") so they never write to disk.
+        MPIHelper::getInstance().gatherCheckpoint(&model_info);
+        MPIHelper::getInstance().broadcastCheckpoint(&model_info);
+        // Restore post-evaluation model names from checkpoint for models this rank
+        // did not evaluate (they still have the pre-evaluation name, e.g. +G not +G4).
+        for (int i = 0; i < n; i++) {
+            if (!at(i).hasFlag(MF_DONE))
+                continue; // not gathered (should not happen after Allreduce)
+            string sname, rname;
+            if (model_info.getString("mf_subst_" + convertIntToString(i), sname))
+                at(i).subst_name = sname;
+            if (model_info.getString("mf_rate_"  + convertIntToString(i), rname))
+                at(i).rate_name  = rname;
+        }
+        cout << "MF-MPI: gather complete, " << n << " model scores consolidated" << endl;
+    }
+#endif
 
     // update alignment if best data type changed
     int best_model = getBestModelID(params.model_test_criterion);
