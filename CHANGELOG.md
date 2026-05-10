@@ -2,6 +2,63 @@
 
 ---
 
+## 2026-05-10 (y) — Phase 5 benchmark: ModelFinder MPI dispatch on 4 SPR nodes
+
+### Plan
+
+**Goal:** Demonstrate real ModelFinder speedup on `xlarge_mf.fa` with 4 MPI ranks on 4
+separate SPR nodes (1 rank/node × 104 OMP/rank = 416 cores total).
+
+**Patch inventory (all in binary `build-mpi-mf2/iqtree3-mpi`, commit `1ac3c0a8`):**
+
+| Patch | Commit | Description |
+|-------|--------|-------------|
+| Phase 1 | `0150bb27` | Round-robin `MF_IGNORED` stripes — each rank evaluates ~1/N models |
+| Phase 2 | `0150bb27` | `MPI_Allreduce` gather + checkpoint merge + name fix |
+| Phase 3 | `0e701aaa` | `--mpi-ranks-per-node` OMP thread budget (default 1 rank/node) |
+| Issue 5 | `60f5cd1f` | Sequential model eval in MPI builds (eliminates OMP data race) |
+| Issue 6 | `1ac3c0a8` | Always use `evaluateAll()` in MPI builds (np=1 ≡ np=N code path) |
+
+**Correctness pre-test:** PBS **167999083** → ✓ PASS (`SYM+G4` matches np=1 and np=4).
+
+**Script:** `gadi-ci/run_xlarge_r2_mf2_dispatch.sh`
+
+**Key design choices:**
+- `-te fixed_xlarge_tree.nwk` — same fixed tree from correctness pre-test; eliminates
+  multi-rank fast-NNI tree search divergence, ensures best-fit model is directly
+  verifiable against the np=1 pre-test reference (`SYM+G4`).
+- `SEED=42` — matches correctness pre-test seed.
+- 1 rank/node: each rank gets a full SPR node (104 cores, 503 GB RAM), no core sharing.
+  Phase 3 thread budget unchanged (1 rank/node = full 104 OMP per rank by default).
+
+**Expected outcomes:**
+
+| Metric | Expected |
+|--------|---------|
+| Best-fit model | `SYM+G4` (matches correctness pre-test) |
+| MF wall (4 nodes) | ~69 s ÷ 4 × overhead ≈ **~20–30 s** (each rank does ~1/4 of models with 104 OMP) |
+| MF speedup vs np=1 | ~4× (embarrassingly parallel over models) |
+| Phase 1 | `MF-MPI: rank N/4 assigned K/M models` in log (rank 0 visible; others on worker nodes) |
+| Phase 2 | `MF-MPI: gather complete, M model scores consolidated` |
+| Exit code | 0 |
+
+Note: np=1 MF wall on this dataset = 69.1 s (PBS 167999083, 968 models, 104 OMP sequential).
+With 4 ranks each doing ~242 models at 104 OMP, theoretical MF wall ≈ 69.1 / 4 ≈ 17 s
+plus Phase 2 gather overhead (~1–2 s on InfiniBand for 4 × 4 arrays of 968 doubles).
+
+### PBS submission
+
+| Field | Value |
+|-------|-------|
+| Script | `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` |
+| Resources | `normalsr`, 4 nodes, 416 ncpus, 2000 GB, 6 h walltime |
+| Binary | `build-mpi-mf2/iqtree3-mpi` (commit `1ac3c0a8`, built 2026-05-10 13:10) |
+| Fixed tree | `test_xlarge_mf2/fixed_xlarge_tree.nwk` (from PBS 167999083 pre-test) |
+| Job ID | **TBD** |
+| Status | **Submitted** |
+
+---
+
 ## 2026-05-10 (x) — Phase 5 correctness pre-test: Issues 4+5 found + fixed
 
 ### Summary
