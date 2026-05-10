@@ -33,7 +33,7 @@
 #PBS -P um09
 #PBS -q normalsr
 #PBS -l ncpus=104
-#PBS -l mem=64gb
+#PBS -l mem=503gb
 #PBS -l walltime=02:00:00
 #PBS -l wd
 #PBS -l storage=scratch/um09
