@@ -102,9 +102,11 @@ if ldd "${IQTREE}" 2>/dev/null | grep -q 'libgomp'; then
     echo "ERROR: ${IQTREE} links libgomp — expected libiomp5 (icpx build)." >&2; exit 7
 fi
 # LPT fix verification (Issue 7): binary must contain the MF_WAITING clear string.
-if ! strings "${IQTREE}" 2>/dev/null | grep -q 'cost-sorted LPT stripe'; then
+# Use grep -a (binary-as-text) for reliable cross-node detection;
+# 'strings' may silently miss strings on some Gadi compute nodes.
+if ! grep -qa 'cost-sorted LPT stripe' "${IQTREE}"; then
     echo "ERROR: ${IQTREE} is missing the LPT fix (Issue 7 — commit abd98764)." >&2
-    echo "       Broken i%nranks binary will stall: rank 0 evaluates only ~24/242 models." >&2
+    echo "       Broken binary will stall: rank 0 evaluates only ~24/242 models." >&2
     echo "       Rebuild from branch gadi-spr-r2-avx512, HEAD abd98764." >&2
     exit 11
 fi
