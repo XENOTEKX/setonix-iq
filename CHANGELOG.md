@@ -2,6 +2,152 @@
 
 ---
 
+## 2026-05-10 (ac) — Performance Research: CPU/MPI bottlenecks for 10M full-sweep
+
+### Research question
+
+> Where is performance stuck at 4 MPI ranks × 104 OMP threads on 10M sites, and
+> what code changes could reduce walltime for the full 968-model sweep?
+
+### Hardware characterisation (xlarge_mf, 104T / 2-node, PBS 167973941)
+
+The best available hardware profiling is from the xlarge_mf (100K-site) benchmark.
+All directional conclusions apply to the 10M case; absolute numbers scale accordingly.
+
+| Counter | Value | Implication |
+|---------|-------|-------------|
+| IPC | **1.10** insn/cycle | vs AVX-512 FMA theoretical max ~4.0 → 73% compute headroom unreachable |
+| LLC miss rate | **77.9%** | Structural — CLV arrays far exceed L3 capacity |
+| LLC loads | 44.3B | Each branch traversal = full DRAM round-trip |
+| LLC load misses | 34.5B | 77.9% miss → ~0 reuse from L3 |
+| DRAM bandwidth | **1.7%** util | 5.1 GB/s actual vs 307 GB/s peak |
+| dTLB misses | **0.005%** | TLB is not the bottleneck |
+| Branch mispredicts | 0.05% | Branch prediction is not the bottleneck |
+
+**Bottleneck classification: latency-bound, not bandwidth-bound.**
+At 2,793 cycles/LLC-miss (from DRAM latency ~270 cycles × OOO inflight factor) the
+processor's out-of-order window cannot queue enough outstanding misses to keep the
+pipeline full.  More threads beyond ~52 yield diminishing returns because the LLC
+miss queue is already saturated, not the DRAM bus.
+
+### 10M dataset memory footprint
+
+- Alignment: 954 MB, **0% site-pattern compression** (10M unique patterns)
+- CLV per branch per iteration:
+  - JC (no rate variation):      10M × 4 states × 1 cat × 8B = **320 MB**
+  - GTR+G4 (+4-cat Γ):           10M × 4 × 4 × 8B = **1.28 GB**
+  - GTR+R10 (slowest, 10 cats):  10M × 4 × 10 × 8B = **3.20 GB**
+- Total CLV store (all branches): 197 branches × 320 MB–3.2 GB = **63–630 GB**
+- L3 cache per SPR node: **105 MB** — CLV working set exceeds L3 by 600–6000×
+- Consequence: every traversal step is a **cold DRAM miss**, regardless of thread count
+
+### Per-model timing (confirmed from PBS 167977883)
+
+| Model class | Estimated wall per model (4 nodes, 104T/rank) |
+|-------------|----------------------------------------------|
+| JC, F81, GTR… (no rate variation) | ~744s ≈ 12 min |
+| +G4, +I+G4 | ~1,500–2,500s ≈ 25–40 min (estimated, 4× CLV) |
+| +R6, +R8, +R10 | ~3,000–8,000s ≈ 50–130 min (estimated, 6–10× CLV, more EM iterations) |
+
+Full 968-model sweep walltime at 4 MPI ranks × 1-rank/node (242 models/rank):
+- Lower bound (all flat): 242 × 744s / 3600 ≈ **50 h**
+- Realistic (mixed):      242 × ~3,000s / 3600 ≈ **200 h**
+- `normalsr` queue limit: 48 h → **cannot complete in one job without intervention**
+
+### Checkpoint-resume mechanism (confirmed from source)
+
+`CandidateModel::evaluate()` (phylotesting.cpp:1961) calls `restoreCheckpoint()`
+before any computation:
+```cpp
+if (restoreCheckpoint(&in_model_info)) {
+    delete iqtree;
+    return "";   // microseconds — model score already in .model.gz
+}
+```
+`MF_DONE = 16` is NOT in the `getNextModel()` skip mask (14 = MF_IGNORED+MF_RUNNING+MF_WAITING).
+Models from a prior run are re-visited but restored from checkpoint instantly.
+
+**PBS job chaining is already supported — no code changes required.**
+To resume a killed job, re-submit with the same `--prefix` (no `--redo`):
+```
+NOTE: Restoring information from model checkpoint file ...
+```
+IQ-TREE prints that message and skips all models already in `.model.gz`.
+The starting tree is also stored in `.ckp.gz` — not re-computed on resume.
+Per-resume overhead: ~10s checkpoint load + program startup.
+
+### `--mpi-ranks-per-node 2`: thread budget division (confirmed from source)
+
+phylotesting.cpp:1531:
+```cpp
+int rank_threads = max(1, params.num_threads / params.mpi_ranks_per_node);
+```
+With `-T 104 --mpi-ranks-per-node 2` on 4 nodes:
+- 8 total MPI ranks × 52 OMP threads each
+- 968 / 8 = **121 models per rank** (vs 242 at 1-rank/node)
+- Per-model time: uncertain — halving threads reduces concurrent DRAM requests,
+  which for a latency-bound workload may INCREASE per-model time (fewer in-flight
+  misses → lower effective memory-level parallelism)
+- Net effect: must be empirically tested; may not help
+
+### Software prefetch gap (confirmed from source)
+
+Zero calls to `_mm_prefetch` or `__builtin_prefetch` exist in any phylokernel*.{h,cpp} file.
+
+The inner ptn loop in `phylokernelnew.h`:
+```cpp
+for (size_t ptn = ptn_lower; ptn < ptn_upper; ptn += VectorClass::size()) {
+    VectorClass *partial_lh = (VectorClass*)(dad_branch->partial_lh + (ptn*block));
+    // ... 4–10 FMAs per state per cat, then advance ptn
+}
+```
+For +G4 on 10M sites: `block = 16` doubles, stride = `16 × 8 × 8 = 1024 bytes`.
+DRAM latency ≈ 270 cycles.  Prefetch distance for full hiding ≈ 270 / (16 FMAs/iter ×
+throughput) ≈ **16–32 iterations ahead** (512–1024 bytes).
+Adding `_mm_prefetch((char*)&partial_lh[AHEAD * block], _MM_HINT_T2)` at the ptn
+loop entry could hide 20–40% of stall cycles by overlapping DRAM fetches with
+compute.  Estimated speedup: **5–15% per model**.  Medium implementation effort
+(one line per traversal loop in phylokernelnew.h, ~4 sites).
+
+### Cross-rank BIC pruning opportunity (MPI code change)
+
+Current `filterRates()` and `filterSubst()` only prune within a rank's own model
+stripe.  Example: if rank 0 evaluates GTR+R4 and BIC is already worse than
+GTR+G4, ranks 1–3 do not know this and still evaluate SYM+R5, TVM+R6, etc.
+
+**Phase 2.5 mid-sweep gather** (new code, high effort):
+After evaluating all rate-homogeneous models (the first `subst_block` models), do a
+partial `MPI_Allreduce` of current best BIC.  Each rank can then skip +Rk models
+where `filterRates()` would fire against the global best BIC rather than only its
+own partial view.  Estimated model-count reduction: **15–30%** (most of the +R8..
++R10 tail).
+
+### Optimisation priority matrix
+
+| Approach | Effort | Expected walltime reduction | Code changes |
+|----------|--------|----------------------------|--------------|
+| **PBS job chaining via checkpoint** | None | Enables splitting 48h jobs across days; functionally unlocks 968-model sweep | None |
+| **2 ranks/node empirical test** | Low (script only) | Unknown (may help or hurt); halves models/rank | Script flag only |
+| **Software prefetch in ptn loop** | Medium (~10 lines, 4 loop sites in phylokernelnew.h) | 5–15% per-model | phylokernelnew.h |
+| **Phase 2.5 cross-rank BIC pruning** | High (new MPI_Allreduce + filter logic) | 15–30% model skip rate | phylotesting.cpp |
+| **Looser --mf-epsilon (e.g. 1.0)** | None (CLI flag) | 2–5× per-model (risky) | Not recommended — changes best-fit selection |
+| **NUMA first-touch** | Already applied | ~0% on 10M (latency-bound, not NUMA-bound) | None |
+| **More OMP threads / MPI ranks** | N/A | 0% — LLC queue already saturated | N/A |
+
+### Next steps
+
+1. **Immediate**: Submit a `--mrate G,I+G` 4-node job (88 models, ~6h) to validate
+   end-to-end correctness with the LPT-fix binary.  This also creates the `.model.gz`
+   checkpoint that a follow-up full-sweep job can build on.
+2. **Near-term**: Test `--mpi-ranks-per-node 2` on an xlarge run and compare
+   per-model time vs 1-rank/node at the same total core count.
+3. **Code**: Add `_mm_prefetch` to the 4 ptn-loop sites in `phylokernelnew.h`.
+   Profile before/after on xlarge_mf to measure IPC improvement.
+4. **Research**: Prototype Phase 2.5 mid-sweep Allreduce on a small dataset
+   (xlarge_mf, 4 ranks) and count models skipped vs baseline.
+
+---
+
 ## 2026-05-10 (ab) — Issue 7: MF_WAITING cross-rank blocking + LPT cost-sort fix
 
 ### PBS 168000932 — Job Outcome (confirmed)
