@@ -62,17 +62,17 @@ The xlarge correctness test focuses on Phase 1+2 correctness only.
 All three: consistent `GTR+R4` best-fit model. MF wall variance (~7%) is within
 expected run-to-run noise from CPU frequency boost state and LLC warming.
 
-### PBS 167997083 — correctness re-test (np=4, fixed script)
+### PBS 167997487 — correctness re-test (np=4, fixed script)
 
 | Field | Value |
 |-------|-------|
-| Job ID | 167997083 |
+| Job ID | 167997487 |
 | Fix applied | `-T 26` and `OMP_NUM_THREADS=26` per rank (not `-T 104`) |
 | Expected: Phase 1 | `MF-MPI: rank N/4 assigned 242/968 models` (all 4 ranks) |
 | Expected: Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` |
 | Expected: model | `GTR+R4` — must match np=1 reference |
 | Expected: MF wall | ~32 s (118 s / 4 ranks, each evaluating 242 models with 26 OMP) |
-| Status | **Queued** |
+| Status | **Queued — PBS 167997487** |
 ---
 
 ## 2026-05-10 (w) — ModelFinder MPI dispatch: Phase 4 plan + Phase 5 preparation
