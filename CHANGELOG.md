@@ -2,7 +2,115 @@
 
 ---
 
-## 2026-05-10 (aa) — Correctness test: MF2 dispatch vs baseline (free tree + fixed tree)
+## 2026-05-10 (ab) — Issue 7: MF_WAITING cross-rank blocking + LPT cost-sort fix
+
+### Discovery
+
+Analysis of the PBS 168000932 (4-node 10M run) live log revealed severe load
+imbalance: rank 0 finished its 242 assigned models at t=5,738s (1h35m) while ranks
+1–3 were still running at t=10,180s (2h50m) and were killed at the 3h wall (imbalance
+1.77×).
+
+The source inspection also confirmed:
+- **Q2 (19/24 thread issue)**: Not present in this run. Each rank uses 104 OMP threads
+  (one rank per node, `--mpi-ranks-per-node` defaulting to 1). The 19/24 issue was from
+  an earlier run with wrong ranks-per-node. Resolved / not applicable to 4-node runs.
+- **Q3 (starting tree)**: `evaluateAll()` and `test()` use the **same starting tree**.
+  Before ModelFinder begins, IQ-TREE builds an NJ tree, optimises parameters, runs one
+  round of fast NNI, then in MPI mode broadcasts the best-NNI tree to all ranks via
+  `MPI_Allreduce(MPI_MAXLOC)`. ModelFinder (whether `test()` or `evaluateAll()`) then
+  starts from that shared tree. The GTR+R4 vs SYM+G4 difference is purely algorithmic
+  (`test()` pruning vs `evaluateAll()` full sweep), not a tree-start difference.
+
+### Root Cause of Load Imbalance (Issue 7)
+
+Two compounding problems:
+
+**Problem 1 — MF_WAITING cross-rank blocking (primary, ~6–10× imbalance)**
+
+`+Rk` models (k > `min_rate_cats`=2) are initialised with the `MF_WAITING` flag in
+`generate()`. The `getNextModel()` queue skips `MF_WAITING` models. Promotion (clearing
+`MF_WAITING`) happens when the `+R(k-1)` model is evaluated and deemed worth continuing.
+
+With `i % nranks` stripping, consecutive `+Rk` and `+R(k-1)` models land on different
+ranks. Rank 0 never evaluates `+R(k-1)` (it belongs to rank 1 or 3), so it never
+promotes `+R(k)`, which stays permanently `MF_WAITING` on rank 0. Eventually
+`getNextModel()` returns -1 and rank 0 exits early — having evaluated only the
+`~66 non-WAITING` models out of 242 assigned, and after `filterRates`/`filterSubst`
+pruning, only ~24 actually ran.
+
+Ranks 1–3 have a different but also broken promotion pattern: they can sometimes promote
+within their own stripe, but cross-rank dependencies still leave many models blocked or
+cause some ranks to evaluate many more heavy models than others.
+
+**Problem 2 — Cost variation (secondary, ~10× per-model variation)**
+
+Plain `i % nranks` gives equal model COUNTS but unequal WORK. On the 10M site dataset,
+`+R10` evaluation takes ~10× longer than `JC+""` (more EM rounds to converge 10
+free-rate categories). Index-based striding does not account for this.
+
+### Fix — commit `abd98764` (`gadi-spr-r2-avx512`)
+
+Two changes to `main/phylotesting.cpp` + `main/phylotesting.h`:
+
+**A. LPT cost-sorted stripe** (`phylotesting.cpp`):
+Sort model indices by estimated cost descending (cost proxy: rate-category count from
+`rate_name` — `+R10` → 100, `+I+G` → 5, `+G` → 4, `+I` → 2, `""` → 1). Assign sorted
+position `p` to rank `p % nranks`. This is the classic **Longest Processing Time (LPT)**
+heuristic, giving a ≤ 4/3 approximation to optimal makespan on identical machines. Each
+rank receives a mix of cheap and expensive models with approximately equal total cost.
+
+**B. Clear `MF_WAITING` on own models** (`phylotesting.cpp`):
+After stripe assignment, call `resetFlag(MF_WAITING)` on all non-`MF_IGNORED` models.
+This breaks the cross-rank promotion chain: each rank evaluates its full assigned stripe
+regardless of whether `+R(k-1)` belongs to another rank. The within-rank
+`getLowerKModel` guard (`!hasFlag(MF_IGNORED)`) still prevents incorrect pruning within
+the stripe. Phase 2 `MPI_Allreduce` produces the globally correct best model.
+
+**C. Add `resetFlag()` to `CandidateModel`** (`phylotesting.h`):
+`setFlag()` was OR-only; no way to clear a flag existed. Added:
+```cpp
+void resetFlag(int flag) { this->flag &= ~flag; }
+```
+
+### Expected Outcome
+
+- All 4 ranks evaluate their full 242-model stripe (instead of ~24 for rank 0).
+- Each rank's cost is approximately equal (LPT distribution).
+- Rank finish times within ~20% of each other (vs 1.77× imbalance before).
+- A 3h walltime is still insufficient to complete all 968 models on 10M uncompressed
+  data (~240s/model × 242 models = ~16h per rank). The fix makes all ranks productive
+  for the full 3h rather than rank 0 being idle for 1h25m.
+
+### 10M Run Performance Improvement Opportunities
+
+Based on findings across entries (y), (z), and this entry:
+
+| Issue | Current | Fix | Speedup |
+|-------|---------|-----|---------|
+| Load imbalance (MF_WAITING) | rank 0 idle 1h25m | LPT + clear WAITING | Eliminates idle time |
+| Model count (10M, 0% compression) | 968 models, ~240s each | `--mrate G,I+G` → 88 models | ~11× |
+| Rank count (4 nodes) | 968 ÷ 4 = 242/rank | 16 nodes → 61/rank, 64 → 16/rank | 4–16× |
+| Walltime | 3h (insufficient) | 48h (normalsr) | Job completes |
+| Per-model OMP efficiency | 104 OMP / model | 104 threads fully used (already correct) | No change |
+| BIC-pruning within stripe | disabled (cross-rank guard) | Within-rank pruning still active | Minor reduction |
+
+**Recommended next run** (4-node, 10M, corrected):
+```
+--mrate G,I+G     # reduces to 88 models (4 base rates × 22 subst×freq)
+-ntop 8           # or keep default 968 for production
+walltime=04:00:00 # 88 models × ~240s ÷ 4 ranks = ~5,280s = ~1.5h
+```
+
+**For the full 968-model sweep** (production 10M):
+```
+16 nodes × 1 rank each → 61 models/rank × ~240s = ~4h
+walltime=06:00:00
+```
+
+---
+
+
 
 ### Purpose
 
