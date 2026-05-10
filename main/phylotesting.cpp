@@ -3473,6 +3473,75 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     }
 #endif
 
+#ifdef _IQTREE_MPI
+    // Issue 5 fix: evaluateAll() parallelises across models via OMP threads, each
+    // calling evaluate() → initializeModel() → new ModelFactory().  ModelFactory's
+    // constructor may write to the shared model_info (std::map) through the iqtree
+    // checkpoint pointer.  Concurrent std::map writes from multiple OMP threads is
+    // undefined behaviour; on xlarge datasets the collision window is wide enough to
+    // corrupt glibc's tcache → SIGSEGV ("malloc(): unaligned tcache chunk detected").
+    //
+    // Fix: in MPI rank-stripe mode, evaluate models SEQUENTIALLY (no outer OMP
+    // parallel section).  Each sequential evaluate() call is free to use the full
+    // num_threads OMP budget for within-model (site-level) parallelism — the correct
+    // granularity.  The across-rank parallelism is provided by the MPI dispatch itself
+    // (Phase 1 stripes 1/N of the models to each rank).
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        int64_t model;
+        do {
+            model = getNextModel();
+            if (model == -1)
+                break;
+            string orig_model_name = at(model).getName();
+            ModelCheckpoint out_model_info;
+            at(model).set_name = at(model).aln->name;
+            string tree_string;
+            tree_string = at(model).evaluate(params, model_info, out_model_info,
+                                             models_block, num_threads, brlen_type);
+            at(model).computeICScores();
+            at(model).setFlag(MF_DONE);
+            int lower_model = getLowerKModel(model);
+            if (lower_model >= 0
+                && !at(lower_model).hasFlag(MF_IGNORED)
+                && at(lower_model).getScore() < at(model).getScore()) {
+                for (int higher_model = model; higher_model != -1;
+                    higher_model = getHigherKModel(higher_model)) {
+                    at(higher_model).setFlag(MF_IGNORED);
+                }
+            }
+            if (best_score > at(model).getScore()) {
+                best_score = at(model).getScore();
+                model_info.putSubCheckpoint(&out_model_info, "");
+            }
+            model_info.dump();
+            if (write_info) {
+                cout.width(3);
+                cout << right << model+1 << "  ";
+                cout.width(13);
+                cout << left << at(model).getName() << " ";
+                cout.precision(3);
+                cout << fixed;
+                cout.width(12);
+                cout << -at(model).logl << " ";
+                cout.width(3);
+                cout << at(model).df << " ";
+                cout.width(12);
+                cout << at(model).AIC_score << " ";
+                cout.width(12);
+                cout << at(model).AICc_score << " " << at(model).BIC_score;
+                cout << endl;
+            }
+            if (model >= rate_block)
+                filterRates(model);
+            if (model >= subst_block)
+                filterSubst(model);
+            // Save post-evaluation names for Phase 2 gather (same as OMP path below).
+            model_info.put("mf_subst_" + convertIntToString(model), at(model).subst_name);
+            model_info.put("mf_rate_"  + convertIntToString(model), at(model).rate_name);
+        } while (model != -1);
+    } else
+#endif
+    {
 #ifdef _OPENMP
 #pragma omp parallel num_threads(num_threads)
 #endif
@@ -3559,6 +3628,7 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
 #endif
     } while (model != -1);
     }
+    } // end else (non-MPI OMP parallel path)
     
     // store the best model
     ModelTestCriterion criteria[] = {MTC_AIC, MTC_AICC, MTC_BIC};
