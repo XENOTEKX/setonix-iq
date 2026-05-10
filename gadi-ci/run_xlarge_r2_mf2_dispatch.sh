@@ -249,7 +249,6 @@ echo ""
 T_START=$(date +%s)
 
 mpirun -np "${NRANKS}" \
-    --hostfile  "${HOSTFILE}" \
     --rankfile  "${RANKFILE}" \
     --mca pml ucx \
     -x UCX_TLS=rc_mlx5,ud_mlx5,sm,self \
