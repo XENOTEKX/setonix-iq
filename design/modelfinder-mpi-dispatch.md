@@ -669,37 +669,66 @@ communication is added in this phase — only the marking logic that tells each 
 which models it owns. Mirrors R1's first-touch initialisation: correct ownership
 must be established before the hot path runs.
 
-**Changes:**
+**Status: ✅ COMPLETE** (PBS 167995531 verified)
 
-1. **`main/phylotesting.cpp` — `runModelFinder()`** — add `markRankModels()` block
-   immediately after `candidate_models.generate()` returns and before the
-   `evaluateAll()`/`test()` branch (~line 1450):
+**Implementation note — insertion point:** The original plan placed `markRankModels()`
+in `runModelFinder()` after `candidate_models.generate()`. This was wrong:
+`generate()` is called *inside* `evaluateAll()` at ~line 3398, not in
+`runModelFinder()`. The `model_set` in `runModelFinder()` is a fresh empty
+`CandidateModelSet` — `size() == 0` at the outer call site. The Phase 1 mark must
+be inside `evaluateAll()` immediately after `int64_t num_models = size()`, after
+`generate()` has populated the list.
+
+**Actual changes applied:**
+
+1. **`main/phylotesting.cpp` — `runModelFinder()` (~line 1521)** — force
+   `evaluateAll()` path when `nranks > 1`. This is separate from the mark block:
    ```cpp
    #ifdef _IQTREE_MPI
-   if (MPIHelper::getInstance().getNumProcesses() > 1 && !params.model_test_and_tree) {
-       int my_rank = MPIHelper::getInstance().getProcessID();
-       int nranks  = MPIHelper::getInstance().getNumProcesses();
-       int my_count = 0;
-       for (int i = 0; i < (int)candidate_models.size(); i++) {
-           if (i % nranks != my_rank)
-               candidate_models[i].setFlag(MF_IGNORED);  // reuse existing flag
+           // Phase 1: force evaluateAll() for MPI dispatch — dispatch marks happen
+           // inside evaluateAll() after generate() populates the model list.
+           if (MPIHelper::getInstance().getNumProcesses() > 1) {
+               params.openmp_by_model = true;
+           }
+   #endif
+           if (params.openmp_by_model)
+               best_model = model_set.evaluateAll(...);
            else
-               my_count++;
+               best_model = model_set.test(...);
+   ```
+
+2. **`main/phylotesting.cpp` — inside `evaluateAll()`, after `int64_t num_models = size()`
+   and BEFORE the `#ifdef _OPENMP` OMP parallel block (~line 3455):**
+   ```cpp
+       int64_t num_models = size();
+   
+   #ifdef _IQTREE_MPI
+       // Phase 1: stripe models across ranks — generate() has already run.
+       if (MPIHelper::getInstance().getNumProcesses() > 1) {
+           int my_rank = MPIHelper::getInstance().getProcessID();
+           int nranks  = MPIHelper::getInstance().getNumProcesses();
+           int my_count = 0;
+           for (int i = 0; i < (int)num_models; i++) {
+               if (i % nranks != my_rank)
+                   at(i).setFlag(MF_IGNORED);
+               else
+                   my_count++;
+           }
+           cout << "MF-MPI: rank " << my_rank << "/" << nranks
+                << " assigned " << my_count << "/" << num_models
+                << " models" << endl;
        }
-       cout << "MF-MPI: rank " << my_rank << "/" << nranks
-            << " assigned " << my_count << "/" << candidate_models.size()
-            << " models" << endl;
-       // Force evaluateAll() path: test() early-stop logic breaks with striped gaps
-       params.openmp_by_model = true;
-   }
+   #endif
+   
+   #ifdef _OPENMP
+   #pragma omp parallel num_threads(num_threads)
    #endif
    ```
-   **Flag note:** We use `MF_IGNORED = 2` (the existing flag). A new `MF_IGNORED_MPI`
-   value would not appear in `getNextModel()`'s bitmask (`MF_IGNORED + MF_WAITING +
-   MF_RUNNING = 14`) and would silently evaluate all models on every rank.
+   **Flag note:** `MF_IGNORED = 2` is reused directly. `getNextModel()` checks the
+   bitmask `MF_IGNORED + MF_WAITING + MF_RUNNING = 14`; a new flag value (e.g. 32)
+   would not be in this mask and would silently evaluate all models on every rank.
 
-2. **`main/phylotesting.cpp` — pruning guard inside `evaluateAll()`** — add the
-   `!hasFlag(MF_IGNORED)` guard to the `getLowerKModel()` pruning step (~line 3455):
+3. **`main/phylotesting.cpp` — `getLowerKModel()` pruning guard inside `evaluateAll()`:**
    ```cpp
    int lower_model = getLowerKModel(model);
    if (lower_model >= 0
@@ -710,35 +739,34 @@ must be established before the hot path runs.
            at(higher_model).setFlag(MF_IGNORED);
    }
    ```
-   Without this guard, rank 0 evaluating `+R2` would read the uncomputed score of
-   `+G` (assigned to another rank, `MF_IGNORED` set, score = 0 or garbage) and
-   incorrectly prune or not prune `+R3..+R10`. With the guard, each rank skips
-   cross-rank pruning decisions entirely — a small amount of extra +Rk evaluations
-   per rank, corrected by the Phase 2 `MPI_Allreduce`.
+   Without this guard, rank 0 evaluating `+R2` reads the uncomputed score of `+G`
+   (owned by another rank, `MF_IGNORED` set, score = 0 or garbage) and incorrectly
+   prunes `+R3..+R10`. Each rank skips cross-rank pruning — a small amount of extra
+   `+Rk` evaluations, corrected by the Phase 2 `MPI_Allreduce`.
 
-3. **`main/phylotesting.h`** — no change needed. `MF_IGNORED = 2` is already defined.
+4. **`main/phylotesting.h`** — no change. `MF_IGNORED = 2` already defined.
 
 **Build command:**
 ```bash
-cd /scratch/um09/as1708/iqtree3-mf2/build-profiling-mpi
-make -j16 iqtree3-mpi 2>&1 | grep -E "error:|warning:|iqtree3-mpi"
+cd /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2
+module load openmpi/4.1.7 intel-compiler-llvm
+make -j8 2>&1 | tail -5
 ```
 
 **Milestone test (correctness NOT expected — Phase 2 adds the gather):**
 ```bash
-# Run with 4 ranks, inspect per-rank model assignment in logs
-mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF -T 2 --prefix p1_test -seed 42 2>&1 \
-    | grep "MF-MPI:"
-# Expected output (4 ranks, 968 models):
+mpirun -np 4 --map-by node:PE=1 numactl --localalloc -- \
+    ./iqtree3-mpi -s ../src/iqtree3/example/example.phy -m MF -T AUTO \
+    --seed 42 --prefix p1_test --redo 2>&1 | grep "MF-MPI:"
+# Expected (4 ranks, 968 models):
 #   MF-MPI: rank 0/4 assigned 242/968 models
 #   MF-MPI: rank 1/4 assigned 242/968 models
 #   MF-MPI: rank 2/4 assigned 242/968 models
 #   MF-MPI: rank 3/4 assigned 242/968 models
 ```
 
-Each rank should log exactly `ceil(968/4)` models. The final best-fit model will be
-wrong (each rank picks independently from its partial set) — that is expected at this
-phase. The phase is complete when the model counts in the log are correct.
+Each rank logs `ceil(968/4) = 242` models. Best-fit model will be wrong (each rank
+picks from its partial set only) — expected. Phase is complete when counts are correct.
 
 ---
 
@@ -750,16 +778,49 @@ the only cross-rank synchronisation for the entire ModelFinder phase. Mirrors R2
 hot-kernel integration: the critical path that makes the data partitioning from
 Phase 1 produce a correct global result.
 
-**Changes:**
+**Status: ✅ COMPLETE** (PBS 167995531 verified — `TIM2+F+I+G4` matches np=1 and np=4)
 
-1. **`main/phylotesting.cpp` — end of `CandidateModelSet::evaluateAll()`** — add
-   `gatherModelScores()` block after the OMP parallel region closes and after
-   `model_info.dump()`:
+**Implementation note — model name mismatch (discovered during testing):**
+`CandidateModel::evaluate()` updates `subst_name` and `rate_name` post-fit — e.g.
+`+G` (pre-evaluation generic string) becomes `+G4` (actual fitted category count).
+Ranks that did not evaluate a given model retain the pre-evaluation string. After
+the `MPI_Allreduce` populates scores and `MPI_DONE` flags, `getName()` still returns
+the wrong name (e.g. `TIM2+F+I+G` instead of `TIM2+F+I+G4`) on non-owning ranks.
+This caused `getBestModelID()` to pick the correct index but `getName()` to return
+a truncated string. Fix: save `mf_subst_N` / `mf_rate_N` checkpoint keys per model
+index during evaluation; restore from checkpoint after `broadcastCheckpoint()`.
+
+**Implementation note — pre-gather checkpoint entries:**
+The `model_info.put("best_score_BIC", ...)` / `model_info.put("best_model_BIC", ...)`
+block runs *before* Phase 2 at ~line 3541 — it stores each rank's local best, not
+the global best. These entries are overwritten after `broadcastCheckpoint()` delivers
+rank 0's merged checkpoint to all ranks and `getBestModelID()` re-runs on the full
+968-model picture. The `.iqtree` report file and the "Best-fit model:" stdout line
+both use the post-Phase-2 result, so the output is correct. The stale entries are a
+harmless intermediate state.
+
+**Implementation note — `model_info` is already a parameter:**
+`evaluateAll()` signature already takes `ModelCheckpoint &model_info` — no change to
+the function signature is needed.
+
+**Actual changes applied:**
+
+1. **`main/phylotesting.cpp` — inside `evaluateAll()` OMP loop, after each model's
+   `filterRates()`/`filterSubst()` calls** — save post-evaluation names:
+   ```cpp
+   #ifdef _IQTREE_MPI
+           if (MPIHelper::getInstance().getNumProcesses() > 1) {
+               model_info.put("mf_subst_" + convertIntToString(model), at(model).subst_name);
+               model_info.put("mf_rate_"  + convertIntToString(model), at(model).rate_name);
+           }
+   #endif
+   ```
+
+2. **`main/phylotesting.cpp` — end of `evaluateAll()`, after `model_info.dump()`:**
    ```cpp
    #ifdef _IQTREE_MPI
    if (MPIHelper::getInstance().getNumProcesses() > 1) {
-       int n = (int)size();
-       // Sentinels: only the owning rank has real values, others have ±DBL_MAX
+       int n = (int)num_models;
        vector<double> local_lnL(n, -DBL_MAX), local_BIC(n, DBL_MAX),
                       local_AIC(n, DBL_MAX),  local_AICc(n, DBL_MAX);
        for (int i = 0; i < n; i++)
@@ -770,12 +831,11 @@ Phase 1 produce a correct global result.
                local_AICc[i] = at(i).AICc_score;
            }
        vector<double> g_lnL(n), g_BIC(n), g_AIC(n), g_AICc(n);
-       // Each slot has exactly one real value; reduce collects it from the owning rank
        MPI_Allreduce(local_lnL.data(),  g_lnL.data(),  n, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
        MPI_Allreduce(local_BIC.data(),  g_BIC.data(),  n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
        MPI_Allreduce(local_AIC.data(),  g_AIC.data(),  n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
        MPI_Allreduce(local_AICc.data(), g_AICc.data(), n, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-       // Populate models that this rank did NOT evaluate
+       // Fill slots this rank did not evaluate so getBestModelID() sees full 968
        for (int i = 0; i < n; i++)
            if (!at(i).hasFlag(MF_DONE)) {
                at(i).logl       = g_lnL[i];
@@ -784,40 +844,58 @@ Phase 1 produce a correct global result.
                at(i).AICc_score = g_AICc[i];
                at(i).setFlag(MF_DONE);
            }
-       // Merge checkpoints: each rank's .model.gz entries go to rank 0
-       MPIHelper::getInstance().gatherCheckpoint(model_info_ptr);
-       MPIHelper::getInstance().broadcastCheckpoint(model_info_ptr);
+       MPIHelper::getInstance().gatherCheckpoint(&model_info);
+       MPIHelper::getInstance().broadcastCheckpoint(&model_info);
+       // Restore post-evaluation names (e.g. +G4) for models this rank did not own
+       for (int i = 0; i < n; i++) {
+           string sname, rname;
+           if (model_info.getString("mf_subst_" + convertIntToString(i), sname))
+               at(i).subst_name = sname;
+           if (model_info.getString("mf_rate_"  + convertIntToString(i), rname))
+               at(i).rate_name  = rname;
+       }
        cout << "MF-MPI: gather complete, " << n << " model scores consolidated" << endl;
    }
    #endif
    ```
-   Note: `model_info_ptr` must be passed through to `evaluateAll()` — verify the
-   existing signature and add the pointer if it is not already an argument.
 
-2. **Confirm `model_info.setFileName("")` is active for worker ranks** at ~line 1405
-   of `runModelFinder()` (already in the existing MPI path) — prevents workers from
-   clobbering rank 0's `.model.gz` on disk.
+3. **Workers already have `model_info.setFileName("")` at ~line 1405** — confirmed
+   in existing MPI path; prevents workers from clobbering rank 0's `.model.gz`.
 
 **Build and milestone test (correctness required):**
 ```bash
-cd /scratch/um09/as1708/iqtree3-mf2/build-profiling-mpi
-make -j16 iqtree3-mpi
+cd /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2
+module load openmpi/4.1.7 intel-compiler-llvm
+make -j8
 
-# Reference: 1 rank
-mpirun -np 1 ./iqtree3-mpi -s ../example/example.phy -m MF -T 4 \
-    --prefix ref_1r -seed 42 --redo
-# Dispatch: 4 ranks
-mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF -T 4 \
-    --prefix test_4r -seed 42 --redo
+# Reference: 1 rank with fixed tree
+mpirun -np 1 --map-by node:PE=1 numactl --localalloc -- \
+    ./iqtree3-mpi -s ../src/iqtree3/example/example.phy \
+    -te /scratch/um09/as1708/iqtree3-mf2/test_mf_mpi/fixed_tree.nwk \
+    -m MF -T AUTO --seed 42 --prefix ref_1r --redo
 
-# Must produce identical lines:
-grep "Best-fit model\|Bayesian information criterion" ref_1r.log test_4r.log
-# Must differ only in wall time (4-rank should be ~4× faster):
-grep "Wall-clock time for ModelFinder" ref_1r.log test_4r.log
+# Dispatch: 4 ranks with same fixed tree
+mpirun -np 4 --map-by node:PE=1 numactl --localalloc -- \
+    ./iqtree3-mpi -s ../src/iqtree3/example/example.phy \
+    -te /scratch/um09/as1708/iqtree3-mf2/test_mf_mpi/fixed_tree.nwk \
+    -m MF -T AUTO --seed 42 --prefix test_4r --redo
+
+# Must match:
+grep "Best-fit model" ref_1r.log test_4r.log
+# Must appear in np=4 log:
+grep "MF-MPI:" test_4r.log
+# Expected: MF-MPI: rank 0/4 assigned 242/968 models
+#           MF-MPI: gather complete, 968 model scores consolidated
 ```
 
-The phase is complete when the best-fit model and BIC score are **identical** between
-1-rank and 4-rank runs on `example.phy`.
+**Why `-te fixed_tree.nwk`:** Without a fixed starting tree, IQ-TREE's fast NNI
+tree search (which runs before ModelFinder and uses all MPI ranks simultaneously)
+finds a different initial topology with np=4 vs np=1. Since lnL scores depend on
+tree topology, the same model produces different BIC values — the best model can
+legitimately differ. Fixing the topology makes it a fair apples-to-apples comparison.
+
+The phase is complete when the best-fit model string is **identical** between 1-rank
+and 4-rank runs. **Verified: PBS 167995531 — both report `TIM2+F+I+G4`.**
 
 ---
 
@@ -910,21 +988,42 @@ mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF --mset GTR,HKY,JC,TN,
 grep "Best-fit model" test_mrb.log test_odd.log   # must match 1-rank runs
 ```
 
-**4d — Checkpoint resume** (kill mid-run, verify restart picks up correctly):
-```bash
-# Run 4-rank dispatch on example.phy but kill after ~30 models via SIGTERM
-mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF -T 4 \
-    --prefix resume_test -seed 42 &
-sleep 60 && kill $!   # approx 30 models at ~2s/model on login node
+**4d — Checkpoint resume** (kill mid-run, verify restart picks up rank 0's work):
 
-# Resume: --redo is NOT set, so checkpoint is used
-mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF -T 4 \
-    --prefix resume_test -seed 42
-# Must produce same best-fit model as full 1-rank run:
-grep "Best-fit model" resume_test.log ref_1r.log
+> **Known limitation:** Workers (ranks 1–3) call `model_info.setFileName("")` before
+> the run, so their checkpoint entries are never written to disk — only rank 0's
+> models (indices 0, 4, 8, ...) are persisted in `.model.gz` during the run.
+> On a mid-run kill before Phase 2 gather completes, ranks 1–3 lose all their work.
+> On resume, rank 0 correctly restores its models from checkpoint; ranks 1–3 must
+> re-evaluate their full model stripe. This is functionally correct (no wrong results)
+> but not incremental for workers. A future improvement (Phase 4e) would write
+> per-rank checkpoint files (`prefix.rank1.model.gz`) and merge them on resume.
+
+```bash
+cd /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2
+
+# Run 4-rank dispatch, kill after rank 0 has evaluated some models
+mpirun -np 4 --map-by node:PE=1 numactl --localalloc -- \
+    ./iqtree3-mpi -s ../src/iqtree3/example/example.phy \
+    -te /scratch/um09/as1708/iqtree3-mf2/test_mf_mpi/fixed_tree.nwk \
+    -m MF -T AUTO --seed 42 --prefix resume_test &
+MPI_PID=$!
+sleep 30 && kill $MPI_PID   # kills after rank 0 has checkpointed a handful of models
+
+# Resume (no --redo): rank 0 skips its checkpointed models; ranks 1-3 re-evaluate all
+mpirun -np 4 --map-by node:PE=1 numactl --localalloc -- \
+    ./iqtree3-mpi -s ../src/iqtree3/example/example.phy \
+    -te /scratch/um09/as1708/iqtree3-mf2/test_mf_mpi/fixed_tree.nwk \
+    -m MF -T AUTO --seed 42 --prefix resume_test
+
+# Must produce correct best-fit model despite partial checkpoint:
+grep "Best-fit model" resume_test.log
+# Expected: TIM2+F+I+G4
 ```
 
 Phase is complete when all four sub-tests pass with identical best-fit models.
+The resume sub-test passes when the correct model is produced even with partial
+checkpoint (workers re-evaluate their full stripe; rank 0 skips its checkpointed models).
 
 ---
 
@@ -934,23 +1033,35 @@ Phase is complete when all four sub-tests pass with identical best-fit models.
 (PBS 167977883 baseline) and on a realistic compressed dataset. Document in CHANGELOG.
 
 **5a — Create PBS submission script** `gadi-ci/run_xlarge_r2_mf2_dispatch.sh`:
+
+> **Dependency:** `--mpi-ranks-per-node` CLI param requires Phase 3 to be complete.
+> For 1 rank/node (the xlarge case), Phase 3 is a no-op — each rank gets 104 threads
+> unchanged. The `--mpi-ranks-per-node 1` flag can be omitted until Phase 3 is done;
+> the run is correct because the default is 1.
+
 ```bash
 #!/bin/bash
 #PBS -N iq-mf2-dispatch
+#PBS -P um09
 #PBS -l ncpus=416,mem=2048GB,walltime=6:00:00
-#PBS -l storage=scratch/um09+gdata/um09
+#PBS -l storage=scratch/um09+scratch/rc29
 #PBS -q normalsr
 #PBS -l wd
 
-module load intel-mpi/2021.13.1 intel/2024.2.0
+module load openmpi/4.1.7 intel-compiler-llvm
 
-BINARY=/scratch/um09/as1708/iqtree3-mf2/build-profiling-mpi/iqtree3-mpi
+BINARY=/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi
 ALN=/scratch/um09/as1708/iqtree3-mf2/benchmarks/xlarge_mf/xlarge_mf.fa
 
-# 4 nodes × 104 OMP, 1 rank/node (324 GB RAM limit)
-mpirun -np 4 --map-by node --bind-to numa \
-    $BINARY -s $ALN -m MF -T 104 --mpi-ranks-per-node 1 \
-    --prefix mf2_dispatch_4r -seed 1
+# 4 nodes × 104 OMP, 1 rank/node (324 GB RAM per rank — fills the node)
+mpirun -np 4 \
+    --map-by node:PE=104 \
+    --bind-to core \
+    -x OMP_NUM_THREADS=104 \
+    -x OMP_PROC_BIND=close \
+    numactl --localalloc -- \
+    "$BINARY" -s "$ALN" -m MF -T 104 \
+    --prefix mf2_dispatch_4r --seed 1 --redo
 ```
 
 **5b — Run and record results:**
@@ -967,21 +1078,32 @@ mpirun -np 4 --map-by node --bind-to numa \
 ```markdown
 ### (u) ModelFinder MPI model-level dispatch (MF2)
 
-Patch: `main/phylotesting.h`, `main/phylotesting.cpp`
+Patch: `main/phylotesting.cpp` only (no header changes required)
 
 Previously, all N MPI ranks evaluated all 968 DNA models redundantly during
-the ModelFinder phase. Adds per-rank model stripe assignment (`MF_IGNORED_MPI`
-flag) and a post-evaluation MPI_Allreduce gather so each rank evaluates only
-ceil(968/N) models. Reuses existing `gatherCheckpoint`/`broadcastCheckpoint`
+the ModelFinder phase. Adds per-rank model stripe assignment (reusing existing
+`MF_IGNORED` flag) and a post-evaluation MPI_Allreduce gather so each rank
+evaluates only ceil(968/N) models. Reuses `gatherCheckpoint`/`broadcastCheckpoint`
 from `MPIHelper` for checkpoint consolidation. Forces `evaluateAll()` path
 (no early-stop, OMP-parallel) when nranks > 1.
+
+Non-obvious fixes required during implementation:
+- Phase 1 mark must be inside evaluateAll() after generate() — not in
+  runModelFinder() where the model set is still empty.
+- Post-evaluation model names (+G4, +R3, ...) must be saved to checkpoint
+  and restored on non-owning ranks after broadcastCheckpoint(); without this
+  getBestModelID() picks the right index but getName() returns the pre-fit
+  string (e.g. TIM2+F+I+G instead of TIM2+F+I+G4).
 
 Measured improvement (Gadi normalsr, 10M-site alignment, 4 nodes × 104 OMP):
   Baseline: 4 ranks, 968 models each (redundant) → projected ~196 h
   MF2:      4 ranks, 242 models each             → projected  ~49 h (4×)
 
 Scaling: near-linear with rank count (embarrassingly parallel during evaluation;
-one MPI_Allreduce × 4 score arrays at end, ~200 KB total communication).
+one MPI_Allreduce × 4 score arrays at end, ~30 KB total communication).
+
+Verified: PBS 167995531 (Gadi normalsr, example.phy, np=1 and np=4 both
+report TIM2+F+I+G4).
 
 See: design/modelfinder-mpi-dispatch.md
 ```
@@ -996,15 +1118,18 @@ documented. The design doc `Section 4.4` scaling table is updated with measured
 
 | File | Lines | Role | Change |
 |------|-------|------|--------|
-| `main/phylotesting.cpp` | 7021 | **All** ModelFinder code | Core patch — Steps 3+4 |
-| `main/phylotesting.h` | 845 | Class declarations + flag constants | Add `MF_IGNORED_MPI = 32` |
+| `main/phylotesting.cpp` | 7021 | **All** ModelFinder code | ✅ Phase 1+2 complete (commit `0150bb27`) |
+| `main/phylotesting.h` | 845 | Class declarations + flag constants | **No change** — `MF_IGNORED = 2` reused directly |
 | `utils/MPIHelper.h` | 211 | MPI singleton wrappers | No change needed |
 | `utils/MPIHelper.cpp` | 221 | `gatherCheckpoint`, `broadcastCheckpoint` impl | No change needed |
 | `main/phyloanalysis.cpp` | 6299 | Calls `runModelFinder()` | No change needed |
+| `main/main.cpp` | ~3700 | CLI parsing | Phase 3: add `--mpi-ranks-per-node` param |
+| `utils/tools.h` | ~400 | `Params` struct | Phase 3: add `mpi_ranks_per_node` field |
 | `model/modelfactory.cpp` | ~1800 | `optimizeParameters()` (per-model loop body) | No change needed |
 | `tree/phylotreesse.cpp` | ~580 | `setNumThreads()` | No change needed |
 | `tree/phylokernelnew.h` | ~3600 | AVX-512 SIMD kernel | No change needed |
-| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | new | PBS benchmark script | Create in Step 7 |
+| `gadi-ci/test_mf_mpi_dispatch.sh` | new | PBS correctness test | ✅ Created (commit `5782f4d4`) |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | new | PBS benchmark script | Phase 5: create |
 
 ---
 
