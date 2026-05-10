@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-05-10 (aa) — Correctness test: MF2 dispatch vs baseline, free tree search
+
+### Purpose
+
+End-to-end correctness verification of the MF2 dispatch patch using the same binary
+for both runs — the only variable is rank count (1 vs 2). Eliminates confounds from
+different binaries, different tree-search modes, or different total thread counts.
+
+Prior correctness tests (PBS 167999083, entry x) used `-te fixed_xlarge_tree.nwk`
+and confirmed `SYM+G4` with `evaluateAll()` on both np=1 and np=4. Those tests are
+still valid but used a fixed tree; this test uses free tree search (no `-te`) to
+verify the full end-to-end pipeline including tree optimisation after model selection.
+
+### Design
+
+| Property | Baseline (168004016) | MF2 dispatch (168004018) |
+|----------|---------------------|-------------------------|
+| Script | `run_xlarge_correctness_baseline.sh` | `run_xlarge_correctness_mf2.sh` |
+| Binary | `build-mpi-mf2/iqtree3-mpi` | `build-mpi-mf2/iqtree3-mpi` |
+| Dataset | `xlarge_mf.fa` (seed=1) | `xlarge_mf.fa` (seed=1) |
+| Ranks | **1** | **2** |
+| OMP/rank | 104 | 52 |
+| Total cores | 104 | 104 |
+| Node | 1 × normalsr SPR | 1 × normalsr SPR |
+| `-te` | none (free tree search) | none (free tree search) |
+| Walltime | 30 min | 30 min |
+
+Only variable: rank count. With 1 rank, dispatch is inactive — all 968 models
+evaluated sequentially by rank 0. With 2 ranks, round-robin stripe assigns odd
+models to rank 0 and even models to rank 1; `MPI_Allreduce` merges results.
+
+### Expected result
+
+Both runs report the same `Best-fit model:` string (likely `GTR+R4` — the result
+from the old-binary OMP run PBS 167969243 which also used free tree search and
+no `-te`). The MF2 run log must show `MF-MPI: rank 0/2 assigned 484/968 models`.
+
+### Status
+
+Submitted 2026-05-10. Results pending — check `.o168004016` and `.o168004018`
+output files for `CORRECTNESS PASS` / `CORRECTNESS FAIL` lines.
+
+---
+
 ## 2026-05-10 (z) — 10M-site dataset: dispatch vs baseline walltime analysis
 
 ### Dataset
@@ -70,19 +114,29 @@ thread each), processed in `ceil(242/104) = 3` waves. Wall = 3 × heaviest-model
 | **MF2 — best estimate** | **5×** | **3,740 s** | **~4.7 h** | **86%** |
 | MF2 — upper bound | 15× | 11,220 s | ~14 h | 43% |
 
-**Summary:**
+**Corrected summary (post-verification — BIC pruning on this JC-like dataset):**
+
+Verification (7/7 PASS, see session notes) revealed two earlier errors:
+
+1. **BIC pruning** — `evaluateAll()` prunes higher-K rate-variation models when the
+   base model has better BIC. On this maximally symmetric dataset (JC ≡ F81 ≡ K2P;
+   uniform base frequencies confirmed), rate variation never improves BIC. Rank-0
+   evaluated only **24 models** (all 22 base substitution families + JC+R2 + JC+G4)
+   before pruning halted further evaluation — not 242.
+
+2. **KSU is invariant to node count** — adding nodes reduces wall time but increases
+   cores proportionally. KSU = ncpus × wall × 2.0 SU/core-h = constant regardless
+   of whether 1, 4, or 8 nodes are used. MF2 dispatch reduces **wall time**, not SU cost.
+   The earlier claim of "21× less CPU work per model" (and "5–14 KSU") was wrong;
+   both approaches cost ~41.8 KSU to complete all models.
 
 | | Baseline | MF2 (4 nodes) |
 |-|----------|---------------|
-| Wall to complete 968 models | ~201 h | **~4.7 h** (best estimate) |
-| Wall speedup | — | **~43×** |
-| Unique models at 2h | 9 (redundant) | ~750 (77%) |
-| KSU to complete all | 41.8 KSU | **~5–14 KSU** |
-
-MF2 dispatch is also cheaper in SU: each model uses 1 OMP thread × ~3,740 s = 3,740
-core-seconds vs baseline 104 OMP × 748 s = 77,792 core-seconds — **21× less CPU work
-per model** — because the DRAM bandwidth bottleneck was wasted on idle OMP threads in
-the baseline.
+| Wall to complete all models | ~201 h (968 models × 748 s, no pruning) | **~4.7 h** (4× fewer wall hours) |
+| Wall speedup | — | **~4×** (4 ranks, each doing 1/4 of models) |
+| Unique models at 2h PBS kill | 9 (redundant, 4 ranks did same 9) | ~96 unique (4 ranks × ~24 pruned set) |
+| KSU to complete all | 41.8 KSU | **~41.8 KSU** (same — KSU is invariant) |
+| Benefit | — | **Wall time** (time-to-answer), not SU efficiency |
 
 See [results.md](results.md) for full empirical data and methodology.
 
