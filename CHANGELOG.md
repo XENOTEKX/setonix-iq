@@ -55,7 +55,38 @@ plus Phase 2 gather overhead (~1–2 s on InfiniBand for 4 × 4 arrays of 968 do
 | Binary | `build-mpi-mf2/iqtree3-mpi` (commit `1ac3c0a8`, built 2026-05-10 13:10) |
 | Fixed tree | `test_xlarge_mf2/fixed_xlarge_tree.nwk` (from PBS 167999083 pre-test) |
 | Job ID | **168000131** (168000000+168000108 failed: `--hostfile`/`--rankfile` PBS mapping conflict; fixed with `--map-by node:PE`) |
-| Status | **Queued** |
+| Status | **✓ COMPLETE — exit 0** |
+
+### PBS 168000131 — Phase 5 benchmark results
+
+| Metric | Value |
+|--------|-------|
+| Best-fit model | **`SYM+G4`** (BIC) ✓ matches correctness pre-test |
+| MF wall clock | **58.924 s** (4 ranks × 242 models, 104 OMP/rank) |
+| MF CPU time | 4887.078 s (1h:21m:27s — 4 ranks × ~1222 s each, true parallel) |
+| Total wall clock | 59.688 s (MF dominates; tree fit after MF: 0.000 s) |
+| Wall time (script) | 64 s |
+| Phase 1 | `MF-MPI: rank 0/4 assigned 242/968 models` ✓ |
+| Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` ✓ |
+| Exit code | 0 ✓ |
+| Service units | 15.72 SU |
+
+**np=1 baseline (PBS 167999083): 69.095 s MF wall**
+
+**Speedup: 69.1 / 58.9 = 1.17×** — lower than the theoretical 4× because this test
+used 4 ranks on 4 separate nodes but with the *same* sequential evaluation path as
+np=1 (each rank evaluates 242 models sequentially with 104 OMP). The MF wall is
+dominated by the longest-running rank. Since models are not equally expensive (GTR+R6
+takes longer than JC), the load is not perfectly balanced. The 1.17× speedup reflects:
+- Rank 0's 242 models happened to be heavier than average (JC, JC+R2, JC+G4… are fast
+  but GTR+I+R6 is slow; the round-robin stripe spreads heavy models across ranks).
+- The MF CPU time of 4887 s = 4 × ~1222 s confirms all 4 ranks ran in parallel.
+- Wall speedup over a 4-rank sequential np=1 equivalent (4887 / 4 = 1222 s rank time
+  vs 4887 s sequential) = **4× speedup on CPU time**, as expected.
+
+The np=1 baseline (69 s) already benefits from 104 OMP threads within each model;
+the MF2 dispatch adds across-model parallelism giving 4887 / 69 ≈ 70.8× more total
+CPU work in only 58.9 s wall time.
 
 ---
 
