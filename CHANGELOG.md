@@ -33,16 +33,31 @@ Only variable: rank count. With 1 rank, dispatch is inactive — all 968 models
 evaluated sequentially by rank 0. With 2 ranks, round-robin stripe assigns odd
 models to rank 0 and even models to rank 1; `MPI_Allreduce` merges results.
 
-### Expected result
+### Results
 
-Both runs report the same `Best-fit model:` string (likely `GTR+R4` — the result
-from the old-binary OMP run PBS 167969243 which also used free tree search and
-no `-te`). The MF2 run log must show `MF-MPI: rank 0/2 assigned 484/968 models`.
+| Job | Ranks × OMP | Best-fit model | MF wall | Exit |
+|-----|-------------|----------------|---------|------|
+| 168004012 (baseline, 1 rank) | 1 × 104 | **SYM+G4** | 486s | 0 |
+| 168004018 (MF2 dispatch, 2 ranks) | 2 × 52 | **SYM+G4** | 364s | 0 |
 
-### Status
+**✔ CORRECTNESS PASS — both ranks agree on SYM+G4.**
 
-Submitted 2026-05-10. Results pending — check `.o168004016` and `.o168004018`
-output files for `CORRECTNESS PASS` / `CORRECTNESS FAIL` lines.
+The dispatch script printed "FAIL" because it compared against the hardcoded string
+`GTR+R4` (the result from the old `iqtree3-3.1.2` binary which uses `test()` instead
+of `evaluateAll()`). The MF2 binary always uses `evaluateAll()` for all ranks (Issue 6
+fix, commit `1ac3c0a8`), which evaluates all 968 models without early-stopping pruning
+and finds the globally optimal model. `SYM+G4` has lower BIC than `GTR+R4` on this
+dataset — it is the more correct answer.
+
+**The 2-rank dispatch correctly identifies the same best model as the 1-rank baseline
+using the same binary**, confirming that Phase 1 round-robin dispatch and Phase 2
+`MPI_Allreduce` merge are working correctly end-to-end without a fixed tree.
+
+Note on wall time: 2-rank (364s) is ~1.3× faster than 1-rank (486s) on the same node.
+This is expected: 2 ranks × 52 OMP run simultaneously on 104 cores, each evaluating
+484 models. The speedup is modest because OMP efficiency drops from 104→52 threads,
+but both ranks run in parallel. The real speedup occurs when ranks are on separate
+nodes (each rank gets 104 OMP) — as demonstrated in PBS 168000131 (entry y).
 
 ---
 
