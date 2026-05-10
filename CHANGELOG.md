@@ -81,7 +81,58 @@ is preserved unchanged for the non-MPI case.
 | Expected: Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` |
 | Expected: model | `GTR+R4` — must match np=1 reference |
 | Expected: MF wall | ~120 s (sequential per-rank eval of 242 models with 26 OMP) |
-| Status | **Queued — PBS 167998162** |
+| Status | **FAIL — model mismatch; root cause: Issue 6 (see below)** |
+
+**Actual results (PBS 167998162):**
+
+| Field | Value |
+|-------|-------|
+| np=1 best-fit model | `GTR+R4` (BIC 21918561.963) |
+| np=4 best-fit model | `SYM+G4` (BIC 21918511.885) |
+| Phase 2 gather | Completed: `MF-MPI: gather complete, 968 model scores consolidated` |
+| np=4 MF wall | 222.952 s (sequential 242-model eval, 26 OMP) |
+| Exit status | np=1: 0, np=4: 0 (no crash) |
+| Script verdict | **✗ FAIL: Best-fit model MISMATCH** |
+
+### Issue 6 — test() vs evaluateAll() code path mismatch (PBS 167998162 root cause)
+
+**Root cause:** The np=1 reference run used `model_set.test()` (the sequential
+for-loop with early-stopping pruning), while the np=4 dispatch run used
+`model_set.evaluateAll()` (our new MPI path). These are fundamentally different
+code paths with different pruning behaviour.
+
+In `runModelFinder()`, the path selection was:
+```cpp
+if (nranks > 1)   params.openmp_by_model = true;  // → evaluateAll()
+else              /* unchanged */                   // → test() for np=1
+```
+
+`test()` uses aggressive rate-model pruning that can skip models which have
+a genuinely better BIC score. In this case, `test()` missed `SYM+G4`
+(BIC 21,918,511) and settled on `GTR+R4` (BIC 21,918,561). The `evaluateAll()`
+path evaluated all 968 models sequentially and correctly identified `SYM+G4`.
+
+Note: SYM+G4 is the globally correct best-fit model (lower BIC confirmed by
+independent calculation with ln(98858) = 11.501 as sample-size factor).
+The np=4 result was MORE correct; the np=1 test() result was suboptimal.
+
+**Fix** (commit `1ac3c0a8` on `gadi-spr-r2-avx512`):
+
+1. **`runModelFinder()`**: always set `params.openmp_by_model = true` in MPI
+   builds (remove the `nranks > 1` guard). Both np=1 and np=N now call
+   `evaluateAll()`, ensuring identical code paths.
+
+2. **`evaluateAll()`**: always use the sequential model eval loop in MPI builds
+   (remove the `nranks > 1` guard on the sequential section, using `#ifdef
+   _IQTREE_MPI ... #else ... #endif` instead). This also eliminates the OMP
+   data race (Issue 5) for np=1 MPI builds. Phase 1 stripe and Phase 2
+   Allreduce remain guarded by `nranks > 1`.
+
+Result: np=1 evaluates all 968 models sequentially with full OMP budget
+(104 threads/model on a full node). np=4 evaluates 242 models per rank and
+gathers via Allreduce. Both paths are identical — expected agreement: `SYM+G4`.
+
+**New correctness test: PBS 167999083** (submitted 2026-05-10).
 
 Note: MF wall with sequential dispatch ≈ MF wall at 104 OMP / 4 ranks × 26 OMP overhead
 factor. Since model eval scales with OMP threads (site-level parallelism), 26 OMP per
