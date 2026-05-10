@@ -170,6 +170,11 @@ public:
         this->flag |= flag;
     }
 
+    /** clear a flag bit */
+    void resetFlag(int flag) {
+        this->flag &= ~flag;
+    }
+
     bool hasFlag(int flag) {
         return (this->flag & flag) != 0;
     }

@@ -3463,16 +3463,74 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     if (MPIHelper::getInstance().getNumProcesses() > 1) {
         int my_rank = MPIHelper::getInstance().getProcessID();
         int nranks  = MPIHelper::getInstance().getNumProcesses();
+
+        // Phase 1 — cost-sorted stripe dispatch.
+        //
+        // Problem with plain i%nranks (index-based round-robin):
+        //   1. MF_WAITING: +Rk models (k > min_rate_cats) start as WAITING and
+        //      are promoted only after their +R(k-1) neighbour is evaluated.
+        //      With cross-rank stripping the promoter (+R(k-1)) belongs to a
+        //      different rank that never signals this rank.  Result: most +Rk
+        //      models remain permanently WAITING on each rank → severe load
+        //      imbalance (rank 0 evaluates ~24 models, ranks 1-3 evaluate ~66+).
+        //   2. Cost variation: models with more rate categories (+R10) are ~10×
+        //      slower than base models (JC+""). Plain i%nranks gives equal
+        //      MODEL COUNTS but unequal WORK.
+        //
+        // Fix (two-part):
+        //   A. Build a cost-sorted index (heaviest models first) and assign
+        //      by sorted position mod nranks (LPT-inspired load balancing).
+        //      Cost proxy: rate-category count from rate_name string.
+        //   B. After stripe assignment, clear MF_WAITING on all own models
+        //      so each rank evaluates its full assigned stripe regardless of
+        //      whether the +R(k-1) promoter belongs to another rank.
+        //      Phase 2 MPI_Allreduce gathers the globally correct best model.
+
+        // Step A: build cost estimate and sort by descending cost.
+        auto modelCost = [&](int idx) -> int {
+            const string &r = at(idx).orig_rate_name;
+            // +Rk / +I+Rk: cost proportional to k
+            for (const char *tag : {"+R", "*R", "+H", "*H", "+I+R", "+I*R"}) {
+                size_t p = r.find(tag);
+                if (p != string::npos && p + strlen(tag) < r.size()
+                    && isdigit((unsigned char)r[p + strlen(tag)])) {
+                    int k = atoi(r.c_str() + p + strlen(tag));
+                    if (k > 0) return k * 10;
+                }
+            }
+            if (r.find("+I+G") != string::npos || r.find("+ASC+G") != string::npos) return 5;
+            if (r.find("+G")   != string::npos) return 4;
+            if (r.find("+I")   != string::npos) return 2;
+            return 1; // bare substitution model or +ASC
+        };
+
+        vector<int> sorted_idx(num_models);
+        std::iota(sorted_idx.begin(), sorted_idx.end(), 0);
+        // Stable sort: ties preserve generate() order (ensures determinism).
+        stable_sort(sorted_idx.begin(), sorted_idx.end(),
+                    [&](int a, int b){ return modelCost(a) > modelCost(b); });
+
+        // Mark cross-rank models MF_IGNORED based on sorted position.
         int my_count = 0;
-        for (int i = 0; i < (int)num_models; i++) {
-            if (i % nranks != my_rank)
-                at(i).setFlag(MF_IGNORED);
+        for (int p = 0; p < (int)num_models; p++) {
+            if (p % nranks != my_rank)
+                at(sorted_idx[p]).setFlag(MF_IGNORED);
             else
                 my_count++;
         }
+
+        // Step B: clear MF_WAITING on all own models so the sequential
+        // evaluation loop is not blocked by the cross-rank promotion chain.
+        // The within-rank getLowerKModel guard (below) still prevents incorrect
+        // pruning; Phase 2 MPI_Allreduce produces the globally correct result.
+        for (int i = 0; i < (int)num_models; i++) {
+            if (!at(i).hasFlag(MF_IGNORED))
+                at(i).resetFlag(MF_WAITING);
+        }
+
         cout << "MF-MPI: rank " << my_rank << "/" << nranks
              << " assigned " << my_count << "/" << num_models
-             << " models" << endl;
+             << " models (cost-sorted LPT stripe, MF_WAITING cleared)" << endl;
     }
 #endif
 
