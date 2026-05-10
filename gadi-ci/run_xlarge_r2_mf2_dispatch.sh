@@ -249,7 +249,7 @@ echo ""
 T_START=$(date +%s)
 
 mpirun -np "${NRANKS}" \
-    --rankfile  "${RANKFILE}" \
+    --map-by node:PE="${OMP_PER_RANK}" \
     --mca pml ucx \
     -x UCX_TLS=rc_mlx5,ud_mlx5,sm,self \
     -x UCX_NET_DEVICES=mlx5_0:1 \
