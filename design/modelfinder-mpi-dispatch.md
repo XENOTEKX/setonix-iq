@@ -1019,6 +1019,8 @@ documented. The design doc `Section 4.4` scaling table is updated with measured
 | Score mismatch across ranks | Low | Identical alignment + identical starting tree + `--seed`; only OMP non-determinism in last digit |
 | Checkpoint race: workers write to same `.model.gz` | **Eliminated** | Workers call `model_info.setFileName("")` at line ~1405 (already in code for MPI workers) |
 | `gatherCheckpoint` is slow for large checkpoints | Low | 968 models × ~200 bytes = ~200 KB total; negligible vs 729 s/model |
+| **Model name mismatch after Phase 2 gather** | **Eliminated** | `CandidateModel::evaluate()` updates `subst_name + rate_name` post-fit (e.g. `+G` → `+G4`). Ranks that did not evaluate a model keep the pre-evaluation name. Fix: save `mf_subst_N` / `mf_rate_N` checkpoint entries per model index during evaluation; restore from checkpoint after `broadcastCheckpoint()` in Phase 2. Without this, `getName()` returns `TIM2+F+I+G` for the best model on rank 0 while np=1 returns `TIM2+F+I+G4` — functionally equivalent but string-mismatched. |
+| **Phase 1 insertion point — must be inside `evaluateAll()`** | **Eliminated** | `model_set` in `runModelFinder()` is empty until `generate()` is called inside `evaluateAll()`. Phase 1 must be placed AFTER `int64_t num_models = size()` inside `evaluateAll()`, not in `runModelFinder()`. Inserting Phase 1 in the outer function runs against an empty vector and stripes zero models. |
 | Upstream ModelFinder2 supersedes this | Medium | Track issues #130–134; patch can be upstreamed or rebased |
 
 ---
