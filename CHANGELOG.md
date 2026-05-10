@@ -4,12 +4,45 @@
 
 ## 2026-05-10 (ab) — Issue 7: MF_WAITING cross-rank blocking + LPT cost-sort fix
 
-### Discovery
+### PBS 168000932 — Job Outcome (confirmed)
 
-Analysis of the PBS 168000932 (4-node 10M run) live log revealed severe load
-imbalance: rank 0 finished its 242 assigned models at t=5,738s (1h35m) while ranks
-1–3 were still running at t=10,180s (2h50m) and were killed at the 3h wall (imbalance
-1.77×).
+**Job killed at walltime (exit -29).** Run details extracted from
+`iq-100taxa-10M-mf2-4node.o168000932` and the profile directory:
+
+| Metric | Value |
+|--------|-------|
+| Binary | `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi` (pre-LPT-fix) |
+| PBS exit | -29 — *job killed: walltime 10867 exceeded limit 10800* |
+| Walltime used | 3h 01m 18s / 3h 00m 00s |
+| Service units | 2514.03 SU (416 CPUs × 3h × 2.0) |
+| Memory used | 659.93 GB / 1.95 TB |
+| Starting tree | 547.692 s (~9 min) — NJ + GTR+ASC+G NNI |
+| Models scored | **24** (checkpoint `iqtree_run.model.gz`; 19 visible in log) |
+| Log ends at | TIM3e (model index 705) — cut off mid-evaluation |
+| No Best-fit output | Job killed before Phase 2 `MPI_Allreduce` gather |
+
+**Binary was the OLD round-robin version (pre-fix).** Confirmed by log message:
+> `MF-MPI: rank 0/4 assigned 242/968 models`
+
+The LPT-fix message reads `...242/968 models (cost-sorted LPT stripe, MF_WAITING
+cleared)`. The absence of that suffix is definitive: this ran the broken i%nranks
+stripe without the MF_WAITING clear.
+
+**24 models scored by rank 0** — all simple flat substitution models with no `+G` or
+`+R3+` component (exactly those without `MF_WAITING` in the old code). Of the 24:
+
+| Best partial score | -lnL | df |
+|--------------------|------|----|
+| GTR | 672,798,759.4 | 202 |
+| SYM | 672,798,759.4 | 202 |
+| K3Pu | 672,798,759.7 | 199 |
+
+These scores are meaningless for model selection: no `+G`, `+I+G`, or `+Rk` models
+were evaluated, so BIC cannot distinguish the true best fit. The full 10M run needs
+~240 s/model × 968 models = 230,000 s total work → **~16h per rank** (4 ranks,
+none sharing).  
+
+### Discovery — Why the Job Failed (Issue 7)
 
 The source inspection also confirmed:
 - **Q2 (19/24 thread issue)**: Not present in this run. Each rank uses 104 OMP threads
@@ -35,9 +68,8 @@ Two compounding problems:
 With `i % nranks` stripping, consecutive `+Rk` and `+R(k-1)` models land on different
 ranks. Rank 0 never evaluates `+R(k-1)` (it belongs to rank 1 or 3), so it never
 promotes `+R(k)`, which stays permanently `MF_WAITING` on rank 0. Eventually
-`getNextModel()` returns -1 and rank 0 exits early — having evaluated only the
-`~66 non-WAITING` models out of 242 assigned, and after `filterRates`/`filterSubst`
-pruning, only ~24 actually ran.
+`getNextModel()` returns -1 and rank 0 exits early — having evaluated only those models
+without `MF_WAITING` in its stripe: in PBS 168000932, exactly **24 of 242** assigned.
 
 Ranks 1–3 have a different but also broken promotion pattern: they can sometimes promote
 within their own stripe, but cross-rank dependencies still leave many models blocked or
@@ -75,9 +107,9 @@ void resetFlag(int flag) { this->flag &= ~flag; }
 
 ### Expected Outcome
 
-- All 4 ranks evaluate their full 242-model stripe (instead of ~24 for rank 0).
+- All 4 ranks evaluate their full 242-model stripe (instead of 24 for rank 0 in PBS 168000932).
 - Each rank's cost is approximately equal (LPT distribution).
-- Rank finish times within ~20% of each other (vs 1.77× imbalance before).
+- Rank finish times within ~20% of each other (vs rank 0 evaluating only 9.9% of its stripe in PBS 168000932).
 - A 3h walltime is still insufficient to complete all 968 models on 10M uncompressed
   data (~240s/model × 242 models = ~16h per rank). The fix makes all ranks productive
   for the full 3h rather than rank 0 being idle for 1h25m.
