@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-10 (v) — ModelFinder MPI dispatch: Phase 3 thread budget
+
+### Summary
+
+Implemented Phase 3: `--mpi-ranks-per-node N` CLI parameter that partitions the
+OMP thread budget when multiple MPI ranks share a physical node.  Without this,
+a 4-rank/node run would spawn 4 × 104 = 416 OMP threads on a 104-core node.
+With it, each rank receives `num_threads / mpi_ranks_per_node` threads.
+
+For the xlarge 1-rank/node benchmark (default `N=1`), Phase 3 is a no-op: each
+rank keeps all 104 threads unchanged.
+
+### Changes
+
+| file | change |
+|------|--------|
+| `utils/tools.h` | Added `int mpi_ranks_per_node;` to `Params` struct |
+| `utils/tools.cpp` | Initialised to 1; CLI parse `--mpi-ranks-per-node <N>` after `--thread-site` |
+| `main/phylotesting.cpp` | In Phase 1 MPI block: save `orig_num_threads`, divide, restore after `evaluateAll()`; emit "MF-MPI: thread budget per rank = K" only when K < num_threads |
+| `gadi-ci/test_mf_mpi_dispatch.sh` | Added Test 3: np=4 with `-T 8 --mpi-ranks-per-node 4` → 2 threads/rank; checks model match + budget message |
+
+### Issues found during implementation
+
+**Issue 1: Wrong Makefile target name**
+
+The CMake build system generates a target named `iqtree3`, but the output binary
+is named `iqtree3-mpi` (set by `set_target_properties`). Running
+`/bin/gmake iqtree3-mpi` reported "nothing to be done" silently — all
+recompilation was skipped even after modifying source files.
+
+**Root cause:** CMake creates a target named after the `add_executable()` first
+argument (`iqtree3`), not after the binary output name. The binary rename is a
+CMake install step, not a separate target.
+
+**Fix:** Always use `/bin/gmake -j4 iqtree3` (the CMake target) or `/bin/gmake
+-B iqtree3` to force a full rebuild.  `touch`-ing source files then calling
+`gmake iqtree3-mpi` does nothing.
+
+**Issue 2: Login-node AVX-512 SIGILL**
+
+The `iqtree3-mpi` binary is compiled with `-march=sapphirerapids` (AVX-512 +
+AMX instruction set). The Gadi login nodes (`gadi-login-02`) do not have the
+same instruction set and crash with SIGILL on any execution that reaches the
+SIMD kernel. This made it impossible to run the Phase 3 milestone test
+(4 MPI ranks, `-T 8 --mpi-ranks-per-node 4`) locally.
+
+**Root cause:** Login nodes are Ice Lake (AVX-512 base set); compute nodes are
+Sapphire Rapids (adds AMX tiles and additional AVX-512 variants). An SPR binary
+is not portable back to ICX.
+
+**Fix:** Phase 3 milestone test (division correctness + budget message check)
+must be submitted via PBS `normalsr` (`#PBS -q normalsr`). The test script
+`gadi-ci/test_mf_mpi_dispatch.sh` now includes Test 3 which covers this.  
+The login node can only be used for compilation and argument-parsing checks
+(`-np 1` with `-T 1`).
+
+**Issue 3: Default `--mpi-ranks-per-node 1` suppresses budget message**
+
+The "MF-MPI: thread budget per rank" log message is only emitted when
+`rank_threads < num_threads`, i.e., when the division is non-trivial.  At the
+default of 1, the message is correctly suppressed. The Phase 3 test script
+accounts for this with a `△ NOTE` (non-fatal) rather than `✗ FAIL`.
+
+### Commits
+
+| repo | hash | message |
+|------|------|---------|
+| `iqtree3` (`gadi-spr-r2-avx512`) | `0e701aaa` | `feat(mpi): Phase 3 -- --mpi-ranks-per-node OMP thread budget` |
+| `setonix-iq` (`modelfinder2`) | `366fbbae` | `test: extend mf-mpi dispatch test with Phase 3 thread budget check` |
+
+### Status
+
+Phase 3 is code-complete and built. PBS `normalsr` job required to validate the
+division path (`--mpi-ranks-per-node 4`, 2 threads/rank correctness check).  
+Pending: Phase 4 correctness hardening, Phase 5 scale benchmark.
+
+---
+
 ## 2026-05-10 (u) — ModelFinder MPI dispatch: branch + scratch setup
 
 ### Summary

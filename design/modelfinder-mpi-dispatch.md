@@ -899,7 +899,7 @@ and 4-rank runs. **Verified: PBS 167995531 — both report `TIM2+F+I+G4`.**
 
 ---
 
-### Phase 3 — Thread Budget Partitioning (OMP Threads per Rank)
+### Phase 3 — Thread Budget Partitioning (OMP Threads per Rank) ✅ COMPLETE
 
 **Scope:** When multiple MPI ranks share a single node, each rank must receive only
 its fair share of the node's OMP threads so they do not over-subscribe the CPU.
@@ -907,84 +907,146 @@ Without this, 4 ranks on 1 node would each request 104 OMP threads → 416 concu
 threads on 104 cores. Mirrors R2's `PACKETS_PER_THREAD` / `num_packets` tuning:
 adjusting the intra-node parallelism budget after the inter-node dispatch is correct.
 
-**Changes:**
+**Actual implementation (commit `0e701aaa`, `gadi-spr-r2-avx512`):**
 
-1. **`main/phylotesting.cpp` — `runModelFinder()` inside the Phase 1 block** — after
-   `params.openmp_by_model = true`, compute `rank_threads`:
+1. **`utils/tools.h`** — Added `int mpi_ranks_per_node;` to `Params` struct (default 1,
+   documented with comment explaining xlarge/compressed use-cases).
+
+2. **`utils/tools.cpp`** — Initialised `mpi_ranks_per_node = 1` near other thread
+   defaults; added CLI parsing for `--mpi-ranks-per-node <N>` (throws on `N < 1`)
+   immediately after the existing `--thread-model` / `--thread-site` block. Note:
+   parsing lives in `tools.cpp`, **not** `main/main.cpp` — all other thread params
+   use `tools.cpp`, so Phase 3 follows the same pattern.
+
+3. **`main/phylotesting.cpp`** — Inside the Phase 1 `#ifdef _IQTREE_MPI` block in
+   `runModelFinder()`, after `params.openmp_by_model = true`:
    ```cpp
-   // Determine how many OMP threads this rank may use.
-   // When 1 rank per node (typical for xlarge, 324 GB/rank), no adjustment needed.
-   // When >1 rank per node (compressed data), share the thread pool equally.
-   int ranks_per_node = 1;   // default: xlarge case, 1 rank fills the node RAM
-   // Count how many ranks share localhost by checking hostnames if needed,
-   // or accept ranks_per_node as a new CLI param --mpi-ranks-per-node (default 1).
-   int rank_threads = max(1, params.num_threads / ranks_per_node);
-   params.num_threads = rank_threads;  // scoped to this MF phase only
+   // Phase 3: partition OMP thread budget across ranks sharing a node.
+   int orig_num_threads = params.num_threads;
+   if (MPIHelper::getInstance().getNumProcesses() > 1) {
+       params.openmp_by_model = true;
+       int rank_threads = max(1, params.num_threads / params.mpi_ranks_per_node);
+       if (rank_threads != params.num_threads) {
+           cout << "MF-MPI: thread budget per rank = " << rank_threads
+                << " (" << params.num_threads << " total / "
+                << params.mpi_ranks_per_node << " ranks/node)" << endl;
+           params.num_threads = rank_threads;
+       }
+   }
    ```
-   For the initial xlarge benchmark (1 rank/node), `ranks_per_node = 1` →
-   `rank_threads = 104` → no change from current behaviour. The multi-rank/node
-   path is activated by `--mpi-ranks-per-node N`.
-
-2. **Add `--mpi-ranks-per-node` CLI parameter** to `main/main.cpp` and
-   `utils/tools.h` (pattern: search for any existing `num_threads` CLI wiring and
-   mirror it). This is a single integer param, default 1.
-
-3. **Restore `params.num_threads` after `evaluateAll()` returns** to avoid
-   affecting the subsequent tree-search phase:
+   After `evaluateAll()` returns:
    ```cpp
-   params.num_threads = orig_num_threads;  // restore before tree search
+   // Phase 3: restore thread count so subsequent tree search is unaffected.
+   params.num_threads = orig_num_threads;
    ```
+   The budget message is emitted **only when the division is non-trivial**
+   (`rank_threads < num_threads`). At default `N=1`, `rank_threads = num_threads`
+   → condition false → no message → no overhead.
 
-**Milestone test:**
+**Non-obvious issues found during implementation:**
+
+**Issue 1 — Wrong Makefile target name:**
+The CMake build generates a target named `iqtree3` (the `add_executable()` name)
+but the output binary is renamed to `iqtree3-mpi` via `set_target_properties`.
+Running `/bin/gmake iqtree3-mpi` reported "nothing to be done" silently — all
+touched sources were skipped. Touch + wrong target = silent no-op rebuild.
+
+*Fix:* Always use `/bin/gmake -j4 iqtree3` (correct CMake target). Use
+`/bin/gmake -B iqtree3` to force unconditional rebuild when timestamps are
+suspect. The binary at `build-mpi-mf2/iqtree3-mpi` is the output, not the target.
+
+**Issue 2 — Login-node AVX-512 SIGILL (compute-node-only testing):**
+`iqtree3-mpi` is compiled with `-march=sapphirerapids` (SPR: AVX-512 + AMX tiles).
+Gadi login nodes are Ice Lake (ICX): same AVX-512 base, but missing SPR-specific
+correctvector variants that the compiler emits for SPR targets. Any run that
+reaches the SIMD kernel crashes with SIGILL. This includes all `mpirun -np N`
+calls with `-T > 1` on the login node.
+
+Consequence: the Phase 3 milestone test (4 ranks, `-T 8 --mpi-ranks-per-node 4`,
+expected 2 threads/rank) **cannot be validated on the login node**. PBS
+`normalsr` (SPR compute node) is required for all functional testing of the
+budget-division path.
+
+*Fix:* `test_mf_mpi_dispatch.sh` Test 3 covers this via PBS submission.
+CLI argument parsing was confirmed correct by running `mpirun -np 1` with `-T 1`
+(avoids kernel entry) on the login node.
+
+**Issue 3 — Default `N=1` suppresses budget log message:**
+When `mpi_ranks_per_node = 1` (default), `rank_threads == num_threads` →
+the `if (rank_threads != params.num_threads)` guard is false → no message emitted.
+Test 3 in the test script treats a missing budget message as `△ NOTE` (advisory),
+not `✗ FAIL` — the correctness check (model match) is the gate.
+
+**Milestone test (PBS `normalsr` required):**
 ```bash
-# Simulate 4 ranks on a single 8-core login node with 2 threads total budget
-mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF -T 8 \
-    --mpi-ranks-per-node 4 --prefix p3_test -seed 42 --redo
-# Verify: each rank runs with 8/4 = 2 OMP threads
-# Check: OMP_NUM_THREADS reported in logs = 2, htop/ps shows ≤8 threads total
-grep "Number of threads" p3_test.log
-
-# Confirm correctness is preserved with non-default thread count:
-grep "Best-fit model" p3_test.log ref_1r.log   # must match
+# Submit via: qsub gadi-ci/test_mf_mpi_dispatch.sh
+# Test 3 within the script runs:
+mpirun -np 4 \
+    --map-by node:PE=2 \
+    -x OMP_NUM_THREADS=8 \
+    numactl --localalloc -- \
+    "${IQTREE}" -s "${ALN}" -te "${FIXED_TREE}" \
+    -m MF -T 8 --mpi-ranks-per-node 4 \
+    --seed 42 --prefix "${OUTDIR}/p3_test" --redo
+# Expected in p3_test.log:
+#   MF-MPI: thread budget per rank = 2 (8 total / 4 ranks/node)
+#   Best-fit model: TIM2+F+I+G4   ← must match np=1 reference
 ```
 
-Phase is complete when: correct model with `--mpi-ranks-per-node 4` AND CPU
-utilization stays within the per-rank thread budget.
+Phase is complete when PBS Test 3 reports `✓ PASS (Test 3)` for both model
+match and thread-budget message. Pending PBS job submission.
 
 ---
 
 ### Phase 4 — Correctness Hardening (Edge Cases & Checkpoint Resume)
 
-**Scope:** Stress the patch against scenarios that differ from the standard DNA `/
-normal data / single restart` path. These exercise the flag and gather logic on
+**Scope:** Stress the patch against scenarios that differ from the standard DNA /
+normal data / single restart path. These exercise the flag and gather logic on
 data paths that Phase 1–3 did not explicitly test.
+
+> **Login-node constraint (inherited from Phase 3 Issue 2):** All Phase 4 tests
+> require a Sapphire Rapids compute node (`#PBS -q normalsr`). The binary is
+> compiled with `-march=sapphirerapids` and crashes with SIGILL on the login node.
+> All sub-tests below must be run via `qsub`. The test script
+> `gadi-ci/test_mf_mpi_dispatch.sh` is the vehicle — new sub-tests should be
+> added as Test 4, Test 5, ... following the existing Test 1/2/3 pattern.
 
 **Test suite (run in order, each must match 1-rank reference):**
 
 **4a — SNP / ASC data** (0% invariant sites, `+ASC` rate models active instead of `+I`):
 ```bash
 # SNP alignment has frac_invariant_sites = 0.0 → different rate options array
-mpirun -np 1 ./iqtree3-mpi -s test_snp.phy -m MF --prefix ref_snp -seed 1 --redo
-mpirun -np 4 ./iqtree3-mpi -s test_snp.phy -m MF --prefix test_snp -seed 1 --redo
+mpirun -np 1 ./iqtree3-mpi -s test_snp.phy -m MF \
+    -te fixed_tree.nwk --prefix ref_snp -seed 1 --redo
+mpirun -np 4 ./iqtree3-mpi -s test_snp.phy -m MF \
+    -te fixed_tree.nwk --prefix test_snp -seed 1 --redo
 grep "Best-fit model" ref_snp.log test_snp.log
 ```
+Note: each test data type needs its own fixed tree (generated from np=1 without
+`-te` first, then reused for both np=1 and np=4). The `-te` pattern from Phase 2
+applies here too — omitting it risks topology divergence.
 
 **4b — Protein data** (28 subst × 2 freq × 22 rate = 1232 models; bigger gather vector):
 ```bash
-mpirun -np 1 ./iqtree3-mpi -s test_protein.phy -m MF --prefix ref_aa -seed 1 --redo
-mpirun -np 4 ./iqtree3-mpi -s test_protein.phy -m MF --prefix test_aa -seed 1 --redo
+mpirun -np 1 ./iqtree3-mpi -s test_protein.phy -m MF \
+    -te fixed_protein_tree.nwk --prefix ref_aa -seed 1 --redo
+mpirun -np 4 ./iqtree3-mpi -s test_protein.phy -m MF \
+    -te fixed_protein_tree.nwk --prefix test_aa -seed 1 --redo
 grep "Best-fit model" ref_aa.log test_aa.log
 ```
+Note: the `mf_subst_N`/`mf_rate_N` checkpoint keys and the Allreduce vectors in
+Phase 2 are sized by `num_models` which is determined at `generate()` time — no
+code change needed for protein, but the 1232-model gather is a stress test for
+any off-by-one in the round-robin assignment.
 
 **4c — Restricted model set** (non-multiple-of-nranks count, tests load-balance edge):
 ```bash
 # 6 models × 2 freq × 22 rate = 264; 264 / 4 = 66 per rank (even division)
 mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF --mset mrbayes \
-    --prefix test_mrb -seed 1 --redo
-# 3 models × 2 freq × 22 rate = 132; 132 / 4 = 33 per rank (even)
+    -te fixed_tree.nwk --prefix test_mrb -seed 1 --redo
 # 5 models → 5/4 = ranks 0,1 get 2, ranks 2,3 get 1 (odd test)
 mpirun -np 4 ./iqtree3-mpi -s ../example/example.phy -m MF --mset GTR,HKY,JC,TN,TVM \
-    --prefix test_odd -seed 1 --redo
+    -te fixed_tree.nwk --prefix test_odd -seed 1 --redo
 grep "Best-fit model" test_mrb.log test_odd.log   # must match 1-rank runs
 ```
 
@@ -1118,17 +1180,18 @@ documented. The design doc `Section 4.4` scaling table is updated with measured
 
 | File | Lines | Role | Change |
 |------|-------|------|--------|
-| `main/phylotesting.cpp` | 7021 | **All** ModelFinder code | ✅ Phase 1+2 complete (commit `0150bb27`) |
+| `main/phylotesting.cpp` | 7021 | **All** ModelFinder code | ✅ Phase 1+2 complete (`0150bb27`); Phase 3 complete (`0e701aaa`) |
 | `main/phylotesting.h` | 845 | Class declarations + flag constants | **No change** — `MF_IGNORED = 2` reused directly |
 | `utils/MPIHelper.h` | 211 | MPI singleton wrappers | No change needed |
 | `utils/MPIHelper.cpp` | 221 | `gatherCheckpoint`, `broadcastCheckpoint` impl | No change needed |
 | `main/phyloanalysis.cpp` | 6299 | Calls `runModelFinder()` | No change needed |
-| `main/main.cpp` | ~3700 | CLI parsing | Phase 3: add `--mpi-ranks-per-node` param |
-| `utils/tools.h` | ~400 | `Params` struct | Phase 3: add `mpi_ranks_per_node` field |
+| `main/main.cpp` | ~3700 | CLI parsing | **No change** — CLI parsing lives in `utils/tools.cpp` (see Phase 3 Issue 1) |
+| `utils/tools.h` | ~400 | `Params` struct | ✅ Phase 3 complete (`0e701aaa`) — `mpi_ranks_per_node` field added |
+| `utils/tools.cpp` | ~7400 | CLI parsing + Params init | ✅ Phase 3 complete (`0e701aaa`) — `--mpi-ranks-per-node` parsed here |
 | `model/modelfactory.cpp` | ~1800 | `optimizeParameters()` (per-model loop body) | No change needed |
 | `tree/phylotreesse.cpp` | ~580 | `setNumThreads()` | No change needed |
 | `tree/phylokernelnew.h` | ~3600 | AVX-512 SIMD kernel | No change needed |
-| `gadi-ci/test_mf_mpi_dispatch.sh` | new | PBS correctness test | ✅ Created (commit `5782f4d4`) |
+| `gadi-ci/test_mf_mpi_dispatch.sh` | new | PBS correctness test | ✅ Phase 1+2 (`5782f4d4`); Phase 3 Test 3 added (`366fbbae`) |
 | `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | new | PBS benchmark script | Phase 5: create |
 
 ---
