@@ -2,6 +2,92 @@
 
 ---
 
+## 2026-05-10 (z) — 10M-site dataset: dispatch vs baseline walltime analysis
+
+### Dataset
+
+| Property | Value |
+|----------|-------|
+| File | `alignment_10000000.phy` (PHYLIP) |
+| Path | `/scratch/um09/as1708/iqtree3-mf2/benchmarks/100taxa_10M/` |
+| Taxa | 100 |
+| Sites | 10,000,000 |
+| Distinct patterns | 10,000,000 (0% compression — all sites unique) |
+| **File size** | **954 MB** |
+| RAM per rank | ~324 GB (confirmed by IQ-TREE warning in PBS 168000932) |
+| DNA models tested | 968 |
+
+### Baseline (PBS 167977883 — no dispatch, all ranks duplicate)
+
+Config: 4 nodes, 4 ranks, 104 OMP/rank, `--hostfile`/`-rf rankfile` (old mapping,
+pre-MF2 patches). No `MF_IGNORED` round-robin stripe — all 4 ranks evaluated the
+same models in the same order.
+
+| Metric | Value |
+|--------|-------|
+| MF wall at 2h PBS kill | ~6,735 s |
+| Unique models done | **9** (9 JC/F81/K2P base models; all 4 ranks did the same 9) |
+| Coverage | 9 / 968 = **0.9%** |
+| Average wall / model | **748 s** (empirical: 9 models in 6,735 s with 104 OMP) |
+| KSU to complete all 968 | **41.8 KSU** |
+
+**Projected total wall to complete all 968 models sequentially:**
+
+$$968 \times 748\text{s} = 724{,}064\text{s} \approx \textbf{201 hours (8.4 days)}$$
+
+### MF2 Dispatch (PBS 168000932 — 4 unique ranks, evaluateAll, 1 thread/model)
+
+Config: 4 nodes, 4 ranks, 104 OMP/rank, `--map-by node:PE=104`, 3h PBS limit (intentional
+kill to capture checkpoint). Script: `gadi-ci/run_100taxa_10M_mf2dispatch_4node.sh`.
+
+**Observations at 40 min elapsed (1,878 s into MF phase):**
+
+| Metric | Value |
+|--------|-------|
+| Phase 1 dispatch | `MF-MPI: rank 0/4 assigned 242/968 models` ✓ |
+| Rank-0 models done | 12 (JC, JC+R2, JC+G4, F81, K2P, HKY, TNe, TN, K3P, K3Pu, TPM2, TPM2u) |
+| All-rank unique models | ~48 (4 ranks × 12 base models each, disjoint sets) |
+| RAM (all 4 ranks) | 659 GB = 165 GB/rank (still loading; full load ~324 GB/rank) |
+| CPU utilisation | 94.5% on 416 cores (confirmed 4-rank parallel) |
+| Baseline at same 40 min | ~3 redundant models (0.07 unique models/min shared) |
+| This run at 40 min | ~48 unique models (1.2 unique models/min) → **17× more coverage** |
+
+**OMP speedup constraint (empirically derived):**
+The 10M-site dataset is memory-bandwidth bound (954 MB, 0% compression). OMP
+parallelism saturates at ~2–5× on this dataset vs ~80× on compressed data:
+- Base models finished in < 1,878 s at 1 thread → OMP speedup < 1,878 / 748 ≈ **2.5×**
+- Rate-var models still running at 1,878 s → single-thread time > 1,878 s
+
+### Projected walltime (all 968 models)
+
+In `evaluateAll()` + MF2 dispatch mode, all 242 rank-0 models run concurrently (1 OMP
+thread each), processed in `ceil(242/104) = 3` waves. Wall = 3 × heaviest-model time.
+
+| Scenario | OMP speedup | 1-thread avg | **Total MF wall** | 3h kill coverage |
+|----------|------------|-------------|------------------|-----------------|
+| Baseline (no dispatch) | sequential | — | **~201 h** | 0.9% |
+| MF2 — lower bound | 2× | 1,496 s | **~1.9 h** | 100% |
+| **MF2 — best estimate** | **5×** | **3,740 s** | **~4.7 h** | **86%** |
+| MF2 — upper bound | 15× | 11,220 s | ~14 h | 43% |
+
+**Summary:**
+
+| | Baseline | MF2 (4 nodes) |
+|-|----------|---------------|
+| Wall to complete 968 models | ~201 h | **~4.7 h** (best estimate) |
+| Wall speedup | — | **~43×** |
+| Unique models at 2h | 9 (redundant) | ~750 (77%) |
+| KSU to complete all | 41.8 KSU | **~5–14 KSU** |
+
+MF2 dispatch is also cheaper in SU: each model uses 1 OMP thread × ~3,740 s = 3,740
+core-seconds vs baseline 104 OMP × 748 s = 77,792 core-seconds — **21× less CPU work
+per model** — because the DRAM bandwidth bottleneck was wasted on idle OMP threads in
+the baseline.
+
+See [results.md](results.md) for full empirical data and methodology.
+
+---
+
 ## 2026-05-10 (y) — Phase 5 benchmark: ModelFinder MPI dispatch on 4 SPR nodes
 
 ### Plan
