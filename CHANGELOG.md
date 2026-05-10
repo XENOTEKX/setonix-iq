@@ -54,8 +54,8 @@ plus Phase 2 gather overhead (~1–2 s on InfiniBand for 4 × 4 arrays of 968 do
 | Resources | `normalsr`, 4 nodes, 416 ncpus, 2000 GB, 6 h walltime |
 | Binary | `build-mpi-mf2/iqtree3-mpi` (commit `1ac3c0a8`, built 2026-05-10 13:10) |
 | Fixed tree | `test_xlarge_mf2/fixed_xlarge_tree.nwk` (from PBS 167999083 pre-test) |
-| Job ID | **TBD** |
-| Status | **Submitted** |
+| Job ID | **168000000** |
+| Status | **Queued** |
 
 ---
 
