@@ -2,20 +2,26 @@
 
 ---
 
-## 2026-05-10 (aa) — Correctness test: MF2 dispatch vs baseline, free tree search
+## 2026-05-10 (aa) — Correctness test: MF2 dispatch vs baseline (free tree + fixed tree)
 
 ### Purpose
 
-End-to-end correctness verification of the MF2 dispatch patch using the same binary
-for both runs — the only variable is rank count (1 vs 2). Eliminates confounds from
-different binaries, different tree-search modes, or different total thread counts.
+End-to-end correctness verification of the MF2 dispatch patch, using two complementary
+test designs:
+
+1. **Free-tree test** (no `-te`): same MF2 binary, 1 rank vs 2 ranks, free tree search.
+   Verifies dispatch correctness in the full pipeline including NNI tree optimisation.
+
+2. **Fixed-tree test** (`-te fixed_xlarge_mf2_tree.nwk`): isolates ModelFinder model
+   selection from tree-search divergence. Tests the old binary (`test()` code path) and
+   the new binary (`evaluateAll()` code path) on the same fixed tree.
 
 Prior correctness tests (PBS 167999083, entry x) used `-te fixed_xlarge_tree.nwk`
 and confirmed `SYM+G4` with `evaluateAll()` on both np=1 and np=4. Those tests are
 still valid but used a fixed tree; this test uses free tree search (no `-te`) to
 verify the full end-to-end pipeline including tree optimisation after model selection.
 
-### Design
+### Design — free-tree test
 
 | Property | Baseline (168004016) | MF2 dispatch (168004018) |
 |----------|---------------------|-------------------------|
@@ -33,7 +39,22 @@ Only variable: rank count. With 1 rank, dispatch is inactive — all 968 models
 evaluated sequentially by rank 0. With 2 ranks, round-robin stripe assigns odd
 models to rank 0 and even models to rank 1; `MPI_Allreduce` merges results.
 
-### Results
+### Design — fixed-tree test
+
+| Property | Old binary test() | New binary 1-rank | New binary 2-rank (dispatch) |
+|----------|-------------------|-------------------|------------------------------|
+| Script | `run_xlarge_fixedtree_baseline.sh` | (same binary as right) | `run_xlarge_fixedtree_mf2.sh` |
+| Binary | `iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi` | `build-mpi-mf2/iqtree3-mpi` | `build-mpi-mf2/iqtree3-mpi` |
+| MF code path | `test()` — BIC-pruning, early stop | `evaluateAll()` | `evaluateAll()` + dispatch |
+| Ranks | 1 | 1 | 2 |
+| Fixed tree | `fixed_xlarge_mf2_tree.nwk` | same | same |
+| Dataset | `xlarge_mf.fa` (seed=1) | same | same |
+| OMP/rank | 104 | 104 | 52 |
+
+Fixed tree source: PBS 168004012 (MF2 binary 1-rank free-search, lnL −10956936.089,
+saved to `/scratch/um09/as1708/iqtree3-mf2/gadi-ci/fixed_xlarge_mf2_tree.nwk`).
+
+### Results — free-tree test
 
 | Job | Ranks × OMP | Best-fit model | MF wall | Exit |
 |-----|-------------|----------------|---------|------|
@@ -58,6 +79,25 @@ This is expected: 2 ranks × 52 OMP run simultaneously on 104 cores, each evalua
 484 models. The speedup is modest because OMP efficiency drops from 104→52 threads,
 but both ranks run in parallel. The real speedup occurs when ranks are on separate
 nodes (each rank gets 104 OMP) — as demonstrated in PBS 168000131 (entry y).
+
+### Results — fixed-tree test
+
+| Job | Binary | MF path | Ranks | Best-fit model | Wall | Exit |
+|-----|--------|---------|-------|----------------|------|------|
+| 168004827 | `iqtree3-3.1.2` (old) | `test()` | 1 × 104 | **GTR+R4** | 107s | 0 |
+| 168004710 | `build-mpi-mf2` (new) | `evaluateAll()` | 1 × 104 | **SYM+G4** | 68s | 0 |
+| 168004711 | `build-mpi-mf2` (new) | `evaluateAll()` + dispatch | 2 × 52 | **SYM+G4** | 108s | 0 |
+
+**✔ DISPATCH CORRECTNESS PASS** — new binary 1-rank and 2-rank both give SYM+G4.
+
+**✔ ISSUE 6 CONFIRMED** — old binary `test()` selects GTR+R4; new binary `evaluateAll()`
+selects SYM+G4 on the same fixed tree. SYM+G4 has strictly lower BIC. The `test()`
+BIC-pruning loop discards SYM+G4 as a candidate before evaluating it. This is the
+Issue 6 finding (commit `1ac3c0a8`): the old `test()` code path can miss the globally
+best model, and the MF2 binary's always-on `evaluateAll()` corrects this.
+
+**The difference GTR+R4 vs SYM+G4 is NOT a dispatch bug** — it reflects the
+`test()` vs `evaluateAll()` code path difference, which is orthogonal to dispatch.
 
 ---
 
