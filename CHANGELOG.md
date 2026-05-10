@@ -2,6 +2,95 @@
 
 ---
 
+## 2026-05-10 (w) — ModelFinder MPI dispatch: Phase 4 plan + Phase 5 preparation
+
+### Summary
+
+Phase 4 (Correctness Hardening) plan finalised with changes inherited from Phase 3.
+Phase 5 (Scale Benchmarking) prepared: correctness pre-test script created for
+`xlarge_mf.fa`, and the full benchmark PBS script created. Both scripts target the
+real empirical dataset (200 taxa × 100,000 sites, 98,858 distinct patterns, ~99%
+compression) rather than the 10M synthetic dataset used in the bottleneck analysis
+(PBS 167977883). The xlarge dataset is the correct benchmark: it exercises the
+ModelFinder speedup while keeping RAM per rank within Gadi `normalsr` limits without
+requiring maximum compression of a large synthetic dataset.
+
+### Phase 4 plan changes (no code changes — plan updates only)
+
+The following changes to the Phase 4 plan were required as a consequence of Phase 3
+discoveries:
+
+**Change 1 — Login-node constraint propagated to all Phase 4 sub-tests.**
+Phase 3 Issue 2 established that `-march=sapphirerapids` binaries crash with SIGILL
+on Gadi login nodes (ICX architecture). All Phase 4 sub-tests (4a SNP, 4b protein,
+4c restricted model set, 4d checkpoint resume) must therefore be submitted via PBS
+`normalsr`, not run interactively. The test infrastructure vehicle is
+`gadi-ci/test_mf_mpi_dispatch.sh`; new sub-tests are added as Test 4, 5, 6 in
+the same script.
+
+**Change 2 — `-te fixed_tree.nwk` added to Phase 4a/4b/4c sub-tests.**
+Phase 2 established that IQ-TREE MPI runs a multi-rank fast-NNI tree search before
+ModelFinder when no tree is supplied. With np=4 vs np=1, this produces a different
+(potentially better) initial tree → different lnL surface → potentially different
+best-fit model even with identical data. All Phase 4 sub-tests therefore require
+the `-te fixed_tree.nwk` pattern from Phase 2: generate a fixed tree from np=1
+without `-te` first, then use it for both the np=1 reference and the np=4 dispatch
+run. Each data type (SNP, protein) needs its own fixed tree.
+
+**Change 3 — Phase 5 corrected to target `xlarge_mf.fa` (not the 10M synthetic).**
+The Phase 5 design originally referenced the 10M-site synthetic dataset from PBS
+167977883 as the benchmark. That dataset has 0% site-pattern compression (10M
+patterns for 10M sites) and requires 324 GB RAM per rank — constraining to exactly
+1 rank/node. The correct Phase 5 benchmark target is `xlarge_mf.fa` (200 taxa ×
+100,000 sites, 98,858 distinct patterns, ~1% compression). This dataset:
+- Fits comfortably in RAM even at multiple ranks/node
+- Uses the same file as all prior xlarge baselines (sha256 verified)
+- Exercises the realistic ModelFinder case (not a pathological synthetic)
+- Allows direct comparison against existing baselines (PBS 167865976, 167932917)
+The 10M synthetic remains relevant for worst-case memory analysis, but the Phase 5
+wall-time benchmark uses `xlarge_mf.fa`.
+
+**Change 4 — Phase 5 adds a correctness pre-test before the benchmark.**
+Before submitting the 4-node benchmark, a lightweight correctness test on
+`xlarge_mf.fa` with np=1 vs np=4 is required. This verifies that Phase 1+2+3 all
+work correctly on the actual benchmark dataset before consuming node-hours on the
+full 968-model run. Script: `gadi-ci/test_xlarge_mf2_correctness.sh`.
+
+### Phase 5 — scripts created
+
+| script | purpose |
+|--------|---------|
+| `gadi-ci/test_xlarge_mf2_correctness.sh` | Correctness pre-test: np=1 vs np=4 on `xlarge_mf.fa`, same fixed-tree pattern as `test_mf_mpi_dispatch.sh` |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | Phase 5 benchmark: 4 nodes × 4 ranks × 104 OMP, full 968-model ModelFinder on `xlarge_mf.fa` |
+
+**Expected outcome of correctness pre-test:**
+- Both np=1 and np=4 report the same `Best-fit model:` string
+- np=4 log contains `MF-MPI: rank N/4 assigned 242/968 models` (all 4 ranks)
+- np=4 log contains `MF-MPI: gather complete, 968 model scores consolidated`
+- Wall time for np=4 run ≈ 1/4 of np=1 (242 models each vs 968)
+
+**Expected outcome of Phase 5 benchmark (first time ModelFinder will show a real
+speedup on a production dataset with 4 MPI nodes):**
+- Best-fit model matches np=1 `xlarge_mf.fa` baseline
+- ModelFinder wall time ≈ 1/4 of baseline single-rank time
+- MF phase wall time reported vs fast-ML phase wall time (both expected to be short
+  for xlarge_mf.fa — the ~100K-pattern dataset runs in minutes per model vs hours
+  for the 10M synthetic)
+- `perf stat` counters available for IPC / LLC miss comparison vs baseline PBS runs
+
+### Files added
+
+| file | PBS directives | purpose |
+|------|---------------|---------|
+| `gadi-ci/test_xlarge_mf2_correctness.sh` | `normalsr`, 1 node, 8 ncpus, 64 GB | xlarge correctness: np=1 ref + np=4 dispatch |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | `normalsr`, 4 nodes, 416 ncpus, 512 GB | Phase 5 benchmark: full MF on xlarge |
+
+### Commits
+
+See git log — committed as a single batch with all scripts and doc updates.
+
+---
+
 ## 2026-05-10 (v) — ModelFinder MPI dispatch: Phase 3 thread budget
 
 ### Summary

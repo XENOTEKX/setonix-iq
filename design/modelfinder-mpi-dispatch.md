@@ -1004,6 +1004,13 @@ match and thread-budget message. Pending PBS job submission.
 normal data / single restart path. These exercise the flag and gather logic on
 data paths that Phase 1–3 did not explicitly test.
 
+> **Plan changes from Phase 3 (documented in CHANGELOG entry w):**
+> 1. Login-node SIGILL constraint applies to all Phase 4 sub-tests — all tests
+>    require PBS `normalsr`; add sub-tests as Test 4, 5, 6 in
+>    `gadi-ci/test_mf_mpi_dispatch.sh`.
+> 2. `-te fixed_tree.nwk` added to 4a/4b/4c — same topology-divergence rationale
+>    as Phase 2; each data type needs its own fixed tree generated from np=1 first.
+
 > **Login-node constraint (inherited from Phase 3 Issue 2):** All Phase 4 tests
 > require a Sapphire Rapids compute node (`#PBS -q normalsr`). The binary is
 > compiled with `-march=sapphirerapids` and crashes with SIGILL on the login node.
@@ -1091,88 +1098,99 @@ checkpoint (workers re-evaluate their full stripe; rank 0 skips its checkpointed
 
 ### Phase 5 — Scale Benchmarking & CHANGELOG
 
-**Scope:** Measure the actual wall-time improvement on the xlarge worst-case dataset
-(PBS 167977883 baseline) and on a realistic compressed dataset. Document in CHANGELOG.
+**Scope:** Measure the actual wall-time improvement on the realistic empirical dataset
+(`xlarge_mf.fa`) and document in CHANGELOG.
 
-**5a — Create PBS submission script** `gadi-ci/run_xlarge_r2_mf2_dispatch.sh`:
+> **Dataset correction (CHANGELOG entry w):** The original Phase 5 plan referenced
+> the 10M-site synthetic dataset from PBS 167977883. The correct benchmark target is
+> `xlarge_mf.fa` (200 taxa × 100,000 sites, 98,858 distinct patterns, ~99% compression,
+> sha256 `66eaf64b9b7e561f52dc515198c0b7db6d68cd37ada9498b254777f2dde94c44`).
+> The synthetic dataset is a worst-case memory analysis tool; `xlarge_mf.fa` is the
+> dataset used for all prior Gadi xlarge baselines and is the scientifically correct
+> comparator. The 10M dataset requires 324 GB RAM/rank; `xlarge_mf.fa` requires ~3 GB.
 
-> **Dependency:** `--mpi-ranks-per-node` CLI param requires Phase 3 to be complete.
-> For 1 rank/node (the xlarge case), Phase 3 is a no-op — each rank gets 104 threads
-> unchanged. The `--mpi-ranks-per-node 1` flag can be omitted until Phase 3 is done;
-> the run is correct because the default is 1.
+**5a — Correctness pre-test on `xlarge_mf.fa`** (run before the benchmark):
+
+Create `gadi-ci/test_xlarge_mf2_correctness.sh` — np=1 vs np=4 correctness check on
+`xlarge_mf.fa` using the same fixed-tree pattern as `test_mf_mpi_dispatch.sh`.
+This verifies Phase 1+2+3 all work on the actual benchmark dataset before committing
+node-hours to the full 968-model run.
+
+```bash
+# Submit:
+qsub gadi-ci/test_xlarge_mf2_correctness.sh
+# Expect:
+#   MF-MPI: rank N/4 assigned 242/968 models  (all 4 ranks)
+#   MF-MPI: gather complete, 968 model scores consolidated
+#   ✓ PASS: Best-fit model matches between np=1 and np=4
+```
+
+**5b — Create Phase 5 benchmark script** `gadi-ci/run_xlarge_r2_mf2_dispatch.sh`:
 
 ```bash
 #!/bin/bash
-#PBS -N iq-mf2-dispatch
+#PBS -N iq-mf2-xlarge
 #PBS -P um09
-#PBS -l ncpus=416,mem=2048GB,walltime=6:00:00
-#PBS -l storage=scratch/um09+scratch/rc29
 #PBS -q normalsr
+#PBS -l ncpus=416,mem=512gb,walltime=6:00:00
+#PBS -l storage=scratch/um09+scratch/rc29
 #PBS -l wd
 
 module load openmpi/4.1.7 intel-compiler-llvm
 
 BINARY=/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi
-ALN=/scratch/um09/as1708/iqtree3-mf2/benchmarks/xlarge_mf/xlarge_mf.fa
+ALN=/scratch/um09/as1708/iqtree3-mf2/benchmarks/xlarge_mf.fa
+OUTDIR=/scratch/um09/as1708/iqtree3-mf2/results_xlarge_mf2
 
-# 4 nodes × 104 OMP, 1 rank/node (324 GB RAM per rank — fills the node)
+mkdir -p "${OUTDIR}"
+
+# 4 nodes × 104 OMP, 1 rank/node
+# --mpi-ranks-per-node 1 is default; included explicitly for logging
 mpirun -np 4 \
     --map-by node:PE=104 \
-    --bind-to core \
+    --mca pml ucx \
+    -x UCX_TLS=rc_mlx5,ud_mlx5,sm,self \
+    -x UCX_NET_DEVICES=mlx5_0:1 \
     -x OMP_NUM_THREADS=104 \
     -x OMP_PROC_BIND=close \
+    -x OMP_PLACES=cores \
+    -x OMP_DYNAMIC=false \
+    -x KMP_BLOCKTIME=200 \
     numactl --localalloc -- \
-    "$BINARY" -s "$ALN" -m MF -T 104 \
-    --prefix mf2_dispatch_4r --seed 1 --redo
+    "${BINARY}" -s "${ALN}" -m MF -T 104 \
+    --prefix "${OUTDIR}/mf2_xlarge_4r" --seed 1 --redo
 ```
 
-**5b — Run and record results:**
+**5c — Run and record results:**
 
-| Metric | Baseline (PBS 167977883) | MF2 dispatch | Δ |
-|--------|--------------------------|--------------|---|
-| Nodes / ranks / OMP | 4 / 4 / 104 | 4 / 4 / 104 | same |
-| Models per rank | 968 (redundant) | 242 | −75% |
-| Wall time (MF phase) | ~196 h (projected) | ~49 h (projected) | 4× |
-| Best-fit model | — | must match | ✓ |
-| RAM per rank | 324 GB | 324 GB | same |
+| Metric | Baseline np=1 (xlarge_mf.fa) | MF2 dispatch np=4 | Δ |
+|--------|------------------------------|-------------------|---|
+| Nodes / ranks / OMP | 1 / 1 / 104 | 4 / 4 / 104 | 4× ranks |
+| Models per rank | 968 | 242 | −75% |
+| Wall time (MF phase) | TBD (first run) | TBD | target ~4× |
+| Best-fit model | TBD | must match | ✓ |
+| RAM per rank | ~3 GB | ~3 GB | same |
 
-**5c — CHANGELOG entry** (add to `CHANGELOG.md` under `Unreleased`):
+Note: `xlarge_mf.fa` at ~99% compression requires only ~3 GB/rank (vs 324 GB for
+10M synthetic). The MF phase wall time will be on the order of minutes to hours
+depending on per-model convergence speed. Fast-ML baseline: 523 s (PBS 167932917),
+342 s (2-node MPI, PBS 167932918).
+
+**5d — CHANGELOG entry** (update after PBS job completes):
 ```markdown
-### (u) ModelFinder MPI model-level dispatch (MF2)
+Measured improvement (Gadi normalsr, xlarge_mf.fa, 4 nodes × 104 OMP):
+  np=1 baseline: 968 models, ~TBD s/model → TBD h total
+  np=4 MF2:      242 models/rank, ~TBD s/model → TBD h total (TBD× speedup)
 
-Patch: `main/phylotesting.cpp` only (no header changes required)
-
-Previously, all N MPI ranks evaluated all 968 DNA models redundantly during
-the ModelFinder phase. Adds per-rank model stripe assignment (reusing existing
-`MF_IGNORED` flag) and a post-evaluation MPI_Allreduce gather so each rank
-evaluates only ceil(968/N) models. Reuses `gatherCheckpoint`/`broadcastCheckpoint`
-from `MPIHelper` for checkpoint consolidation. Forces `evaluateAll()` path
-(no early-stop, OMP-parallel) when nranks > 1.
-
-Non-obvious fixes required during implementation:
-- Phase 1 mark must be inside evaluateAll() after generate() — not in
-  runModelFinder() where the model set is still empty.
-- Post-evaluation model names (+G4, +R3, ...) must be saved to checkpoint
-  and restored on non-owning ranks after broadcastCheckpoint(); without this
-  getBestModelID() picks the right index but getName() returns the pre-fit
-  string (e.g. TIM2+F+I+G instead of TIM2+F+I+G4).
-
-Measured improvement (Gadi normalsr, 10M-site alignment, 4 nodes × 104 OMP):
-  Baseline: 4 ranks, 968 models each (redundant) → projected ~196 h
-  MF2:      4 ranks, 242 models each             → projected  ~49 h (4×)
-
-Scaling: near-linear with rank count (embarrassingly parallel during evaluation;
-one MPI_Allreduce × 4 score arrays at end, ~30 KB total communication).
-
-Verified: PBS 167995531 (Gadi normalsr, example.phy, np=1 and np=4 both
-report TIM2+F+I+G4).
-
-See: design/modelfinder-mpi-dispatch.md
+Verified: PBS XXXXXXX — both np=1 and np=4 report same best-fit model.
 ```
 
-Phase is complete when the PBS job completes and the wall-time improvement is
-documented. The design doc `Section 4.4` scaling table is updated with measured
-(not projected) values.
+Phase is complete when the PBS benchmark job completes, best-fit model matches the
+np=1 correctness pre-test, and wall-time improvement is documented in CHANGELOG.
+The design doc `Section 4.4` scaling table is updated with measured (not projected)
+values.
+
+
 
 ---
 
