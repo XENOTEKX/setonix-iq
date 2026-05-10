@@ -1523,8 +1523,11 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
             // inside evaluateAll() after generate() populates the model list.
             // Phase 3: partition the OMP thread budget across ranks sharing a node.
             int orig_num_threads = params.num_threads;
+            // Always use evaluateAll() in MPI builds so np=1 and np=N use the
+            // same code path and produce consistent best-fit model selection.
+            // Phase 2 gather fires only when nranks > 1.
+            params.openmp_by_model = true;
             if (MPIHelper::getInstance().getNumProcesses() > 1) {
-                params.openmp_by_model = true;
                 int rank_threads = max(1, params.num_threads / params.mpi_ranks_per_node);
                 if (rank_threads != params.num_threads) {
                     cout << "MF-MPI: thread budget per rank = " << rank_threads
@@ -3486,7 +3489,10 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     // num_threads OMP budget for within-model (site-level) parallelism — the correct
     // granularity.  The across-rank parallelism is provided by the MPI dispatch itself
     // (Phase 1 stripes 1/N of the models to each rank).
-    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+    // Always use the sequential evaluation loop in MPI builds regardless of nranks.
+    // This eliminates the OMP data race (ModelFactory writes to shared model_info)
+    // and ensures np=1 and np=N use identical evaluation paths for consistent results.
+    {
         int64_t model;
         do {
             model = getNextModel();
@@ -3539,8 +3545,9 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
             model_info.put("mf_subst_" + convertIntToString(model), at(model).subst_name);
             model_info.put("mf_rate_"  + convertIntToString(model), at(model).rate_name);
         } while (model != -1);
-    } else
-#endif
+    }
+#else
+    // Non-MPI build: use OMP parallel across models (original path).
     {
 #ifdef _OPENMP
 #pragma omp parallel num_threads(num_threads)
@@ -3628,7 +3635,8 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
 #endif
     } while (model != -1);
     }
-    } // end else (non-MPI OMP parallel path)
+    } // end non-MPI OMP parallel path
+#endif // _IQTREE_MPI
     
     // store the best model
     ModelTestCriterion criteria[] = {MTC_AIC, MTC_AICC, MTC_BIC};
