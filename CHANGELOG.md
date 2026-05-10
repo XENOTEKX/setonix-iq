@@ -2,6 +2,88 @@
 
 ---
 
+## 2026-05-10 (ad) — mega_dna 4-node MF2-dispatch APS run (PBS 168015597)
+
+### Objective
+
+Run `mega_dna.fa` (500 taxa × 100,000 DNA sites) on 4 Gadi normalsr SPR nodes
+with the MF2-dispatch binary (`abd98764`, cost-sorted LPT stripe + MF_WAITING fix),
+full 968-model ModelFinder, Intel APS profiling (APS_STAT_LEVEL=2), and
+4 MPI ranks × 104 OMP threads with `OMP_PROC_BIND=close` + `numactl --localalloc`.
+
+### Configuration
+
+| Parameter | Value |
+|---|---|
+| Binary | `iqtree3-mpi` @ `abd98764` (gadi-spr-r2-avx512 branch) |
+| Build | `icpx` + OpenMPI, `-xSAPPHIRERAPIDS`, `-O3 -march=sapphirerapids` |
+| Dataset | `mega_dna.fa` — 500 taxa × 100,000 DNA sites |
+| Site patterns | 99,999 / 100,000 distinct (effectively no compression — 500 taxa) |
+| MPI ranks | 4 (one per node) |
+| OMP threads | 104 per rank (416 total) |
+| MF dispatch | Cost-sorted LPT stripe — rank 0/4 → 242/968 models |
+| Profiler | intel-vtune/2025.8.1, APS_STAT_LEVEL=2 |
+| Queue | normalsr, 4× SPR nodes (8470Q, 104 cores/node) |
+| Walltime limit | 2:00:00 |
+
+### Results vs baseline (Gadi_mega_dna_104T, PBS 167001099)
+
+The baseline ran tree search only (no ModelFinder) at 104T on a single node with
+the icx build, no thread pinning, no numactl, and VTune co-resident (+26% overhead).
+
+| Metric | Baseline `167001099` | Current `168015597` |
+|---|---|---|
+| Platform | 1× SPR node | 4× SPR nodes |
+| Threads | 104T single rank | 4× 104T = 416T MPI |
+| ModelFinder | ❌ None | ✅ Full 968-model scan |
+| Wall time | ~39.5 min (clean est.) | **18m 31s** |
+| CPU time total | ~68 CPU-hours | **30.1 CPU-hours** |
+| IPC | 1.02 | 1.15 / 1.29 / 1.35 / 1.42 (ranks 0–3) |
+| LLC miss rate | 79.4% | 86.6 / 86.1 / 87.0 / 83.0% (ranks 0–3) |
+| Best-fit model (BIC) | N/A | **SYM+I+R2** |
+| Log-likelihood (tree) | -27,328,165.86 | -27,328,165.83 ✓ |
+| BIC score | N/A | 54,667,982.74 |
+
+**2.1× faster wall time doing more work** — full ModelFinder included — due to
+MF-MPI dispatch spreading 968 models across 4 ranks in parallel.
+
+**IPC improved** (avg ~1.30 vs 1.02): `OMP_PROC_BIND=close` + `numactl --localalloc`
+eliminate cross-NUMA thread migration and first-touch remote allocation.
+
+**LLC miss rate increased** (~86% vs 79%): expected — 4 independent ranks each
+churn 99,999-pattern alignments with no inter-rank data sharing; no L3 reuse between
+model evaluations. This is structural (dataset has essentially zero pattern compression).
+
+### Model selection
+
+Best-fit by BIC: **SYM+I+R2** (symmetric rate matrix + invariant + 2 free rates).
+BIC strongly penalises extra parameters at N=100,000 sites, favouring SYM over GTR.
+Top models by BIC:
+
+```
+SYM+I+R2     logL -28,064,347.70   BIC 56,140,265.89   w-BIC 1.00
+GTR+F+I+R2   logL -28,064,365.34   BIC 56,140,335.71   w-BIC 6.9e-16
+TVMe+I+R2    logL -28,067,498.30   BIC 56,146,555.58   w-BIC 0
+```
+
+### Engineering notes
+
+- **`strings` vs `grep -a`**: Binary guard for LPT patch must use `grep -qa` — the
+  ELF binary has `too many notes (256)` which causes `strings` to miss embedded
+  strings that `grep -a` finds correctly on Gadi compute nodes.
+- **`OMP_DISPLAY_AFFINITY=TRUE` removed**: This env var (+ `OMP_DISPLAY_ENV=VERBOSE`)
+  caused Intel OMP to write thread affinity to stdout on every model evaluation —
+  producing a 5.5 GB log file that throttled disk I/O and reduced model throughput
+  ~5×. Removed in commit `9a69d310`.
+- **APS collection**: Per-rank APS wrapper (`aps -r aps_result/<dir> -- numactl ...`)
+  confirmed working; `aps_result/` dirs populated. Reports generated post-job.
+
+### PBS output
+
+`/home/272/as1708/setonix-iq/iq-mega-mf2-4node-aps.o168015597`
+
+---
+
 ## 2026-05-10 (ac) — Performance Research: CPU/MPI bottlenecks for 10M full-sweep
 
 ### Research question
