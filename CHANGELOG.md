@@ -195,7 +195,17 @@ wall-time benchmark uses `xlarge_mf.fa`.
 Before submitting the 4-node benchmark, a lightweight correctness test on
 `xlarge_mf.fa` with np=1 vs np=4 is required. This verifies that Phase 1+2+3 all
 work correctly on the actual benchmark dataset before consuming node-hours on the
-full 968-model run. Script: `gadi-ci/test_xlarge_mf2_correctness.sh`.
+full ModelFinder run. Script: `gadi-ci/test_xlarge_mf2_correctness.sh`.
+
+> **Note on model count:** The 968-model figure is **data-dependent** (not a fixed
+> constant). `CandidateModelSet::generate()` calls `getModelSubst()` → fixed list by
+> `SeqType` (24 DNA substitution models × freq options), then `getRateHet()` → rate
+> categories that depend on `frac_invariant_sites` from the actual alignment.
+> `xlarge_mf.fa` has 468/100,000 constant sites (`frac_invariant_sites = 0.00468`),
+> putting it in the "normal data" path: `+I`, `+G`, `+I+G`, `+R`, `+I+R` all included
+> → 968 total models. SNP/ASC data (zero constant sites) uses `+ASC` variants instead
+> and would produce a different count. The test script now extracts the model count
+> dynamically from the IQ-TREE log rather than hardcoding 968.
 
 ### Phase 5 — scripts created
 

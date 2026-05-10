@@ -22,9 +22,12 @@
 #
 # Expected outcomes:
 #   - np=1 and np=4 report identical "Best-fit model:" string.
-#   - np=4 log contains "MF-MPI: rank N/4 assigned 242/968 models" for all 4 ranks.
-#   - np=4 log contains "MF-MPI: gather complete, 968 model scores consolidated".
+#   - np=4 log contains "MF-MPI: rank N/4 assigned K/M models" for all 4 ranks.
+#   - np=4 log contains "MF-MPI: gather complete, M model scores consolidated".
 #   - np=4 log contains "MF-MPI: thread budget per rank = 26 (104 total / 4 ranks/node)".
+# Note: the model count M is data-dependent (seq type + frac_invariant_sites from the
+#   alignment). For xlarge_mf.fa (DNA, 468/100000 constant sites) M=968, but this
+#   script extracts M dynamically and does not hardcode it.
 #
 # Usage:
 #   qsub gadi-ci/test_xlarge_mf2_correctness.sh
@@ -163,7 +166,7 @@ fi
 
 # ── Test 1: np=1 reference ────────────────────────────────────────────────────
 echo "──────────────────────────────────────────────────────────────────"
-echo " Test 1: np=1 reference  (${TOTAL_THREADS} OMP threads, 968 models)"
+echo " Test 1: np=1 reference  (${TOTAL_THREADS} OMP threads)"
 echo "──────────────────────────────────────────────────────────────────"
 echo "$(date '+%H:%M:%S') start"
 
@@ -191,7 +194,7 @@ echo ""
 
 # ── Test 2: np=NRANKS MPI dispatch ────────────────────────────────────────────
 echo "──────────────────────────────────────────────────────────────────"
-echo " Test 2: np=${NRANKS} MPI dispatch  (${OMP_PER_RANK} OMP/rank, 242 models/rank)"
+echo " Test 2: np=${NRANKS} MPI dispatch  (${OMP_PER_RANK} OMP/rank)"
 echo "──────────────────────────────────────────────────────────────────"
 echo "$(date '+%H:%M:%S') start"
 
@@ -283,8 +286,14 @@ grep "MF-MPI:" "${TEST_LOG}" 2>/dev/null || echo "(none — check _IQTREE_MPI co
 
 # Check Phase 1 assignment lines (expect all 4 ranks)
 echo ""
-ASSIGNED_COUNT=$(grep -c "MF-MPI: rank .* assigned .*/968 models" "${TEST_LOG}" 2>/dev/null || echo "0")
-echo "[Phase 1] ${ASSIGNED_COUNT}/${NRANKS} rank assignment lines found"
+# Extract total model count dynamically from np=1 log (data-dependent: varies by seq type
+# and frac_invariant_sites; do not hardcode 968).
+TOTAL_MODELS=$(grep -oP 'assigned \d+/\K\d+(?= models)' "${TEST_LOG}" 2>/dev/null | head -1 || true)
+if [[ -z "${TOTAL_MODELS}" ]]; then
+    TOTAL_MODELS=$(grep -oP 'test up to \K\d+(?= DNA models| RNA models| protein models| morphological models)' "${REF_LOG}" 2>/dev/null | head -1 || echo "?")
+fi
+ASSIGNED_COUNT=$(grep -c "MF-MPI: rank .* assigned .*/[0-9]* models" "${TEST_LOG}" 2>/dev/null || echo "0")
+echo "[Phase 1] ${ASSIGNED_COUNT}/${NRANKS} rank assignment lines found (total models: ${TOTAL_MODELS})"
 if [[ "${ASSIGNED_COUNT}" -eq "${NRANKS}" ]]; then
     echo "✓ PASS: Phase 1 — all ${NRANKS} ranks reported model stripe"
 else
@@ -315,7 +324,7 @@ if [[ -n "${NP1_TIME}" && -n "${NPN_TIME}" ]]; then
     echo "[Wall time]"
     echo "  np=1  ${NP1_TIME}"
     echo "  np=${NRANKS}  ${NPN_TIME}"
-    echo "  (np=${NRANKS} should be faster: 242 models/rank vs 968 for np=1)"
+    echo "  (np=${NRANKS} should be faster: ~$((${TOTAL_MODELS:-0} / ${NRANKS})) models/rank vs ${TOTAL_MODELS:-?} for np=1)"
 fi
 
 echo ""
