@@ -3,7 +3,7 @@
 // harvesting pending), so they will be absent from this view — that is expected
 // and an empty-state hint is rendered when no IPC points exist.
 
-import { platformColour, dimLegendHidden } from '../utils.js?v=9cdc4334baef';
+import { platformColour, dimLegendHidden } from '../utils.js?v=4094d3bf7673';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
