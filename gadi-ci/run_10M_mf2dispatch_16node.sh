@@ -168,7 +168,7 @@ echo "[10M-16node] hostfile (reference):"; cat "${HOSTFILE}" | sed 's/^/    /'
 
 # ── env.json snapshot ────────────────────────────────────────────────
 ENV_JSON="${WORK_DIR}/env.json"
-python3 - <<PYENV > "${ENV_JSON}"
+/usr/bin/python3.11 - <<PYENV > "${ENV_JSON}"
 import json, os, subprocess, hashlib
 def sh(c, d=""):
     try: return subprocess.check_output(c, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
@@ -258,7 +258,7 @@ echo "  → ${ENV_JSON}"
 
 # ── /proc sampler (30s interval — model evaluations take hours, not seconds) ──
 cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
-#!/usr/bin/env python3
+#!/usr/bin/python3.11
 import json, os, sys, time, pathlib
 pid = int(sys.argv[1]); out = pathlib.Path(sys.argv[2])
 interval = float(sys.argv[3]) if len(sys.argv) > 3 else 30.0
@@ -355,7 +355,7 @@ sleep 15
 INNER_PID="$(pgrep -P "${IQTREE_APS_PID}" 2>/dev/null | head -1 || true)"
 [[ -z "${INNER_PID:-}" ]] && INNER_PID="${IQTREE_APS_PID}"
 echo "  → mpirun pid=${IQTREE_APS_PID}, sampler tracking pid=${INNER_PID}"
-python3 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples_aps.jsonl" 30 &
+/usr/bin/python3.11 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples_aps.jsonl" 30 &
 SAMPLER_APS_PID=$!
 
 wait "${IQTREE_APS_PID}" || IQRC_APS=$?
@@ -381,7 +381,7 @@ grep "Best-fit model:" "${WORK_DIR}/iqtree_aps.log" 2>/dev/null | sed 's/^/    /
 if [[ -f "${WORK_DIR}/iqtree_aps.model.gz" ]]; then
     echo ""
     echo "[10M-16node] Extracting per-model wall times from checkpoint..."
-    python3 - "${WORK_DIR}/iqtree_aps.model.gz" "${WORK_DIR}/model_times_10M.tsv" <<'PYEOF'
+    /usr/bin/python3.11 - "${WORK_DIR}/iqtree_aps.model.gz" "${WORK_DIR}/model_times_10M.tsv" <<'PYEOF'
 import gzip, sys, re
 
 gz_path = sys.argv[1]
@@ -489,7 +489,7 @@ echo ""
 echo "[10M-16node] Building run record..."
 WALL="${WALL_APS}"
 
-python3 - <<PYEOF
+/usr/bin/python3.11 - <<PYEOF
 import json, os, re, glob
 work, runs = "${WORK_DIR}", "${RUNS_DIR}"
 rid, label = "${RUN_ID}", "${LABEL}"

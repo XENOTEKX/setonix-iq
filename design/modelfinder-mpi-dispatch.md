@@ -790,14 +790,77 @@ This caused `getBestModelID()` to pick the correct index but `getName()` to retu
 a truncated string. Fix: save `mf_subst_N` / `mf_rate_N` checkpoint keys per model
 index during evaluation; restore from checkpoint after `broadcastCheckpoint()`.
 
-**Implementation note — pre-gather checkpoint entries:**
+**Implementation note — pre-gather checkpoint entries (⚠ known reporting bug):**
 The `model_info.put("best_score_BIC", ...)` / `model_info.put("best_model_BIC", ...)`
-block runs *before* Phase 2 at ~line 3541 — it stores each rank's local best, not
-the global best. These entries are overwritten after `broadcastCheckpoint()` delivers
-rank 0's merged checkpoint to all ranks and `getBestModelID()` re-runs on the full
-968-model picture. The `.iqtree` report file and the "Best-fit model:" stdout line
-both use the post-Phase-2 result, so the output is correct. The stale entries are a
-harmless intermediate state.
+block (lines ~3700–3706) runs *before* Phase 2, using each rank's LOCAL `MF_DONE`
+model set. At this point, non-master ranks only have their own stripe of models with
+`MF_DONE` set. The rank evaluating `+I+R2` variants writes `"best_model_BIC" =
+"SYM+I+R2"` to its local checkpoint. After `gatherCheckpoint()` merges all ranks,
+this stale value can overwrite the master's `best_model_BIC` key in the merged
+checkpoint.
+
+The `.iqtree` `"Best-fit model according to BIC:"` header is read from this key via
+`CKP_RESTORE` in the caller — and therefore shows the wrong model on np≥2 runs.
+The model table in the report is similarly built from one rank's pre-gather sorted
+model list (e.g., only 23 models for np4 `+I+R2` stripe, vs 50 for np1).
+
+**The tree search itself is correct**: `evaluateAll()` returns `at(getBestModelID(...))`
+computed POST-Allreduce from the fully-consolidated global scores. The returned
+`CandidateModel` object has the correct name regardless of the checkpoint key corruption.
+`runModelFinder()` sets `iqtree.aln->model_name` from this return value.
+
+**Observed in practice (PBS 168183552, np4, xlarge_mf.fa):** `.iqtree` header shows
+`SYM+I+R2`, log AIC/BIC lines show `SYM+I+R2`, but "Best-fit model:" log line shows
+`GTR+R4` and the actual substitution model is `GTR+F+R4`. The report table lnL values
+(≈ −11,198,286) are ~241,350 units worse than the final tree lnL (−10,956,936) because
+they come from the rank that found a worse initial NNI starting tree.
+
+**Fix applied** (Phase 2 hardening — `phylotesting.cpp` inside `evaluateAll()`,
+after the name-restoration loop and before `cout << "MF-MPI: gather complete"`):
+
+Placement is BEFORE the cout so the corrected keys are dumped to `.model.gz` and are
+visible in the log on the same line that confirms consolidation. The fix is gated
+inside the existing `if (MPIHelper::getInstance().getNumProcesses() > 1)` block —
+no overhead for single-rank (OMP-only) runs.
+
+```cpp
+// Fix pre-gather checkpoint corruption: the "store the best model" block above
+// wrote best_model_AIC/AICc/BIC and best_score_* from each rank's local MF_DONE
+// subset (only ~n/nranks models, on whichever starting tree that rank found).
+// gatherCheckpoint() merges all ranks' checkpoint entries with last-write-wins
+// semantics, so the highest-numbered rank's stale local-best name silently
+// overwrites master's correct value (e.g. "SYM+I+R2" replaces "GTR+R4" for np4).
+// Now that all n models have post-Allreduce globally-correct scores and
+// post-evaluation names restored from checkpoint, re-write all criteria keys and
+// rebuild the full model_list (replaces the rank-local partial list, e.g. 23 models
+// for one rank's +I+R2 stripe vs the full 968-model view).
+{
+    const ModelTestCriterion all_criteria[] = {MTC_AIC, MTC_AICC, MTC_BIC};
+    for (auto mtc : all_criteria) {
+        int bm = getBestModelID(mtc);
+        model_info.put("best_model_" + criterionName(mtc), at(bm).getName());
+        model_info.put("best_score_" + criterionName(mtc), at(bm).getScore(mtc));
+    }
+    // Rebuild model_list from all n gathered models sorted by active criterion score.
+    multimap<double,int> global_sorted;
+    for (int i = 0; i < n; i++)
+        global_sorted.insert(multimap<double,int>::value_type(at(i).getScore(), i));
+    string global_list;
+    for (auto it = global_sorted.begin(); it != global_sorted.end(); it++) {
+        if (it != global_sorted.begin()) global_list += " ";
+        global_list += at(it->second).getName();
+    }
+    model_info.putBestModelList(global_list);
+    // Re-dump to persist the corrected keys to .model.gz.
+    // Workers have setFileName("") so their dump() is a no-op.
+    model_info.dump();
+}
+```
+
+This makes the `.iqtree` header, model table, and `"BIC:"` log line all consistent
+with the globally-selected model used for tree search. Performance impact is zero —
+three `O(n)` passes over 968 models plus one `multimap` insert (O(n log n)) run once
+at the end of the ModelFinder phase.
 
 **Implementation note — `model_info` is already a parameter:**
 `evaluateAll()` signature already takes `ModelCheckpoint &model_info` — no change to
@@ -896,6 +959,73 @@ legitimately differ. Fixing the topology makes it a fair apples-to-apples compar
 
 The phase is complete when the best-fit model string is **identical** between 1-rank
 and 4-rank runs. **Verified: PBS 167995531 — both report `TIM2+F+I+G4`.**
+
+---
+
+#### Phase 2 Hardening — Execution Plan
+
+The pre-gather fix is applied to `phylotesting.cpp` (CHANGELOG entry ai). It requires
+a rebuild and two verification runs before it can be considered validated on the
+`xlarge_mf.fa` production dataset.
+
+**Step 1 — Rebuild** (`tiers/rebuild_mf2_binary.sh`)
+
+Must run on a Gadi SPR compute node because the build uses `-march=sapphirerapids`
+(SIGILL on login nodes). Script:
+  - Loads `cmake/3.31.6`, `openmpi/4.1.7`, `intel-compiler-llvm` modules
+  - Verifies canary string `"Fix pre-gather checkpoint corruption"` is in source
+  - Backs up the old binary with a timestamp suffix (`.bak_YYYYMMDD_HHMMSS`)
+  - Runs `/bin/gmake -j8 iqtree3` from `build-mpi-mf2/`
+  - Validates binary mtime > build start and libmpi in ELF
+
+```bash
+cd ~/setonix-iq && qsub tiers/rebuild_mf2_binary.sh
+```
+
+**Step 2 — np=4 verification** (`tiers/verify_mf2_fix_np4.sh`)
+
+4-node, 4×104T = 416T, `xlarge_mf.fa`, seed=1. Automated pass/fail checks:
+
+| Check | Before fix | Expected after fix |
+|---|---|---|
+| `gather complete, 968` in log | ✓ (already present) | ✓ |
+| Log BIC line model base | `SYM` | `GTR` (or same as Best-fit) |
+| Log Best-fit model base | `GTR` | `GTR` |
+| `.iqtree` BIC header base | `SYM` ← **WRONG** | `GTR` ← **FIXED** |
+| `.iqtree` model table rows | 23 ← **WRONG** | ≥900 ← **FIXED** |
+| lnL delta from ref (−10,956,936.67) | < 5 | < 5 |
+
+```bash
+qsub tiers/verify_mf2_fix_np4.sh
+```
+
+Script exits non-zero if any check fails, making it PBS-job-failure safe.
+
+**Step 3 — np=2 verification** (`tiers/verify_mf2_fix_np2.sh`)
+
+2-node, 2×104T = 208T, same dataset and seed. Same checks. Before the fix, np=2
+showed `GTR+I+R4` in the BIC header vs `GTR+R4` as Best-fit and 49-model table.
+
+```bash
+qsub tiers/verify_mf2_fix_np2.sh
+```
+
+**Step 4 — Mark Phase 2 Hardening complete** (update this doc and CHANGELOG)
+
+Once both verification runs pass all checks:
+- Update this section: mark `Phase 2 Hardening — ✅ COMPLETE`
+- Add CHANGELOG entry with PBS IDs of the passing verification runs
+- Update the CHANGELOG entry (ah) model comparison table — replace `SYM+I+R2`
+  and `GTR+I+R4` rows with the post-fix model names
+
+**Cost estimate:**
+
+| Job | ncpus | Wall (est.) | SU |
+|---|---|---|---|
+| rebuild | 8 | 15min | 4 |
+| verify np=2 | 208 | 30min | 208 |
+| verify np=4 | 416 | 35min | 484 |
+| **Total** | | | **≈ 696 SU** |
 
 ---
 

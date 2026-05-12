@@ -190,7 +190,7 @@ cat "${RANKFILE}" | sed 's/^/    /'
 
 # ── Environment metadata capture ─────────────────────────────────────────────
 ENV_JSON="${RESULTS_DIR}/env_${PBS_ID_SHORT}.json"
-python3 - <<PYENV > "${ENV_JSON}"
+/usr/bin/python3.11 - <<PYENV > "${ENV_JSON}"
 import json, os, subprocess, hashlib
 
 def sh(c, d=""):
@@ -299,7 +299,7 @@ if [[ ${EXIT_CODE} -eq 0 && -f "${PREFIX}.log" ]]; then
 
     # Write run summary JSON for the dashboard
     RUN_JSON="${RUNS_DIR}/${RUN_ID}.json"
-    python3 - <<PYRUN > "${RUN_JSON}"
+    /usr/bin/python3.11 - <<PYRUN > "${RUN_JSON}"
 import json, os, subprocess, re
 
 def sh(c, d=""):

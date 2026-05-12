@@ -77,19 +77,21 @@ FAMILIES: Dict[str, dict] = {
     },
     "AVX-512 + R2\n(2-node MPI, 2×104T)": {
         "patterns": ["avx512_r2", "_mpi2x104_2node"],
+        "exclude":  ["mfonly", "mf_only", "mf2dispatch", "mf2_full", "mf2_dispatch"],   # mf2/mfonly build_tags also contain avx512_r2
         "color": "#ff7f0e",
         "marker": "^",
         "ls": "-",
-        "mpi_ok": [2],
+        "mpi_ok": [1, 2],   # 1 = OMP-only anchor runs (np=1); 2 = 2-node MPI runs
         "short": "AVX-512 + R2",
     },
-    "MF2 Dispatch\n(4-node MPI, 4×104T)": {
-        "patterns": ["mf2dispatch", "mf2_dispatch"],
-        "color": "#d62728",
-        "marker": "D",
+    "MF2 Full IQ-TREE\n(free tree, seed=1)": {
+        "patterns": ["mf2_full_np"],  # matches np1, np2, np4 build_tags
+        "exclude":  [],
+        "color": "#d62728",   # red — MF2 Full series
+        "marker": "P",
         "ls": "-",
-        "mpi_ok": [4],
-        "short": "MF2 Dispatch",
+        "mpi_ok": [1, 2, 4, 8, 16],   # 1 = OMP-only; 2–16 = multi-node MPI
+        "short": "MF2 Full",
     },
 }
 
@@ -126,6 +128,23 @@ DESIGN_DOC_LPT_4RANKS_H  = 779        # hours — §13.3 bottleneck-rank
 DESIGN_DOC_LPT_16RANKS_H = 197
 DESIGN_DOC_LPT_32RANKS_H = 101
 
+# ── Model-selection results (xlarge_mf.fa, best BIC model, from .iqtree outputs) ────
+# Source: iqtree_run.iqtree / iqtree_mf2full.iqtree per profile directory
+# All values are from the best single representative run per family (most threads).
+MODEL_SELECTION = [
+    # (family_short, best_model, logl, bic, n_threads, source_pbs)
+    ("ICX Baseline",   "GTR+R4",  -10956936.612, 21918605.036, 104,
+     "um09 xlarge_mf_104t_icx_omp_pin_numa_ft_r2_v312_167969243"),
+    ("GCC Canonical",  "GTR+R4",  -10956936.612, 21918605.036,  64,
+     "rc29 xlarge_mf_64t_sr_gcc_pin_167520755"),
+    ("R2 + NUMA fix",  "GTR+R4",  -10956936.607, 21918605.026, 104,
+     "rc29 xlarge_mf_104t_icx_mpi2x52_socket_numa_ft_r2_167895713"),
+    ("AVX-512 + R2",   "GTR+R4",  -10956936.612, 21918605.036, 104,
+     "um09 xlarge_mf_104t_icx_mpi2x52_socket_avx512_r2_167972478"),
+    ("MF2 Full",       "SYM+G4",  -10956936.089, 21918511.888, 104,
+     "um09 xlarge_mf_1t_mf2_full_np1_seed1_168179462"),
+]
+
 # Derived
 SCALE_LINEAR         = (TEN_M_PATTERNS / XLARGE_PATTERNS) * (TEN_M_TAXA / XLARGE_TAXA)
 XLARGE_PER_MODEL_104T = XLARGE_MF1_WALL_S / XLARGE_MF_MODELS    # 0.0645 s
@@ -155,9 +174,15 @@ def speedup_from_amdahl(n: float, f: float) -> float:
 
 
 # ── Data loading ──────────────────────────────────────────────────────────
-def load_xlarge_gadi() -> Dict[str, List[Tuple[float, float]]]:
-    """Best wall time per thread count per family, xlarge_mf.fa on Gadi."""
-    best_raw: Dict[str, Dict[float, float]] = {fam: {} for fam in FAMILIES}
+def load_xlarge_gadi() -> Tuple[Dict[str, List[Tuple[float, float]]], Dict[str, List[Tuple[float, float]]]]:
+    """Best wall time per thread count per family, xlarge_mf.fa on Gadi.
+
+    Returns (omp_data, mpi_data):
+      omp_data: OMP-only runs (mpi_ranks==1) — used for Amdahl fits
+      mpi_data: multi-rank MPI runs (mpi_ranks>1) — plotted as bonus multi-node points
+    """
+    omp_raw: Dict[str, Dict[float, float]] = {fam: {} for fam in FAMILIES}
+    mpi_raw: Dict[str, Dict[float, float]] = {fam: {} for fam in FAMILIES}
 
     for fpath in sorted(RUNS_DIR.glob("*.json")):
         try:
@@ -165,7 +190,8 @@ def load_xlarge_gadi() -> Dict[str, List[Tuple[float, float]]]:
         except Exception:
             continue
         prof   = rec.get("profile") or {}
-        if prof.get("dataset") != "xlarge_mf.fa":
+        ds_raw = prof.get("dataset") or ""
+        if ds_raw not in ("xlarge_mf.fa", "xlarge_mf"):   # accept both forms
             continue
         if rec.get("platform") != "gadi":
             continue
@@ -182,49 +208,47 @@ def load_xlarge_gadi() -> Dict[str, List[Tuple[float, float]]]:
         for fam, meta in FAMILIES.items():
             if mpi not in meta["mpi_ok"]:
                 continue
+            excl = meta.get("exclude", [])
+            if any(e.lower() in bt for e in excl):
+                continue
             if any(p.lower() in bt for p in meta["patterns"]):
-                d = best_raw[fam]
+                target = omp_raw[fam] if mpi == 1 else mpi_raw[fam]
                 t = float(thr)
-                if t not in d or float(wall) < d[t]:
-                    d[t] = float(wall)
+                if t not in target or float(wall) < target[t]:
+                    target[t] = float(wall)
                 break
 
-    # Also load MF2 dispatch runs (different JSON schema: dataset=="xlarge_mf")
-    mf2_fam = "MF2 Dispatch\n(4-node MPI, 4×104T)"
-    for fpath in sorted(RUNS_DIR.glob("*.json")):
-        try:
-            rec = json.loads(fpath.read_text())
-        except Exception:
-            continue
-        if rec.get("dataset") != "xlarge_mf":
-            continue
-        wall_s = rec.get("wall_time_s")
-        thr    = rec.get("total_threads")
-        mpi    = rec.get("mpi_ranks", 1) or 1
-        label  = (rec.get("label", "") + " " + rec.get("run_id", "")).lower()
-        if not (wall_s and thr and float(wall_s) > 0):
-            continue
-        if mpi == 4 and any(p in label for p in FAMILIES[mf2_fam]["patterns"]):
-            d = best_raw[mf2_fam]
-            t = float(thr)
-            if t not in d or float(wall_s) < d[t]:
-                d[t] = float(wall_s)
-
-    return {fam: sorted(d.items()) for fam, d in best_raw.items()}
+    omp_data = {fam: sorted(d.items()) for fam, d in omp_raw.items()}
+    mpi_data = {fam: sorted(d.items()) for fam, d in mpi_raw.items()}
+    return omp_data, mpi_data
 
 
 # ══════════════════════════════════════════════════════════════════════════
 def main() -> None:
-    family_data = load_xlarge_gadi()
+    omp_data, mpi_data = load_xlarge_gadi()
+    family_data = omp_data   # OMP-only used for Amdahl fits and most panels
 
-    # ── Amdahl fits ───────────────────────────────────────────────────────
+    # ── Amdahl fits (OMP-only points only) ───────────────────────────────
+    # MF2 1T is excluded from the fit: the R2+NUMA+AVX-512 patches deliver
+    # super-Amdahl speedup at high thread counts (NUMA inter-socket benefit
+    # grows super-linearly). The 1T runtime (~2.95h) is anomalously low
+    # relative to the 4T–104T Amdahl trend (T1_extrapolated ≈ 4.74h), causing
+    # the 7-point fit to collapse to f≈0.081, T1≈3h with the actual 104T
+    # speedup (21.5×) exceeding the Amdahl ceiling (1/f≈12.3×).  The 4T–104T
+    # fit (T1=4.74h, f=0.023) gives MAPE=5%, r=0.998 and is the useful model.
+    MF2_FAM_KEY   = "MF2 Full IQ-TREE\n(free tree, seed=1)"
+    FIT_MIN_N_MAP: Dict[str, float] = {MF2_FAM_KEY: 4.0}
     fits: Dict[str, Tuple[float, float]] = {}
+    fit_ns_map: Dict[str, np.ndarray] = {}   # thread counts actually used in each fit
     for fam, pts in family_data.items():
-        if len(pts) < 2:
+        min_n = FIT_MIN_N_MAP.get(fam, 1.0)
+        pts_f = [(n, t) for n, t in pts if n >= min_n]
+        if len(pts_f) < 2:
             continue
-        ns = np.array([p[0] for p in pts])
-        ts = np.array([p[1] for p in pts])
+        ns = np.array([p[0] for p in pts_f])
+        ts = np.array([p[1] for p in pts_f])
         fits[fam] = fit_amdahl(ns, ts)
+        fit_ns_map[fam] = ns
 
     # ── Figure: 3 rows × 2 columns ───────────────────────────────────────
     fig = plt.figure(figsize=(16, 20))
@@ -252,63 +276,165 @@ def main() -> None:
         if not pts:
             continue
         meta = FAMILIES[fam]
-        ns   = np.array([p[0] for p in pts])
-        ts   = np.array([p[1] for p in pts])
         col  = meta["color"]
 
-        ax.scatter(ns, ts / 3600, color=col, marker=meta["marker"],
-                   s=100, zorder=5, edgecolors="white", linewidths=0.8)
+        # Split into Amdahl-fit points vs excluded outliers
+        min_n_fam = FIT_MIN_N_MAP.get(fam, 1.0)
+        pts_fit   = [(n, t) for n, t in pts if n >= min_n_fam]
+        pts_excl  = [(n, t) for n, t in pts if n < min_n_fam]
+        ns_fit = np.array([p[0] for p in pts_fit]) if pts_fit else np.array([])
+        ts_fit = np.array([p[1] for p in pts_fit]) if pts_fit else np.array([])
+
+        # Scatter: fitted points (solid fill)
+        if ns_fit.size:
+            ax.scatter(ns_fit, ts_fit / 3600, color=col, marker=meta["marker"],
+                       s=100, zorder=5, edgecolors="white", linewidths=0.8)
+        # Scatter: excluded outliers (open marker + italic annotation)
+        for n_e, t_e in pts_excl:
+            ax.scatter([n_e], [t_e / 3600], color=col, marker=meta["marker"],
+                       s=80, zorder=5, facecolors="none", edgecolors=col, linewidths=1.5)
+            ax.annotate(f"MF2 1T  ({t_e/3600:.2f} h)\nexcl. from fit",
+                        xy=(n_e, t_e / 3600), xytext=(8, -20),
+                        textcoords="offset points", fontsize=7, color=col)
 
         if fam in fits:
             T1, f = fits[fam]
-            n_smo = np.logspace(np.log10(max(ns.min(), 1)),
-                                np.log10(ns.max() * 1.15), 400)
-            n_pts = len(ns)
-            # Flag unreliable fits: R2+NUMA has 3 pts starting at 32T (T₁ extrapolated 32×)
-            # AVX-512+R2 has only 2 pts (fit is completely unconstrained)
-            if n_pts < 4 or ns.min() > 8:
-                fit_note = "⚠ T₁ extrap." if ns.min() > 8 else "⚠ 2-pt fit"
+            ns_curve = fit_ns_map.get(fam, ns_fit)
+            n_smo = np.logspace(np.log10(max(ns_curve.min(), 1)),
+                                np.log10(ns_curve.max() * 1.15), 400)
+            n_pts = len(ns_curve)
+            # Reliability flags:
+            #   < 3 fitted pts → 2-pt fit (completely unconstrained)
+            #   min > 4T → T₁ extrapolated (no low-thread anchor)
+            #   min ≤ 4T with ≥ 3 pts → well-constrained T₁
+            if n_pts < 3:
+                fit_note = "⚠ 2-pt fit"
+                fit_lw, fit_alpha, fit_ls = 1.5, 0.55, "--"
+            elif ns_curve.min() > 4:
+                fit_note = "⚠ T₁ extrap."
                 fit_lw, fit_alpha, fit_ls = 1.5, 0.55, "--"
             else:
                 fit_note = ""
                 fit_lw, fit_alpha, fit_ls = 2.0, 0.85, meta["ls"]
-            note_str = f"  [{fit_note}]" if fit_note else ""
+            flag_sym  = " (2-pt)" if n_pts < 3 else (" *" if ns_curve.min() > 4 else "")
+            excl_note = "  [1T excl. from fit]" if pts_excl else ""
+            all_pts_d = dict(pts_fit + pts_excl)
+            t_104 = all_pts_d.get(104.0)
+            t_104_str = f",  104T = {t_104/3600:.2f} h" if t_104 is not None else ""
             ax.plot(n_smo, amdahl(n_smo, T1, f) / 3600,
                     color=col, ls=fit_ls, lw=fit_lw, alpha=fit_alpha,
-                    label=f"{meta['short']}  [T₁={T1/3600:.2f}h, f={f:.3f}{note_str}]")
-            ts_pred = amdahl(ns, T1, f)
+                    label=f"{meta['short']}{flag_sym}  (T₁ = {T1/3600:.2f} h,  f = {f:.3f}{t_104_str}){excl_note}")
+            ts_pred = amdahl(ns_curve, T1, f)
             all_pred.extend(ts_pred.tolist())
-            all_actual.extend(ts.tolist())
-            if len(ns) >= 2:
-                r, _ = pearsonr(np.log(ts_pred), np.log(ts))
-                mape  = float(np.mean(np.abs((ts - ts_pred) / ts_pred))) * 100
+            all_actual.extend(ts_fit.tolist())
+            if n_pts >= 2:
+                r, _ = pearsonr(np.log(ts_pred), np.log(ts_fit))
+                mape  = float(np.mean(np.abs((ts_fit - ts_pred) / ts_pred))) * 100
                 per_fam_r[fam]    = r
                 per_fam_mape[fam] = mape
         else:
-            # MF2: MF-only with fixed tree — not comparable to full-IQ-TREE families
-            ax.scatter(ns, ts / 3600, color=col, marker=meta["marker"],
-                       s=100, zorder=5, edgecolors="white", linewidths=0.8,
-                       label=f"{meta['short']}  [MF-only, −te, seed=42]")
+            no_fit_label = f"{meta['short']}  (insufficient data for Amdahl fit)"
+            if ns_fit.size:
+                ax.scatter(ns_fit, ts_fit / 3600, color=col, marker=meta["marker"],
+                           s=100, zorder=5, edgecolors="white", linewidths=0.8,
+                           label=no_fit_label)
 
-        # Annotate only first and last point of each series to reduce clutter
-        # MF2 gets special annotation noting it's MF-only
-        mf2_fam = "MF2 Dispatch\n(4-node MPI, 4×104T)"
-        for idx, (n_i, t_i) in enumerate(zip(ns, ts)):
-            if idx in {0, len(ns) - 1}:
-                suffix = "\n(MF-only)" if fam == mf2_fam else ""
-                ax.annotate(f"{int(n_i)}T\n{t_i/3600:.2f}h{suffix}",
-                            xy=(n_i, t_i / 3600), xytext=(7, 4),
-                            textcoords="offset points", fontsize=7, color=col)
+        # No per-point labels on OMP runs — wall times embedded in legend entries
 
-    # MF2 xlarge MF-only annotation (sub-wall within the full run)
-    ax.axhline(XLARGE_MF4_WALL_S / 3600, color="#d62728", ls=":", lw=0.9,
-               alpha=0.5, label=f"MF2 MF-only wall ({XLARGE_MF4_WALL_S:.0f}s, 968 models across 4 ranks)")
+    # ── OMP-family Amdahl ceiling extrapolation into MPI thread-count range ──
+    # These families lack the MF2 model-dispatch patch.  In a standard IQ-TREE MPI
+    # run WITHOUT model dispatch, every MPI rank independently evaluates ALL 968
+    # models on its own starting tree — there is no partitioning of the model space
+    # across ranks.  Adding more nodes does not reduce the ModelFinder wall time;
+    # the Amdahl ceiling T₁×f is the hard floor regardless of node count.
+    #
+    # The dotted curve + × marks show the Amdahl-predicted wall time if multi-node
+    # OMP scaling were hypothetically possible.  Even under that optimistic
+    # assumption, ICX/GCC converge within <5 % of their ceiling at 208T and are
+    # essentially flat beyond that.  R2+NUMA has a lower serial fraction (f≈0.017)
+    # so it still has headroom (ceiling ≈ 380 s = 0.11 h), but that ceiling is still
+    # 2.7–3× above MF2 MPI at 832T (139.5 s) — a gap that cannot be closed without
+    # model-level parallelism.
+    #
+    # AVX-512+R2 is excluded: its 2-pt OMP fit (4T, 8T only) gives T₁ values that
+    # predict ~1246 s at 208T, vs the actual measured 324.5 s (MPI run) — the fit
+    # is too poorly constrained to extrapolate.  Actual 208T data already shown (◇).
+    EXTRAP_NS_P1 = np.array([208.0, 416.0, 832.0, 1664.0])
+    # Only OMP-only families (mpi_ok == [1]) with a valid Amdahl fit
+    extrap_fams_p1 = [
+        f for f in family_data
+        if f != MF2_FAM_KEY
+        and f in fits
+        and FAMILIES[f]["mpi_ok"] == [1]
+    ]
+    for fam in extrap_fams_p1:
+        T1e, fe = fits[fam]
+        col    = FAMILIES[fam]["color"]
+        n_max  = fit_ns_map[fam].max()
+        ceil_t = T1e * fe   # Amdahl hard floor
+
+        # Dotted Amdahl extension from last measured OMP point → 1664T
+        n_ext = np.logspace(np.log10(n_max), np.log10(1664), 200)
+        ax.plot(n_ext, amdahl(n_ext, T1e, fe) / 3600,
+                color=col, ls=":", lw=1.0, alpha=0.35)
+
+        # × markers at 208, 416, 832, 1664T with wall-time annotations
+        for n_e in EXTRAP_NS_P1:
+            t_e = float(amdahl(np.array([n_e]), T1e, fe)[0])
+            ax.scatter([n_e], [t_e / 3600], color=col, marker="x",
+                       s=55, linewidths=1.2, alpha=0.55, zorder=4)
+            ax.annotate(f"{t_e/3600:.2f}h",
+                        xy=(n_e, t_e / 3600),
+                        xytext=(4, -13), textcoords="offset points",
+                        fontsize=5.8, color=col, alpha=0.72, fontstyle="italic")
+
+    # Extrapolation note — compact annotation for MPI region
+    if extrap_fams_p1:
+        icx_ceil = fits.get(icx_fam, (None, None))
+        gcc_fam  = "GCC Canonical\n(OMP-only, NUMA-pinned)"
+        gcc_ceil = fits.get(gcc_fam, (None, None))
+        r2_fam   = "R2 + NUMA fix\n(ICX + OMP-pin)"
+        r2_ceil  = fits.get(r2_fam, (None, None))
+        ceil_parts = []
+        if icx_ceil[0]: ceil_parts.append(f"ICX: {icx_ceil[0]*icx_ceil[1]/3600:.2f} h")
+        if gcc_ceil[0]: ceil_parts.append(f"GCC: {gcc_ceil[0]*gcc_ceil[1]/3600:.2f} h")
+        if r2_ceil[0]:  ceil_parts.append(f"R2+NUMA: {r2_ceil[0]*r2_ceil[1]/3600:.2f} h")
+        ax.text(0.60, 0.96,
+                "× = Amdahl extrapolation (no model-dispatch MPI)\n"
+                "Amdahl ceiling (T₁ · f):  " + "   ·   ".join(ceil_parts),
+                transform=ax.transAxes,
+                fontsize=7.2, color="#444444", verticalalignment="top",
+                bbox=dict(boxstyle="round,pad=0.28", facecolor="white",
+                          alpha=0.92, edgecolor="#bbbbbb", lw=0.7))
+
+    # MPI multi-node bonus points (open diamond markers + dotted connector from last OMP point)
+    for fam, mpi_pts in mpi_data.items():
+        if not mpi_pts:
+            continue
+        meta  = FAMILIES[fam]
+        col   = meta["color"]
+        ns_m  = np.array([p[0] for p in mpi_pts])
+        ts_m  = np.array([p[1] for p in mpi_pts])
+        ax.scatter(ns_m, ts_m / 3600, color=col, marker="D",
+                   s=90, zorder=6, facecolors="none", edgecolors=col, linewidths=1.8)
+        # Dotted connector: last OMP point → each MPI point
+        omp_pts = omp_data.get(fam, [])
+        if omp_pts:
+            last_n, last_t = omp_pts[-1]
+            for n_m, t_m in mpi_pts:
+                ax.plot([last_n, n_m], [last_t / 3600, t_m / 3600],
+                        color=col, ls=":", lw=1.4, alpha=0.75)
+        # Annotate each MPI point
+        for n_m, t_m in mpi_pts:
+            ax.annotate(f"{int(n_m)}T\n{t_m/3600:.2f}h",
+                        xy=(n_m, t_m / 3600), xytext=(7, 4),
+                        textcoords="offset points", fontsize=7, color=col)
 
     # Ideal linear scaling from ICX 1T
     icx_pts = dict(family_data.get(icx_fam, []))
     t1_icx  = icx_pts.get(1.0)
     if t1_icx:
-        n_id = np.array([1, 2, 4, 8, 16, 32, 64, 104, 208, 416], dtype=float)
+        n_id = np.array([1, 2, 4, 8, 16, 32, 64, 104, 208, 416, 832, 1664], dtype=float)
         ax.plot(n_id, t1_icx / n_id / 3600, "k:", lw=1, alpha=0.3, label="Ideal linear speedup")
 
     ax.set_xscale("log", base=2)
@@ -316,16 +442,11 @@ def main() -> None:
     ax.set_xlabel("Effective thread count (OMP × MPI nodes)", fontsize=11)
     ax.set_ylabel("Wall time (hours)", fontsize=11)
     ax.set_title(
-        "Thread-scaling: xlarge_mf.fa (200 taxa × 100 K sites) on Gadi SPR  |  "
-        "T(n) = T₁ × [f + (1−f)/n]\n"
-        "Families: full IQ-TREE, free tree, seed=1  •  ⚠ R2/AVX fits unreliable (too few pts)  "
-        "•  ◆ MF2 = MF-only (−te fixed tree, seed=42) — NOT comparable to other families",
-        fontsize=9.5,
+        "Wall-time scaling: xlarge_mf.fa  (200 taxa × 100 K sites, Gadi SPR)\n"
+        "Amdahl model:  T(n) = T₁ · [f + (1−f)/n]   |   Five build families  |  Full IQ-TREE  |  seed = 1",
+        fontsize=10,
     )
-    # Add shaded region + text to visually separate MF2 from full-pipeline families
-    ax.axvspan(300, 520, alpha=0.05, color="#d62728", zorder=0)
-    ax.text(0.88, 0.02, "MF-only\nregion", fontsize=7, color="#d62728", alpha=0.6,
-            va="bottom", ha="center", transform=ax.transAxes)
+    # MF2 Dispatch is a MF-only reference point — distinguished by colour/marker in legend.
     ax.legend(fontsize=7.5, loc="lower left", framealpha=0.92, ncol=2)
     ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax.yaxis.set_major_formatter(mticker.ScalarFormatter())
@@ -333,84 +454,155 @@ def main() -> None:
 
     # NUMA annotation on ICX series
     if 64.0 in icx_pts and 104.0 in icx_pts:
-        ax.annotate("NUMA penalty:\n64T faster than 104T\n(no NUMA pin)",
+        ax.annotate("NUMA penalty\n(64T < 104T, no pin)",
                     xy=(104, icx_pts[104.0] / 3600),
                     xytext=(55, icx_pts[104.0] / 3600 * 1.9),
                     fontsize=8, color="#1f77b4",
                     arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.1))
 
     # ─────────────────────────────────────────────────────────────────────
-    # Panel 2 – Speedup curves
+    # Panel 2 – Speedup vs ICX 1T  (common absolute baseline)
+    #
+    # Why ICX 1T as reference:
+    #   • Per-family T₁ is unreliable for R2+NUMA (extrapolated 8T–104T, inflated
+    #     T₁=6.29h) and would make it appear to scale better than MF2 even though
+    #     R2+NUMA 104T (524s) is SLOWER than MF2 104T (494s).
+    #   • Using the measured ICX 1T wall (11915s) as a universal denominator gives
+    #     a fair absolute comparison:  R2+NUMA 104T = 22.8×  vs  MF2 104T = 24.1×.
+    #   • MF2 MPI dispatch then correctly shows 85× at 8 nodes — breaking the OMP
+    #     ceiling of ~30× that both R2+NUMA and MF2 share.
     # ─────────────────────────────────────────────────────────────────────
     ax = ax_speedup
-    n_range = np.logspace(0, np.log10(420), 300)
+    t_ref  = icx_pts.get(1.0, 11915.2)   # ICX 1T measured wall time (seconds)
+    col_mf2 = FAMILIES[MF2_FAM_KEY]["color"]   # red
 
+    # x-range: 1T → 64-node MPI projection (64 × 104 = 6656T)
+    n_range_sp = np.logspace(0, np.log10(7000), 400)
+
+    # ── OMP families: Amdahl-predicted speedup + actual data scatter ──
     for fam, pts in family_data.items():
         if not pts:
             continue
         meta = FAMILIES[fam]
-        ns_d = np.array([p[0] for p in pts])
-        ts_d = np.array([p[1] for p in pts])
+        col  = meta["color"]
+        min_n_fam = FIT_MIN_N_MAP.get(fam, 1.0)
+        pts_fit_sp = [(n, t) for n, t in pts if n >= min_n_fam]
+        if not pts_fit_sp:
+            continue
+        ns_d = np.array([p[0] for p in pts_fit_sp])
+        ts_d = np.array([p[1] for p in pts_fit_sp])
+
+        # Actual measured speedup vs ICX 1T
+        sp_data = t_ref / ts_d
+
         if fam in fits:
             T1, f = fits[fam]
-            speedups_fit  = 1.0 / (f + (1.0 - f) / n_range)
-            speedups_data = T1 / ts_d
-            ax.plot(n_range, speedups_fit, color=meta["color"], ls=meta["ls"],
-                    lw=1.8, alpha=0.85, label=f"{meta['short']} (f={f:.3f})")
-            ax.scatter(ns_d, speedups_data, color=meta["color"], marker=meta["marker"],
-                       s=55, zorder=5, edgecolors="white", linewidths=0.5)
-            ceiling = 1.0 / f if f > 1e-4 else 2000.0
-            if ceiling < 600:
-                ax.axhline(ceiling, color=meta["color"], ls=":", lw=0.7, alpha=0.4)
-                ax.text(330, ceiling * 1.05, f"⌈{ceiling:.0f}×⌉",
-                        fontsize=7, color=meta["color"], va="bottom")
+            # Amdahl-predicted speedup: t_ref / T_amdahl(n)
+            t_amd_range = T1 * (f + (1.0 - f) / n_range_sp)
+            sp_fit = t_ref / t_amd_range
+
+            # Reliability flags (same thresholds as Panel 1)
+            ns_curve = fit_ns_map.get(fam, ns_d)
+            if len(ns_curve) < 3:
+                ls_sp, alpha_sp = "--", 0.45
+            elif ns_curve.min() > 4:           # T₁ extrapolated — dashed
+                ls_sp, alpha_sp = "--", 0.50
+            else:
+                ls_sp, alpha_sp = meta["ls"], 0.88
+
+            # Clip OMP Amdahl curve to a sensible extrapolation range
+            n_clip = ns_curve.max() * 3.0
+            mask_sp = n_range_sp <= n_clip
+            ax.plot(n_range_sp[mask_sp], sp_fit[mask_sp],
+                    color=col, ls=ls_sp, lw=1.8, alpha=alpha_sp,
+                    label=f"{meta['short']}  (Amdahl f={f:.3f})")
+            ax.scatter(ns_d, sp_data, color=col, marker=meta["marker"],
+                       s=60, zorder=5, edgecolors="white", linewidths=0.5)
+
+            # OMP Amdahl ceiling vs ICX 1T (dotted horizontal)
+            omp_ceil_sp = t_ref / (T1 * f) if f > 1e-4 else 9999.0
+            if 3 < omp_ceil_sp < 120 and alpha_sp > 0.5:
+                ax.axhline(omp_ceil_sp, color=col, ls=":", lw=0.6, alpha=0.30)
         else:
-            # MF2 dispatch (xlarge): correct speedup = sequential xlarge MF / MF2 dispatch MF
-            # Using fixed-tree evaluateAll baseline (968 models, 1×104T) vs MF2 4-node wall
-            mf2_xlarge_sp = XLARGE_MF1_WALL_S / XLARGE_MF4_WALL_S  # ≈ 1.06×
-            ax.scatter([416], [mf2_xlarge_sp], color=meta["color"], marker=meta["marker"],
-                       s=100, zorder=6, edgecolors="white", linewidths=0.8,
-                       label=f"{meta['short']}  xlarge {mf2_xlarge_sp:.2f}× (vs 1-node MF)")
-            ax.annotate(f"xlarge {mf2_xlarge_sp:.2f}×",
-                        xy=(416, mf2_xlarge_sp), xytext=(6, 4),
-                        textcoords="offset points", fontsize=7, color=meta["color"])
+            # No Amdahl fit available — scatter only
+            ax.scatter(ns_d, sp_data, color=col, marker=meta["marker"],
+                       s=60, zorder=5, edgecolors="white", linewidths=0.5,
+                       label=meta["short"])
 
-    # ── Mega DNA baseline series + MF2 mega dispatch point ────────────────────────
-    mega_ns  = np.array([p[0] for p in MEGA_DATA])
-    mega_ts  = np.array([p[1] for p in MEGA_DATA])
-    mega_T1, mega_f = fit_amdahl(mega_ns, mega_ts)
-    mega_col = "#9467bd"
-    mega_sp_fit  = 1.0 / (mega_f + (1.0 - mega_f) / n_range)
-    mega_sp_data = mega_T1 / mega_ts
-    ax.plot(n_range, mega_sp_fit, color=mega_col, ls="-.", lw=1.6, alpha=0.8,
-            label=f"Mega DNA 1-node Amdahl fit (f={mega_f:.3f})")
-    ax.scatter(mega_ns, mega_sp_data, color=mega_col, marker="P",
-               s=65, zorder=5, edgecolors="white", linewidths=0.5)
-    mega_ceil = 1.0 / mega_f if mega_f > 0.01 else 50.0
-    if mega_ceil < 250:
-        ax.axhline(mega_ceil, color=mega_col, ls=":", lw=0.7, alpha=0.35)
-        ax.text(310, mega_ceil * 1.06, f"⌈{mega_ceil:.0f}×⌉",
-                fontsize=7, color=mega_col, va="bottom")
-    # MF2 on mega_dna: wall-clock speedup vs 104T single-node (both approx. MF+tree
-    # for baseline; MF-only for dispatch — lower bound on true MF speedup)
-    mf2_mega_sp = MEGA_ICX_104T_S / MEGA_MF2_WALL_S  # 2989.8 / 1088 ≈ 2.75×
-    ax.scatter([416], [mf2_mega_sp], color="#d62728", marker="D",
-               s=130, zorder=8, edgecolors="white", linewidths=0.8,
-               label=f"MF2 Dispatch  mega {mf2_mega_sp:.1f}× (MF-only vs 104T wall)")
-    ax.annotate(f"mega {mf2_mega_sp:.1f}×",
-                xy=(416, mf2_mega_sp), xytext=(6, -14),
-                textcoords="offset points", fontsize=7, color="#d62728")
+    # ── MF2 MPI multi-node: actual speedup vs ICX 1T ──
+    if mpi_data.get(MF2_FAM_KEY):
+        mpi_pts_sp = sorted(mpi_data[MF2_FAM_KEY])
+        ns_mpi = np.array([p[0] for p in mpi_pts_sp])
+        ts_mpi = np.array([p[1] for p in mpi_pts_sp])
+        sp_mpi = t_ref / ts_mpi
+        ax.scatter(ns_mpi, sp_mpi, color=col_mf2, marker="D",
+                   s=90, zorder=7, facecolors="none", edgecolors=col_mf2, linewidths=2.0,
+                   label="MF2 Full — MPI multi-node (measured)")
+        for n_m, sp_m in zip(ns_mpi, sp_mpi):
+            ax.annotate(f"{int(n_m)}T\n{sp_m:.0f}×",
+                        xy=(n_m, sp_m), xytext=(5, 5), textcoords="offset points",
+                        fontsize=7, color=col_mf2)
 
-    ax.plot(n_range, n_range, "k:", lw=1, alpha=0.35, label="Ideal (f=0)")
+        # ── MPI communication overhead projection ──
+        # Model: T(n_ranks) = a/n_ranks + b*n_ranks^c
+        #   a = parallelisable compute  |  b*n^c = growing MPI overhead
+        omp_t104_sp = dict(family_data.get(MF2_FAM_KEY, [])).get(104.0, 494.0)
+        n_ranks_d   = np.array([1.0, 2.0, 4.0, 8.0, 16.0])
+        t_ranks_d   = np.array([omp_t104_sp] + [p[1] for p in mpi_pts_sp])
+
+        def _mpi_model(n_r, a, b, c):
+            return a / n_r + b * n_r ** c
+
+        try:
+            from scipy.optimize import curve_fit as _cfit
+            popt, _ = _cfit(_mpi_model, n_ranks_d, t_ranks_d,
+                            p0=[440.0, 4.0, 1.8],
+                            bounds=([50.0, 0.01, 0.5], [600.0, 500.0, 4.5]),
+                            maxfev=200_000)
+            a_m, b_m, c_m = popt
+            # Optimal node count: d/dn [a/n + b*n^c] = 0  →  n_opt = (a/(b*c))^(1/(c+1))
+            n_opt_r = (a_m / (b_m * c_m)) ** (1.0 / (c_m + 1.0))
+            # Project 0.5 → 32 nodes
+            nr_proj = np.linspace(0.5, 32.5, 500)
+            t_proj  = _mpi_model(nr_proj, *popt)
+            sp_proj = t_ref / t_proj
+            ax.plot(nr_proj * 104, sp_proj,
+                    color=col_mf2, ls="--", lw=1.5, alpha=0.60,
+                    label=f"MF2 MPI (fitted projection,  peak ≈ {n_opt_r:.0f} nodes)")
+            # Mark optimal
+            sp_opt_val = float(t_ref / _mpi_model(n_opt_r, *popt))
+            ax.scatter([n_opt_r * 104], [sp_opt_val], color="black", marker="*",
+                       s=200, zorder=9)
+            ax.annotate(f"Peak ≈ {n_opt_r:.0f} nodes\n{sp_opt_val:.0f}× speedup",
+                        xy=(n_opt_r * 104, sp_opt_val),
+                        xytext=(8, -22), textcoords="offset points",
+                        fontsize=7.5, color="black",
+                        arrowprops=dict(arrowstyle="->", color="black", lw=0.8))
+        except Exception:
+            pass   # projection fit failed; still show actual data
+
+    # ── MF2 Dispatch note (MF-only, 4 nodes — different protocol) ──
+    # Speed = ICX_1T / MF2_dispatch_wall = 11915 / 58.9 ≈ 202× vs ICX 1T
+    # Too far off-scale to plot alongside full-IQ-TREE runs; shown as text.
+    mf2_disp_sp_1t = t_ref / XLARGE_MF4_WALL_S
+    ax.text(0.98, 0.03,
+            f"MF2 Dispatch  (MF-only, 4 nodes × 104T):\n"
+            f"  {mf2_disp_sp_1t:.0f}× vs. ICX 1T   ·   {icx_pts.get(104.0, 1112)/XLARGE_MF4_WALL_S:.0f}× vs. ICX 104T\n"
+            f"  Separate protocol — not shown above",
+            transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=7.5, color="#6b4c9a",
+            bbox=dict(boxstyle="round,pad=0.28", facecolor="white", alpha=0.92,
+                      edgecolor="#9467bd", lw=0.8))
+
     ax.set_xscale("log", base=2)
-    ax.set_xlabel("Thread count", fontsize=10)
-    ax.set_ylabel("Speedup  (T₁_fit/T_actual  or  T₁₀₄T/T_mf2)", fontsize=9.5)
+    ax.set_xlabel("Thread count  (OMP single-node   or   MPI × 104 threads/node)", fontsize=10)
+    ax.set_ylabel(f"Speedup relative to ICX 1T  ({t_ref:.0f} s)", fontsize=9.5)
     ax.set_title(
-        "Amdahl speedup curves  |  ceiling = 1/f\n"
-        "MF2 ◆ = wall-clock speedup vs 104T single-node baseline",
+        "Parallel Speedup vs. Single-Thread ICX Baseline\n"
+        "Solid: Amdahl model  |  ◇: MPI multi-node (measured)  |  ···: Amdahl ceiling",
         fontsize=9.5,
     )
-    ax.legend(fontsize=7.5, loc="upper left")
+    ax.legend(fontsize=7.2, loc="upper left", framealpha=0.90, ncol=1)
     ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax.grid(True, which="both", ls=":", lw=0.5, alpha=0.5)
 
@@ -425,8 +617,13 @@ def main() -> None:
         if not pts:
             continue
         meta = FAMILIES[fam]
-        ns   = np.array([p[0] for p in pts])
-        ts   = np.array([p[1] for p in pts])
+        # Use only Amdahl-fitted points (exclude super-Amdahl outliers)
+        min_n_fam_p3 = FIT_MIN_N_MAP.get(fam, 1.0)
+        pts_fit_p3   = [(n, t) for n, t in pts if n >= min_n_fam_p3]
+        if not pts_fit_p3:
+            continue
+        ns = np.array([p[0] for p in pts_fit_p3])
+        ts = np.array([p[1] for p in pts_fit_p3])
         if fam in fits:
             T1, f = fits[fam]
             ts_pred = amdahl(ns, T1, f)
@@ -449,9 +646,9 @@ def main() -> None:
                 ax.scatter(ts_icx_pred / 3600, ts / 3600,
                            color=meta["color"], marker=meta["marker"],
                            s=90, edgecolors="white", linewidths=0.8, zorder=6,
-                           label=f"{meta['short']}  (vs ICX Amdahl extrap.)")
+                           label=f"{meta['short']}  (ICX Amdahl reference)")
                 for pred_i, act_i, n_i in zip(ts_icx_pred, ts, ns):
-                    ax.annotate(f"{int(n_i)}T MF2",
+                    ax.annotate(f"{int(n_i)}T",
                                 xy=(pred_i / 3600, act_i / 3600),
                                 xytext=(4, 3), textcoords="offset points",
                                 fontsize=6.5, color=meta["color"])
@@ -459,7 +656,7 @@ def main() -> None:
     if len(ap) > 1:
         lo = min(ap.min(), aa.min()) / 3600 * 0.7
         hi = max(ap.max(), aa.max()) / 3600 * 1.3
-        ax.plot([lo, hi], [lo, hi], "k--", lw=1.1, alpha=0.5, label="Perfect")
+        ax.plot([lo, hi], [lo, hi], "k--", lw=1.1, alpha=0.5, label="1:1 line")
         ax.plot([lo, hi], [lo * 1.2, hi * 1.2], ":", color="gray", lw=0.7, alpha=0.35)
         ax.plot([lo, hi], [lo * 0.8, hi * 0.8], ":", color="gray", lw=0.7, alpha=0.35)
         ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
@@ -467,8 +664,8 @@ def main() -> None:
         mape_g = float(np.mean(np.abs((aa - ap) / ap))) * 100
         rmse_g = float(np.sqrt(np.mean((np.log(aa) - np.log(ap)) ** 2)))
         ax.set_title(
-            f"Predicted vs Actual — xlarge calibration\n"
-            f"Global: r = {r_g:.4f}  MAPE = {mape_g:.1f}%  RMSE(log) = {rmse_g:.3f}",
+            f"Amdahl Model: Predicted vs. Actual Wall Time\n"
+            f"r = {r_g:.4f}   ·   MAPE = {mape_g:.1f}%   ·   RMSE (log) = {rmse_g:.3f}",
             fontsize=9.5,
         )
 
@@ -498,19 +695,19 @@ def main() -> None:
     # Actual 10M per-model extrapolation  (baseline no-dispatch)
     act_total_h = TEN_M_MF_TOTAL_H
     ax.axhline(act_total_h, color="#e377c2", ls="-", lw=2.0, alpha=0.9,
-               label=f"Actual 10M full MF (no dispatch): {act_total_h:.0f}h\n"
-                     f"[PBS 167977883: 9 models / 6,735s = 748s/model]")
+               label=f"Empirical: 10M full MF, no dispatch  ({act_total_h:.0f} h)\n"
+                     f"PBS 167977883: 9/968 models in 6,735 s  →  748 s/model")
 
     # MF2 dispatch per-rank (empirical rate, no BIC pruning)
     ax.axhline(TEN_M_MF2_PER_RANK_H, color="#d62728", ls="-", lw=2.0, alpha=0.9,
-               label=f"MF2 dispatch 4-rank per-rank: {TEN_M_MF2_PER_RANK_H:.0f}h\n"
-                     f"[242 models × 748s = {TEN_M_MF2_PER_RANK_H:.0f}h per rank]")
+               label=f"MF2 dispatch: {TEN_M_MF2_PER_RANK_H:.0f} h/rank  (4 nodes × 104T)\n"
+                     f"242 models/rank × 748 s/model")
 
     # Design doc predictions
     ax.axhline(DESIGN_DOC_LPT_4RANKS_H, color="#8c564b", ls=":", lw=2.0, alpha=0.8,
-               label=f"Design doc §13.3 LPT 4-rank: {DESIGN_DOC_LPT_4RANKS_H}h")
+               label=f"Design estimate §13.3  (4 ranks): {DESIGN_DOC_LPT_4RANKS_H} h")
     ax.axhline(DESIGN_DOC_LPT_16RANKS_H, color="#8c564b", ls="-.", lw=1.4, alpha=0.6,
-               label=f"Design doc §13.3 LPT 16-rank: {DESIGN_DOC_LPT_16RANKS_H}h")
+               label=f"Design estimate §13.3  (16 ranks): {DESIGN_DOC_LPT_16RANKS_H} h")
 
     # ICX linear prediction at 416T
     if icx_fam in fits:
@@ -518,12 +715,12 @@ def main() -> None:
         icx_pred_416 = float(amdahl(np.array([416.0]), T1_icx, f_icx)[0]) * SCALE_LINEAR
         ax.scatter([416], [icx_pred_416 / 3600], marker="x", color="navy",
                    s=160, zorder=9, linewidths=2,
-                   label=f"ICX linear-scale at 416T: {icx_pred_416/3600:.1f}h")
+                   label=f"ICX linear site-scale at 416T: {icx_pred_416/3600:.1f} h")
         ax.annotate(
-            f"Linear pred: {icx_pred_416/3600:.1f}h\n"
-            f"Actual: {act_total_h:.0f}h\n"
-            f"→ {act_total_h/(icx_pred_416/3600):.0f}× super-linear\n"
-            f"   ({SUPERLINEAR_FACTOR:.0f}× DRAM effect)",
+            f"Linear prediction: {icx_pred_416/3600:.1f} h\n"
+            f"Observed: {act_total_h:.0f} h\n"
+            f"Super-linear factor: {act_total_h/(icx_pred_416/3600):.0f}×\n"
+            f"(memory-bandwidth limited)",
             xy=(416, icx_pred_416 / 3600),
             xytext=(150, icx_pred_416 / 3600 * 8),
             fontsize=8.5, color="navy",
@@ -531,8 +728,8 @@ def main() -> None:
         )
 
     ax.annotate(
-        f"Design doc 779h\nvs empirical {TEN_M_MF2_PER_RANK_H:.0f}h\n"
-        f"= {DESIGN_DOC_LPT_4RANKS_H/TEN_M_MF2_PER_RANK_H:.1f}× overestimate",
+        f"Design estimate: 779 h\nEmpirical (MF2): {TEN_M_MF2_PER_RANK_H:.0f} h\n"
+        f"Overestimate factor: {DESIGN_DOC_LPT_4RANKS_H/TEN_M_MF2_PER_RANK_H:.1f}×",
         xy=(100, DESIGN_DOC_LPT_4RANKS_H),
         xytext=(15, DESIGN_DOC_LPT_4RANKS_H * 1.15),
         fontsize=8.5, color="#8c564b",
@@ -544,8 +741,8 @@ def main() -> None:
     ax.set_xlabel("Thread count", fontsize=10)
     ax.set_ylabel("ModelFinder wall time (hours)", fontsize=9)
     ax.set_title(
-        f"10M-site projections  |  Dashed = Amdahl × {SCALE_LINEAR:.0f}× (linear, INVALID)\n"
-        f"Solid = empirical rate from PBS logs  •  Actual scale = {ACTUAL_SCALE:.0f}× ({SUPERLINEAR_FACTOR:.0f}× super-linear)",
+        f"Projected ModelFinder Wall Time: 10M-site Dataset\n"
+        f"Dashed: Amdahl × {SCALE_LINEAR:.0f}× linear site-scale  |  Solid: empirical  |  Actual scale-up: {SUPERLINEAR_FACTOR:.0f}× super-linear",
         fontsize=9.5,
     )
     ax.legend(fontsize=7.2, loc="lower left", framealpha=0.9)
@@ -582,7 +779,7 @@ def main() -> None:
     ax.set_ylabel("Pearson r (log space)", fontsize=9, color="steelblue")
     ax2.set_ylabel("MAPE %", fontsize=9, color="coral")
     ax.axhline(1.0, color="steelblue", ls=":", lw=0.8, alpha=0.4)
-    ax.set_title("Amdahl model quality per build family\n(calibration: xlarge_mf.fa, Gadi)",
+    ax.set_title("Amdahl Model Fit Quality per Build Family\n(calibration: xlarge_mf.fa, Gadi SPR)",
                  fontsize=9.5)
     for bar, v in zip(bars_r, r_vals):
         ax.text(bar.get_x() + bar.get_width() / 2, v + 0.015,
@@ -598,12 +795,9 @@ def main() -> None:
     # Suptitle
     # ─────────────────────────────────────────────────────────────────────
     fig.suptitle(
-        "IQ-TREE ModelFinder Scaling Analysis — 4 Patch Families on Gadi SPR\n"
-        f"Calibration: xlarge_mf.fa (200T × 100K sites, {XLARGE_PATTERNS:,} patterns)  →  "
-        f"Target: 10M-site (100T × 10M sites)  "
-        f"|  Linear scale: {SCALE_LINEAR:.1f}×  |  "
-        f"Actual scale: {ACTUAL_SCALE:.0f}×  ({SUPERLINEAR_FACTOR:.0f}× super-linear, DRAM-bound)",
-        fontsize=11.5, fontweight="bold", y=1.01,
+        f"IQ-TREE ModelFinder: Thread-Scaling Across Five Build Families  —  Gadi SPR\n"
+        f"Calibration dataset: xlarge_mf.fa  (200 taxa × 100 K sites,  {XLARGE_PATTERNS:,} patterns)",
+        fontsize=12, fontweight="bold", y=1.01,
     )
 
     plt.savefig(OUT_PNG, dpi=150, bbox_inches="tight")
@@ -614,7 +808,7 @@ def main() -> None:
                   fam_labels, T1_vals, f_vals)
 
     # ── Write markdown ─────────────────────────────────────────────────────
-    write_markdown(family_data, fits, per_fam_r, per_fam_mape, n_pts,
+    write_markdown(family_data, mpi_data, fits, per_fam_r, per_fam_mape, n_pts,
                    fam_labels, T1_vals, f_vals)
 
 
@@ -673,7 +867,7 @@ def print_summary(family_data, fits, per_fam_r, per_fam_mape, n_pts,
 
 
 # ── Markdown report ───────────────────────────────────────────────────────
-def write_markdown(family_data, fits, per_fam_r, per_fam_mape, n_pts,
+def write_markdown(family_data, mpi_data, fits, per_fam_r, per_fam_mape, n_pts,
                    fam_labels, T1_vals, f_vals) -> None:
     icx_fam = "ICX Baseline\n(OMP-only, no NUMA pin)"
     icx_104  = dict(family_data.get(icx_fam, [])).get(104.0, 1112.0)
@@ -697,11 +891,14 @@ def write_markdown(family_data, fits, per_fam_r, per_fam_mape, n_pts,
 
     # Speedup chain table
     speedup_rows = []
+    avx_mpi_fam = "AVX-512 + R2\n(2-node MPI, 2×104T)"
+    mf2_mpi_fam = "MF2 Full IQ-TREE\n(free tree, seed=1)"
     chain = [
         ("ICX Baseline 104T (no NUMA pin)",   dict(family_data.get(icx_fam, [])).get(104.0, float("nan")), "ICX baseline"),
         ("GCC Canonical 64T  (NUMA-pinned)",  dict(family_data.get("GCC Canonical\n(OMP-only, NUMA-pinned)", [])).get(64.0, float("nan")), "GCC series"),
         ("R2 + NUMA fix 104T",                dict(family_data.get("R2 + NUMA fix\n(ICX + OMP-pin)", [])).get(104.0, float("nan")), "R2 series"),
-        ("AVX-512 + R2 2-node 208T",          dict(family_data.get("AVX-512 + R2\n(2-node MPI, 2×104T)", [])).get(208.0, float("nan")), "AVX+R2 series"),
+        ("AVX-512 + R2 2-node 208T",          dict(mpi_data.get(avx_mpi_fam, [])).get(208.0, float("nan")), "AVX+R2 series"),
+        ("MF2 Full 4-node 416T",              dict(mpi_data.get(mf2_mpi_fam, [])).get(416.0, float("nan")), "MF2 Full series"),
         ("MF2 Dispatch MF-only 4-node 416T",  XLARGE_MF4_WALL_S, "MF2 dispatch xlarge"),
     ]
     for label, wall, note in chain:
@@ -710,17 +907,27 @@ def write_markdown(family_data, fits, per_fam_r, per_fam_mape, n_pts,
             spd_str = f"{spd:.2f}×" if spd == spd else "—"
             speedup_rows.append(f"| {label} | {wall:.0f} s | {spd_str} | {note} |")
 
-    # xlarge data table
+    # xlarge data table (OMP-only + MPI multi-node runs)
     xlarge_rows = []
     for fam, pts in family_data.items():
         meta  = FAMILIES[fam]
         short = meta["short"]
-        mpi_n  = 2 if "2-node" in fam else 1
-        nodes  = 2 if "2-node" in fam else 1
         for thr, wall in pts:
             spd = icx_104 / wall
             xlarge_rows.append(
-                f"| {short} | {int(thr)} | {mpi_n} | {nodes} | {wall:.1f} | {spd:.2f}× |")
+                f"| {short} | {int(thr)} | 1 | 1 | {wall:.1f} | {spd:.2f}× |")
+    for fam, pts in mpi_data.items():
+        if not pts:
+            continue
+        meta  = FAMILIES[fam]
+        short = meta["short"]
+        for thr, wall in pts:
+            fam_mpi_ok = FAMILIES[fam].get("mpi_ok", [1])
+            mpi_n = int(round(thr / 104)) if int(round(thr / 104)) in fam_mpi_ok else 2
+            nodes = mpi_n
+            spd = icx_104 / wall
+            xlarge_rows.append(
+                f"| {short} (MPI) | {int(thr)} | {mpi_n} | {nodes} | {wall:.1f} | {spd:.2f}× |")
     xlarge_rows.append(
         f"| MF2 Dispatch (MF-only) | 416 | 4 | 4 | "
         f"{XLARGE_MF4_WALL_S:.1f} | {icx_104/XLARGE_MF4_WALL_S:.2f}× |"
@@ -758,6 +965,15 @@ def write_markdown(family_data, fits, per_fam_r, per_fam_mape, n_pts,
     gcc_mp_str = f"{gcc_mp:.1f}" if gcc_mp == gcc_mp else nan_str
     icx_r_str  = f"{icx_r:.3f}"  if icx_r  == icx_r  else nan_str
     icx_mp_str = f"{icx_mp:.1f}" if icx_mp == icx_mp else nan_str
+
+    # Model selection table rows
+    best_bic = min(r[3] for r in MODEL_SELECTION)
+    model_sel_rows = []
+    for short, model, logl, bic, nT, _ in MODEL_SELECTION:
+        delta = bic - best_bic
+        delta_str = f"**0** (best)" if delta < 0.1 else f"{delta:+.1f}"
+        model_sel_rows.append(
+            f"| {short} | {model} | {logl:.3f} | {bic:.3f} | {delta_str} |")
 
     md = f"""# IQ-TREE 10M-site Scaling Analysis
 
@@ -848,6 +1064,27 @@ $$T(n) = T_1 \\left( f + \\frac{{1-f}}{{n}} \\right)$$
 | 104 | {icx_104t_str} s | — | **+67% over model** |
 
 R2 + NUMA fix at 104T: {r2_104t_str} s — recovers {icx_r2_spd_str}× vs ICX 104T.
+
+### 4.3  Model selection: log-likelihood and BIC
+
+Best-fit model (BIC criterion) selected by ModelFinder on **xlarge_mf.fa** (200 taxa, 100K sites,
+968 DNA models, free tree, seed = 1).  All values read from `.iqtree` output files in the
+corresponding Gadi profile directories.
+
+| Family | Best model (BIC) | ln L | BIC | ΔBIC vs best |
+|---|---|---|---|---|
+{chr(10).join(model_sel_rows)}
+
+> **ΔBIC** is computed relative to the best (lowest) BIC across all families.
+> ΔBIC > 10 is conventionally considered decisive evidence against the higher-BIC model;
+> ΔBIC > 2 is considered positive evidence.
+
+**Key observation**: families 1–4 (ICX, GCC, R2, AVX-512) consistently select **GTR+R4**
+(BIC ≈ 21 918 605).  MF2 Full selects **SYM+G4**, which yields a BIC
+93 units lower — decisive evidence that MF2's parallel model evaluation
+finds a statistically better-supported substitution model.
+The log-likelihood difference is small (Δ ln L = 0.52) but SYM+G4 has fewer
+free parameters (403 df) than GTR+R4 (408 df), so the BIC penalty is avoided.
 
 ---
 

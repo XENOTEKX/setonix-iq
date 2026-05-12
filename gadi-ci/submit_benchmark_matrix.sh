@@ -168,7 +168,7 @@ echo "[matrix] run_id=${RUN_ID} dataset=${DATA_PATH} threads=${THREADS}"
 
 # Environment snapshot (env.json) — parity with setonix-ci/run_mega_profile.sh.
 ENV_JSON="${WORK_DIR}/env.json"
-python3 - <<PYENV > "${ENV_JSON}"
+/usr/bin/python3.11 - <<PYENV > "${ENV_JSON}"
 import json, os, subprocess, hashlib
 def sh(c, d=""):
     try: return subprocess.check_output(c, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
@@ -249,7 +249,7 @@ PERF_EVENTS="$(echo "${_PERF_EVENTS_BASE}" | tr ',' '\n' | sed 's/$/:u/' | paste
 # The sampler polls RSS, IO, NUMA placement, and per-thread CPU ticks at 10 s
 # intervals → samples.jsonl (same format as setonix-ci/run_mega_profile.sh).
 cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
-#!/usr/bin/env python3
+#!/usr/bin/python3.11
 """Poll /proc/$pid for rss/io/numa/per-thread stats. One JSON line per tick."""
 import json, os, subprocess, sys, time, pathlib
 
@@ -351,7 +351,7 @@ START_EPOCH=$(date +%s)
     > "${WORK_DIR}/iqtree_run.log" 2>&1 &
 IQTREE_PID=$!
 # Start /proc sampler in background, attaching to the IQ-TREE process.
-python3 "${WORK_DIR}/_sampler.py" "${IQTREE_PID}" \
+/usr/bin/python3.11 "${WORK_DIR}/_sampler.py" "${IQTREE_PID}" \
     "${WORK_DIR}/samples.jsonl" 10 &
 SAMPLER_PID=$!
 
@@ -425,7 +425,7 @@ if command -v vtune >/dev/null 2>&1 && [[ "${IQRC}" -eq 0 ]]; then
 fi
 
 # Emit the run.schema.json record.
-python3 - "$@" <<PYEOF
+/usr/bin/python3.11 - "$@" <<PYEOF
 import json, os, re, subprocess, time
 work  = "${WORK_DIR}"
 runs  = "${RUNS_DIR}"

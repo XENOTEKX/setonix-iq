@@ -129,7 +129,7 @@ echo "╚═══════════════════════�
 
 # ── Environment snapshot (env.json) ─────────────────────────────────────
 ENV_JSON="${WORK_DIR}/env.json"
-python3 - <<PYENV > "${ENV_JSON}"
+/usr/bin/python3.11 - <<PYENV > "${ENV_JSON}"
 import json, os, subprocess, hashlib
 def sh(c, d=""):
     try: return subprocess.check_output(c, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
@@ -242,7 +242,7 @@ chmod +x "${PERF_WRAP}"
 
 # ── /proc time-series sampler (rank 0 only — RSS/IO/NUMA/per-thread) ────
 cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
-#!/usr/bin/env python3
+#!/usr/bin/python3.11
 """Poll /proc/$pid for rss/io/numa/per-thread stats. One JSON line per tick.
 Identical shape to gadi-ci/_run_matrix_job.sh's sampler so the dashboard
 front-end can ingest both run types unchanged."""
@@ -358,7 +358,7 @@ sleep 5
 INNER_PID="$(pgrep -f 'iqtree3-mpi' 2>/dev/null | head -1 || true)"
 [[ -z "${INNER_PID:-}" ]] && INNER_PID="${IQTREE_PID}"
 echo "  → mpirun pid=${IQTREE_PID}, sampler attached to inner pid=${INNER_PID}"
-python3 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples.jsonl" 10 &
+/usr/bin/python3.11 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples.jsonl" 10 &
 SAMPLER_PID=$!
 
 wait "${IQTREE_PID}" || IQRC=$?
@@ -383,7 +383,7 @@ if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
 fi
 
 # ── Emit run.schema.json record ─────────────────────────────────────────
-python3 - <<PYEOF
+/usr/bin/python3.11 - <<PYEOF
 import json, os, re, glob, subprocess
 work, runs = "${WORK_DIR}", "${RUNS_DIR}"
 rid, label = "${RUN_ID}", "${LABEL}"

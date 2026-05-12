@@ -17,7 +17,7 @@
 #                                     phylokernelnew.h)
 #
 #PBS -N iq-xlarge-r2-v312-canon
-#PBS -P rc29
+#PBS -P um09
 #PBS -q normalsr
 #PBS -l ncpus=104
 #PBS -l mem=500GB
@@ -100,7 +100,7 @@ echo "║  work_dir:      ${WORK_DIR}"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
 ENV_JSON="${WORK_DIR}/env.json"
-python3 - <<PYENV > "${ENV_JSON}"
+/usr/bin/python3.11 - <<PYENV > "${ENV_JSON}"
 import json, os, subprocess, hashlib
 def sh(c, d=""):
     try: return subprocess.check_output(c, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
@@ -170,7 +170,7 @@ PERF_EVENTS="$(echo "${_PERF_EVENTS_BASE}" | tr ',' '\n' | sed 's/$/:u/' | paste
 
 # /proc sampler
 cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
-#!/usr/bin/env python3
+#!/usr/bin/python3.11
 import json, os, subprocess, sys, time, pathlib
 pid = int(sys.argv[1]); out = pathlib.Path(sys.argv[2])
 interval = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
@@ -224,7 +224,7 @@ IQTREE_PID=$!
 sleep 5
 INNER_PID="$(pgrep -P "${IQTREE_PID}" 2>/dev/null | head -1 || true)"
 [[ -z "${INNER_PID:-}" ]] && INNER_PID="${IQTREE_PID}"
-python3 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples.jsonl" 10 &
+/usr/bin/python3.11 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples.jsonl" 10 &
 SAMPLER_PID=$!
 
 wait "${IQTREE_PID}" || IQRC=$?
@@ -245,7 +245,7 @@ if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
 fi
 
 # ── Run record ────────────────────────────────────────────────────────
-python3 - <<PYEOF
+/usr/bin/python3.11 - <<PYEOF
 import json, os, re, subprocess
 work, runs = "${WORK_DIR}", "${RUNS_DIR}"
 rid, label = "${RUN_ID}", "${LABEL}"

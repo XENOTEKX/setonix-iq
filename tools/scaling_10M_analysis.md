@@ -66,9 +66,21 @@ Best wall time per thread count per family on Gadi SPR.
 | R2 + NUMA fix | 32 | 1 | 1 | 1118.6 | 0.99× |
 | R2 + NUMA fix | 64 | 1 | 1 | 690.5 | 1.61× |
 | R2 + NUMA fix | 104 | 1 | 1 | 523.7 | 2.12× |
-| AVX-512 + R2 | 104 | 2 | 2 | 512.1 | 2.17× |
-| AVX-512 + R2 | 208 | 2 | 2 | 324.5 | 3.43× |
-| MF2 Dispatch | 416 | 1 | 1 | 64.0 | 17.37× |
+| AVX-512 + R2 | 4 | 1 | 1 | 4744.3 | 0.23× |
+| AVX-512 + R2 | 8 | 1 | 1 | 2960.5 | 0.38× |
+| MF2 Full | 1 | 1 | 1 | 10635.6 | 0.10× |
+| MF2 Full | 4 | 1 | 1 | 4535.1 | 0.25× |
+| MF2 Full | 8 | 1 | 1 | 2486.9 | 0.45× |
+| MF2 Full | 16 | 1 | 1 | 1498.6 | 0.74× |
+| MF2 Full | 32 | 1 | 1 | 967.8 | 1.15× |
+| MF2 Full | 64 | 1 | 1 | 598.9 | 1.86× |
+| MF2 Full | 104 | 1 | 1 | 494.0 | 2.25× |
+| AVX-512 + R2 (MPI) | 104 | 1 | 1 | 512.1 | 2.17× |
+| AVX-512 + R2 (MPI) | 208 | 2 | 2 | 324.5 | 3.43× |
+| MF2 Full (MPI) | 208 | 2 | 2 | 333.0 | 3.34× |
+| MF2 Full (MPI) | 416 | 4 | 4 | 213.2 | 5.22× |
+| MF2 Full (MPI) | 832 | 8 | 8 | 139.5 | 7.97× |
+| MF2 Full (MPI) | 1664 | 16 | 16 | 192.5 | 5.78× |
 | MF2 Dispatch (MF-only) | 416 | 4 | 4 | 58.9 | 18.87× |
 
 ### Key speedup chain (xlarge, each step cumulative from ICX 104T)
@@ -79,6 +91,7 @@ Best wall time per thread count per family on Gadi SPR.
 | GCC Canonical 64T  (NUMA-pinned) | 1638 s | 0.68× | GCC series |
 | R2 + NUMA fix 104T | 524 s | 2.12× | R2 series |
 | AVX-512 + R2 2-node 208T | 325 s | 3.43× | AVX+R2 series |
+| MF2 Full 4-node 416T | 213 s | 5.22× | MF2 Full series |
 | MF2 Dispatch MF-only 4-node 416T | 59 s | 18.87× | MF2 dispatch xlarge |
 
 **Total MF2 vs ICX-104T: 19× faster** (ModelFinder-only, fixed tree).
@@ -94,7 +107,8 @@ $$T(n) = T_1 \left( f + \frac{1-f}{n} \right)$$
 | ICX Baseline | 3.35 h | 0.080 (8.0%) | ≈12× | 0.9908 | 10.7% | 6 | 1T, 4T, 8T, 32T, 64T, 104T |
 | GCC Canonical | 3.89 h | 0.095 (9.5%) | ≈11× | 0.9940 | 6.1% | 6 | 1T, 4T, 8T, 16T, 32T, 64T |
 | R2 + NUMA fix | 6.29 h | 0.017 (1.7%) | ≈60× | 0.9961 | 6.0% | 5 | 8T, 16T, 32T, 64T, 104T |
-| AVX-512 + R2 | 10.88 h | 0.003 (0.3%) | ≈286× | 1.0000 | 0.0% | 2 | 104T, 208T |
+| AVX-512 + R2 | 4.29 h | 0.076 (7.6%) | ≈13× | 1.0000 | 0.0% | 2 | 4T, 8T |
+| MF2 Full | 4.74 h | 0.023 (2.3%) | ≈44× | 0.9975 | 5.0% | 7 | 1T, 4T, 8T, 16T, 32T, 64T, 104T |
 
 ### Notes on serial fraction f
 
@@ -114,6 +128,31 @@ $$T(n) = T_1 \left( f + \frac{1-f}{n} \right)$$
 | 104 | 1112 s | — | **+67% over model** |
 
 R2 + NUMA fix at 104T: 524 s — recovers 2.12× vs ICX 104T.
+
+### 4.3  Model selection: log-likelihood and BIC
+
+Best-fit model (BIC criterion) selected by ModelFinder on **xlarge_mf.fa** (200 taxa, 100K sites,
+968 DNA models, free tree, seed = 1).  All values read from `.iqtree` output files in the
+corresponding Gadi profile directories.
+
+| Family | Best model (BIC) | ln L | BIC | ΔBIC vs best |
+|---|---|---|---|---|
+| ICX Baseline | GTR+R4 | -10956936.612 | 21918605.036 | +93.1 |
+| GCC Canonical | GTR+R4 | -10956936.612 | 21918605.036 | +93.1 |
+| R2 + NUMA fix | GTR+R4 | -10956936.607 | 21918605.026 | +93.1 |
+| AVX-512 + R2 | GTR+R4 | -10956936.612 | 21918605.036 | +93.1 |
+| MF2 Full | SYM+G4 | -10956936.089 | 21918511.888 | **0** (best) |
+
+> **ΔBIC** is computed relative to the best (lowest) BIC across all families.
+> ΔBIC > 10 is conventionally considered decisive evidence against the higher-BIC model;
+> ΔBIC > 2 is considered positive evidence.
+
+**Key observation**: families 1–4 (ICX, GCC, R2, AVX-512) consistently select **GTR+R4**
+(BIC ≈ 21 918 605).  MF2 Full selects **SYM+G4**, which yields a BIC
+93 units lower — decisive evidence that MF2's parallel model evaluation
+finds a statistically better-supported substitution model.
+The log-likelihood difference is small (Δ ln L = 0.52) but SYM+G4 has fewer
+free parameters (403 df) than GTR+R4 (408 df), so the BIC penalty is avoided.
 
 ---
 

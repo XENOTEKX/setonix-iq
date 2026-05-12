@@ -119,7 +119,7 @@ fi
 echo "[perfstat] perf_stat.txt produced ($(wc -l < "${STAT_DIR}/perf_stat.txt") lines)"
 
 # Patch the run JSON with the new metrics.
-python3 - << PYEOF
+/usr/bin/python3.11 - << PYEOF
 import json, re, os, subprocess
 
 stat_dir = "${STAT_DIR}"
