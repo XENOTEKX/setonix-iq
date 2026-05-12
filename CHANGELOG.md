@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-05-12 (ao) — mega_dna MF2 Full parity scripts; 3 jobs submitted
+
+### What changed
+
+**Created three CI scripts to run the MF2 Full series on `mega_dna.fa`, giving full
+parity with the `xlarge_mf.fa` MF2 Full series. Three PBS jobs submitted.**
+
+#### Purpose
+
+The `xlarge_mf.fa` MF2 Full series (`non_canonical_label: "MF2 Full · ICX+MPI · R2 · AVX-512"`)
+covers 4 thread counts (64T, 104T, 208T, 416T). The same 4 configurations are now submitted
+for `mega_dna.fa` using the identical `build-mpi-mf2/iqtree3-mpi` binary, so the chart will
+show a second MF2 Full line grouped under the same series label.
+
+#### Dataset context
+
+`mega_dna.fa` is a pathological case for MF2 dispatch overhead:
+- **500 taxa × 100,000 sites** with **99,999 unique patterns** (~0% compression)
+- Reference lnL (seed=1, ICX 104T): −27,328,165.86
+- sha256: `0c8af2d62e214be8b0258393d71d1a0bed15568334de56b89116ae8653f92619`
+
+Zero compression means IQ-TREE cannot amortise pattern lookups across threads.
+This also stresses MF2's LPT model dispatcher because each model candidate operates
+on the full 99,999-pattern column, not a compressed subset. Expect `mega_dna` MF2 Full
+runtimes to be ~2.5× slower than `xlarge_mf` at equivalent thread counts.
+
+#### New scripts
+
+| Script | PBS name | Threads | Nodes | Walltime |
+|---|---|---|---|---|
+| `gadi-ci/run_mega_mf2_full_omp_batch.sh` | `iq-mega-mf2-omp` | 64T + 104T | 1 | 8 h |
+| `gadi-ci/run_mega_mf2_full_2node.sh` | `iq-mega-mf2-2node` | 208T | 2 | 3 h |
+| `gadi-ci/run_mega_mf2_full_4node.sh` | `iq-mega-mf2-4node` | 416T | 4 | 3 h |
+
+Key metadata for all three:
+- **binary:** `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi`
+- **build_tag:** `mf2_full_icx_avx512_r2_lpt`
+- **non_canonical_label:** `"MF2 Full · ICX+MPI · R2 · AVX-512"`
+- **seed:** 1, free tree, full IQ-TREE (no `-m MF`, no `-te`)
+- **`--bind-to none`** on all `mpirun` calls
+
+#### PBS job IDs
+
+| Job | Script | Threads | Notes |
+|---|---|---|---|
+| **168213985** | `run_mega_mf2_full_omp_batch.sh` | 64T + 104T | Q/R |
+| **168213987** | `run_mega_mf2_full_2node.sh` | 208T | Q/R |
+| **168213988** | `run_mega_mf2_full_4node.sh` | 416T | Q/R |
+
+#### Run IDs to expect
+
+- `gadi_mega_dna_64t_mf2_full_np1_seed1`
+- `gadi_mega_dna_104t_mf2_full_np1_seed1`
+- `gadi_mega_dna_208t_mf2_full_np2_seed1`
+- `gadi_mega_dna_416t_mf2_full_np4_seed1`
+
+---
+
 ## 2026-05-12 (an) — Bug fixes: chart series grouping, OMP binding, rc29→um09; jobs resubmitted
 
 ### What changed
