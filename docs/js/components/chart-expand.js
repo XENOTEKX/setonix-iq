@@ -1,7 +1,9 @@
 // web/js/components/chart-expand.js
 // Adds a fullscreen expand button to a .card container. When clicked, opens
 // a modal with a fresh, larger render of the chart. When runsIndex is provided,
-// dataset and thread filter chips are rendered above the chart.
+// dataset, build-variant, and thread filter chips are rendered above the chart.
+
+import { buildFamily, BUILD_FAMILIES } from '../utils.js?v=ba34545de3a7';
 
 const EXPAND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 
@@ -29,26 +31,35 @@ export function attachExpand(card, { title, badge, renderFn, runsIndex }) {
 function buildFilterOptions(runsIndex) {
   const datasets = new Set();
   const threads = new Set();
+  const families = new Set();
   for (const r of runsIndex) {
     if (r.archived) continue;
     if (r.dataset_short) datasets.add(r.dataset_short);
     if (r.threads != null) threads.add(Number(r.threads));
+    families.add(buildFamily(r));
+  }
+  // Order families by the canonical BUILD_FAMILIES list, append any unknown at end.
+  const orderedFamilies = BUILD_FAMILIES.filter(f => families.has(f));
+  for (const f of families) {
+    if (!BUILD_FAMILIES.includes(f)) orderedFamilies.push(f);
   }
   return {
     datasets: [...datasets].sort(),
     threads: [...threads].sort((a, b) => a - b),
+    families: orderedFamilies,
   };
 }
 
-function applyFilters(runsIndex, activeDatasets, activeThreads) {
+function applyFilters(runsIndex, activeDatasets, activeThreads, activeFamilies) {
   return runsIndex.filter(r => {
     if (r.dataset_short && !activeDatasets.has(r.dataset_short)) return false;
     if (r.threads != null && !activeThreads.has(Number(r.threads))) return false;
+    if (activeFamilies && !activeFamilies.has(buildFamily(r))) return false;
     return true;
   });
 }
 
-function renderFilterBar(container, opts, activeDatasets, activeThreads, rerender) {
+function renderFilterBar(container, opts, activeDatasets, activeThreads, activeFamilies, rerender) {
   const makeGroup = (label, items, activeSet) => {
     const group = document.createElement('div');
     group.className = 'cm-filter-group';
@@ -78,15 +89,17 @@ function renderFilterBar(container, opts, activeDatasets, activeThreads, rerende
   };
 
   if (opts.datasets.length > 1) container.appendChild(makeGroup('Dataset', opts.datasets, activeDatasets));
+  if (opts.families.length > 1) container.appendChild(makeGroup('Build variant', opts.families, activeFamilies));
   if (opts.threads.length > 1)  container.appendChild(makeGroup('Threads', opts.threads, activeThreads));
 }
+
 
 /* ── Modal ───────────────────────────────────────────────────── */
 
 function openModal({ title, badge, renderFn, runsIndex }) {
   const hasIndex = Array.isArray(runsIndex) && runsIndex.length > 0;
   const filterOpts = hasIndex ? buildFilterOptions(runsIndex) : null;
-  const showFilters = filterOpts && (filterOpts.datasets.length > 1 || filterOpts.threads.length > 1);
+  const showFilters = filterOpts && (filterOpts.datasets.length > 1 || filterOpts.threads.length > 1 || filterOpts.families.length > 1);
 
   const modal = document.createElement('div');
   modal.className = 'chart-modal';
@@ -116,9 +129,10 @@ function openModal({ title, badge, renderFn, runsIndex }) {
   const body = modal.querySelector('.chart-modal-body');
   const activeDatasets = new Set(filterOpts?.datasets || []);
   const activeThreads  = new Set(filterOpts?.threads  || []);
+  const activeFamilies = new Set(filterOpts?.families || []);
 
   const rerender = () => {
-    const filtered = hasIndex ? applyFilters(runsIndex, activeDatasets, activeThreads) : runsIndex;
+    const filtered = hasIndex ? applyFilters(runsIndex, activeDatasets, activeThreads, activeFamilies) : runsIndex;
     body.innerHTML = '';
     requestAnimationFrame(() => {
       try { renderFn(body, filtered); }
@@ -129,7 +143,7 @@ function openModal({ title, badge, renderFn, runsIndex }) {
   };
 
   if (showFilters) {
-    renderFilterBar(modal.querySelector('.chart-modal-filters'), filterOpts, activeDatasets, activeThreads, rerender);
+    renderFilterBar(modal.querySelector('.chart-modal-filters'), filterOpts, activeDatasets, activeThreads, activeFamilies, rerender);
   }
   rerender();
 }

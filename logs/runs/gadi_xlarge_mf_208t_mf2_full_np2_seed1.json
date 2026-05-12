@@ -4,7 +4,7 @@
   "platform": "gadi",
   "run_type": "profile",
   "label": "xlarge_mf_208t_mf2_full_np2_seed1",
-  "description": "MF2 binary full IQ-TREE (free tree, seed=1) \u2014 np=2 2-node full-node, 2\u00d7104T = 208T",
+  "description": "MF2 binary full IQ-TREE (free tree, seed=1) — np=2 2-node full-node, 2×104T = 208T",
   "timing": [
     {
       "command": "mpirun -np 2 --hostfile hostfile.txt -rf rankfile.txt numactl --localalloc /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s xlarge_mf.fa -T 104 -seed 1",
@@ -56,5 +56,9 @@
     "placement": "mpi_2node_fullnode",
     "nodes": 2,
     "build_tag": "mf2_full_np2_seed1_avx512_r2_lpt"
-  }
+  },
+  "build_tag": "mf2_full_icx_avx512_r2_lpt",
+  "non_canonical": true,
+  "non_canonical_label": "MF2 Full · ICX+MPI · R2 · AVX-512",
+  "canonical": false
 }

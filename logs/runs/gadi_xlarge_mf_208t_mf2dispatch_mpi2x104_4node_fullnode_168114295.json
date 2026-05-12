@@ -18,5 +18,9 @@
   "pbs_job_id": "168114295.gadi-pbs",
   "date": "",
   "env_json": "/scratch/um09/as1708/iqtree3-mf2/results_xlarge_mf2/env_168114295.json",
-  "log": "/scratch/um09/as1708/iqtree3-mf2/results_xlarge_mf2/mf2_xlarge_2r.log"
+  "log": "/scratch/um09/as1708/iqtree3-mf2/results_xlarge_mf2/mf2_xlarge_2r.log",
+  "build_tag": "mf2_dispatch_np2_icx_avx512_r2_lpt",
+  "non_canonical": true,
+  "non_canonical_label": "MF2 Dispatch · np=2 (stub)",
+  "archived": true
 }
