@@ -442,7 +442,7 @@
   },
   "build_tag": "icx_mpi2x104_2node_socket_numa_ft_r2_avx512",
   "non_canonical": true,
-  "non_canonical_label": "ICX \u00b7 MPI 2\u00d7104 2-node socket \u00b7 R2 AVX-512",
+  "non_canonical_label": "AVX-512 + R2",
   "dataset_info": {
     "file": "xlarge_mf.fa",
     "file_size_bytes": 20002400,

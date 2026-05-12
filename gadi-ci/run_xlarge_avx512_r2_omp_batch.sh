@@ -41,7 +41,7 @@ set -euo pipefail
 PROJECT="${PROJECT:-um09}"
 USER_ID="${USER:-$(whoami)}"
 REPO_DIR="${REPO_DIR:-${HOME}/setonix-iq}"
-PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-3.1.2}"
+PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-mf2}"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build-profiling-mpi}"
 IQTREE="${IQTREE:-${BUILD_DIR}/iqtree3-mpi}"
 BENCHMARKS="${PROJECT_DIR}/benchmarks"

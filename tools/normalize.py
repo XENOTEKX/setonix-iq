@@ -194,7 +194,7 @@ def summarize_run(run: dict) -> dict:
         "description": run.get("description", ""),
         "run_type": run.get("run_type", "pipeline"),
         "dataset": dataset,
-        "dataset_short": os.path.basename(dataset) if dataset else None,
+        "dataset_short": os.path.splitext(os.path.basename(dataset))[0] if dataset else None,
         "taxa": taxa,
         "sites": sites,
         "patterns": patterns,
