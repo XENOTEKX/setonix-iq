@@ -1,0 +1,57 @@
+{
+  "run_id": "gadi_xlarge_mf_16t_mf2_full_np1_seed1",
+  "pbs_id": "168179465",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "xlarge_mf_16t_mf2_full_np1_seed1",
+  "description": "MF2 binary full IQ-TREE (free tree, seed=1) — np=1, 16T",
+  "timing": [
+    {
+      "command": "mpirun -np 1 ... /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s xlarge_mf.fa -T 16 -seed 1",
+      "time_s": 1498.561,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -10956936.089,
+      "reported": -10956936.089,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0250.gadi.nci.org.au",
+    "date": "2026-05-12T15:36:52+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 16,
+    "icx": "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2 (2025.3.2.20260112)",
+    "mpi": "mpirun (Open MPI) 4.1.7",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "iqtree_version_tag": "v3.1.2+mf2",
+    "pbs": {
+      "job_id": "168179465.gadi-pbs",
+      "project": "um09",
+      "ncpus": "16"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 1498.561,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf.fa",
+    "threads": 16,
+    "mpi_ranks": 1,
+    "omp_per_rank": 16,
+    "placement": "omp_pin_numa_ft",
+    "build_tag": "mf2_full_np1_seed1_avx512_r2_lpt"
+  },
+  "build_tag": "mf2_full_icx_avx512_r2_lpt",
+  "non_canonical": true,
+  "non_canonical_label": "MF2 Full · ICX+MPI · R2 · AVX-512",
+  "canonical": false
+}

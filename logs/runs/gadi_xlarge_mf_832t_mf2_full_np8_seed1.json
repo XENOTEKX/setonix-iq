@@ -1,0 +1,70 @@
+{
+  "run_id": "gadi_xlarge_mf_832t_mf2_full_np8_seed1",
+  "pbs_id": "168195261",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "xlarge_mf_832t_mf2_full_np8_seed1",
+  "description": "MF2 binary full IQ-TREE (free tree, seed=1) — np=8 8-node full-node, 8×104T = 832T",
+  "timing": [
+    {
+      "command": "mpirun -np 8 --hostfile hostfile.txt -rf rankfile.txt numactl --localalloc /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s xlarge_mf.fa -T 104 -seed 1",
+      "time_s": 139.483,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -10956936.145,
+      "reported": -10956936.145,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0433.gadi.nci.org.au",
+    "date": "2026-05-12T17:55:19+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "icx": "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2 (2025.3.2.20260112)",
+    "mpi": "mpirun (Open MPI) 4.1.7",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "iqtree_version_tag": "v3.1.2+mf2",
+    "nodes": 8,
+    "hosts": [
+      "gadi-cpu-spr-0433.gadi.nci.org.au",
+      "gadi-cpu-spr-0434.gadi.nci.org.au",
+      "gadi-cpu-spr-0435.gadi.nci.org.au",
+      "gadi-cpu-spr-0436.gadi.nci.org.au",
+      "gadi-cpu-spr-0437.gadi.nci.org.au",
+      "gadi-cpu-spr-0438.gadi.nci.org.au",
+      "gadi-cpu-spr-0439.gadi.nci.org.au",
+      "gadi-cpu-spr-0440.gadi.nci.org.au"
+    ],
+    "rankfile": "rank 0=gadi-cpu-spr-0433.gadi.nci.org.au slot=0-103\nrank 1=gadi-cpu-spr-0434.gadi.nci.org.au slot=0-103\nrank 2=gadi-cpu-spr-0435.gadi.nci.org.au slot=0-103\nrank 3=gadi-cpu-spr-0436.gadi.nci.org.au slot=0-103\nrank 4=gadi-cpu-spr-0437.gadi.nci.org.au slot=0-103\nrank 5=gadi-cpu-spr-0438.gadi.nci.org.au slot=0-103\nrank 6=gadi-cpu-spr-0439.gadi.nci.org.au slot=0-103\nrank 7=gadi-cpu-spr-0440.gadi.nci.org.au slot=0-103\n",
+    "pbs": {
+      "job_id": "168195261.gadi-pbs",
+      "project": "um09",
+      "ncpus": "832"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 139.483,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf.fa",
+    "threads": 832,
+    "mpi_ranks": 8,
+    "omp_per_rank": 104,
+    "placement": "mpi_8node_fullnode",
+    "nodes": 8,
+    "build_tag": "mf2_full_np8_seed1_avx512_r2_lpt"
+  },
+  "build_tag": "mf2_full_icx_avx512_r2_lpt",
+  "non_canonical": true,
+  "non_canonical_label": "MF2 Full · ICX+MPI · R2 · AVX-512",
+  "canonical": false
+}

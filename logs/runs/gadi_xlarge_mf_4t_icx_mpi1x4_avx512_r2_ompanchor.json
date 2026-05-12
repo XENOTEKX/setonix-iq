@@ -1,0 +1,56 @@
+{
+  "run_id": "gadi_xlarge_mf_4t_icx_mpi1x4_avx512_r2_ompanchor",
+  "pbs_id": "168116051",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "xlarge_mf_4t_icx_mpi1x4_avx512_r2_ompanchor",
+  "description": "AVX-512+R2 OMP-only audit anchor — np=1, 4T",
+  "timing": [
+    {
+      "command": "mpirun -np 1 ... /scratch/um09/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi -s xlarge_mf.fa -T 4 -seed 1",
+      "time_s": 4744.309,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -10956936.612,
+      "reported": -10956936.612,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0070.gadi.nci.org.au",
+    "date": "2026-05-12T04:31:02+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 4,
+    "icx": "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2 (2025.3.2.20260112)",
+    "mpi": "mpirun (Open MPI) 4.1.7",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "iqtree_version_tag": "v3.1.2",
+    "pbs": {
+      "job_id": "168116051.gadi-pbs",
+      "project": "um09",
+      "ncpus": "4"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 4744.309,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf",
+    "threads": 4,
+    "mpi_ranks": 1,
+    "omp_per_rank": 4,
+    "placement": "omp_pin_numa_ft",
+    "build_tag": "icx_mpi1xN_avx512_r2_ompanchor_v312"
+  },
+  "non_canonical": true,
+  "non_canonical_label": "AVX-512+R2 anchor · np=1 · 4T",
+  "build_tag": "icx_omp_pin_avx512_r2_anchor"
+}

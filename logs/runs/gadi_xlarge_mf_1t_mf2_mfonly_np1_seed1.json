@@ -1,0 +1,60 @@
+{
+  "run_id": "gadi_xlarge_mf_1t_mf2_mfonly_np1_seed1",
+  "pbs_id": "168116162",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "xlarge_mf_1t_mf2_mfonly_np1_seed1",
+  "description": "MF-only MF2 audit — np=1, 1T, AVX-512+R2+LPT, -m MF -te fixed_xlarge_tree.nwk --seed 1",
+  "timing": [
+    {
+      "command": "mpirun -np 1 /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s xlarge_mf.fa -m MF -te fixed_xlarge_tree.nwk -T 1 -seed 1",
+      "time_s": 2725.234,
+      "mf_wall_s": 2704.317,
+      "best_model": "SYM+G4",
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -10956936.093,
+      "reported": -10956936.093,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0070.gadi.nci.org.au",
+    "date": "2026-05-12T03:57:24+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "icx": "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2 (2025.3.2.20260112)",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "iqtree_version_tag": "v3.1.2",
+    "pbs": {
+      "job_id": "168116162.gadi-pbs",
+      "project": "um09",
+      "ncpus": "1"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 2725.234,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf",
+    "threads": 1,
+    "mpi_ranks": 1,
+    "omp_per_rank": 1,
+    "placement": "omp_pin_numa_ft",
+    "protocol": "mf_only_fixed_tree_seed1",
+    "fixed_tree": "fixed_xlarge_tree.nwk",
+    "seed": 1,
+    "build_tag": "mf2_mfonly_np1_seed1_avx512_r2_lpt"
+  },
+  "non_canonical": true,
+  "non_canonical_label": "MF-only MF2 audit · np=1 · 1T · -m MF -te seed=1",
+  "build_tag": "mf2_mfonly_icx_avx512_r2"
+}

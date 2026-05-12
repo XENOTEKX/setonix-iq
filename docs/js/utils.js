@@ -125,6 +125,53 @@ export function platformColour(platform, datasetKey, alpha = 1) {
   return `hsla(${hue}, ${sat}%, ${lum}%, ${alpha})`;
 }
 
+/**
+ * buildFamily — maps a run's build_tag (and fallback non_canonical_label)
+ * to a human-readable patch-family name used for filter chips.
+ *
+ * Returns one of:
+ *   "GCC canonical"      sr_gcc_pin
+ *   "ICX baseline (ref)" sr_icx
+ *   "R2 · NUMA patch"    icx_omp_pin_numa_ft_r2 / *_v312
+ *   "R2 · MPI"           icx_mpi* without avx512
+ *   "AVX-512 + R2"       *avx512*
+ *   "MF2 Full"           mf2_full*
+ *   "MF2 MF-only"        mf2_mfonly*
+ *   "MF2 Dispatch"       mf2_dispatch*  /  nc_label containing "MF-only MF2 audit"
+ *   "AOCC / Setonix"     clang_*, smtoff_pin, baseline_smton
+ *   "Other"              everything else
+ */
+export function buildFamily(r) {
+  const tag = r?.build_tag || '';
+  const nc  = r?.non_canonical_label || '';
+  if (!tag && nc.includes('MF-only MF2')) return 'MF2 MF-only';
+  if (!tag && nc.includes('AVX-512+R2 anchor')) return 'AVX-512 + R2';
+  if (tag === 'sr_gcc_pin') return 'GCC canonical';
+  if (tag === 'sr_icx') return 'ICX baseline (ref)';
+  if (tag.startsWith('mf2_full')) return 'MF2 Full';
+  if (tag.startsWith('mf2_mfonly')) return 'MF2 MF-only';
+  if (tag.startsWith('mf2_dispatch')) return 'MF2 Dispatch';
+  if (tag.includes('avx512') || tag.includes('avx_512') || tag.includes('r2_anchor')) return 'AVX-512 + R2';
+  if (tag.startsWith('icx_omp_pin_numa_ft_r2')) return 'R2 · NUMA patch';
+  if (tag.startsWith('icx_mpi')) return 'R2 · MPI';
+  if (tag.startsWith('clang_') || tag === 'smtoff_pin' || tag === 'baseline_smton') return 'AOCC / Setonix';
+  return 'Other';
+}
+
+// Ordered list of all recognised families for stable chip ordering.
+export const BUILD_FAMILIES = [
+  'GCC canonical',
+  'ICX baseline (ref)',
+  'R2 · NUMA patch',
+  'R2 · MPI',
+  'AVX-512 + R2',
+  'MF2 Full',
+  'MF2 MF-only',
+  'MF2 Dispatch',
+  'AOCC / Setonix',
+  'Other',
+];
+
 export function createEl(tag, attrs = {}, children = []) {
   const el = document.createElement(tag);
   for (const k in attrs) {
