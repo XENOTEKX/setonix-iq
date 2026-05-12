@@ -2,6 +2,106 @@
 
 ---
 
+## 2026-05-12 (an) — Bug fixes: chart series grouping, OMP binding, rc29→um09; jobs resubmitted
+
+### What changed
+
+**Three bugs found and fixed. Two jobs resubmitted and currently running.**
+
+#### Fix 1 — AVX-512+R2 chart: 4T/8T isolated points instead of connected line
+
+The AVX-512+R2 OMP scaling series appeared as disconnected isolated markers on the
+website chart because two separate bugs prevented the runs from sharing a common
+chart series key (`${platform} · ${dataset} · ${non_canonical_label}`):
+
+**Bug A — `non_canonical_label` was per-thread-count** (not a shared family label):
+The 4T and 8T anchor run JSONs had `non_canonical_label` values of
+`"AVX-512+R2 anchor · np=1 · 4T"` and `"AVX-512+R2 anchor · np=1 · 8T"` respectively
+— each run created a separate legend entry instead of grouping together.
+The 208T 2-node run (PBS 167973941) also had `"ICX · MPI 2×104 2-node socket · R2 AVX-512"`.
+
+**Fix:** Set `non_canonical_label: "AVX-512 + R2"` uniformly across all three existing
+AVX-512+R2 run files. After the 16T–104T batch (PBS 168209650) and 4-node NUMA jobs
+complete, all 7 points (4T, 8T, 16T, 32T, 64T, 104T, 208T) will form one connected line.
+
+Files updated:
+- `logs/runs/gadi_xlarge_mf_4t_icx_mpi1x4_avx512_r2_ompanchor.json`
+- `logs/runs/gadi_xlarge_mf_8t_icx_mpi1x8_avx512_r2_ompanchor.json`
+- `logs/runs/gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2.json`
+
+**Bug B — `dataset_short` field included `.fa` extension** for some runs but not
+others (e.g. `"xlarge_mf.fa"` vs `"xlarge_mf"`), splitting what should be one series
+into two by dataset key.
+
+**Fix (`tools/normalize.py`):** Strip file extension when computing `dataset_short`:
+```python
+# Before:
+"dataset_short": os.path.basename(dataset) if dataset else None,
+# After:
+"dataset_short": os.path.splitext(os.path.basename(dataset))[0] if dataset else None,
+```
+
+#### Fix 2 — OMP batch script: `mpirun` CPU-binding prevented multi-thread runs (rc=2)
+
+Job 168209451 (16T/32T/64T/104T AVX-512+R2 OMP batch) failed immediately on all four
+thread counts. IQ-TREE reported `"ERROR: You have specified more threads than CPU cores
+available"` with `rc=2, wall=5s` for each tier. Root cause: `mpirun -np 1` without
+`--bind-to none` pins the single MPI rank to exactly one CPU slot. IQ-TREE detected
+only 1 core available, making `-T 16+` invalid.
+
+**Fix (`gadi-ci/run_xlarge_avx512_r2_omp_batch.sh`):**
+```bash
+# Before:
+mpirun -np 1 \
+# After:
+mpirun -np 1 --bind-to none \
+```
+
+The bad run files from PBS 168209451 were deleted. Job **168209650** resubmitted with
+the fix; currently **Running** (8h, 1 normalsr node, 104 cores).
+
+#### Fix 3 — 4-node NUMA script had wrong project (`rc29` has no allocation)
+
+`gadi-ci/run_xlarge_r2_numa_416t_4node.sh` was written with `#PBS -P rc29` and
+`PROJECT_DIR=.../iqtree3-3.1.2`. The `rc29` project has no active SU allocation.
+The script had never been successfully submitted. The `iqtree3-3.1.2` binary does not
+exist under `um09` scratch.
+
+**Fix:**
+- `#PBS -P rc29` → `#PBS -P um09`
+- `#PBS -l storage=scratch/rc29` → `scratch/um09`
+- `PROJECT` default `rc29` → `um09`
+- `PROJECT_DIR` → `/scratch/um09/${USER}/iqtree3-mf2` (R2+AVX-512 MPI binary built May 9 2026 from `gadi-spr-r2-avx512`, HEAD `abd98764`)
+
+Job **168209769** submitted; currently **Running** (2h, 4 normalsr nodes, 416 cores).
+
+#### Fix 4 — `make dashboard` broken (gitignored paths require `-f`)
+
+`git add docs/ web/data/` failed silently because these paths are in `.gitignore`.
+Added `-f` flag and also staged `logs/runs/` in the Makefile `dashboard` target.
+
+#### Jobs currently running
+
+| Job | Description | Nodes | Cores | Wall | State |
+|---|---|---|---|---|---|
+| 168209650 | AVX-512+R2 OMP: 16T, 32T, 64T, 104T (batch) | 1 | 104 | 8h | **R** |
+| 168209769 | ICX+R2 NUMA 4-node MPI: 416T | 4 | 416 | 2h | **R** |
+
+#### Previous failed jobs
+
+| Job | Failure reason |
+|---|---|
+| 168209451 | `mpirun` CPU-binding (`--bind-to none` missing): all tiers rc=2, wall=5s |
+| 168207037 | Build attempt for AVX-512+R2 MPI binary failed (Eigen3 not found); abandoned — using existing `iqtree3-mf2` binary |
+
+#### Website rebuild
+
+Docs rebuilt with the `dataset_short` and `non_canonical_label` fixes applied
+(v=`b5ce8908d66d` on `modelfinder2`). Both `main` and `modelfinder2` branches updated
+and pushed.
+
+---
+
 ## 2026-05-12 (am) — Log housekeeping: archive MF-only runs + new batched AVX-512+R2 CI scripts
 
 ### What changed
