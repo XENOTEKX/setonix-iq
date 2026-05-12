@@ -1,10 +1,10 @@
 // web/js/pages/runs.js — leaderboard/list with expandable detail
 
-import { store } from '../state.js?v=2b2ef11eee98';
-import { loadRun } from '../data.js?v=2b2ef11eee98';
-import { bindCopyButtons } from '../components/copy-button.js?v=2b2ef11eee98';
-import { escHtml, fmtTime, debounce } from '../utils.js?v=2b2ef11eee98';
-import * as hotspotChart from '../charts/hotspot.js?v=2b2ef11eee98';
+import { store } from '../state.js?v=dbcfa9a76d11';
+import { loadRun } from '../data.js?v=dbcfa9a76d11';
+import { bindCopyButtons } from '../components/copy-button.js?v=dbcfa9a76d11';
+import { escHtml, fmtTime, debounce } from '../utils.js?v=dbcfa9a76d11';
+import * as hotspotChart from '../charts/hotspot.js?v=dbcfa9a76d11';
 
 const TMPL = `
   <div class="page-header">
