@@ -19,6 +19,17 @@
   "date": "",
   "env_json": "/scratch/um09/as1708/iqtree3-mf2/results_xlarge_mf2/env_168000131.json",
   "log": "/scratch/um09/as1708/iqtree3-mf2/results_xlarge_mf2/mf2_xlarge_4r.log",
+  "timing": [
+    {
+      "command": "mpirun -np 4 iqtree3-mpi -s xlarge_mf.fa -T 104 --mf-only",
+      "time_s": 64
+    }
+  ],
+  "env": {
+    "hostname": "gadi",
+    "pbs": { "job_id": "168000131.gadi-pbs" }
+  },
+  "summary": { "pass": 1, "fail": 0, "total_time": 64, "all_pass": true },
   "build_tag": "mf2_dispatch_np4_icx_avx512_r2_lpt",
   "non_canonical": true,
   "non_canonical_label": "MF2 Dispatch · np=4 · 59s",
