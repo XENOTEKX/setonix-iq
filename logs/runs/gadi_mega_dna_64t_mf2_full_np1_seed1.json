@@ -1,0 +1,80 @@
+{
+  "run_id": "gadi_mega_dna_64t_mf2_full_np1_seed1",
+  "pbs_id": "168213985",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "mega_dna_64t_mf2_full_np1_seed1",
+  "description": "Gadi SPR MF2 Full \u2014 single-node 64T OMP on mega_dna.fa",
+  "timing": [
+    {
+      "command": "mpirun -np 1 --bind-to none ... numactl --localalloc /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s mega_dna.fa -T 64 -seed 1",
+      "time_s": 1751.925,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "mega_dna.fa",
+      "status": "pass",
+      "expected": -27328169.308,
+      "reported": -27328169.308,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0367.gadi.nci.org.au",
+    "date": "2026-05-13T00:02:48+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "icx": "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2 (2025.3.2.20260112)",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "os": "Rocky Linux 8.10 (Green Obsidian)",
+    "iqtree_version_tag": "v3.1.2+mf2",
+    "pbs": {
+      "job_id": "168213985.gadi-pbs",
+      "job_name": "iq-mega-mf2-omp",
+      "queue": "normalsr-exec",
+      "project": "um09",
+      "ncpus": "104",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 1751.925,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "mega_dna.fa",
+    "threads": 64,
+    "mpi_ranks": 1,
+    "omp_per_rank": 64,
+    "placement": "omp_pin_numa_ft",
+    "perf_cmd": "numactl --localalloc /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s /scratch/um09/as1708/iqtree3-mf2/benchmarks/mega_dna.fa -T 64 -seed 1 --prefix /scratch/um09/as1708/iqtree3-mf2/gadi-ci/profiles/mega_dna_64t_mf2_full_np1_seed1_168213985/iqtree_perf",
+    "metrics": {
+      "IPC": 1.0815,
+      "cache-miss-rate": 85.88,
+      "branch-miss-rate": 1.2,
+      "L1-dcache-miss-rate": 2.3399,
+      "LLC-miss-rate": 49.8246,
+      "dTLB-miss-rate": 0.0914,
+      "cycles": 284242047,
+      "instructions": 307403236,
+      "cache-references": 698925,
+      "cache-misses": 600237,
+      "branch-instructions": 66720990,
+      "branch-misses": 800645,
+      "L1-dcache-loads": 73772275,
+      "L1-dcache-load-misses": 1726214,
+      "LLC-loads": 108009,
+      "LLC-load-misses": 53815,
+      "dTLB-loads": 31197053,
+      "dTLB-load-misses": 28529,
+      "iTLB-load-misses": 15723
+    }
+  },
+  "build_tag": "mf2_full_icx_avx512_r2_lpt",
+  "non_canonical": true,
+  "non_canonical_label": "MF2 Full \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512"
+}
