@@ -11,10 +11,10 @@
 # Companion to run_xlarge_r2_v312_mpi_2node_fullnode.sh (2 nodes, 2×104).
 #
 # Provenance:
-#   binary:  /scratch/rc29/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi
-#   build:   bootstrap_iqtree_3.1.2_mpi.sh
-#   source:  v3.1.2 (4e91dd61) + R2 patches, icpx + libiomp5, AVX-512
-#   project: rc29
+#   binary:  /scratch/um09/as1708/iqtree3-mf2/build-profiling-mpi/iqtree3-mpi
+#   build:   gadi-spr-r2-avx512 branch (abd98764), icpx + libiomp5, -march=sapphirerapids
+#   source:  v3.1.2 + R2 + AVX-512 patches
+#   project: um09
 #
 # Node layout: 4 × Sapphire Rapids 8470Q (104 cores each = 208 physical
 # cores per 2-socket node × 4 nodes):
@@ -34,21 +34,21 @@
 # build_tag: icx_mpi4x104_4node_fullnode_numa_ft_r2_v312
 #
 #PBS -N iq-xlarge-r2-v312-mpi-4node-fullnode
-#PBS -P rc29
+#PBS -P um09
 #PBS -q normalsr
 #PBS -l ncpus=416
 #PBS -l mem=2000GB
 #PBS -l walltime=02:00:00
 #PBS -l wd
-#PBS -l storage=scratch/rc29
+#PBS -l storage=scratch/um09
 #PBS -j oe
 
 set -euo pipefail
 
-PROJECT="${PROJECT:-rc29}"
+PROJECT="${PROJECT:-um09}"
 USER_ID="${USER:-$(whoami)}"
 REPO_DIR="${REPO_DIR:-${HOME}/setonix-iq}"
-PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-3.1.2}"
+PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-mf2}"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build-profiling-mpi}"
 IQTREE="${IQTREE:-${BUILD_DIR}/iqtree3-mpi}"
 BENCHMARKS="${PROJECT_DIR}/benchmarks"
