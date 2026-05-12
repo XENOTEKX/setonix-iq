@@ -1,0 +1,78 @@
+{
+  "run_id": "gadi_xlarge_mf_8t_icx_omp_pin_numa_ft_r2_v312",
+  "pbs_id": "168136898",
+  "platform": "gadi",
+  "run_type": "profile",
+  "label": "xlarge_mf_8t_icx_omp_pin_numa_ft_r2_v312",
+  "description": "Gadi SPR R2 v3.1.2 \u2014 canonical 1\u00d78 OMP (single node)",
+  "timing": [
+    {
+      "command": "perf stat ... numactl --localalloc /scratch/um09/as1708/iqtree3-3.1.2/build-profiling-clang/iqtree3 -s xlarge_mf.fa -T 8 -seed 1",
+      "time_s": 3096.536,
+      "memory_kb": 0
+    }
+  ],
+  "verify": [
+    {
+      "file": "xlarge_mf.fa",
+      "status": "pass",
+      "expected": -10956936.612,
+      "reported": -10956936.612,
+      "diff": 0.0
+    }
+  ],
+  "env": {
+    "hostname": "gadi-cpu-spr-0428.gadi.nci.org.au",
+    "date": "2026-05-12T11:27:11+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 8,
+    "icx": "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.2 (2025.3.2.20260112)",
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "os": "Rocky Linux 8.10 (Green Obsidian)",
+    "iqtree_version_tag": "v3.1.2",
+    "pbs": {
+      "job_id": "168136898.gadi-pbs",
+      "job_name": "iq-r2-8t",
+      "queue": "normalsr-exec",
+      "project": "um09",
+      "ncpus": "8",
+      "scheduler": "pbs_pro"
+    }
+  },
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 3096.536,
+    "all_pass": true
+  },
+  "profile": {
+    "dataset": "xlarge_mf.fa",
+    "threads": 8,
+    "placement": "omp_pin_numa_ft",
+    "perf_cmd": "numactl --localalloc /scratch/um09/as1708/iqtree3-3.1.2/build-profiling-clang/iqtree3 -s /scratch/um09/as1708/iqtree3-3.1.2/benchmarks/xlarge_mf.fa -T 8 -seed 1 --prefix /scratch/um09/as1708/iqtree3-3.1.2/gadi-ci/profiles/xlarge_mf_8t_icx_omp_pin_numa_ft_r2_v312_168136898/iqtree_perf",
+    "metrics": {
+      "IPC": 1.0444,
+      "cache-miss-rate": 48.2854,
+      "branch-miss-rate": 0.0483,
+      "L1-dcache-miss-rate": 1.7105,
+      "LLC-miss-rate": 45.9663,
+      "dTLB-miss-rate": 0.0347,
+      "cycles": 126779741643415,
+      "instructions": 132409056998913,
+      "cache-references": 2739865465021,
+      "cache-misses": 1322954055108,
+      "branch-instructions": 20187856982762,
+      "branch-misses": 9759781790,
+      "L1-dcache-loads": 56074502371777,
+      "L1-dcache-load-misses": 959142091156,
+      "LLC-loads": 252954531389,
+      "LLC-load-misses": 116273824500,
+      "dTLB-loads": 56094549600915,
+      "dTLB-load-misses": 19473826769,
+      "iTLB-load-misses": 18927605
+    }
+  },
+  "build_tag": "icx_omp_pin_numa_ft_r2_v312",
+  "non_canonical": true,
+  "non_canonical_label": "ICX \u00b7 NUMA patch r2 \u00b7 v3.1.2"
+}
