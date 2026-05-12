@@ -4,7 +4,7 @@
   "platform": "gadi",
   "run_type": "profile",
   "label": "xlarge_mf_1t_mf2_mfonly_np1_seed1",
-  "description": "MF-only MF2 audit — np=1, 1T, AVX-512+R2+LPT, -m MF -te fixed_xlarge_tree.nwk --seed 1",
+  "description": "MF-only MF2 audit \u2014 np=1, 1T, AVX-512+R2+LPT, -m MF -te fixed_xlarge_tree.nwk --seed 1",
   "timing": [
     {
       "command": "mpirun -np 1 /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi -s xlarge_mf.fa -m MF -te fixed_xlarge_tree.nwk -T 1 -seed 1",
@@ -55,6 +55,7 @@
     "build_tag": "mf2_mfonly_np1_seed1_avx512_r2_lpt"
   },
   "non_canonical": true,
-  "non_canonical_label": "MF-only MF2 audit · np=1 · 1T · -m MF -te seed=1",
-  "build_tag": "mf2_mfonly_icx_avx512_r2"
+  "non_canonical_label": "MF-only MF2 audit \u00b7 np=1 \u00b7 1T \u00b7 -m MF -te seed=1",
+  "build_tag": "mf2_mfonly_icx_avx512_r2",
+  "archived": true
 }

@@ -2,6 +2,79 @@
 
 ---
 
+## 2026-05-12 (am) — Log housekeeping: archive MF-only runs + new batched AVX-512+R2 CI scripts
+
+### What changed
+
+**Archived irrelevant MF2 MF-only runs; filled gaps in AVX-512+R2 OMP scaling curve;
+added 4-node 416T ICX+R2 NUMA MPI script to extend the multi-node series.**
+
+#### Archived: MF2 MF-only runs (7 files)
+
+Set `"archived": true` on all 7 `mf2_mfonly_icx_avx512_r2` log files in `logs/runs/`.
+These MF-only runs (1T → 104T) isolate ModelFinder time but do not represent a
+meaningful performance family for the scaling analysis; they are retained for provenance
+but excluded from the website charts via the archive flag.
+
+| File | T | Wall (s) |
+|---|---|---|
+| `gadi_xlarge_mf_1t_mf2_mfonly_np1_seed1.json` | 1 | 2725 |
+| `gadi_xlarge_mf_4t_mf2_mfonly_np1_seed1.json` | 4 | 815 |
+| `gadi_xlarge_mf_8t_mf2_mfonly_np1_seed1.json` | 8 | 527 |
+| `gadi_xlarge_mf_16t_mf2_mfonly_np1_seed1.json` | 16 | 365 |
+| `gadi_xlarge_mf_32t_mf2_mfonly_np1_seed1.json` | 32 | 165 |
+| `gadi_xlarge_mf_64t_mf2_mfonly_np1_seed1.json` | 64 | 104 |
+| `gadi_xlarge_mf_104t_mf2_mfonly_np1_seed1.json` | 104 | 70 |
+
+#### New CI script: `gadi-ci/run_xlarge_avx512_r2_omp_batch.sh`
+
+Batched single-PBS-job script that runs **16T, 32T, 64T, and 104T** in sequence
+on one Gadi normalsr node (104 cores).  Fills the gap in the existing AVX-512+R2
+OMP anchor series between the existing 4T / 8T anchor points and the 2-node 208T
+run (`gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2.json`, already
+complete, 325 s).
+
+- **Binary:** `/scratch/um09/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi`
+  (v3.1.2 + R2 patches, ICX+OpenMPI, AVX-512, single rank `mpirun -np 1`)
+- **Dataset:** `xlarge_mf.fa` (200 taxa × 100,000 sites, 968 models), seed 1
+- **build_tag:** `icx_omp_pin_avx512_r2_anchor`
+- **Estimated walltime:** 16T ≈ 1800 s, 32T ≈ 1000 s, 64T ≈ 620 s, 104T ≈ 500 s → ≈ 4000 s; 8 h requested
+- **Verification:** lnL reported against `BEST SCORE FOUND` in IQ-TREE output;
+  compare against ICX+R2 NUMA canonical 104T baseline (−10,956,936.6) and
+  GCC canonical series (PBS 167520755)
+
+#### Note: AVX-512+R2 208T already covered
+
+`gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2.json` (build_tag
+`icx_mpi2x104_2node_socket_numa_ft_r2_avx512`, 325 s) already exists and provides
+the 208T data point for the AVX-512+R2 family.  No new 208T script needed.
+
+#### ICX+R2 NUMA series: 208T already covered
+
+`gadi_xlarge_mf_208t_icx_mpi2x104_2node_fullnode_numa_ft_r2_v312.json` (342 s)
+provides the 2-node 208T point.  Three other 208T NUMA variants also exist
+(334 s, 325 s, 389 s for different rank/socket placements).
+
+#### New CI script: `gadi-ci/run_xlarge_r2_numa_416t_4node.sh`
+
+**4-node, 4×104 OMP = 416T** MPI run extending the ICX+R2 NUMA OMP series to
+4 nodes.  Patterned after `run_xlarge_r2_v312_mpi_2node_fullnode.sh`.
+
+- **Binary:** `/scratch/rc29/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi`
+  (v3.1.2 + R2 patches, ICX+OpenMPI, AVX-512)
+- **PBS:** `#PBS -l ncpus=416`, 4 nodes, `rc29` project, `normalsr` queue
+- **MPI shape:** `mpirun -np 4 -rf rankfile.txt`, rankfile pins each rank to its
+  full node (slot=0–103); `numactl --localalloc` per rank
+- **build_tag:** `icx_mpi4x104_4node_fullnode_numa_ft_r2_v312`
+- **non_canonical:** `true` (R2+MPI multi-node variant)
+- **Expected range:** ~170–260 s if IQ-TREE scales from the 2-node result (342 s);
+  hypothesis (a)/(b)/(c) same as documented in the 2-node script header
+- **Verification:** lnL must match 1-node canonical 104T (−10,956,936.607) and
+  2-node fullnode result (−10,956,936.607); seed propagation: IQ-TREE MPI sets
+  per-rank seed = 1 + rank_id internally
+
+---
+
 ## 2026-05-12 (al) — Analysis report: professional text cleanup + §4.3 model selection BIC table
 
 ### What changed
