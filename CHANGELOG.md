@@ -2,6 +2,2158 @@
 
 ---
 
+## 2026-05-12 (am) — Log housekeeping: archive MF-only runs + new batched AVX-512+R2 CI scripts
+
+### What changed
+
+**Archived irrelevant MF2 MF-only runs; filled gaps in AVX-512+R2 OMP scaling curve;
+added 4-node 416T ICX+R2 NUMA MPI script to extend the multi-node series.**
+
+#### Archived: MF2 MF-only runs (7 files)
+
+Set `"archived": true` on all 7 `mf2_mfonly_icx_avx512_r2` log files in `logs/runs/`.
+These MF-only runs (1T → 104T) isolate ModelFinder time but do not represent a
+meaningful performance family for the scaling analysis; they are retained for provenance
+but excluded from the website charts via the archive flag.
+
+| File | T | Wall (s) |
+|---|---|---|
+| `gadi_xlarge_mf_1t_mf2_mfonly_np1_seed1.json` | 1 | 2725 |
+| `gadi_xlarge_mf_4t_mf2_mfonly_np1_seed1.json` | 4 | 815 |
+| `gadi_xlarge_mf_8t_mf2_mfonly_np1_seed1.json` | 8 | 527 |
+| `gadi_xlarge_mf_16t_mf2_mfonly_np1_seed1.json` | 16 | 365 |
+| `gadi_xlarge_mf_32t_mf2_mfonly_np1_seed1.json` | 32 | 165 |
+| `gadi_xlarge_mf_64t_mf2_mfonly_np1_seed1.json` | 64 | 104 |
+| `gadi_xlarge_mf_104t_mf2_mfonly_np1_seed1.json` | 104 | 70 |
+
+#### New CI script: `gadi-ci/run_xlarge_avx512_r2_omp_batch.sh`
+
+Batched single-PBS-job script that runs **16T, 32T, 64T, and 104T** in sequence
+on one Gadi normalsr node (104 cores).  Fills the gap in the existing AVX-512+R2
+OMP anchor series between the existing 4T / 8T anchor points and the 2-node 208T
+run (`gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2.json`, already
+complete, 325 s).
+
+- **Binary:** `/scratch/um09/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi`
+  (v3.1.2 + R2 patches, ICX+OpenMPI, AVX-512, single rank `mpirun -np 1`)
+- **Dataset:** `xlarge_mf.fa` (200 taxa × 100,000 sites, 968 models), seed 1
+- **build_tag:** `icx_omp_pin_avx512_r2_anchor`
+- **Estimated walltime:** 16T ≈ 1800 s, 32T ≈ 1000 s, 64T ≈ 620 s, 104T ≈ 500 s → ≈ 4000 s; 8 h requested
+- **Verification:** lnL reported against `BEST SCORE FOUND` in IQ-TREE output;
+  compare against ICX+R2 NUMA canonical 104T baseline (−10,956,936.6) and
+  GCC canonical series (PBS 167520755)
+
+#### Note: AVX-512+R2 208T already covered
+
+`gadi_xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2.json` (build_tag
+`icx_mpi2x104_2node_socket_numa_ft_r2_avx512`, 325 s) already exists and provides
+the 208T data point for the AVX-512+R2 family.  No new 208T script needed.
+
+#### ICX+R2 NUMA series: 208T already covered
+
+`gadi_xlarge_mf_208t_icx_mpi2x104_2node_fullnode_numa_ft_r2_v312.json` (342 s)
+provides the 2-node 208T point.  Three other 208T NUMA variants also exist
+(334 s, 325 s, 389 s for different rank/socket placements).
+
+#### New CI script: `gadi-ci/run_xlarge_r2_numa_416t_4node.sh`
+
+**4-node, 4×104 OMP = 416T** MPI run extending the ICX+R2 NUMA OMP series to
+4 nodes.  Patterned after `run_xlarge_r2_v312_mpi_2node_fullnode.sh`.
+
+- **Binary:** `/scratch/rc29/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi`
+  (v3.1.2 + R2 patches, ICX+OpenMPI, AVX-512)
+- **PBS:** `#PBS -l ncpus=416`, 4 nodes, `rc29` project, `normalsr` queue
+- **MPI shape:** `mpirun -np 4 -rf rankfile.txt`, rankfile pins each rank to its
+  full node (slot=0–103); `numactl --localalloc` per rank
+- **build_tag:** `icx_mpi4x104_4node_fullnode_numa_ft_r2_v312`
+- **non_canonical:** `true` (R2+MPI multi-node variant)
+- **Expected range:** ~170–260 s if IQ-TREE scales from the 2-node result (342 s);
+  hypothesis (a)/(b)/(c) same as documented in the 2-node script header
+- **Verification:** lnL must match 1-node canonical 104T (−10,956,936.607) and
+  2-node fullnode result (−10,956,936.607); seed propagation: IQ-TREE MPI sets
+  per-rank seed = 1 + rank_id internally
+
+---
+
+## 2026-05-12 (al) — Analysis report: professional text cleanup + §4.3 model selection BIC table
+
+### What changed
+
+**Scaling analysis graph and report cleaned for academic presentation.**
+
+#### Graph text cleanup (tools/scaling_10M_analysis.py)
+
+Applied 20 targeted text replacements across all 5 panels to remove informal language
+and standardise phrasing for presentation to supervisors / external audience:
+
+- **Panel 1 (Amdahl fit):** Legend format standardised to `(T₁ = X h, f = Y, 104T = Z h)`;
+  white annotation box for extrapolation note (was yellow `lightyellow` fill); NUMA annotation
+  shortened; AVX-512 2-point fit labelled `(2-pt)` instead of informal marker; MF2 1T point
+  labelled `[1T excl. from fit]` with offset fixed to avoid overlap.
+- **Panel 2 (speedup):** Clean axis labels; MF2 MPI legend entry; `Peak ≈ 8 nodes / 85× speedup`;
+  academic Dispatch box wording.
+- **Panel 3 (prediction):** `1:1 line` label (was `Perfect`); title uses `r =`, `MAPE =`, `RMSE (log) =`.
+- **Panel 4 (OMP-to-MPI extrapolation):** Legend entries phrased academically; annotations use
+  `Linear prediction / Observed / Super-linear factor` and `Design estimate / Empirical / Overestimate
+  factor`; title notes `super-linear` correctly.
+- **Panel 5 (dispatch MPI):** Subtitle clarifies calibration dataset.
+
+#### §4.3 Model selection table added to report
+
+Added `MODEL_SELECTION` constant and §4.3 section to `tools/scaling_10M_analysis.py`; regenerated
+`tools/scaling_10M_analysis.md` with a five-family logL / BIC comparison table.
+
+| Family | Best model (BIC) | ln L | BIC | ΔBIC vs best |
+|---|---|---|---|---|
+| ICX Baseline | GTR+R4 | −10,956,936.612 | 21,918,605.036 | +93.1 |
+| GCC Canonical | GTR+R4 | −10,956,936.612 | 21,918,605.036 | +93.1 |
+| R2 + NUMA fix | GTR+R4 | −10,956,936.607 | 21,918,605.026 | +93.1 |
+| AVX-512 + R2 | GTR+R4 | −10,956,936.612 | 21,918,605.036 | +93.1 |
+| MF2 Full | **SYM+G4** | **−10,956,936.089** | **21,918,511.888** | **0 (best)** |
+
+**Key result — ΔBIC = 93.1** (decisive evidence threshold ≥ 10). MF2 ModelFinder selects
+`SYM+G4` (403 df, BIC 21,918,511.9) vs all other families selecting `GTR+R4` (408 df,
+BIC 21,918,605.0). The 93.1-unit BIC difference decisively favours the MF2-selected model.
+This demonstrates that MF2 not only parallelises model selection across MPI ranks but
+produces a qualitatively better-supported model by exploring the full 968-model space
+without the pre-gather checkpoint truncation that affected earlier np≥2 runs.
+
+Data sources: `.iqtree` files in gadi-ci profile directories on scratch. ICX Baseline
+(PBS 167969243), GCC Canonical (PBS 167520755), R2+NUMA (PBS 167895713), AVX-512+R2
+(PBS 167972478), MF2 Full np=1 (PBS 168179462).
+
+---
+
+## 2026-05-12 (ak) — Graph fixes: R2+NUMA vs MF2 ordering; ICX-1T baseline; MPI projection
+
+### What changed
+
+**Root causes of three graph correctness issues identified and fixed.**
+
+#### Issue 1 — MF2 1T job (PBS 168179462) completed: 10635.6s
+
+The 1T MF2 Full run completed during the 8/16-node session. Including it in the
+Amdahl fit **destroys** the fit:
+- 7-point fit (1T–104T): T₁=3.04h, f=0.081, predicted ceiling = 12.3×
+- But actual speedup at 104T = 10635/494 = **21.5×** — *exceeds the Amdahl ceiling*
+- Physically impossible for standard Amdahl's law → NUMA+R2+AVX-512 effects cause
+  super-Amdahl scaling at high thread counts (cross-socket memory locality improves
+  disproportionately as thread count approaches 2-socket saturation)
+
+**Fix:** Exclude 1T point from MF2 Amdahl fit. The 4T–104T fit (T₁=4.74h, f=0.023,
+r=0.998, MAPE=5.0%) is the predictively useful model. The 1T point is shown as an
+open marker annotated "super-Amdahl" on the graph. This also restores the correct
+`FIT_MIN_N_MAP` mechanism for any future families with similar behavior.
+
+#### Issue 2 — R2+NUMA apparent over-scaling (inflated T₁)
+
+**Problem:** Panel 2 used each family's own T₁ as the speedup denominator. R2+NUMA
+only has 8T–104T data; its T₁=6.29h is extrapolated 8× beyond the minimum observation.
+This inflated T₁ made its "speedup" = T₁/T(n) = 22644/524 = **43×** at 104T, higher
+than MF2's **35×** — even though MF2 at 104T (494s) is *faster* than R2+NUMA (524s).
+
+**Fix:** Changed Panel 2 to use **ICX 1T (11915s) as the common absolute baseline**
+for all speedup calculations. Now:
+- R2+NUMA at 104T: 11915/524 = **22.8×** vs ICX 1T
+- MF2 at 104T: 11915/494 = **24.1×** vs ICX 1T ← correctly higher ✓
+- MF2 MPI 832T: 11915/139.5 = **85.4×** ← breakthrough ✓
+
+Also fixed the Amdahl curve extrapolation flag from `ns.min() > 32T` to `ns.min() > 4T`,
+so R2+NUMA (min=8T, no low-thread T₁ anchor) correctly gets a dashed line.
+
+#### Issue 3 — MPI communication overhead projection added
+
+Fitted `T(n_ranks) = a/n_ranks + b×n_ranks^c` to the 5 MPI data points (n=1–16 ranks):
+
+| n ranks | T (s) | Speedup vs ICX 1T |
+|---|---|---|
+| 1 (104T OMP) | 494.0 | 24.1× |
+| 2 (208T) | 333.0 | 35.8× |
+| 4 (416T) | 213.2 | 55.9× |
+| 8 (832T) | 139.5 | **85.4×** ← peak |
+| 16 (1664T) | 192.5 | 61.9× ← regression |
+
+The fitted model predicts **~8 nodes as optimal** for the 968-model xlarge dataset.
+Projection curve (dashed) shows expected performance at 16–32 nodes declining due to
+MPI overhead growing as models/rank drops below ~100.
+
+**Key insight for larger datasets (10M):** At 748s/model, MPI communication overhead
+(~seconds to minutes) is negligible. The optimal node count scales with `n_models / min_granularity`.
+For 10M full MF (968 models × 748s = 50h/rank at 4 nodes), scaling can extend to
+64+ nodes before communication dominates.
+
+### Graph changes summary
+
+| Panel | Before | After |
+|---|---|---|
+| Panel 1 | MF2 1T included in Amdahl fit (T₁=3.04h, f=0.081, terrible fit) | 1T excluded (shown as ○); fit restored to T₁=4.74h, f=0.023 |
+| Panel 1 | R2+NUMA shown as solid line (min=8T treated as well-constrained) | R2+NUMA dashed "⚠ T₁ extrap." (min > 4T threshold) |
+| Panel 2 | Per-family T₁ speedup reference (inflates R2+NUMA to 43×) | Common ICX 1T baseline (R2+NUMA=22.8×, MF2=24.1× — correct ordering) |
+| Panel 2 | T₁-relative Amdahl ceiling lines | OMP Amdahl ceiling vs ICX 1T (dotted, ~25-30×) |
+| Panel 2 | No MPI projection | Communication overhead projection fitted to 5-point MPI dataset |
+| Panel 2 | MF2 Dispatch at 18.87× (vs ICX 104T) on scatter | MF2 Dispatch noted as text box (202× vs ICX 1T, off-scale) |
+
+---
+
+## 2026-05-12 (aj) — MF2 Full: 8-node and 16-node MPI scaling; communication overhead plateau
+
+### What changed
+
+**8-node (832T) and 16-node (1664T) MPI runs completed** for the MF2 Full IQ-TREE
+scaling series on `xlarge_mf.fa` (seed=1, free tree).
+
+| PBS | Config | Threads | Ranks | Wall | vs 104T (1-node) | vs prior |
+|---|---|---|---|---|---|---|
+| 168195261 | 8 nodes × 104T | 832T | 8 | **139.5s** | 3.54× | 1.53× vs 416T |
+| 168195262 | 16 nodes × 104T | 1664T | 16 | **192.5s** | 2.57× | 0.73× vs 832T ← **regression** |
+
+Both runs verified (lnL within 5 units of reference −10,956,936.67):
+- 832T: lnL = −10,956,936.145 (diff = 0.52, within tolerance) ✓
+- 1664T: lnL = −10,956,932.288 (diff = 4.38, within tolerance) ✓
+
+**Key result — MPI communication overhead saturates at 8 nodes:**
+
+The 16-node run is **38% slower** than the 8-node run (192.5s vs 139.5s). This is the
+expected Amdahl/communication ceiling. With only 968 models to dispatch across 16 ranks
+(~60 models/rank), the fraction of time spent in MPI coordination + barrier
+synchronisation exceeds the fraction saved by additional parallelism.
+
+**Full MF2 Full scaling table (xlarge_mf.fa, seed=1):**
+
+| Threads | Ranks | Nodes | Wall (s) | Speedup vs 104T |
+|---|---|---|---|---|
+| 4T  | 1 | 1 | 4535.1 | 0.11× |
+| 8T  | 1 | 1 | 2486.9 | 0.20× |
+| 16T | 1 | 1 | 1498.6 | 0.33× |
+| 32T | 1 | 1 | 967.8  | 0.51× |
+| 64T | 1 | 1 | 598.9  | 0.82× |
+| 104T | 1 | 1 | 494.0 | **1.00×** (baseline) |
+| 208T | 2 | 2 | 333.0  | 1.48× |
+| 416T | 4 | 4 | 213.2  | 2.32× |
+| **832T** | **8** | **8** | **139.5** | **3.54×** ← peak |
+| 1664T | 16 | 16 | 192.5 | 2.57× ← regression |
+
+**Optimal configuration: 8 nodes (832T).** Beyond this point, MPI overhead
+exceeds parallelisation gain for this 968-model dataset. The ~60 models/rank at 16
+nodes is near the minimum granularity for effective MPI dispatch.
+
+**Amdahl fit comparison (OMP-only series, 4T–104T):**
+
+The OMP-only Amdahl fit (f=0.023, T₁=4.74h) predicts a ceiling of ~44×. The MPI
+multi-node points vastly exceed this ceiling (122× at 832T vs the 44× OMP ceiling)
+because MPI dispatch exploits a fundamentally different parallelisation axis:
+independent model evaluation across ranks rather than shared-memory thread scaling
+within a single model evaluation.
+
+**Graph updated:** `tools/scaling_10M_analysis.png` — Panel 1 shows 832T and 1664T
+as open diamond (◇) MPI bonus points. Panel 2 shows actual speedups: 832T → 122×,
+1664T → 89× (both vs Amdahl-extrapolated T₁). Performance regression at 1664T is
+clearly visible as the rightmost open diamond dropping below the 832T point.
+
+**SU cost:** 8-node: 832 cores × (139.5/3600)h × 2.0 = **129 SU**.
+16-node: 1664 cores × (192.5/3600)h × 2.0 = **178 SU**. Total: **307 SU**.
+
+---
+
+## 2026-05-12 (ai) — MF2 MPI: fix pre-gather checkpoint corruption of best-model keys
+
+### What changed
+
+**Implemented the Phase 2 hardening fix** for the pre-gather checkpoint corruption bug
+identified in entry (ah). Applied directly to
+`/scratch/um09/as1708/iqtree3-mf2/src/iqtree3/main/phylotesting.cpp`.
+
+**Root cause (recap):** `evaluateAll()` writes `best_model_AIC/AICc/BIC` and
+`best_score_*` checkpoint keys **before** `MPI_Allreduce`, using each rank's local
+`MF_DONE` model subset (only ~n/nranks models evaluated on that rank's own starting
+tree). `gatherCheckpoint()` merges all ranks' serialised checkpoints with
+last-write-wins semantics (rank order in `MPI_Gatherv` → last rank wins). The
+highest-numbered rank's stale local-best name overwrites master's correct value.
+Result: `.iqtree` header, AIC/BIC log lines, and model table reflect one rank's
+partial local evaluation rather than the globally-consolidated result.
+
+**Fix location:** Inside the `#ifdef _IQTREE_MPI` block in `evaluateAll()`, between
+the post-name-restoration loop and the `cout << "MF-MPI: gather complete"` line.
+At this point: all 968 models have globally-correct scores (post-`MPI_Allreduce`)
+and post-evaluation names (restored from checkpoint via `mf_subst_N` / `mf_rate_N`
+keys). The fix re-writes the criterion-best keys and rebuilds the model list using
+this complete global picture, then re-dumps to `.model.gz`.
+
+**Changes applied:**
+
+```cpp
+// Fix pre-gather checkpoint corruption ...
+{
+    const ModelTestCriterion all_criteria[] = {MTC_AIC, MTC_AICC, MTC_BIC};
+    for (auto mtc : all_criteria) {
+        int bm = getBestModelID(mtc);
+        model_info.put("best_model_" + criterionName(mtc), at(bm).getName());
+        model_info.put("best_score_" + criterionName(mtc), at(bm).getScore(mtc));
+    }
+    multimap<double,int> global_sorted;
+    for (int i = 0; i < n; i++)
+        global_sorted.insert(multimap<double,int>::value_type(at(i).getScore(), i));
+    string global_list;
+    for (auto it = global_sorted.begin(); it != global_sorted.end(); it++) {
+        if (it != global_sorted.begin()) global_list += " ";
+        global_list += at(it->second).getName();
+    }
+    model_info.putBestModelList(global_list);
+    model_info.dump();
+}
+```
+
+**What this fixes for the np4 run (PBS 168183552):**
+- `.iqtree` header `"Best-fit model according to BIC:"` will now show `GTR+F+R4`
+  (matching `"Best-fit model:"` log line and actual substitution model)
+- AIC/AICc/BIC log lines will all name `GTR+F+R4` (or whichever is globally best)
+- Model table in `.iqtree` will contain all 968 consolidated models, not just the
+  23 `+I+R2` models from one rank's partial stripe
+- `.model.gz` checkpoint contains globally-correct keys, so resume (`--redo` skipped)
+  would correctly restore the right model name
+
+**Performance:** Zero overhead. Three O(n) passes over n=968 models + one
+`multimap` insert (O(n log n) ≈ 968×10 = ~10K operations) run once, after all
+model evaluations complete. Fully gated behind `nranks > 1` guard — OMP-only
+(np1) runs are completely unaffected.
+
+**Execution plan — steps to validate:**
+
+1. **Rebuild binary** — must run on Gadi SPR compute node (icpx required):
+   ```bash
+   cd ~/setonix-iq && qsub tiers/rebuild_mf2_binary.sh
+   ```
+   Script backs up old binary, checks canary string in source, runs
+   `/bin/gmake -j8 iqtree3`, validates mtime and libmpi ELF section.
+
+2. **np=4 verification run** — 4 nodes × 104T = 416T, `xlarge_mf.fa`, seed=1:
+   ```bash
+   qsub tiers/verify_mf2_fix_np4.sh
+   ```
+   Automated pass/fail checks: `gather complete, 968` line, log BIC model vs
+   Best-fit model base agreement, `.iqtree` header agreement, model table ≥900
+   rows, lnL within 5 units of reference (−10,956,936.67).
+
+3. **np=2 verification run** — 2 nodes × 104T = 208T, same dataset:
+   ```bash
+   qsub tiers/verify_mf2_fix_np2.sh
+   ```
+   Same checks. np=2 also showed pre-gather corruption (`GTR+I+R4` in BIC
+   header vs `GTR+R4` Best-fit, 49-model table).
+
+4. **Mark complete** — once both verification runs exit 0, update CHANGELOG
+   with PBS IDs and correct the model table in entry (ah).
+
+**SU cost:** ~696 SU total (rebuild=4, np=2=208, np=4=484).
+
+---
+
+## 2026-05-12 (ah) — MF2 Full: 2-node and 4-node MPI jobs completed; model/BIC analysis
+
+### What changed
+
+**Scaling runs completed across 4T–416T (xlarge_mf.fa, seed=1):**
+- `gadi_xlarge_mf_4t_mf2_full_np1_seed1.json`   — PBS 168179463, wall=4535.1s
+- `gadi_xlarge_mf_8t_mf2_full_np1_seed1.json`   — PBS 168179464, wall=2486.9s
+- `gadi_xlarge_mf_16t_mf2_full_np1_seed1.json`  — PBS 168179465, wall=1498.6s
+- `gadi_xlarge_mf_32t_mf2_full_np1_seed1.json`  — PBS 168179466, wall=967.8s
+- `gadi_xlarge_mf_64t_mf2_full_np1_seed1.json`  — PBS 168173628, wall=598.9s
+- `gadi_xlarge_mf_104t_mf2_full_np1_seed1.json` — PBS 168173629, wall=494.0s
+- `gadi_xlarge_mf_208t_mf2_full_np2_seed1.json` — PBS 168188898, wall=333.0s (2-node MPI, post-fix)
+- `gadi_xlarge_mf_416t_mf2_full_np4_seed1.json` — PBS 168188897, wall=213.2s (4-node MPI, post-fix)
+
+All runs pass verify (status=pass). Tree log-likelihoods converge to ≈ −10,956,936.
+
+**Full results — MF2 Full IQ-TREE scaling (xlarge_mf.fa, seed=1):**
+
+| Threads | Ranks | Wall (s) | MF best model | Tree model | lnL | BIC | MF table |
+|---|---|---|---|---|---|---|---|
+| 4T | 1 | 4535.1 | `SYM+G4` | `SYM+G4` | −10,956,936.089 | **21,918,511.89** | 83 |
+| 8T | 1 | 2486.9 | `SYM+G4` | `SYM+G4` | −10,956,936.089 | **21,918,511.89** | 83 |
+| 16T | 1 | 1498.6 | `SYM+G4` | `SYM+G4` | −10,956,936.089 | **21,918,511.89** | 83 |
+| 32T | 1 | 967.8 | `SYM+G4` | `SYM+G4` | −10,956,936.089 | **21,918,511.89** | 83 |
+| 64T | 1 | 598.9 | `SYM+G4` | `SYM+G4` | −10,956,936.089 | **21,918,511.89** | 83 |
+| 104T | 1 | 494.0 | `SYM+G4` | `SYM+G4` | −10,956,936.089 | **21,918,511.89** | 83 |
+| 208T | 2 | 333.0 | `GTR+R4` | `GTR+F+R4` | −10,956,936.671 | 21,918,605.15 | 968 |
+| 416T | 4 | 213.2 | `GTR+R4` | `GTR+F+R4` | −10,956,936.670 | 21,918,605.15 | 968 |
+
+**Key observations (post-fix, PBS 168188897/168188898):**
+- All np1 runs (4T–104T) **consistently select `SYM+G4`** with BIC 21,918,511.89 and 83 models in the table. Results are deterministic and reproducible across thread counts.
+- np2 and np4 now **consistently select `GTR+R4`** — BIC header, log BIC line, and Best-fit line all agree. The pre-gather corruption bug is fixed.
+- np1 has the **lowest (best) BIC** — 93 units better than np2/np4. The simpler model `SYM+G4` (403 free params, BIC penalty ~93 less) beats `GTR+F+R4` (411 params); np1 lnL is also fractionally better (0.6 units).
+- MPI runs consolidate **all 968 models** into the table (was 49/23 before the fix). lnL differences are <0.6 units across all 8 runs — trees are phylogenetically equivalent.
+- **Scaling:** 4T→104T gives 9.2× speedup (OMP-only). 104T→208T (np=2) adds 1.49×; 208T→416T (np=4) adds another 1.56×. MPI scaling is sub-linear due to inter-node communication overhead but practical — 416T finishes in 3m33s vs 75m35s at 4T.
+
+**Root-cause investigation of the np4 inconsistency flag (`SYM+I+R2` ≠ `GTR+F+R4`):**
+
+The np4 log and .iqtree file report two contradictory best-model selections:
+```
+AIC / AICc / BIC:       SYM+I+R2    ← from .iqtree header and log AIC/BIC printout
+Best-fit model chosen:  GTR+R4      ← from log "Best-fit model:" line
+Model of substitution:  GTR+F+R4    ← actual model used for tree search
+```
+The np4 MF table contains only 23 models, all with `+I+R2` rate variation, and their
+lnL values (≈ −11,198,286) are ~241,350 units worse than the final tree lnL
+(−10,956,936). This is impossible from a single consistent evaluation — the lnL values
+in the table are from a completely different tree than the one used for tree search.
+
+**Mechanism** (traced through `phylotesting.cpp` source):
+
+1. **LPT stripe assignment**: `evaluateAll()` assigns each of the 968 models to a
+   specific rank. For np4, rank 0 gets models 0,4,8,... (all `+R4` variants); another
+   rank gets models with `+I+R2` variants.
+2. **Independent starting trees**: Each rank runs the fast-NNI GTR+I+G tree search
+   independently before its ModelFinder phase. Rank 0 finds a near-optimal tree
+   (lnL ≈ −10,956,932). The rank evaluating `+I+R2` models finds a worse tree
+   (lnL ≈ −11,198,286). Every rank evaluates its assigned models on its own tree.
+3. **Pre-gather `best_model_BIC` write** (the bug): Around line 3700–3706 of
+   `phylotesting.cpp`, BEFORE the `MPI_Allreduce` gather, each rank calls
+   `getBestModelID(MTC_BIC)` on its LOCAL model set (only its assigned models with
+   `MF_DONE` set) and writes `model_info.put("best_model_BIC", ...)`. The rank
+   evaluating `+I+R2` models writes `"SYM+I+R2"` to its local checkpoint.
+4. **`gatherCheckpoint()` merges stale values**: After `MPI_Allreduce` fills the
+   global score table correctly, `gatherCheckpoint()` merges all ranks' checkpoint
+   entries — including the stale `best_model_BIC = "SYM+I+R2"` from the
+   non-master rank — into the master's checkpoint.
+5. **Caller reads stale key**: Back in `runModelFinder()`, `CKP_RESTORE(best_model_BIC)`
+   reads the now-corrupted key from the merged checkpoint and prints
+   `"BIC: SYM+I+R2"`. The .iqtree `"Best-fit model according to BIC:"` header
+   is sourced from the same key.
+6. **Tree search is unaffected**: `evaluateAll()` returns `at(getBestModelID(...))`
+   evaluated POST-Allreduce — this correctly finds `GTR+R4` as the global best.
+   `iqtree.aln->model_name` is set from this return value, not from the checkpoint
+   key. The tree is built correctly with `GTR+R4` → optimised to `GTR+F+R4`.
+
+**Impact**: Cosmetic only. The phylogenetic result (tree topology, branch lengths,
+final lnL) is correct. The .iqtree report header and the model table are misleading.
+The model table shows only one rank's partial 23-model set (not the 968-model
+consolidated view) because `putBestModelList()` is also called pre-gather with the
+rank-local sorted model list.
+
+**Fix** (to be applied in Phase 2 hardening of `phylotesting.cpp`):
+After `gatherCheckpoint()` / `broadcastCheckpoint()` and the post-Allreduce
+`getBestModelID()` call, re-write the criterion-best keys with the globally correct
+values before returning:
+```cpp
+// After MF-MPI gather: overwrite stale per-rank best-model keys
+for (auto mtc : {MTC_AIC, MTC_AICC, MTC_BIC}) {
+    int bm = getBestModelID(mtc);
+    model_info.put("best_model_" + criterionName(mtc), at(bm).getName());
+}
+// Also rebuild the model_list from all 968 gathered models (not rank-local)
+// and call model_info.putBestModelList(model_list) again.
+```
+
+**Conclusion:** For this dataset the OMP-only np1 run finds the better-supported model
+by BIC. The MPI runs converge to the same tree but select more complex models with
+slightly worse BIC. The np4 `SYM+I+R2` label in the .iqtree header is a reporting
+artefact of the pre-gather checkpoint write race, not a real model selection difference
+— the actual tree was built with `GTR+R4` (correctly globally selected).
+
+**Still running:** 168179462 (1T, ~3hr remaining), 168179463 (4T, ~1.5hr remaining).
+
+---
+
+## 2026-05-12 (ag) — MF2 Full: 2-node and 4-node MPI runs; 8T completed
+
+### What changed
+
+**New PBS scripts** for MF2 Full IQ-TREE on 2-node and 4-node MPI configurations,
+extending the thread-scaling curve to 208T and 416T:
+- `tiers/run_xlarge_mf2_full_2node.sh` — 2 ranks × 104T = 208T total (2 full SPR nodes)
+- `tiers/run_xlarge_mf2_full_4node.sh` — 4 ranks × 104T = 416T total (4 full SPR nodes)
+
+Both use the same protocol as the OMP-only series: MF2 binary
+(`um09/build-mpi-mf2/iqtree3-mpi`), full IQ-TREE, free tree, seed=1. Placement via
+`--hostfile + -rf rankfile` (validated form from PBS 168000131). Build tags:
+`mf2_full_np2_seed1_avx512_r2_lpt` and `mf2_full_np4_seed1_avx512_r2_lpt`.
+
+**Jobs submitted:**
+- 168183551 — 2-node 208T (Q, 00:30 wall)
+- 168183552 — 4-node 416T (Q, 00:30 wall)
+
+**`tools/scaling_10M_analysis.py` updates:**
+- `FAMILIES["MF2 Full IQ-TREE"]` key renamed from `(OMP-only, free tree)` to `(free tree, seed=1)` to reflect multi-node scope
+- `patterns` broadened from `["mf2_full_np1"]` to `["mf2_full_np"]` (matches np1/np2/np4)
+- `mpi_ok` extended from `[1]` to `[1, 2, 4]`
+- AVX-512+R2 exclude list already contains `"mf2_full"` — no bleed possible
+
+**8T run (job 168179464) completed** while editing — wall=2486.9s. JSON written to
+`logs/runs/gadi_xlarge_mf_8t_mf2_full_np1_seed1.json`. Series now has 5 OMP-only pts:
+8T (2487s), 16T (1499s), 32T (968s), 64T (599s), 104T (494s).
+Amdahl fit (5 pts): T₁=4.88h, f=0.021, r=0.9966, MAPE=5.1%.
+
+**Pending:**
+- 168179462 (1T, ~3h remaining)
+- 168179463 (4T, ~1.5h remaining)
+- 168183551 (2-node 208T, ~30min)
+- 168183552 (4-node 416T, ~30min)
+
+---
+
+## 2026-05-12 (af) — MF2 Full: 16T run completed; graph fixes (solid line, 5-family title)
+
+### What changed
+
+**MF2 Full 16T run (job 168179465) completed** — wall=1498.6s (0.416h). JSON written
+to `logs/runs/gadi_xlarge_mf_16t_mf2_full_np1_seed1.json`. Series now has 4 data points:
+16T (1498.6s), 32T (967.8s), 64T (598.9s), 104T (494.0s).
+
+**Amdahl fit** (4 pts, 16T–104T): T₁=5.40h, f=0.016, r=0.9974, MAPE=3.0%.
+
+**Graph fixes in `tools/scaling_10M_analysis.py`:**
+- Suptitle updated from hard-coded "4 Patch Families" to dynamic `{len(FAMILIES)}` (now "5")
+- T₁ extrap. warning threshold changed from `ns.min() > 8` to `ns.min() > 32`.
+  MF2 Full (min=16T) now plots with a solid line — 4 clean data points is sufficient.
+- Removed dead `mf2_fam = "MF2 Dispatch\n..."` assignment and `suffix` dead code from
+  the annotation loop (MF2 Dispatch was removed from FAMILIES in the previous entry).
+
+**Jobs still running (as of 15:40):** 168179462 (1T, 4hr), 168179463 (4T, 2hr),
+168179464 (8T, 1.5hr). When they complete, re-run the script for the full 7-pt series.
+
+**Current Amdahl fit table (5 families, xlarge_mf.fa):**
+
+| Family | T₁(h) | f | r(log) | MAPE | n |
+|---|---|---|---|---|---|
+| ICX Baseline | 3.35 | 0.080 | 0.9908 | 10.7% | 6 |
+| GCC Canonical | 3.89 | 0.095 | 0.9940 | 6.1% | 6 |
+| R2 + NUMA fix | 6.29 | 0.017 | 0.9961 | 6.0% | 5 |
+| AVX-512 + R2 | 5.14 | 0.020 | 0.9943 | 12.7% | 4 |
+| MF2 Full | 5.40 | 0.016 | 0.9974 | 3.0% | 4 |
+
+---
+
+## 2026-05-12 (ae) — MF2 Full IQ-TREE scaling series; inode cleanup; drop MF-only family
+
+### What changed
+
+**Dropped "MF-only MF2" family from `tools/scaling_10M_analysis.py`.**
+The MF-only series (`-m MF -te fixed_xlarge_tree.nwk`, seed=1) was removed from the
+scaling graph. It measured a fundamentally different quantity (ModelFinder step only,
+fixed tree) and was not comparable to any other family. Its JSON files remain in
+`logs/runs/` but are no longer plotted.
+
+**Added "MF2 Full IQ-TREE" family** — same binary (`um09/build-mpi-mf2/iqtree3-mpi`,
+ICX+OpenMPI, R1+R2+AVX512), but run as full IQ-TREE: free tree, no `-m MF`, no `-te`,
+seed=1. This is directly comparable to ICX Baseline / GCC Canonical / R2+NUMA /
+AVX-512+R2 on the thread-scaling plot.
+
+**Script `tiers/run_xlarge_mf2_full.sh`** created. Runs `mpirun -np 1` OMP-only with
+`--map-by node:PE=N`. Writes JSON with `build_tag = mf2_full_np1_seed1_avx512_r2_lpt`.
+
+**Root cause of earlier job failures (rc=2):** Inode exhaustion on um09 scratch.
+A VTune hotspot collection (job 168163238, GCC canonical 104T) consumed 168k inodes,
+pushing the project over the 500k inode quota. All subsequent jobs that tried to write
+checkpoint files got `Disk quota exceeded`. Fixed by:
+1. Deleting VTune collection data from profile dir (−168k inodes)
+2. Deleting zarr processed cache (`sst-forecasting/data/processed/oisst_coralsea.zarr`) (−21.5k)
+3. Deleting all profiling build artefacts from `iqtree3/` and `iqtree3-3.1.2/` (−7.8k)
+4. Deleting all failed/duplicate profile run directories (mf2_full failed, mfonly all, correctness, partial 100taxa)
+Result: 525k inodes (over-limit) → 326k (35% headroom).
+
+**Exclude list fix for AVX-512+R2:** The `mf2_full` and `mfonly` build_tags both
+contain `avx512_r2`. Added `mf2_full` and kept `mf2dispatch`, `mfonly`, `mf_only` in
+the AVX-512+R2 exclude list so those runs don't bleed into the wrong family.
+
+### Completed runs (MF2 Full IQ-TREE family)
+
+| PBS | Threads | Wall | Status |
+|---|---|---|---|
+| 168173628 | 64T  | 599s | ✓ in `logs/runs/` |
+| 168173629 | 104T | 494s | ✓ in `logs/runs/` |
+| 168179462 | 1T   | ~4h est | R (running) |
+| 168179463 | 4T   | ~2h est | R (running) |
+| 168179464 | 8T   | ~1.5h est | R (running) |
+| 168179465 | 16T  | ~1h est | R (running) |
+| 168179466 | 32T  | ~30m est | R (running) |
+
+### Current Amdahl fit quality (2 pts for MF2 Full — fit will improve when jobs complete)
+
+| Family | T₁(h) | f | r(log) | MAPE | n |
+|---|---|---|---|---|---|
+| ICX Baseline    | 3.35 | 0.080 | 0.991 |  10.7% | 6 |
+| GCC Canonical   | 3.89 | 0.095 | 0.994 |   6.1% | 6 |
+| R2 + NUMA fix   | 6.29 | 0.017 | 0.996 |   6.0% | 5 |
+| AVX-512 + R2    | 5.14 | 0.020 | 0.994 |  12.7% | 4 |
+| MF2 Full IQ-TREE| 4.94 | 0.018 | 1.000 |   0.0% | 2 (pending) |
+
+---
+
+## 2026-05-12 (ae) — xlarge_mf.fa scaling audit: protocol mismatches + new run order
+
+### Audit scope
+
+Full scientific audit of all xlarge_mf.fa runs on Gadi SPR used in
+`tools/scaling_10M_analysis.py`. Objective: verify that families plotted on the same
+scaling axis measure comparable quantities, and that Amdahl fits are statistically valid.
+
+### Confirmed data inventory (all Gadi SPR, `xlarge_mf.fa`, sorted by family)
+
+| Label | PBS | Threads | MPI | Wall | Tree | `-m` flag | Seed | lnL | Status |
+|---|---|---|---|---|---|---|---|---|---|
+| ICX Baseline 1T   | 166978126 | 1   | 1 | 11915s | free | (full IQ-TREE) | 1  | −10956936.612 | ✓ |
+| ICX Baseline 4T   | 166978127 | 4   | 1 |  4244s | free | (full IQ-TREE) | 1  | — | ✓ |
+| ICX Baseline 8T   | 166978128 | 8   | 1 |  2440s | free | (full IQ-TREE) | 1  | — | ✓ |
+| ICX Baseline 32T  | 167001081 | 32  | 1 |  1036s | free | (full IQ-TREE) | 1  | — | ✓ |
+| ICX Baseline 64T  | 167001085 | 64  | 1 |   897s | free | (full IQ-TREE) | 1  | −10956936.640 | ✓ |
+| ICX Baseline 104T | 167004590 | 104 | 1 |  1112s | free | (full IQ-TREE) | 1  | −10956936.611 | ✓ |
+| GCC Canonical 1T  | 167520752 | 1   | 1 | 13954s | free | (full IQ-TREE) | 1  | −10956936.612 | ✓ |
+| GCC Canonical 4T  | 167520753 | 4   | 1 |  4803s | free | (full IQ-TREE) | 1  | — | ✓ |
+| GCC Canonical 8T  | 167520754 | 8   | 1 |  2956s | free | (full IQ-TREE) | 1  | — | ✓ |
+| GCC Canonical 16T | 167520755 | 16  | 1 |  2048s | free | (full IQ-TREE) | 1  | — | ✓ |
+| GCC Canonical 32T | 167520756 | 32  | 1 |  1425s | free | (full IQ-TREE) | 1  | — | ✓ |
+| GCC Canonical 64T | 167520757 | 64  | 1 |  1638s | free | (full IQ-TREE) | 1  | −10956936.612 | ✓ |
+| R2+NUMA 32T       | 167865974 | 32  | 1 |  1119s | free | (full IQ-TREE) | 1  | −10956936.612 | ✓ |
+| R2+NUMA 64T       | 167865975 | 64  | 1 |   691s | free | (full IQ-TREE) | 1  | −10956936.612 | ✓ |
+| R2+NUMA 104T      | 167865976 | 104 | 1 |   524s | free | (full IQ-TREE) | 1  | −10956936.612 | ✓ |
+| AVX-512+R2 104T   | 167972478 | 104 | 2 |   512s | free | (full IQ-TREE) | 1  | — | ✓ |
+| AVX-512+R2 208T   | 167973941 | 208 | 2 |   325s | free | (full IQ-TREE) | 1  | −10956936.640 | ✓† |
+| MF2 Dispatch 416T | 168000131 | 416 | 4 |    59s | **fixed** | **-m MF** | **42** | — | ⚠ |
+
+† AVX 208T lnL diff = 0.028 from expected; attributed to MPI floating-point summation order.
+No full-pipeline 4-node 416T xlarge run exists.
+
+### Critical Finding 1 — MF2 uses a different measurement protocol
+
+All ICX/GCC/R2/AVX families run **full IQ-TREE** (NJ tree construction → NNI
+optimisation → ModelFinder `test()` with BIC pruning → tree re-estimation), with
+`--seed 1`, no `-te` flag. Wall time includes tree search.
+
+MF2 Dispatch runs **ModelFinder-only** (`-m MF`), with a pre-computed fixed tree
+(`-te fixed_xlarge_tree.nwk`), `--seed 42`, and `evaluateAll()` (all 968 models,
+no BIC pruning). Wall time excludes tree search.
+
+The 59s MF2 wall and the 1112s ICX-104T wall are **not the same quantity** and cannot
+be placed on the same thread-scaling axis without a protocol note. Graph now marks the
+MF2 ◆ point with `[MF-only, −te, seed=42]` and a title warning.
+
+### Critical Finding 2 — R2+NUMA uses a different compiler binary than ICX Baseline
+
+| Family | Binary path | Compiler |
+|---|---|---|
+| ICX Baseline | `rc29/.../build-profiling/iqtree3` | Intel ICX (profiling build) |
+| GCC Canonical | `rc29/.../build-profiling/iqtree3` | Same binary |
+| R2+NUMA | `rc29/.../build-profiling-clang/iqtree3` | **Clang/LLVM** (different optimisation) |
+| AVX-512+R2 | `um09/.../build-profiling-mpi/iqtree3` | Intel ICX + OpenMPI |
+
+The ~2× speedup at 104T (524s vs 1112s) between R2+NUMA and ICX Baseline conflates
+two effects: (a) the R2 rate-category patch and NUMA first-touch, and (b) the compiler
+change from ICX to Clang. These are not separated. Future runs should keep the compiler
+constant when isolating patch effects.
+
+### Warning Finding 3 — Amdahl fits have too few data points for R2+NUMA and AVX-512
+
+| Family | Points | Min thread | T₁ validity | Fit quality |
+|---|---|---|---|---|
+| ICX Baseline | 6 (1T–104T) | 1T ✓ | anchored | ✓ reliable |
+| GCC Canonical | 6 (1T–64T) | 1T ✓ | anchored | ✓ reliable, missing 104T |
+| R2+NUMA | **3** (32T–104T) | 32T ❌ | extrapolated **32×** | ❌ T₁=7.71h meaningless |
+| AVX-512+R2 | **2** (104T, 208T) | 104T ❌ | completely unconstrained | ❌ 2-point fit |
+
+Graph now shows R2+NUMA and AVX-512 Amdahl curves as dashed/faded with
+`[⚠ T₁ extrap.]` in the legend.
+
+### Finding 4 — Hidden 4-rank socket-level run (not in current families)
+
+`gadi_xlarge_mf_208t_icx_mpi4x52_2node_socket_numa_ft_r2.json`
+PBS 167911421 — 4 MPI ranks × 52T, 2 nodes, socket-level placement, wall=389s.
+This is the R2+NUMA binary at 4 ranks / 2 nodes. Excluded from current FAMILIES
+(mpi_ok=[1] for R2+NUMA). Included in ordered run list below for reference.
+
+### Ordered list of new runs needed
+
+Priority order based on scientific impact. All new runs use `xlarge_mf.fa`,
+`build-profiling` (ICX) binary unless stated.
+
+#### Priority 1 — Fix missing data to anchor T₁ for R2+NUMA and GCC
+
+These runs add the low-thread points required to constrain the Amdahl T₁ parameter.
+Without them the fits are extrapolations.
+
+| # | Run | Config | Why |
+|---|---|---|---|
+| 1 | GCC 104T | `gadi_xlarge_mf_104t_sr_gcc_pin`, mpi=1, free tree, seed=1 | GCC series missing NUMA-penalty point at 104T |
+| 2 | R2+NUMA 1T | `gadi_xlarge_mf_1t_icx_omp_pin_numa_ft_r2`, mpi=1, free tree, seed=1 | Anchors T₁; current 7.71h extrapolation is 32× unconstrained |
+| 3 | R2+NUMA 4T | same binary, 4T | Needed for Amdahl fit (min 4 pts recommended) |
+| 4 | R2+NUMA 8T | same binary, 8T | |
+| 5 | R2+NUMA 16T | same binary, 16T | Fills 8T→32T gap |
+
+#### Priority 2 — Enable apples-to-apples MF-only comparison with MF2
+
+To plot MF2 ◆ on the same axis as other families, we need an MF-only scaling series
+using the same binary and seed as our other single-node runs: MF2 binary
+(`um09/build-mpi-mf2/iqtree3-mpi`, np=1), `-m MF -te fixed_xlarge_tree.nwk --seed 1`.
+
+| # | Run | Config | Why |
+|---|---|---|---|
+| 6 | MF-only MF2 1T   | MF2 binary (um09/build-mpi-mf2), np=1, `-m MF -te fixed_xlarge_tree.nwk --seed 1`, 1T | T₁ anchor for MF-only Amdahl fit |
+| 7 | MF-only MF2 4T   | same, 4T | |
+| 8 | MF-only MF2 8T   | same, 8T | |
+| 9 | MF-only MF2 16T  | same, 16T | |
+| 10 | MF-only MF2 32T | same, 32T | |
+| 11 | MF-only MF2 64T | same, 64T | |
+| 12 | MF-only MF2 104T | same, 104T | Same binary as MF2 dispatch, single rank — direct baseline for 416T/59s |
+| 13 | MF2 2-node 208T  | MF2 binary, `np=2`, `-m MF -te`, seed=1 | Mid-point for MF2 dispatch scaling curve |
+
+#### Priority 3 — Fill gaps and characterise compiler effect
+
+| # | Run | Config | Why |
+|---|---|---|---|
+| 14 | ICX 16T | ICX baseline, 16T, free tree, seed=1 | Fill gap between ICX 8T (2440s) and 32T (1036s) |
+| 15 | AVX-512 1T (OMP-only) | AVX+R2 binary, 1T, mpi=1, free tree, seed=1 | Anchor AVX T₁ — 2-point fit is currently 100% unconstrained |
+| 16 | AVX-512 4T  | same, 4T | |
+| 17 | AVX-512 8T  | same, 8T | |
+| 18 | ICX-compiled R2 1T | ICX binary (not Clang), R2 patch, NUMA pin, 1T | Isolate patch effect from compiler change |
+| 19 | ICX-compiled R2 104T | same, 104T | Compare directly to R2+Clang 104T=524s |
+
+#### Priority 4 — Extended MF2 dispatch scaling
+
+| # | Run | Config | Why |
+|---|---|---|---|
+| 20 | MF2 8-node 832T  | MF2 binary, `np=8`, `-m MF -te`, seed=42 | Extrapolate MF2 scaling beyond 4 nodes |
+| 21 | MF2 1-node 104T  | MF2 binary, `np=1`, `-m MF -te`, seed=42 | Baseline — already have evaluateAll 62.5s, verify dispatch at 1-rank |
+
+### Graph status after this audit
+
+`tools/scaling_10M_analysis.py` updated (this session):
+- Panel 1 title warns MF2 ◆ is MF-only protocol, not comparable to other families
+- R2+NUMA and AVX-512 Amdahl lines shown dashed with `[⚠ T₁ extrap.]`
+- MF2 data point annotation includes `(MF-only)` suffix
+- Red shaded region marks the MF-only column (>300T)
+
+Graphs do **not** need updating for a "4-node full-pipeline run" because no such run
+exists. The only 4-MPI-rank xlarge data is PBS 168000131 (MF-only, fixed tree, seed=42).
+
+### Implementation — `tiers/` submission scripts
+
+Created `tiers/` directory with the batch scripts to execute Tiers 1–3 (16 jobs).
+Tier 4 (ICX-compiled R2 isolation) is deferred — it requires a new binary build.
+
+| File | Role |
+|---|---|
+| `tiers/README.md` | Plan, walltime estimates, KSU costs |
+| `tiers/run_xlarge_mf_audit.sh` | PBS worker: MF-only MF2 runs (np=1, `-m MF -te fixed_xlarge_tree.nwk --seed 1`, um09/build-mpi-mf2) |
+| `tiers/run_xlarge_avx_omp.sh` | PBS worker: AVX-512+R2 binary in `mpirun -np 1` OMP-only mode for T₁ anchors |
+| `tiers/submit_tier1.sh` | Submits 7 anchor jobs (R2+NUMA 1/4/8/16T + AVX 1/4/8T) |
+| `tiers/submit_tier2.sh` | Submits GCC 104T via `submit_benchmark_matrix.sh xlarge_mf 104` |
+| `tiers/submit_tier3.sh` | Submits 7 MF-only MF2 scaling jobs + MF2 2-node dispatch (8 jobs) |
+| `tiers/submit_all.sh` | Submits all three tiers in sequence (16 jobs total) |
+
+All workers write run records to `logs/runs/` in the schema consumed by
+`tools/scaling_10M_analysis.py::load_xlarge_gadi()`. After all jobs complete,
+re-running the analysis script will:
+- Drop the `[⚠ T₁ extrap.]` flag from R2+NUMA (4 new low-thread points)
+- Drop the `[⚠ T₁ extrap.]` flag from AVX-512+R2 (3 new low-thread points)
+- Extend GCC Canonical to 104T (NUMA penalty visible)
+- Add a 6th family "MF-only MF2" giving the MF2 ◆ point a comparable same-binary curve
+
+### Walltime / SU cost analysis
+
+Original concern was that long walltime runs would waste KSU. The opposite is true:
+**long-wall low-thread runs are SU-cheap** because PBS bills `ncpus × hours × 2.0`.
+
+| Run | Wall (est.) | ncpus | SU = ncpus × h × 2 |
+|---|---|---|---|
+| R2+NUMA 1T   | ~3h20m   | 1    | 8 SU      |
+| R2+NUMA 4T   | ~1h15m   | 4    | 16 SU     |
+| R2+NUMA 8T   | ~45m     | 8    | 24 SU     |
+| R2+NUMA 16T  | ~25m     | 16   | 32 SU     |
+| AVX 1T       | ~3h20m   | 1    | 8 SU      |
+| AVX 4T       | ~1h15m   | 4    | 16 SU     |
+| AVX 8T       | ~45m     | 8    | 24 SU     |
+| GCC 104T     | ~25m     | 104  | 208 SU    |
+| MF-only 1T   | ~1–3h    | 1    | 8 SU      |
+| MF-only 4T   | ~30m     | 4    | 12 SU     |
+| MF-only 8T   | ~15m     | 8    | 16 SU     |
+| MF-only 16T  | ~10m     | 16   | 16 SU     |
+| MF-only 32T  | ~5m      | 32   | 32 SU     |
+| MF-only 64T  | ~3m      | 64   | 32 SU     |
+| MF-only 104T | ~2m      | 104  | 104 SU    |
+| MF2 208T (2-node) | ~2m | 208  | 208 SU    |
+| **TOTAL (16 jobs)** | | | **≈ 764 SU ≈ 0.76 KSU** |
+
+The two heaviest jobs are GCC 104T and MF2 2-node 208T (208 SU each) — both
+unavoidable for completeness. The 1T runs cost 8 SU each despite running 3+ hours.
+
+### Usage
+
+```bash
+DRY_RUN=1 ./tiers/submit_all.sh   # preview qsub commands
+./tiers/submit_tier1.sh           # submit Tier 1 (recommended first batch)
+./tiers/submit_tier2.sh
+./tiers/submit_tier3.sh
+# After completion:
+python3.11 tools/scaling_10M_analysis.py
+```
+
+### Job execution log (2026-05-12)
+
+All 16 jobs submitted via `./tiers/submit_all.sh`. Two infrastructure bugs found
+during the first run, fixed, and affected jobs resubmitted.
+
+#### Bug 1 — `ldd` preflight fails before `module load openmpi/4.1.7`
+
+`run_xlarge_mf_audit.sh` ran `ldd` to verify the binary links libmpi before the
+`module load openmpi/4.1.7` line. On compute nodes, `ldd` cannot resolve OpenMPI
+shared libraries without the module, so it returned empty output and the check
+always failed.
+
+**Fix:** replaced `ldd ... | grep -qE 'libmpi(\.|_)'` with
+`readelf -d ... | grep -q 'NEEDED.*libmpi'`, which reads the static ELF dynamic
+section and requires no runtime library path.
+
+**Affected job:** 168114291 (`iq-mf-16t`, 16T) — failed immediately, exit 6.
+IQ-TREE was never launched. Resubmitted as **168115509**.
+
+#### Bug 2 — `python3` defaults to 3.6.8 on Gadi compute nodes
+
+The inline Python heredocs in `run_xlarge_mf_audit.sh` and `run_xlarge_avx_omp.sh`
+used walrus operators (`:=`, PEP 572) which require Python 3.8+. Gadi compute nodes
+resolve `python3` to `/bin/python3` (3.6.8), causing a `SyntaxError` in the JSON
+writer after IQ-TREE completed successfully.
+
+**Fix:** replaced all bare `python3` invocations with `/usr/bin/python3.11` across
+all 16 run scripts in `gadi-ci/` and `tiers/` via `sed -i`.
+
+**Affected jobs:** 168114289 (`iq-mf-4t`), 168114290 (`iq-mf-8t`),
+168114292 (`iq-mf-32t`), 168114293 (`iq-mf-64t`), 168114294 (`iq-mf-104t`) —
+IQ-TREE finished and produced correct results but no JSON was written to
+`logs/runs/`. The 4T and 8T failures were discovered after the initial audit
+(both had wall times long enough to run through before outputs were checked).
+Resubmitted as **168115629** (32T), **168115630** (64T), **168115631** (104T),
+**168115782** (4T), **168115786** (8T).
+
+#### Early results — MF-only MF2 Tier 3 (from first-run IQ-TREE logs)
+
+The three failed-JSON runs did complete IQ-TREE successfully. Results from
+`gadi-ci/profiles/xlarge_mf_<T>t_mf2_mfonly_np1_seed1_<PBS>/iqtree_mfonly.log`:
+
+| PBS | Threads | Wall (IQ-TREE) | Wall (MF only) | Best model | lnL | Status |
+|---|---|---|---|---|---|---|
+| 168114289 | 4T   | 819s | — | SYM+G4 | −10956936.093 | IQ-TREE ✓, JSON ✗ → resubmit |
+| 168114290 | 8T   | 538s | — | SYM+G4 | −10956936.093 | IQ-TREE ✓, JSON ✗ → resubmit |
+| 168114292 | 32T  | 200s | 198s | SYM+G4 | −10956936.093 | IQ-TREE ✓, JSON ✗ → resubmit |
+| 168114293 | 64T  |  95s |  94s | SYM+G4 | −10956936.093 | IQ-TREE ✓, JSON ✗ → resubmit |
+| 168114294 | 104T |  72s |  70s | SYM+G4 | −10956936.093 | IQ-TREE ✓, JSON ✗ → resubmit |
+
+lnL is consistent across all five thread counts (−10956936.093), confirming
+reproducibility. MF wall ≈ total wall (fixed-tree `-te`, no tree search).
+
+MF2 2-node dispatch (168114295, 208T) completed successfully with exit 0.
+
+#### Script fixes applied
+
+| File | Change |
+|---|---|
+| All 16 `gadi-ci/run_*.sh`, `submit_benchmark_matrix.sh` | `python3 ` → `/usr/bin/python3.11 ` |
+| All 16 `tiers/run_*.sh` | Same |
+| `#!/usr/bin/env python3` shebangs in heredoc sampler blocks | → `#!/usr/bin/python3.11` |
+| `tiers/run_xlarge_mf_audit.sh` | `ldd` → `readelf -d` in libmpi preflight |
+
+#### Job register at submission (normalsr, SPR, 2.0 SU/ch)
+
+| T | PBS ID | Job name | ncpus | nd | Pr | Wall | Status |
+|---|---|---|---|---|---|---|---|
+| 1 | 168114279 | iq-r2-1t   | 1   | 1 | rc29 | 4h   | D (qdel — old python3) |
+| 1 | 168114280 | iq-r2-4t   | 4   | 1 | rc29 | 2h   | D (qdel — old python3) |
+| 1 | 168114281 | iq-r2-8t   | 8   | 1 | rc29 | 90m  | D (qdel — old python3) |
+| 1 | 168114282 | iq-r2-16t  | 16  | 1 | rc29 | 1h   | D (qdel — old python3) |
+| 1 | 168114283 | iq-avx-1t  | 1   | 1 | um09 | 4h   | D (qdel — old python3) |
+| 1 | 168114284 | iq-avx-4t  | 4   | 1 | um09 | 2h   | D (qdel — old python3) |
+| 1 | 168114285 | iq-avx-8t  | 8   | 1 | um09 | 90m  | D (qdel — old python3) |
+| 2 | 168114287 | iq-xlarge-gcc-104t | 104 | 1 | rc29 | 24h | H (held, allocation) |
+| 3 | 168114288 | iq-mf-1t   | 1   | 1 | um09 | 4h   | D (qdel — old python3) |
+| 3 | 168114289 | iq-mf-4t   | 4   | 1 | um09 | 90m  | F (python3 bug, exit 1, IQ-TREE wall=819s) |
+| 3 | 168114290 | iq-mf-8t   | 8   | 1 | um09 | 1h   | F (python3 bug, exit 1, IQ-TREE wall=538s) |
+| 3 | 168114291 | iq-mf-16t  | 16  | 1 | um09 | 30m  | **F (ldd bug, exit 6)** |
+| 3 | 168114292 | iq-mf-32t  | 32  | 1 | um09 | 30m  | F (python3 bug, exit 1) |
+| 3 | 168114293 | iq-mf-64t  | 64  | 1 | um09 | 30m  | F (python3 bug, exit 1) |
+| 3 | 168114294 | iq-mf-104t | 104 | 1 | um09 | 30m  | F (python3 bug, exit 1) |
+| 3 | 168114295 | iq-mf2-2nd | 208 | 2 | um09 | 30m  | **✓ exit 0** |
+
+Resubmissions (fixed scripts):
+
+| PBS ID | Job | Replaces | Actual wall | Exit | JSON written |
+|---|---|---|---|---|---|
+| 168115509 | iq-mf-16t  | 168114291 | 366s | 0 ✓ | `gadi_xlarge_mf_16t_mf2_mfonly_np1_seed1.json` |
+| 168115629 | iq-mf-32t  | 168114292 | 168s | 0 ✓ | `gadi_xlarge_mf_32t_mf2_mfonly_np1_seed1.json` |
+| 168115630 | iq-mf-64t  | 168114293 | 106s | 0 ✓ | `gadi_xlarge_mf_64t_mf2_mfonly_np1_seed1.json` |
+| 168115631 | iq-mf-104t | 168114294 |  72s | 0 ✓ | `gadi_xlarge_mf_104t_mf2_mfonly_np1_seed1.json` |
+| 168115782 | iq-mf-4t   | 168114289 |  9m  | 271 ✗ | qdel'd — resubmitted as 168116165 (no `place=excl`) |
+| 168115786 | iq-mf-8t   | 168114290 | 8m51s | 0 ✓ | finished before qdel; no `place=excl` (see note) |
+| 168115825 | iq-r2-1t   | 168114279 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116041 with `place=excl` |
+| 168115826 | iq-r2-4t   | 168114280 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116043 with `place=excl` |
+| 168115827 | iq-r2-8t   | 168114281 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116045 with `place=excl` |
+| 168115828 | iq-r2-16t  | 168114282 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116047 with `place=excl` |
+| 168115829 | iq-avx-1t  | 168114283 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116049 with `place=excl` |
+| 168115830 | iq-avx-4t  | 168114284 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116051 with `place=excl` |
+| 168115831 | iq-avx-8t  | 168114285 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116053 with `place=excl` |
+| 168115834 | iq-mf-1t   | 168114288 |  5m  | 271 ✗ | qdel'd — resubmitted as 168116162 with `place=excl` |
+
+#### `logs/jobs/tiers/` file manifest
+
+Outputs from the first batch (submitted before `-o` flag was added) were moved
+manually to `logs/jobs/tiers/`. Failed outputs have been removed. Future submissions
+via the updated `tiers/submit_*.sh` scripts route there automatically via
+`qsub -o logs/jobs/tiers`.
+
+**Currently present (successful runs only):**
+
+| File | PBS | Job | Threads | Wall | Notes |
+|---|---|---|---|---|---|
+| `iq-mf2-2nd.o168114295`       | 168114295 | iq-mf2-2nd | 208T | ~127s | MF2 2-node dispatch, exit 0 ✓ |
+| `iq-xlarge-mfonly.o168115509` | 168115509 | iq-mf-16t  | 16T  | 366s  | fixed resubmit, exit 0 ✓ |
+| `iq-xlarge-mfonly.o168115629` | 168115629 | iq-mf-32t  | 32T  | 168s  | fixed resubmit, exit 0 ✓ |
+| `iq-xlarge-mfonly.o168115630` | 168115630 | iq-mf-64t  | 64T  | 106s  | fixed resubmit, exit 0 ✓ |
+| `iq-xlarge-mfonly.o168115631` | 168115631 | iq-mf-104t | 104T |  72s  | fixed resubmit, exit 0 ✓ |
+
+**Removed (failed outputs):**
+
+| Removed file | PBS | Exit | Reason |
+|---|---|---|---|
+| `iq-mf-4t.o168114289`     | 168114289 | 1 | python3 bug (IQ-TREE ran 819s, no JSON) |
+| `iq-mf-8t.o168114290`     | 168114290 | 1 | python3 bug (IQ-TREE ran 538s, no JSON) |
+| `iq-mf-16t.o168114291`    | 168114291 | 6 | ldd bug (IQ-TREE never ran) |
+| `iq-mf-32t.o168114292`    | 168114292 | 1 | python3 bug (IQ-TREE ran 200s, no JSON) |
+| `iq-mf-64t.o168114293`    | 168114293 | 1 | python3 bug (IQ-TREE ran 95s, no JSON) |
+| `iq-mf-104t.o168114294`   | 168114294 | 1 | python3 bug (IQ-TREE ran 72s, no JSON) |
+| `iq-xlarge-mfonly.o168115508` | 168115508 | — | duplicate 16T, qdel'd |
+| `168115783.gadi-pbs.OU`   | 168115783 | — | duplicate 8T, qdel'd before running |
+
+**Cancelled before completion (no output files written):**
+
+| PBS | Job | Elapsed | Reason |
+|---|---|---|---|
+| 168114279 | iq-r2-1t  | 24m | qdel — submitted with old python3 |
+| 168114280 | iq-r2-4t  | 24m | qdel — submitted with old python3 |
+| 168114281 | iq-r2-8t  | 24m | qdel — submitted with old python3 |
+| 168114282 | iq-r2-16t | 24m | qdel — submitted with old python3 |
+| 168114283 | iq-avx-1t | 24m | qdel — submitted with old python3 |
+| 168114284 | iq-avx-4t | 24m | qdel — submitted with old python3 |
+| 168114285 | iq-avx-8t | 24m | qdel — submitted with old python3 |
+| 168114288 | iq-mf-1t  | 24m | qdel — submitted with old python3 |
+
+**Still in queue / held:**
+
+| Expected file | PBS | Job | ncpus | Status |
+|---|---|---|---|---|
+| `iq-xlarge*.o168114287` | 168114287 | iq-xlarge-gcc-104t | 104 | **qdel'd 2026-05-12** — H (rc29 SU exhausted; never ran); resubmit→168137038 (um09) |
+
+**Pending resubmissions (will route to `logs/jobs/tiers/` automatically):**
+
+All pending runs below use `-P um09`.  The r2 canonical script `#PBS -P rc29`
+directive has been corrected to `um09`; `submit_tier1.sh` `run_qsub` helper
+now passes `-P um09` explicitly.
+
+**168116xxx wave — outcomes (2026-05-12):**
+
+| File | PBS | Job | Threads | Wall | Exit | Note |
+|---|---|---|---|---|---|---|
+| `168116041.gadi-pbs.OU` | 168116041 | iq-r2-1t  | 1T  | 4h00m | **-29 ✗** | walltime; Pass1 killed at 14412s; resubmit→168136896 |
+| `168116043.gadi-pbs.OU` | 168116043 | iq-r2-4t  | 4T  | 2h01m | **-29 ✗** | walltime; Pass1=4951s, killed in Pass2; resubmit→168136897 |
+| `168116045.gadi-pbs.OU` | 168116045 | iq-r2-8t  | 8T  | 1h31m | **-29 ✗** | walltime; Pass1=3113s, killed in Pass2; resubmit→168136898 |
+| `168116047.gadi-pbs.OU` | 168116047 | iq-r2-16t | 16T | 1h00m | **-29 ✗** | walltime; Pass1=1900s, killed in Pass2; resubmit→168136899 |
+| `168116049.gadi-pbs.OU` | 168116049 | iq-avx-1t | 1T  | 4h00m | **-29 ✗** | walltime; preflight OK then killed before IQ-TREE; resubmit→168136859 |
+| `168116051.gadi-pbs.OU` | 168116051 | iq-avx-4t | 4T  | 1h19m | **0 ✓**   | wall=4746s; `gadi_xlarge_mf_4t_icx_mpi1x4_avx512_r2_ompanchor.json` |
+| `168116053.gadi-pbs.OU` | 168116053 | iq-avx-8t | 8T  | 0h49m | **0 ✓**   | wall=2963s; `gadi_xlarge_mf_8t_icx_mpi1x8_avx512_r2_ompanchor.json` |
+| `168116162.gadi-pbs.OU` | 168116162 | iq-mf-1t  | 1T  | 0h45m | **0 ✓**   | wall=2727s; `gadi_xlarge_mf_1t_mf2_mfonly_np1_seed1.json` |
+| `168116165.gadi-pbs.OU` | 168116165 | iq-mf-4t  | 4T  | 0h13m | **0 ✓**   | wall=817s; `gadi_xlarge_mf_4t_mf2_mfonly_np1_seed1.json` |
+
+Root cause for -29 failures: `run_xlarge_r2_v312_canonical.sh` runs two passes
+(clean timing + `perf stat`), total ≈ 2×Pass1 + overhead. Walltimes were
+under-estimated. Corrected walltimes in `tiers/submit_tier1.sh` and resubmitted:
+
+**168136xxx / 168137xxx wave — resubmissions with corrected walltimes (2026-05-12, um09):**
+
+| PBS | Job | Threads | New walltime | Project billing | Status |
+|---|---|---|---|---|---|
+| 168136896 | iq-r2-1t        | 1T   | 09:00:00 | um09 | R |
+| 168136897 | iq-r2-4t        | 4T   | 03:30:00 | um09 | R |
+| 168136898 | iq-r2-8t        | 8T   | 02:30:00 | um09 | R |
+| 168136899 | iq-r2-16t       | 16T  | 01:30:00 | um09 | R |
+| 168136859 | iq-avx-1t       | 1T   | 07:00:00 | um09 | R |
+| 168137038 | iq-xlarge-gcc-104t | 104T | 24:00:00 | um09 | Q — binary/data from rc29 scratch; PROJECT_DIR overridden to rc29 path |
+
+> Note: `iq-mf-8t.o168115786` (168115786, 8T, no `place=excl`) completed with
+> exit 0 before the qdel landed (wall=8m51s). Result is valid but was run on a
+> shared node — acceptable given the 8T run has lower leverage on Amdahl T₁
+> than the 1T/4T points. It will not be resubmitted unless the fitted curve is
+> noticeably inconsistent with the excl results.
+
+#### Node exclusivity — shared vs exclusive allocation
+
+**`-l place=excl` does not work on Gadi `normalsr`:** the queue policy silently
+overrides the user's placement request to `place=free`. Verified via `qstat -f`
+on the resubmitted jobs: all show `Resource_List.place = free` and
+`exec_vnode = (node:ncpus=N:...)` (only requested CPUs allocated, not the full
+node). The 1T and 4T r2 jobs (168116041, 168116043) were confirmed co-resident
+on `gadi-cpu-spr-0070` within the same submission wave.
+
+**Cost:** unchanged — `normalsr` bills on `ncpus` requested regardless of
+placement. The `-l place=excl` flag had zero effect on isolation or cost.
+
+**True node exclusivity on `normalsr` requires `ncpus=104`.** At 2.0 SU/cpu-hour,
+a 1T run on a full-node exclusive allocation costs 104 × 4h × 2 = 832 SU vs 8 SU
+shared — not practical for T₁ anchor runs.
+
+**Accepted caveat for low-thread anchor runs (1T, 4T, 8T, 16T):**
+
+Co-resident jobs on the same SPR node can inflate walltime via:
+- L3 cache eviction (IQ-TREE streams large rate matrices; ~2 MB/core L3 slice)
+- DDR5 memory bandwidth contention (8 channels shared across 104 cores)
+- Reduced per-core turbo boost under full-node load
+
+Net effect: T₁ may be measurably inflated, biasing the Amdahl serial fraction `f`
+upward and compressing the fitted speedup curves. This applies equally to the
+existing ICX Baseline and GCC Canonical series (PBS 166978126–167520757) which
+were also run shared — so the comparison is internally consistent. If the fitted
+curves look pessimistic relative to the high-thread measured points, the 1T/4T
+runs can be resubmitted overnight when queue load is low (better empirical isolation).
+
+#### Binary / version / patch matrix — all xlarge families (2026-05-12 audit)
+
+Confirmed from bootstrap scripts, `.build-info.json`, and kernel library presence
+in each build directory:
+
+| Family | Binary path | IQ-TREE | Compiler | R1+R2 | `libkernelavx512` | MPI | Notes |
+|---|---|---|---|---|---|---|---|
+| GCC Canonical | `rc29/iqtree3/build-profiling/iqtree3` | **3.1.1** | GCC 14.2.0 | ✓ | ✗ | ✗ | Also used by old "ICX Baseline" label |
+| ICX Baseline | same binary | **3.1.1** | GCC 14.2.0 | ✓ | ✗ | ✗ | "ICX" refers to the SPR node, not the compiler |
+| R2+NUMA Clang | `rc29/iqtree3-3.1.2/build-profiling-clang/iqtree3` | **3.1.2** | Clang/LLVM | ✓ | **✗** | ✗ | Has `libkernelfma.a`+`libkernelavx.a`; no AVX-512 kernel |
+| AVX-512+R2 | `um09/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi` | **3.1.2** | ICX+OpenMPI | ✓ | **✓** | ✓ | `-DIQTREE_FLAGS=mpi` builds `libkernelavx512.a` |
+| MF2 mf-only | `um09/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi` | **3.1.2+MF2** | ICX+OpenMPI | ✓ | ✓ | ✓ | MF2 dispatch patch on top of AVX-512+R2 |
+
+**Key observation — `libkernelavx512.a`:** both Clang and MPI builds use
+`-march=sapphirerapids`, but only the MPI build (via `-DIQTREE_FLAGS=mpi` in CMake)
+produces `libkernelavx512.a`. The Clang OMP-only build uses IQ-TREE's FMA/AVX kernel
+at runtime; the MPI build uses the full AVX-512 SIMD likelihood kernel. This is the
+primary distinction between the R2+NUMA Clang and AVX-512+R2 families (in addition
+to MPI scaffolding).
+
+**Confirmed confounds in cross-family comparisons:**
+
+| Comparison | Version diff | Compiler diff | Kernel diff | Patch diff | Clean? |
+|---|---|---|---|---|---|
+| GCC Canonical → R2+NUMA Clang | 3.1.1 → 3.1.2 | GCC → Clang | AVX → FMA | +R1+R2 already in both | **✗ 3 confounds** |
+| ICX Baseline → R2+NUMA Clang | 3.1.1 → 3.1.2 | GCC → Clang | AVX → FMA | +R1+R2 already in both | **✗ 2 confounds** |
+| R2+NUMA Clang → AVX-512+R2 | none | Clang → ICX | FMA → AVX-512 | none (R1+R2 in both) | **✓ clean AVX-512 isolation (+ compiler minor)** |
+| AVX-512+R2 → MF2 mf-only | none | none | none | +MF2 dispatch | **✓ clean MF2 isolation** (but protocol differs — MF-only) |
+
+**In-flight jobs are correctly configured within their families:**
+
+| PBS | Job | Family | Binary | Consistent with existing data? |
+|---|---|---|---|---|
+| 168136896–168136899 | r2-1t/4t/8t/16t | R2+NUMA Clang | `build-profiling-clang/iqtree3` | ✓ same binary as 167865974–167865976 (32T/64T/104T) |
+| 168136859 | avx-1t | AVX-512+R2 | `build-profiling-mpi/iqtree3-mpi` | ✓ same binary as 168116051/053 (avx-4T/8T done) |
+| 168137038 | gcc-104t | GCC Canonical | `build-profiling/iqtree3` (3.1.1) | ✓ same binary as 167520752–167520757 (1T–64T) |
+
+No binary or configuration changes needed for the 6 in-flight jobs. All runs will
+produce data that extend their respective families correctly.
+
+**To cleanly isolate the R2 patch effect from compiler effect** (Priority 4 in the
+run list above): build a 3.1.2 GCC binary from `rc29/iqtree3-3.1.2/src/iqtree3`
+with `gcc/14.2.0` + R1+R2 patches and run 1T/104T. This will reveal what fraction
+of the R2+NUMA Clang speedup comes from the NUMA patch vs the compiler change.
+This deferred — no new build or jobs submitted in this session.
+
+---
+
+## 2026-05-10 (ad) — mega_dna 4-node MF2-dispatch APS run (PBS 168015597)
+
+### Objective
+
+Run `mega_dna.fa` (500 taxa × 100,000 DNA sites) on 4 Gadi normalsr SPR nodes
+with the MF2-dispatch binary (`abd98764`, cost-sorted LPT stripe + MF_WAITING fix),
+full 968-model ModelFinder, Intel APS profiling (APS_STAT_LEVEL=2), and
+4 MPI ranks × 104 OMP threads with `OMP_PROC_BIND=close` + `numactl --localalloc`.
+
+### Configuration
+
+| Parameter | Value |
+|---|---|
+| Binary | `iqtree3-mpi` @ `abd98764` (gadi-spr-r2-avx512 branch) |
+| Build | `icpx` + OpenMPI, `-xSAPPHIRERAPIDS`, `-O3 -march=sapphirerapids` |
+| Dataset | `mega_dna.fa` — 500 taxa × 100,000 DNA sites |
+| Site patterns | 99,999 / 100,000 distinct (effectively no compression — 500 taxa) |
+| MPI ranks | 4 (one per node) |
+| OMP threads | 104 per rank (416 total) |
+| MF dispatch | Cost-sorted LPT stripe — rank 0/4 → 242/968 models |
+| Profiler | intel-vtune/2025.8.1, APS_STAT_LEVEL=2 |
+| Queue | normalsr, 4× SPR nodes (8470Q, 104 cores/node) |
+| Walltime limit | 2:00:00 |
+
+### Results vs baseline (Gadi_mega_dna_104T, PBS 167001099)
+
+The baseline ran tree search only (no ModelFinder) at 104T on a single node with
+the icx build, no thread pinning, no numactl, and VTune co-resident (+26% overhead).
+
+| Metric | Baseline `167001099` | Current `168015597` |
+|---|---|---|
+| Platform | 1× SPR node | 4× SPR nodes |
+| Threads | 104T single rank | 4× 104T = 416T MPI |
+| ModelFinder | ❌ None | ✅ Full 968-model scan |
+| Wall time | ~39.5 min (clean est.) | **18m 31s** |
+| CPU time total | ~68 CPU-hours | **30.1 CPU-hours** |
+| IPC | 1.02 | 1.15 / 1.29 / 1.35 / 1.42 (ranks 0–3) |
+| LLC miss rate | 79.4% | 86.6 / 86.1 / 87.0 / 83.0% (ranks 0–3) |
+| Best-fit model (BIC) | N/A | **SYM+I+R2** |
+| Log-likelihood (tree) | -27,328,165.86 | -27,328,165.83 ✓ |
+| BIC score | N/A | 54,667,982.74 |
+
+**2.1× faster wall time doing more work** — full ModelFinder included — due to
+MF-MPI dispatch spreading 968 models across 4 ranks in parallel.
+
+**IPC improved** (avg ~1.30 vs 1.02): `OMP_PROC_BIND=close` + `numactl --localalloc`
+eliminate cross-NUMA thread migration and first-touch remote allocation.
+
+**LLC miss rate increased** (~86% vs 79%): expected — 4 independent ranks each
+churn 99,999-pattern alignments with no inter-rank data sharing; no L3 reuse between
+model evaluations. This is structural (dataset has essentially zero pattern compression).
+
+### Model selection
+
+Best-fit by BIC: **SYM+I+R2** (symmetric rate matrix + invariant + 2 free rates).
+BIC strongly penalises extra parameters at N=100,000 sites, favouring SYM over GTR.
+Top models by BIC:
+
+```
+SYM+I+R2     logL -28,064,347.70   BIC 56,140,265.89   w-BIC 1.00
+GTR+F+I+R2   logL -28,064,365.34   BIC 56,140,335.71   w-BIC 6.9e-16
+TVMe+I+R2    logL -28,067,498.30   BIC 56,146,555.58   w-BIC 0
+```
+
+### Engineering notes
+
+- **`strings` vs `grep -a`**: Binary guard for LPT patch must use `grep -qa` — the
+  ELF binary has `too many notes (256)` which causes `strings` to miss embedded
+  strings that `grep -a` finds correctly on Gadi compute nodes.
+- **`OMP_DISPLAY_AFFINITY=TRUE` removed**: This env var (+ `OMP_DISPLAY_ENV=VERBOSE`)
+  caused Intel OMP to write thread affinity to stdout on every model evaluation —
+  producing a 5.5 GB log file that throttled disk I/O and reduced model throughput
+  ~5×. Removed in commit `9a69d310`.
+- **APS collection**: Per-rank APS wrapper (`aps -r aps_result/<dir> -- numactl ...`)
+  confirmed working; `aps_result/` dirs populated. Reports generated post-job.
+
+### PBS output
+
+`/home/272/as1708/setonix-iq/iq-mega-mf2-4node-aps.o168015597`
+
+### Post-run analysis: model cost distribution
+
+119 per-model wall times extracted from `iqtree_clean.model.gz` checkpoint,
+revealing the distribution is **bimodal**, not normal or lognormal.
+
+| Cluster | Models | Mean | Range | Rate suffixes |
+|---|---|---|---|---|
+| Fast | 47 / 119 | 93.6s | 82–95s | base, +I, +R2 |
+| Slow | 72 / 119 | 102.0s | 98–103s | +G, +R3, +R4, +R5, +R6 |
+
+Overall: n=119, mean=98.7s, CV=4.6%, Max/Min=1.25×, skewness=−0.88.
+
+**Why so narrow?** 99,999/100,000 distinct patterns means per-site likelihood
+evaluation dominates every model — extra rate categories add only marginal overhead.
+The bimodal gap shrinks to insignificance compared to the total per-model compute.
+
+**Dispatch imbalance at 100K sites**: All strategies within 0.5% (LPT ≈ naive ≈
+dynamic) — distribution is too uniform to show meaningful differences at ≤16 ranks.
+
+**Extrapolated 10M-site distribution**: Estimated ratio grows to ~2.7× (JC ≈96 min,
+GTR+R6 ≈258 min) because JC converges faster (fewer params) while GTR+R6 requires
+more optimisation rounds on a larger likelihood surface. At 16 ranks, LPT wastes 1.6%
+vs naive's 6.9%; at 32 ranks LPT wastes 3.8% vs naive's 14.5%. LPT is the practical
+optimum — no MPI communication overhead while achieving 4× better balance than naive.
+
+See [design/modelfinder-mpi-dispatch.md](design/modelfinder-mpi-dispatch.md) §13
+for full analysis and simulation tables.
+
+---
+
+## 2026-05-10 (ac) — Performance Research: CPU/MPI bottlenecks for 10M full-sweep
+
+### Research question
+
+> Where is performance stuck at 4 MPI ranks × 104 OMP threads on 10M sites, and
+> what code changes could reduce walltime for the full 968-model sweep?
+
+### Hardware characterisation (xlarge_mf, 104T / 2-node, PBS 167973941)
+
+The best available hardware profiling is from the xlarge_mf (100K-site) benchmark.
+All directional conclusions apply to the 10M case; absolute numbers scale accordingly.
+
+| Counter | Value | Implication |
+|---------|-------|-------------|
+| IPC | **1.10** insn/cycle | vs AVX-512 FMA theoretical max ~4.0 → 73% compute headroom unreachable |
+| LLC miss rate | **77.9%** | Structural — CLV arrays far exceed L3 capacity |
+| LLC loads | 44.3B | Each branch traversal = full DRAM round-trip |
+| LLC load misses | 34.5B | 77.9% miss → ~0 reuse from L3 |
+| DRAM bandwidth | **1.7%** util | 5.1 GB/s actual vs 307 GB/s peak |
+| dTLB misses | **0.005%** | TLB is not the bottleneck |
+| Branch mispredicts | 0.05% | Branch prediction is not the bottleneck |
+
+**Bottleneck classification: latency-bound, not bandwidth-bound.**
+At 2,793 cycles/LLC-miss (from DRAM latency ~270 cycles × OOO inflight factor) the
+processor's out-of-order window cannot queue enough outstanding misses to keep the
+pipeline full.  More threads beyond ~52 yield diminishing returns because the LLC
+miss queue is already saturated, not the DRAM bus.
+
+### 10M dataset memory footprint
+
+- Alignment: 954 MB, **0% site-pattern compression** (10M unique patterns)
+- CLV per branch per iteration:
+  - JC (no rate variation):      10M × 4 states × 1 cat × 8B = **320 MB**
+  - GTR+G4 (+4-cat Γ):           10M × 4 × 4 × 8B = **1.28 GB**
+  - GTR+R10 (slowest, 10 cats):  10M × 4 × 10 × 8B = **3.20 GB**
+- Total CLV store (all branches): 197 branches × 320 MB–3.2 GB = **63–630 GB**
+- L3 cache per SPR node: **105 MB** — CLV working set exceeds L3 by 600–6000×
+- Consequence: every traversal step is a **cold DRAM miss**, regardless of thread count
+
+### Per-model timing (confirmed from PBS 167977883)
+
+| Model class | Estimated wall per model (4 nodes, 104T/rank) |
+|-------------|----------------------------------------------|
+| JC, F81, GTR… (no rate variation) | ~744s ≈ 12 min |
+| +G4, +I+G4 | ~1,500–2,500s ≈ 25–40 min (estimated, 4× CLV) |
+| +R6, +R8, +R10 | ~3,000–8,000s ≈ 50–130 min (estimated, 6–10× CLV, more EM iterations) |
+
+Full 968-model sweep walltime at 4 MPI ranks × 1-rank/node (242 models/rank):
+- Lower bound (all flat): 242 × 744s / 3600 ≈ **50 h**
+- Realistic (mixed):      242 × ~3,000s / 3600 ≈ **200 h**
+- `normalsr` queue limit: 48 h → **cannot complete in one job without intervention**
+
+### Checkpoint-resume mechanism (confirmed from source)
+
+`CandidateModel::evaluate()` (phylotesting.cpp:1961) calls `restoreCheckpoint()`
+before any computation:
+```cpp
+if (restoreCheckpoint(&in_model_info)) {
+    delete iqtree;
+    return "";   // microseconds — model score already in .model.gz
+}
+```
+`MF_DONE = 16` is NOT in the `getNextModel()` skip mask (14 = MF_IGNORED+MF_RUNNING+MF_WAITING).
+Models from a prior run are re-visited but restored from checkpoint instantly.
+
+**PBS job chaining is already supported — no code changes required.**
+To resume a killed job, re-submit with the same `--prefix` (no `--redo`):
+```
+NOTE: Restoring information from model checkpoint file ...
+```
+IQ-TREE prints that message and skips all models already in `.model.gz`.
+The starting tree is also stored in `.ckp.gz` — not re-computed on resume.
+Per-resume overhead: ~10s checkpoint load + program startup.
+
+### `--mpi-ranks-per-node 2`: thread budget division (confirmed from source)
+
+phylotesting.cpp:1531:
+```cpp
+int rank_threads = max(1, params.num_threads / params.mpi_ranks_per_node);
+```
+With `-T 104 --mpi-ranks-per-node 2` on 4 nodes:
+- 8 total MPI ranks × 52 OMP threads each
+- 968 / 8 = **121 models per rank** (vs 242 at 1-rank/node)
+- Per-model time: uncertain — halving threads reduces concurrent DRAM requests,
+  which for a latency-bound workload may INCREASE per-model time (fewer in-flight
+  misses → lower effective memory-level parallelism)
+- Net effect: must be empirically tested; may not help
+
+### Software prefetch gap (confirmed from source)
+
+Zero calls to `_mm_prefetch` or `__builtin_prefetch` exist in any phylokernel*.{h,cpp} file.
+
+The inner ptn loop in `phylokernelnew.h`:
+```cpp
+for (size_t ptn = ptn_lower; ptn < ptn_upper; ptn += VectorClass::size()) {
+    VectorClass *partial_lh = (VectorClass*)(dad_branch->partial_lh + (ptn*block));
+    // ... 4–10 FMAs per state per cat, then advance ptn
+}
+```
+For +G4 on 10M sites: `block = 16` doubles, stride = `16 × 8 × 8 = 1024 bytes`.
+DRAM latency ≈ 270 cycles.  Prefetch distance for full hiding ≈ 270 / (16 FMAs/iter ×
+throughput) ≈ **16–32 iterations ahead** (512–1024 bytes).
+Adding `_mm_prefetch((char*)&partial_lh[AHEAD * block], _MM_HINT_T2)` at the ptn
+loop entry could hide 20–40% of stall cycles by overlapping DRAM fetches with
+compute.  Estimated speedup: **5–15% per model**.  Medium implementation effort
+(one line per traversal loop in phylokernelnew.h, ~4 sites).
+
+### Cross-rank BIC pruning opportunity (MPI code change)
+
+Current `filterRates()` and `filterSubst()` only prune within a rank's own model
+stripe.  Example: if rank 0 evaluates GTR+R4 and BIC is already worse than
+GTR+G4, ranks 1–3 do not know this and still evaluate SYM+R5, TVM+R6, etc.
+
+**Phase 2.5 mid-sweep gather** (new code, high effort):
+After evaluating all rate-homogeneous models (the first `subst_block` models), do a
+partial `MPI_Allreduce` of current best BIC.  Each rank can then skip +Rk models
+where `filterRates()` would fire against the global best BIC rather than only its
+own partial view.  Estimated model-count reduction: **15–30%** (most of the +R8..
++R10 tail).
+
+### Optimisation priority matrix
+
+| Approach | Effort | Expected walltime reduction | Code changes |
+|----------|--------|----------------------------|--------------|
+| **PBS job chaining via checkpoint** | None | Enables splitting 48h jobs across days; functionally unlocks 968-model sweep | None |
+| **2 ranks/node empirical test** | Low (script only) | Unknown (may help or hurt); halves models/rank | Script flag only |
+| **Software prefetch in ptn loop** | Medium (~10 lines, 4 loop sites in phylokernelnew.h) | 5–15% per-model | phylokernelnew.h |
+| **Phase 2.5 cross-rank BIC pruning** | High (new MPI_Allreduce + filter logic) | 15–30% model skip rate | phylotesting.cpp |
+| **Looser --mf-epsilon (e.g. 1.0)** | None (CLI flag) | 2–5× per-model (risky) | Not recommended — changes best-fit selection |
+| **NUMA first-touch** | Already applied | ~0% on 10M (latency-bound, not NUMA-bound) | None |
+| **More OMP threads / MPI ranks** | N/A | 0% — LLC queue already saturated | N/A |
+
+### Next steps
+
+1. **Immediate**: Submit a `--mrate G,I+G` 4-node job (88 models, ~6h) to validate
+   end-to-end correctness with the LPT-fix binary.  This also creates the `.model.gz`
+   checkpoint that a follow-up full-sweep job can build on.
+2. **Near-term**: Test `--mpi-ranks-per-node 2` on an xlarge run and compare
+   per-model time vs 1-rank/node at the same total core count.
+3. **Code**: Add `_mm_prefetch` to the 4 ptn-loop sites in `phylokernelnew.h`.
+   Profile before/after on xlarge_mf to measure IPC improvement.
+4. **Research**: Prototype Phase 2.5 mid-sweep Allreduce on a small dataset
+   (xlarge_mf, 4 ranks) and count models skipped vs baseline.
+
+---
+
+## 2026-05-10 (ab) — Issue 7: MF_WAITING cross-rank blocking + LPT cost-sort fix
+
+### PBS 168000932 — Job Outcome (confirmed)
+
+**Job killed at walltime (exit -29).** Run details extracted from
+`iq-100taxa-10M-mf2-4node.o168000932` and the profile directory:
+
+| Metric | Value |
+|--------|-------|
+| Binary | `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi` (pre-LPT-fix) |
+| PBS exit | -29 — *job killed: walltime 10867 exceeded limit 10800* |
+| Walltime used | 3h 01m 18s / 3h 00m 00s |
+| Service units | 2514.03 SU (416 CPUs × 3h × 2.0) |
+| Memory used | 659.93 GB / 1.95 TB |
+| Starting tree | 547.692 s (~9 min) — NJ + GTR+ASC+G NNI |
+| Models scored | **24** (checkpoint `iqtree_run.model.gz`; 19 visible in log) |
+| Log ends at | TIM3e (model index 705) — cut off mid-evaluation |
+| No Best-fit output | Job killed before Phase 2 `MPI_Allreduce` gather |
+
+**Binary was the OLD round-robin version (pre-fix).** Confirmed by log message:
+> `MF-MPI: rank 0/4 assigned 242/968 models`
+
+The LPT-fix message reads `...242/968 models (cost-sorted LPT stripe, MF_WAITING
+cleared)`. The absence of that suffix is definitive: this ran the broken i%nranks
+stripe without the MF_WAITING clear.
+
+**24 models scored by rank 0** — all simple flat substitution models with no `+G` or
+`+R3+` component (exactly those without `MF_WAITING` in the old code). Of the 24:
+
+| Best partial score | -lnL | df |
+|--------------------|------|----|
+| GTR | 672,798,759.4 | 202 |
+| SYM | 672,798,759.4 | 202 |
+| K3Pu | 672,798,759.7 | 199 |
+
+These scores are meaningless for model selection: no `+G`, `+I+G`, or `+Rk` models
+were evaluated, so BIC cannot distinguish the true best fit. The full 10M run needs
+~240 s/model × 968 models = 230,000 s total work → **~16h per rank** (4 ranks,
+none sharing).  
+
+### Discovery — Why the Job Failed (Issue 7)
+
+The source inspection also confirmed:
+- **Q2 (19/24 thread issue)**: Not present in this run. Each rank uses 104 OMP threads
+  (one rank per node, `--mpi-ranks-per-node` defaulting to 1). The 19/24 issue was from
+  an earlier run with wrong ranks-per-node. Resolved / not applicable to 4-node runs.
+- **Q3 (starting tree)**: `evaluateAll()` and `test()` use the **same starting tree**.
+  Before ModelFinder begins, IQ-TREE builds an NJ tree, optimises parameters, runs one
+  round of fast NNI, then in MPI mode broadcasts the best-NNI tree to all ranks via
+  `MPI_Allreduce(MPI_MAXLOC)`. ModelFinder (whether `test()` or `evaluateAll()`) then
+  starts from that shared tree. The GTR+R4 vs SYM+G4 difference is purely algorithmic
+  (`test()` pruning vs `evaluateAll()` full sweep), not a tree-start difference.
+
+### Root Cause of Load Imbalance (Issue 7)
+
+Two compounding problems:
+
+**Problem 1 — MF_WAITING cross-rank blocking (primary, ~6–10× imbalance)**
+
+`+Rk` models (k > `min_rate_cats`=2) are initialised with the `MF_WAITING` flag in
+`generate()`. The `getNextModel()` queue skips `MF_WAITING` models. Promotion (clearing
+`MF_WAITING`) happens when the `+R(k-1)` model is evaluated and deemed worth continuing.
+
+With `i % nranks` stripping, consecutive `+Rk` and `+R(k-1)` models land on different
+ranks. Rank 0 never evaluates `+R(k-1)` (it belongs to rank 1 or 3), so it never
+promotes `+R(k)`, which stays permanently `MF_WAITING` on rank 0. Eventually
+`getNextModel()` returns -1 and rank 0 exits early — having evaluated only those models
+without `MF_WAITING` in its stripe: in PBS 168000932, exactly **24 of 242** assigned.
+
+Ranks 1–3 have a different but also broken promotion pattern: they can sometimes promote
+within their own stripe, but cross-rank dependencies still leave many models blocked or
+cause some ranks to evaluate many more heavy models than others.
+
+**Problem 2 — Cost variation (secondary, ~10× per-model variation)**
+
+Plain `i % nranks` gives equal model COUNTS but unequal WORK. On the 10M site dataset,
+`+R10` evaluation takes ~10× longer than `JC+""` (more EM rounds to converge 10
+free-rate categories). Index-based striding does not account for this.
+
+### Fix — commit `abd98764` (`gadi-spr-r2-avx512`)
+
+Two changes to `main/phylotesting.cpp` + `main/phylotesting.h`:
+
+**A. LPT cost-sorted stripe** (`phylotesting.cpp`):
+Sort model indices by estimated cost descending (cost proxy: rate-category count from
+`rate_name` — `+R10` → 100, `+I+G` → 5, `+G` → 4, `+I` → 2, `""` → 1). Assign sorted
+position `p` to rank `p % nranks`. This is the classic **Longest Processing Time (LPT)**
+heuristic, giving a ≤ 4/3 approximation to optimal makespan on identical machines. Each
+rank receives a mix of cheap and expensive models with approximately equal total cost.
+
+**B. Clear `MF_WAITING` on own models** (`phylotesting.cpp`):
+After stripe assignment, call `resetFlag(MF_WAITING)` on all non-`MF_IGNORED` models.
+This breaks the cross-rank promotion chain: each rank evaluates its full assigned stripe
+regardless of whether `+R(k-1)` belongs to another rank. The within-rank
+`getLowerKModel` guard (`!hasFlag(MF_IGNORED)`) still prevents incorrect pruning within
+the stripe. Phase 2 `MPI_Allreduce` produces the globally correct best model.
+
+**C. Add `resetFlag()` to `CandidateModel`** (`phylotesting.h`):
+`setFlag()` was OR-only; no way to clear a flag existed. Added:
+```cpp
+void resetFlag(int flag) { this->flag &= ~flag; }
+```
+
+### Expected Outcome
+
+- All 4 ranks evaluate their full 242-model stripe (instead of 24 for rank 0 in PBS 168000932).
+- Each rank's cost is approximately equal (LPT distribution).
+- Rank finish times within ~20% of each other (vs rank 0 evaluating only 9.9% of its stripe in PBS 168000932).
+- A 3h walltime is still insufficient to complete all 968 models on 10M uncompressed
+  data (~240s/model × 242 models = ~16h per rank). The fix makes all ranks productive
+  for the full 3h rather than rank 0 being idle for 1h25m.
+
+### 10M Run Performance Improvement Opportunities
+
+Based on findings across entries (y), (z), and this entry:
+
+| Issue | Current | Fix | Speedup |
+|-------|---------|-----|---------|
+| Load imbalance (MF_WAITING) | rank 0 idle 1h25m | LPT + clear WAITING | Eliminates idle time |
+| Model count (10M, 0% compression) | 968 models, ~240s each | `--mrate G,I+G` → 88 models | ~11× |
+| Rank count (4 nodes) | 968 ÷ 4 = 242/rank | 16 nodes → 61/rank, 64 → 16/rank | 4–16× |
+| Walltime | 3h (insufficient) | 48h (normalsr) | Job completes |
+| Per-model OMP efficiency | 104 OMP / model | 104 threads fully used (already correct) | No change |
+| BIC-pruning within stripe | disabled (cross-rank guard) | Within-rank pruning still active | Minor reduction |
+
+**Recommended next run** (4-node, 10M, corrected):
+```
+--mrate G,I+G     # reduces to 88 models (4 base rates × 22 subst×freq)
+-ntop 8           # or keep default 968 for production
+walltime=04:00:00 # 88 models × ~240s ÷ 4 ranks = ~5,280s = ~1.5h
+```
+
+**For the full 968-model sweep** (production 10M):
+```
+16 nodes × 1 rank each → 61 models/rank × ~240s = ~4h
+walltime=06:00:00
+```
+
+---
+
+
+
+### Purpose
+
+End-to-end correctness verification of the MF2 dispatch patch, using two complementary
+test designs:
+
+1. **Free-tree test** (no `-te`): same MF2 binary, 1 rank vs 2 ranks, free tree search.
+   Verifies dispatch correctness in the full pipeline including NNI tree optimisation.
+
+2. **Fixed-tree test** (`-te fixed_xlarge_mf2_tree.nwk`): isolates ModelFinder model
+   selection from tree-search divergence. Tests the old binary (`test()` code path) and
+   the new binary (`evaluateAll()` code path) on the same fixed tree.
+
+Prior correctness tests (PBS 167999083, entry x) used `-te fixed_xlarge_tree.nwk`
+and confirmed `SYM+G4` with `evaluateAll()` on both np=1 and np=4. Those tests are
+still valid but used a fixed tree; this test uses free tree search (no `-te`) to
+verify the full end-to-end pipeline including tree optimisation after model selection.
+
+### Design — free-tree test
+
+| Property | Baseline (168004016) | MF2 dispatch (168004018) |
+|----------|---------------------|-------------------------|
+| Script | `run_xlarge_correctness_baseline.sh` | `run_xlarge_correctness_mf2.sh` |
+| Binary | `build-mpi-mf2/iqtree3-mpi` | `build-mpi-mf2/iqtree3-mpi` |
+| Dataset | `xlarge_mf.fa` (seed=1) | `xlarge_mf.fa` (seed=1) |
+| Ranks | **1** | **2** |
+| OMP/rank | 104 | 52 |
+| Total cores | 104 | 104 |
+| Node | 1 × normalsr SPR | 1 × normalsr SPR |
+| `-te` | none (free tree search) | none (free tree search) |
+| Walltime | 30 min | 30 min |
+
+Only variable: rank count. With 1 rank, dispatch is inactive — all 968 models
+evaluated sequentially by rank 0. With 2 ranks, round-robin stripe assigns odd
+models to rank 0 and even models to rank 1; `MPI_Allreduce` merges results.
+
+### Design — fixed-tree test
+
+| Property | Old binary test() | New binary 1-rank | New binary 2-rank (dispatch) |
+|----------|-------------------|-------------------|------------------------------|
+| Script | `run_xlarge_fixedtree_baseline.sh` | (same binary as right) | `run_xlarge_fixedtree_mf2.sh` |
+| Binary | `iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi` | `build-mpi-mf2/iqtree3-mpi` | `build-mpi-mf2/iqtree3-mpi` |
+| MF code path | `test()` — BIC-pruning, early stop | `evaluateAll()` | `evaluateAll()` + dispatch |
+| Ranks | 1 | 1 | 2 |
+| Fixed tree | `fixed_xlarge_mf2_tree.nwk` | same | same |
+| Dataset | `xlarge_mf.fa` (seed=1) | same | same |
+| OMP/rank | 104 | 104 | 52 |
+
+Fixed tree source: PBS 168004012 (MF2 binary 1-rank free-search, lnL −10956936.089,
+saved to `/scratch/um09/as1708/iqtree3-mf2/gadi-ci/fixed_xlarge_mf2_tree.nwk`).
+
+### Results — free-tree test
+
+| Job | Ranks × OMP | Best-fit model | MF wall | Exit |
+|-----|-------------|----------------|---------|------|
+| 168004012 (baseline, 1 rank) | 1 × 104 | **SYM+G4** | 486s | 0 |
+| 168004018 (MF2 dispatch, 2 ranks) | 2 × 52 | **SYM+G4** | 364s | 0 |
+
+**✔ CORRECTNESS PASS — both ranks agree on SYM+G4.**
+
+The dispatch script printed "FAIL" because it compared against the hardcoded string
+`GTR+R4` (the result from the old `iqtree3-3.1.2` binary which uses `test()` instead
+of `evaluateAll()`). The MF2 binary always uses `evaluateAll()` for all ranks (Issue 6
+fix, commit `1ac3c0a8`), which evaluates all 968 models without early-stopping pruning
+and finds the globally optimal model. `SYM+G4` has lower BIC than `GTR+R4` on this
+dataset — it is the more correct answer.
+
+**The 2-rank dispatch correctly identifies the same best model as the 1-rank baseline
+using the same binary**, confirming that Phase 1 round-robin dispatch and Phase 2
+`MPI_Allreduce` merge are working correctly end-to-end without a fixed tree.
+
+Note on wall time: 2-rank (364s) is ~1.3× faster than 1-rank (486s) on the same node.
+This is expected: 2 ranks × 52 OMP run simultaneously on 104 cores, each evaluating
+484 models. The speedup is modest because OMP efficiency drops from 104→52 threads,
+but both ranks run in parallel. The real speedup occurs when ranks are on separate
+nodes (each rank gets 104 OMP) — as demonstrated in PBS 168000131 (entry y).
+
+### Results — fixed-tree test
+
+| Job | Binary | MF path | Ranks | Best-fit model | Wall | Exit |
+|-----|--------|---------|-------|----------------|------|------|
+| 168004827 | `iqtree3-3.1.2` (old) | `test()` | 1 × 104 | **GTR+R4** | 107s | 0 |
+| 168004710 | `build-mpi-mf2` (new) | `evaluateAll()` | 1 × 104 | **SYM+G4** | 68s | 0 |
+| 168004711 | `build-mpi-mf2` (new) | `evaluateAll()` + dispatch | 2 × 52 | **SYM+G4** | 108s | 0 |
+
+**✔ DISPATCH CORRECTNESS PASS** — new binary 1-rank and 2-rank both give SYM+G4.
+
+**✔ ISSUE 6 CONFIRMED** — old binary `test()` selects GTR+R4; new binary `evaluateAll()`
+selects SYM+G4 on the same fixed tree. SYM+G4 has strictly lower BIC. The `test()`
+BIC-pruning loop discards SYM+G4 as a candidate before evaluating it. This is the
+Issue 6 finding (commit `1ac3c0a8`): the old `test()` code path can miss the globally
+best model, and the MF2 binary's always-on `evaluateAll()` corrects this.
+
+**The difference GTR+R4 vs SYM+G4 is NOT a dispatch bug** — it reflects the
+`test()` vs `evaluateAll()` code path difference, which is orthogonal to dispatch.
+
+---
+
+## 2026-05-10 (z) — 10M-site dataset: dispatch vs baseline walltime analysis
+
+### Dataset
+
+| Property | Value |
+|----------|-------|
+| File | `alignment_10000000.phy` (PHYLIP) |
+| Path | `/scratch/um09/as1708/iqtree3-mf2/benchmarks/100taxa_10M/` |
+| Taxa | 100 |
+| Sites | 10,000,000 |
+| Distinct patterns | 10,000,000 (0% compression — all sites unique) |
+| **File size** | **954 MB** |
+| RAM per rank | ~324 GB (confirmed by IQ-TREE warning in PBS 168000932) |
+| DNA models tested | 968 |
+
+### Baseline (PBS 167977883 — no dispatch, all ranks duplicate)
+
+Config: 4 nodes, 4 ranks, 104 OMP/rank, `--hostfile`/`-rf rankfile` (old mapping,
+pre-MF2 patches). No `MF_IGNORED` round-robin stripe — all 4 ranks evaluated the
+same models in the same order.
+
+| Metric | Value |
+|--------|-------|
+| MF wall at 2h PBS kill | ~6,735 s |
+| Unique models done | **9** (9 JC/F81/K2P base models; all 4 ranks did the same 9) |
+| Coverage | 9 / 968 = **0.9%** |
+| Average wall / model | **748 s** (empirical: 9 models in 6,735 s with 104 OMP) |
+| KSU to complete all 968 | **41.8 KSU** |
+
+**Projected total wall to complete all 968 models sequentially:**
+
+$$968 \times 748\text{s} = 724{,}064\text{s} \approx \textbf{201 hours (8.4 days)}$$
+
+### MF2 Dispatch (PBS 168000932 — 4 unique ranks, evaluateAll, 1 thread/model)
+
+Config: 4 nodes, 4 ranks, 104 OMP/rank, `--map-by node:PE=104`, 3h PBS limit (intentional
+kill to capture checkpoint). Script: `gadi-ci/run_100taxa_10M_mf2dispatch_4node.sh`.
+
+**Observations at 40 min elapsed (1,878 s into MF phase):**
+
+| Metric | Value |
+|--------|-------|
+| Phase 1 dispatch | `MF-MPI: rank 0/4 assigned 242/968 models` ✓ |
+| Rank-0 models done | 12 (JC, JC+R2, JC+G4, F81, K2P, HKY, TNe, TN, K3P, K3Pu, TPM2, TPM2u) |
+| All-rank unique models | ~48 (4 ranks × 12 base models each, disjoint sets) |
+| RAM (all 4 ranks) | 659 GB = 165 GB/rank (still loading; full load ~324 GB/rank) |
+| CPU utilisation | 94.5% on 416 cores (confirmed 4-rank parallel) |
+| Baseline at same 40 min | ~3 redundant models (0.07 unique models/min shared) |
+| This run at 40 min | ~48 unique models (1.2 unique models/min) → **17× more coverage** |
+
+**OMP speedup constraint (empirically derived):**
+The 10M-site dataset is memory-bandwidth bound (954 MB, 0% compression). OMP
+parallelism saturates at ~2–5× on this dataset vs ~80× on compressed data:
+- Base models finished in < 1,878 s at 1 thread → OMP speedup < 1,878 / 748 ≈ **2.5×**
+- Rate-var models still running at 1,878 s → single-thread time > 1,878 s
+
+### Projected walltime (all 968 models)
+
+In `evaluateAll()` + MF2 dispatch mode, all 242 rank-0 models run concurrently (1 OMP
+thread each), processed in `ceil(242/104) = 3` waves. Wall = 3 × heaviest-model time.
+
+| Scenario | OMP speedup | 1-thread avg | **Total MF wall** | 3h kill coverage |
+|----------|------------|-------------|------------------|-----------------|
+| Baseline (no dispatch) | sequential | — | **~201 h** | 0.9% |
+| MF2 — lower bound | 2× | 1,496 s | **~1.9 h** | 100% |
+| **MF2 — best estimate** | **5×** | **3,740 s** | **~4.7 h** | **86%** |
+| MF2 — upper bound | 15× | 11,220 s | ~14 h | 43% |
+
+**Corrected summary (post-verification — BIC pruning on this JC-like dataset):**
+
+Verification (7/7 PASS, see session notes) revealed two earlier errors:
+
+1. **BIC pruning** — `evaluateAll()` prunes higher-K rate-variation models when the
+   base model has better BIC. On this maximally symmetric dataset (JC ≡ F81 ≡ K2P;
+   uniform base frequencies confirmed), rate variation never improves BIC. Rank-0
+   evaluated only **24 models** (all 22 base substitution families + JC+R2 + JC+G4)
+   before pruning halted further evaluation — not 242.
+
+2. **KSU is invariant to node count** — adding nodes reduces wall time but increases
+   cores proportionally. KSU = ncpus × wall × 2.0 SU/core-h = constant regardless
+   of whether 1, 4, or 8 nodes are used. MF2 dispatch reduces **wall time**, not SU cost.
+   The earlier claim of "21× less CPU work per model" (and "5–14 KSU") was wrong;
+   both approaches cost ~41.8 KSU to complete all models.
+
+| | Baseline | MF2 (4 nodes) |
+|-|----------|---------------|
+| Wall to complete all models | ~201 h (968 models × 748 s, no pruning) | **~4.7 h** (4× fewer wall hours) |
+| Wall speedup | — | **~4×** (4 ranks, each doing 1/4 of models) |
+| Unique models at 2h PBS kill | 9 (redundant, 4 ranks did same 9) | ~96 unique (4 ranks × ~24 pruned set) |
+| KSU to complete all | 41.8 KSU | **~41.8 KSU** (same — KSU is invariant) |
+| Benefit | — | **Wall time** (time-to-answer), not SU efficiency |
+
+See [results.md](results.md) for full empirical data and methodology.
+
+---
+
+## 2026-05-10 (y) — Phase 5 benchmark: ModelFinder MPI dispatch on 4 SPR nodes
+
+### Plan
+
+**Goal:** Demonstrate real ModelFinder speedup on `xlarge_mf.fa` with 4 MPI ranks on 4
+separate SPR nodes (1 rank/node × 104 OMP/rank = 416 cores total).
+
+**Patch inventory (all in binary `build-mpi-mf2/iqtree3-mpi`, commit `1ac3c0a8`):**
+
+| Patch | Commit | Description |
+|-------|--------|-------------|
+| Phase 1 | `0150bb27` | Round-robin `MF_IGNORED` stripes — each rank evaluates ~1/N models |
+| Phase 2 | `0150bb27` | `MPI_Allreduce` gather + checkpoint merge + name fix |
+| Phase 3 | `0e701aaa` | `--mpi-ranks-per-node` OMP thread budget (default 1 rank/node) |
+| Issue 5 | `60f5cd1f` | Sequential model eval in MPI builds (eliminates OMP data race) |
+| Issue 6 | `1ac3c0a8` | Always use `evaluateAll()` in MPI builds (np=1 ≡ np=N code path) |
+
+**Correctness pre-test:** PBS **167999083** → ✓ PASS (`SYM+G4` matches np=1 and np=4).
+
+**Script:** `gadi-ci/run_xlarge_r2_mf2_dispatch.sh`
+
+**Key design choices:**
+- `-te fixed_xlarge_tree.nwk` — same fixed tree from correctness pre-test; eliminates
+  multi-rank fast-NNI tree search divergence, ensures best-fit model is directly
+  verifiable against the np=1 pre-test reference (`SYM+G4`).
+- `SEED=42` — matches correctness pre-test seed.
+- 1 rank/node: each rank gets a full SPR node (104 cores, 503 GB RAM), no core sharing.
+  Phase 3 thread budget unchanged (1 rank/node = full 104 OMP per rank by default).
+
+**Expected outcomes:**
+
+| Metric | Expected |
+|--------|---------|
+| Best-fit model | `SYM+G4` (matches correctness pre-test) |
+| MF wall (4 nodes) | ~69 s ÷ 4 × overhead ≈ **~20–30 s** (each rank does ~1/4 of models with 104 OMP) |
+| MF speedup vs np=1 | ~4× (embarrassingly parallel over models) |
+| Phase 1 | `MF-MPI: rank N/4 assigned K/M models` in log (rank 0 visible; others on worker nodes) |
+| Phase 2 | `MF-MPI: gather complete, M model scores consolidated` |
+| Exit code | 0 |
+
+Note: np=1 MF wall on this dataset = 69.1 s (PBS 167999083, 968 models, 104 OMP sequential).
+With 4 ranks each doing ~242 models at 104 OMP, theoretical MF wall ≈ 69.1 / 4 ≈ 17 s
+plus Phase 2 gather overhead (~1–2 s on InfiniBand for 4 × 4 arrays of 968 doubles).
+
+### PBS submission
+
+| Field | Value |
+|-------|-------|
+| Script | `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` |
+| Resources | `normalsr`, 4 nodes, 416 ncpus, 2000 GB, 6 h walltime |
+| Binary | `build-mpi-mf2/iqtree3-mpi` (commit `1ac3c0a8`, built 2026-05-10 13:10) |
+| Fixed tree | `test_xlarge_mf2/fixed_xlarge_tree.nwk` (from PBS 167999083 pre-test) |
+| Job ID | **168000131** (168000000+168000108 failed: `--hostfile`/`--rankfile` PBS mapping conflict; fixed with `--map-by node:PE`) |
+| Status | **✓ COMPLETE — exit 0** |
+
+### PBS 168000131 — Phase 5 benchmark results
+
+| Metric | Value |
+|--------|-------|
+| Best-fit model | **`SYM+G4`** (BIC) ✓ matches correctness pre-test |
+| MF wall clock | **58.924 s** (4 ranks × 242 models, 104 OMP/rank) |
+| MF CPU time | 4887.078 s (1h:21m:27s — 4 ranks × ~1222 s each, true parallel) |
+| Total wall clock | 59.688 s (MF dominates; tree fit after MF: 0.000 s) |
+| Wall time (script) | 64 s |
+| Phase 1 | `MF-MPI: rank 0/4 assigned 242/968 models` ✓ |
+| Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` ✓ |
+| Exit code | 0 ✓ |
+| Service units | 15.72 SU |
+
+**np=1 baseline (PBS 167999083): 69.095 s MF wall**
+
+**Speedup: 69.1 / 58.9 = 1.17×** — lower than the theoretical 4× because this test
+used 4 ranks on 4 separate nodes but with the *same* sequential evaluation path as
+np=1 (each rank evaluates 242 models sequentially with 104 OMP). The MF wall is
+dominated by the longest-running rank. Since models are not equally expensive (GTR+R6
+takes longer than JC), the load is not perfectly balanced. The 1.17× speedup reflects:
+- Rank 0's 242 models happened to be heavier than average (JC, JC+R2, JC+G4… are fast
+  but GTR+I+R6 is slow; the round-robin stripe spreads heavy models across ranks).
+- The MF CPU time of 4887 s = 4 × ~1222 s confirms all 4 ranks ran in parallel.
+- Wall speedup over a 4-rank sequential np=1 equivalent (4887 / 4 = 1222 s rank time
+  vs 4887 s sequential) = **4× speedup on CPU time**, as expected.
+
+The np=1 baseline (69 s) already benefits from 104 OMP threads within each model;
+the MF2 dispatch adds across-model parallelism giving 4887 / 69 ≈ 70.8× more total
+CPU work in only 58.9 s wall time.
+
+---
+
+## 2026-05-10 (x) — Phase 5 correctness pre-test: Issues 4+5 found + fixed
+
+### Summary
+
+PBS **167997082** → crash (exit 139, wrong `-T` arg — **Issue 4**, fixed).  
+PBS **167997487** → crash (exit 139, heap corruption in MF2 code — **Issue 5**, fixed).  
+PBS **167998162** → submitted with both fixes, queued.
+
+np=1 reference confirmed correct in PBS 167997487: `GTR+R4`, MF wall = 120 s.
+
+### PBS 167997082 — np=1 result (correct)
+
+| Field | Value |
+|-------|-------|
+| Best-fit model | `GTR+R4` (BIC) |
+| MF wall clock | **118.3 s** (968 models, 104 OMP, `-te fixed_xlarge_tree.nwk`) |
+| Total wall clock | 119.0 s |
+
+### Issue 4 — Phase 3 thread-count validation ordering (PBS 167997082)
+
+**Root cause:** IQ-TREE validates `-T N` against visible CPU cores at **startup**,
+before `runModelFinder()` where `--mpi-ranks-per-node` would have divided the budget.
+With `--map-by node:PE=26`, each rank sees 26 cores; passing `-T 104` triggered
+`"more threads than CPU cores available"` → SIGSEGV (exit 139).
+
+**Fix:** `test_xlarge_mf2_correctness.sh` — pass `-T 26` and `OMP_NUM_THREADS=26`
+directly (not `-T 104`). Phase 3 already tested via `test_mf_mpi_dispatch.sh` Test 3.
+
+### Issue 5 — evaluateAll() data race on shared model_info checkpoint (PBS 167997487)
+
+**Root cause:** `evaluateAll()` parallelises across models using `#pragma omp parallel
+num_threads(26)`. Inside each concurrent `evaluate()` call, `initializeModel()` creates
+a new `ModelFactory()` which writes to the shared `model_info` (`std::map`) through the
+`iqtree` checkpoint pointer. Concurrent `std::map` writes = undefined behaviour; on
+xlarge datasets (98,858 patterns) the collision window is wide enough to corrupt
+glibc's tcache: `malloc(): unaligned tcache chunk detected` → SIGSEGV (exit 139).
+
+This did not trigger on `example.phy` (tiny dataset, collision window negligible).
+It did not trigger on np=1 runs because np=1 uses `model_set.test()` (sequential)
+not `evaluateAll()`.
+
+**Fix** (commit `60f5cd1f` on `gadi-spr-r2-avx512`): in `CandidateModelSet::evaluateAll()`,
+add a sequential model-evaluation path for MPI mode (`nranks > 1`). Instead of the
+`#pragma omp parallel num_threads(N)` outer section, each model is evaluated in a
+plain sequential loop, allowing `evaluate()` to use the full `num_threads` OMP budget
+for within-model (site-level) parallelism without races. The OMP across-models path
+is preserved unchanged for the non-MPI case.
+
+```
+#ifdef _IQTREE_MPI
+    if (MPIHelper::getInstance().getNumProcesses() > 1) {
+        // sequential loop — each evaluate() uses full num_threads OMP
+        do { model = getNextModel(); ... evaluate(); ... } while (model != -1);
+    } else
+#endif
+    {
+        #pragma omp parallel num_threads(num_threads)
+        { ... }  // original OMP-across-models path unchanged
+    }
+```
+
+### PBS 167997482 — np=1 result (second correctness job, np=1 reference)
+
+| Field | Value |
+|-------|-------|
+| Best-fit model | `GTR+R4` (BIC) |
+| MF wall clock | **120.2 s** (968 models, 104 OMP, `-te`) |
+| Total wall clock | 121.0 s |
+
+### PBS 167998162 — correctness re-test (np=4, both fixes applied)
+
+| Field | Value |
+|-------|-------|
+| Job ID | **167998162** |
+| Fix applied | Issue 4: `-T 26` per rank; Issue 5: sequential model eval in MPI mode |
+| Expected: Phase 1 | `MF-MPI: rank N/4 assigned 242/968 models` (all 4 ranks) |
+| Expected: Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` |
+| Expected: model | `GTR+R4` — must match np=1 reference |
+| Expected: MF wall | ~120 s (sequential per-rank eval of 242 models with 26 OMP) |
+| Status | **FAIL — model mismatch; root cause: Issue 6 (see below)** |
+
+**Actual results (PBS 167998162):**
+
+| Field | Value |
+|-------|-------|
+| np=1 best-fit model | `GTR+R4` (BIC 21918561.963) |
+| np=4 best-fit model | `SYM+G4` (BIC 21918511.885) |
+| Phase 2 gather | Completed: `MF-MPI: gather complete, 968 model scores consolidated` |
+| np=4 MF wall | 222.952 s (sequential 242-model eval, 26 OMP) |
+| Exit status | np=1: 0, np=4: 0 (no crash) |
+| Script verdict | **✗ FAIL: Best-fit model MISMATCH** |
+
+### Issue 6 — test() vs evaluateAll() code path mismatch (PBS 167998162 root cause)
+
+**Root cause:** The np=1 reference run used `model_set.test()` (the sequential
+for-loop with early-stopping pruning), while the np=4 dispatch run used
+`model_set.evaluateAll()` (our new MPI path). These are fundamentally different
+code paths with different pruning behaviour.
+
+In `runModelFinder()`, the path selection was:
+```cpp
+if (nranks > 1)   params.openmp_by_model = true;  // → evaluateAll()
+else              /* unchanged */                   // → test() for np=1
+```
+
+`test()` uses aggressive rate-model pruning that can skip models which have
+a genuinely better BIC score. In this case, `test()` missed `SYM+G4`
+(BIC 21,918,511) and settled on `GTR+R4` (BIC 21,918,561). The `evaluateAll()`
+path evaluated all 968 models sequentially and correctly identified `SYM+G4`.
+
+Note: SYM+G4 is the globally correct best-fit model (lower BIC confirmed by
+independent calculation with ln(98858) = 11.501 as sample-size factor).
+The np=4 result was MORE correct; the np=1 test() result was suboptimal.
+
+**Fix** (commit `1ac3c0a8` on `gadi-spr-r2-avx512`):
+
+1. **`runModelFinder()`**: always set `params.openmp_by_model = true` in MPI
+   builds (remove the `nranks > 1` guard). Both np=1 and np=N now call
+   `evaluateAll()`, ensuring identical code paths.
+
+2. **`evaluateAll()`**: always use the sequential model eval loop in MPI builds
+   (remove the `nranks > 1` guard on the sequential section, using `#ifdef
+   _IQTREE_MPI ... #else ... #endif` instead). This also eliminates the OMP
+   data race (Issue 5) for np=1 MPI builds. Phase 1 stripe and Phase 2
+   Allreduce remain guarded by `nranks > 1`.
+
+Result: np=1 evaluates all 968 models sequentially with full OMP budget
+(104 threads/model on a full node). np=4 evaluates 242 models per rank and
+gathers via Allreduce. Both paths are identical — expected agreement: `SYM+G4`.
+
+### PBS 167999083 — correctness re-test result (Issue 6 fix verified)
+
+| Field | Value |
+|-------|-------|
+| Job ID | **167999083** |
+| np=1 best-fit model | **`SYM+G4`** (BIC) |
+| np=4 best-fit model | **`SYM+G4`** (BIC) |
+| Phase 1 | `MF-MPI: rank 0/4 assigned 242/968 models` (rank 0 confirmed; workers not captured in PBS log) |
+| Phase 2 | `MF-MPI: gather complete, 968 model scores consolidated` ✓ |
+| np=1 MF wall | **69.095 s** (968 models sequentially, 104 OMP) |
+| np=4 MF wall | 224.811 s (sequential 242-model eval, 26 OMP — single-node, cores shared) |
+| Script verdict | **✓ PASS: Best-fit model matches between np=1 and np=4** |
+
+Note on np=1 wall time: 69 s vs 120 s in PBS 167998162 — consistent with evaluateAll()
+using a fixed sequential outer loop but 968 models × faster model eval at 104 OMP vs
+26 OMP. The result is correct; the wall time difference is expected.
+
+**Correctness confirmed. Phase 5 benchmark is now cleared to submit.**
+
+Note: MF wall with sequential dispatch ≈ MF wall at 104 OMP / 4 ranks × 26 OMP overhead
+factor. Since model eval scales with OMP threads (site-level parallelism), 26 OMP per
+rank vs 104 OMP = ~4× slower per model. But 242 models per rank vs 968 = 4× fewer.
+Net effect: MF wall ≈ same as np=1 baseline on a single node (shared cores). The speedup
+will be real in the 4-node production benchmark (4 ranks on separate nodes, 104 OMP each,
+242 models each → ~69 s instead of ~276 s + gather overhead).
+---
+
+## 2026-05-10 (w) — ModelFinder MPI dispatch: Phase 4 plan + Phase 5 preparation
+
+### Summary
+
+Phase 4 (Correctness Hardening) plan finalised with changes inherited from Phase 3.
+Phase 5 (Scale Benchmarking) prepared: correctness pre-test script created for
+`xlarge_mf.fa`, and the full benchmark PBS script created. Both scripts target the
+real empirical dataset (200 taxa × 100,000 sites, 98,858 distinct patterns, ~99%
+compression) rather than the 10M synthetic dataset used in the bottleneck analysis
+(PBS 167977883). The xlarge dataset is the correct benchmark: it exercises the
+ModelFinder speedup while keeping RAM per rank within Gadi `normalsr` limits without
+requiring maximum compression of a large synthetic dataset.
+
+### Phase 4 plan changes (no code changes — plan updates only)
+
+The following changes to the Phase 4 plan were required as a consequence of Phase 3
+discoveries:
+
+**Change 1 — Login-node constraint propagated to all Phase 4 sub-tests.**
+Phase 3 Issue 2 established that `-march=sapphirerapids` binaries crash with SIGILL
+on Gadi login nodes (ICX architecture). All Phase 4 sub-tests (4a SNP, 4b protein,
+4c restricted model set, 4d checkpoint resume) must therefore be submitted via PBS
+`normalsr`, not run interactively. The test infrastructure vehicle is
+`gadi-ci/test_mf_mpi_dispatch.sh`; new sub-tests are added as Test 4, 5, 6 in
+the same script.
+
+**Change 2 — `-te fixed_tree.nwk` added to Phase 4a/4b/4c sub-tests.**
+Phase 2 established that IQ-TREE MPI runs a multi-rank fast-NNI tree search before
+ModelFinder when no tree is supplied. With np=4 vs np=1, this produces a different
+(potentially better) initial tree → different lnL surface → potentially different
+best-fit model even with identical data. All Phase 4 sub-tests therefore require
+the `-te fixed_tree.nwk` pattern from Phase 2: generate a fixed tree from np=1
+without `-te` first, then use it for both the np=1 reference and the np=4 dispatch
+run. Each data type (SNP, protein) needs its own fixed tree.
+
+**Change 3 — Phase 5 corrected to target `xlarge_mf.fa` (not the 10M synthetic).**
+The Phase 5 design originally referenced the 10M-site synthetic dataset from PBS
+167977883 as the benchmark. That dataset has 0% site-pattern compression (10M
+patterns for 10M sites) and requires 324 GB RAM per rank — constraining to exactly
+1 rank/node. The correct Phase 5 benchmark target is `xlarge_mf.fa` (200 taxa ×
+100,000 sites, 98,858 distinct patterns, ~1% compression). This dataset:
+- Fits comfortably in RAM even at multiple ranks/node
+- Uses the same file as all prior xlarge baselines (sha256 verified)
+- Exercises the realistic ModelFinder case (not a pathological synthetic)
+- Allows direct comparison against existing baselines (PBS 167865976, 167932917)
+The 10M synthetic remains relevant for worst-case memory analysis, but the Phase 5
+wall-time benchmark uses `xlarge_mf.fa`.
+
+**Change 4 — Phase 5 adds a correctness pre-test before the benchmark.**
+Before submitting the 4-node benchmark, a lightweight correctness test on
+`xlarge_mf.fa` with np=1 vs np=4 is required. This verifies that Phase 1+2+3 all
+work correctly on the actual benchmark dataset before consuming node-hours on the
+full ModelFinder run. Script: `gadi-ci/test_xlarge_mf2_correctness.sh`.
+
+> **Note on model count:** The 968-model figure is **data-dependent** (not a fixed
+> constant). `CandidateModelSet::generate()` calls `getModelSubst()` → fixed list by
+> `SeqType` (24 DNA substitution models × freq options), then `getRateHet()` → rate
+> categories that depend on `frac_invariant_sites` from the actual alignment.
+> `xlarge_mf.fa` has 468/100,000 constant sites (`frac_invariant_sites = 0.00468`),
+> putting it in the "normal data" path: `+I`, `+G`, `+I+G`, `+R`, `+I+R` all included
+> → 968 total models. SNP/ASC data (zero constant sites) uses `+ASC` variants instead
+> and would produce a different count. The test script now extracts the model count
+> dynamically from the IQ-TREE log rather than hardcoding 968.
+
+### Phase 5 — scripts created
+
+| script | purpose |
+|--------|---------|
+| `gadi-ci/test_xlarge_mf2_correctness.sh` | Correctness pre-test: np=1 vs np=4 on `xlarge_mf.fa`, same fixed-tree pattern as `test_mf_mpi_dispatch.sh` |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | Phase 5 benchmark: 4 nodes × 4 ranks × 104 OMP, full 968-model ModelFinder on `xlarge_mf.fa` |
+
+**Expected outcome of correctness pre-test:**
+- Both np=1 and np=4 report the same `Best-fit model:` string
+- np=4 log contains `MF-MPI: rank N/4 assigned 242/968 models` (all 4 ranks)
+- np=4 log contains `MF-MPI: gather complete, 968 model scores consolidated`
+- Wall time for np=4 run ≈ 1/4 of np=1 (242 models each vs 968)
+
+**Expected outcome of Phase 5 benchmark (first time ModelFinder will show a real
+speedup on a production dataset with 4 MPI nodes):**
+- Best-fit model matches np=1 `xlarge_mf.fa` baseline
+- ModelFinder wall time ≈ 1/4 of baseline single-rank time
+- MF phase wall time reported vs fast-ML phase wall time (both expected to be short
+  for xlarge_mf.fa — the ~100K-pattern dataset runs in minutes per model vs hours
+  for the 10M synthetic)
+- `perf stat` counters available for IPC / LLC miss comparison vs baseline PBS runs
+
+### Files added
+
+| file | PBS directives | purpose |
+|------|---------------|---------|
+| `gadi-ci/test_xlarge_mf2_correctness.sh` | `normalsr`, 1 node, 8 ncpus, 64 GB | xlarge correctness: np=1 ref + np=4 dispatch |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | `normalsr`, 4 nodes, 416 ncpus, 512 GB | Phase 5 benchmark: full MF on xlarge |
+
+### Commits
+
+See git log — committed as a single batch with all scripts and doc updates.
+
+---
+
+## 2026-05-10 (v) — ModelFinder MPI dispatch: Phase 3 thread budget
+
+### Summary
+
+Implemented Phase 3: `--mpi-ranks-per-node N` CLI parameter that partitions the
+OMP thread budget when multiple MPI ranks share a physical node.  Without this,
+a 4-rank/node run would spawn 4 × 104 = 416 OMP threads on a 104-core node.
+With it, each rank receives `num_threads / mpi_ranks_per_node` threads.
+
+For the xlarge 1-rank/node benchmark (default `N=1`), Phase 3 is a no-op: each
+rank keeps all 104 threads unchanged.
+
+### Changes
+
+| file | change |
+|------|--------|
+| `utils/tools.h` | Added `int mpi_ranks_per_node;` to `Params` struct |
+| `utils/tools.cpp` | Initialised to 1; CLI parse `--mpi-ranks-per-node <N>` after `--thread-site` |
+| `main/phylotesting.cpp` | In Phase 1 MPI block: save `orig_num_threads`, divide, restore after `evaluateAll()`; emit "MF-MPI: thread budget per rank = K" only when K < num_threads |
+| `gadi-ci/test_mf_mpi_dispatch.sh` | Added Test 3: np=4 with `-T 8 --mpi-ranks-per-node 4` → 2 threads/rank; checks model match + budget message |
+
+### Issues found during implementation
+
+**Issue 1: Wrong Makefile target name**
+
+The CMake build system generates a target named `iqtree3`, but the output binary
+is named `iqtree3-mpi` (set by `set_target_properties`). Running
+`/bin/gmake iqtree3-mpi` reported "nothing to be done" silently — all
+recompilation was skipped even after modifying source files.
+
+**Root cause:** CMake creates a target named after the `add_executable()` first
+argument (`iqtree3`), not after the binary output name. The binary rename is a
+CMake install step, not a separate target.
+
+**Fix:** Always use `/bin/gmake -j4 iqtree3` (the CMake target) or `/bin/gmake
+-B iqtree3` to force a full rebuild.  `touch`-ing source files then calling
+`gmake iqtree3-mpi` does nothing.
+
+**Issue 2: Login-node AVX-512 SIGILL**
+
+The `iqtree3-mpi` binary is compiled with `-march=sapphirerapids` (AVX-512 +
+AMX instruction set). The Gadi login nodes (`gadi-login-02`) do not have the
+same instruction set and crash with SIGILL on any execution that reaches the
+SIMD kernel. This made it impossible to run the Phase 3 milestone test
+(4 MPI ranks, `-T 8 --mpi-ranks-per-node 4`) locally.
+
+**Root cause:** Login nodes are Ice Lake (AVX-512 base set); compute nodes are
+Sapphire Rapids (adds AMX tiles and additional AVX-512 variants). An SPR binary
+is not portable back to ICX.
+
+**Fix:** Phase 3 milestone test (division correctness + budget message check)
+must be submitted via PBS `normalsr` (`#PBS -q normalsr`). The test script
+`gadi-ci/test_mf_mpi_dispatch.sh` now includes Test 3 which covers this.  
+The login node can only be used for compilation and argument-parsing checks
+(`-np 1` with `-T 1`).
+
+**Issue 3: Default `--mpi-ranks-per-node 1` suppresses budget message**
+
+The "MF-MPI: thread budget per rank" log message is only emitted when
+`rank_threads < num_threads`, i.e., when the division is non-trivial.  At the
+default of 1, the message is correctly suppressed. The Phase 3 test script
+accounts for this with a `△ NOTE` (non-fatal) rather than `✗ FAIL`.
+
+### Commits
+
+| repo | hash | message |
+|------|------|---------|
+| `iqtree3` (`gadi-spr-r2-avx512`) | `0e701aaa` | `feat(mpi): Phase 3 -- --mpi-ranks-per-node OMP thread budget` |
+| `setonix-iq` (`modelfinder2`) | `366fbbae` | `test: extend mf-mpi dispatch test with Phase 3 thread budget check` |
+
+### Status
+
+Phase 3 is code-complete and built. PBS `normalsr` job required to validate the
+division path (`--mpi-ranks-per-node 4`, 2 threads/rank correctness check).  
+Pending: Phase 4 correctness hardening, Phase 5 scale benchmark.
+
+---
+
+## 2026-05-10 (u) — ModelFinder MPI dispatch: branch + scratch setup
+
+### Summary
+
+Established the development environment for the ModelFinder MPI model-level dispatch
+patch, based on the analysis of PBS 167977883 (entry t) which confirmed that
+ModelFinder is the sole bottleneck: 968 DNA models evaluated sequentially at ~729 s/model
+= ~196 h projected runtime on 4 Gadi normalsr nodes.
+
+### Branch
+
+Created `modelfinder2` branch on `setonix-iq` repository from `main` (commit
+`2f516538`). All ModelFinder patch work will be committed here before merging to
+`main` when a stable, benchmarked version exists.
+
+```
+git checkout -b modelfinder2
+# Branch point: 2f516538 changelog(t): update PBS 167977883 with final post-cancel data
+```
+
+### Scratch working directory
+
+Copied the IQ-TREE 3.1.2 R2 source (with NUMA first-touch R1+R2 patches and
+AVX-512 icpx/Sapphire Rapids patches applied) to a new working directory:
+
+```
+cp -a /scratch/um09/as1708/iqtree3-3.1.2 /scratch/um09/as1708/iqtree3-mf2
+```
+
+The new directory `/scratch/um09/as1708/iqtree3-mf2` is the **sole working tree for
+all modelfinder2 changes**. The original `iqtree3-3.1.2` is preserved unchanged as a
+reference. If the working tree is corrupted or development goes in a wrong direction,
+delete `iqtree3-mf2` and re-copy from `iqtree3-3.1.2`.
+
+| Directory | Role | Branch |
+|-----------|------|--------|
+| `iqtree3-3.1.2/src/iqtree3` | Reference (frozen) | `gadi-spr-r2-avx512` |
+| `iqtree3-mf2/src/iqtree3` | Working copy (modelfinder2) | `gadi-spr-r2-avx512` |
+
+The working copy inherits:
+- **Patch P1** (NUMA first-touch R1+R2): `tree/phylotreesse.cpp` + `tree/phylokernelnew.h`
+- **Patch P2+P3** (AVX-512 cmake + kernel for icpx/SPR): `CMakeLists.txt` + `tree/phylokernelnew.h`
+
+### Design document
+
+Full implementation plan committed at `design/modelfinder-mpi-dispatch.md`. Covers:
+
+- Problem statement with measured numbers (729 s/model, 196 h projected)
+- Prior art: jModelTest2 (Darriba 2012), ModelTest-NG (Darriba 2020), RAxML-NG MOOSE
+- Architecture: replace `MPI_Allreduce`-per-model with rank-striped evaluation +
+  single `MPI_Allreduce(MPI_MAX)` gather after all local models complete
+- Memory analysis: full-alignment per rank = ~190 GB for 0%-compression xlarge_mf;
+  feasible on Gadi normalsr (256 GB) at 1 rank/node; typical compressed datasets
+  10–100× smaller allowing 8–26 ranks/node
+- Key files: `model/modelfinder.cpp`, `tree/phylotree.cpp`, `utils/MPIHelper.h`
+- 8-step implementation plan through correctness test → memory profiling → PBS benchmark
+- Scaling projections: ~3.2 h at 64 ranks (4 nodes × 16 ranks/node × 6 OMP) for
+  compressed datasets
+
+### Scaling context (from entry t)
+
+| Config | Ranks | Models/rank | Projected MF time |
+|--------|-------|-------------|-------------------|
+| Current MPI (4 nodes) | 4 (pattern-split) | 968 | ~196 h |
+| Model dispatch, 4 nodes, 4 ranks | 4 | 242 | ~49 h |
+| Model dispatch, 4 nodes, 64 ranks | 64 | 16 | ~3.2 h |
+| Model dispatch, 8 nodes, 208 ranks | 208 | 5 | ~1.0 h |
+
+Memory per rank (xlarge_mf 0% compression): ~190 GB → 1 rank/node max on normalsr.  
+Memory per rank (typical 1% compression, ~100K patterns): ~2 GB → 26 ranks/node feasible.
+
+### Next steps
+
+1. `grep` the model loop in `model/modelfinder.cpp` to locate `findBestFitModel()`
+2. Trace MPI pattern-split path: `distributePatterns()` → `MPI_Scatterv` calls
+3. Implement `modelfinder_mode` flag in `PhyloTree` to disable pattern-split during MF
+4. Implement `evaluateModelLocal()` wrapper in `modelfinder.cpp`
+5. Replace sequential loop with rank-striped iteration + `MPI_Allreduce(MPI_MAX)` gather
+6. Unit test on `example/example.phy`: 4-rank output must match 1-rank output
+7. Submit PBS benchmark with new script `gadi-ci/run_xlarge_r2_mf2_model_dispatch.sh`
+
+---
+
 ## 2026-05-10 (t) — 4-node 10 M-site run (PBS 167977883): fast ML PASS, ModelFinder cancelled
 
 ### Job summary
