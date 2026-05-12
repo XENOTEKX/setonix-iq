@@ -217,19 +217,25 @@ def main() -> int:
                 print(f"[build] data: {split} runs split, {max(0, saved) // 1024} KB saved")
 
     # 5. Cache-bust index.html (main.js entry + CSS links)
+    # Strip any existing ?v=... before inserting the new stamp so re-runs always work.
     index_html = DOCS / "index.html"
     if index_html.exists():
         html = index_html.read_text()
-        html = html.replace('js/main.js"', f'js/main.js?v={version}"')
-        html = re.sub(r'href="(css/[^"?]+\.css)"', rf'href="\1?v={version}"', html)
+        # Remove any pre-existing site-version meta so we don't duplicate it.
+        html = re.sub(r'\n?\s*<meta name="site-version"[^>]*>', '', html)
+        # Replace main.js reference (with or without existing ?v=)
+        html = re.sub(r'js/main\.js(?:\?v=[^"]*)?"', f'js/main.js?v={version}"', html)
+        # Replace CSS hrefs (with or without existing ?v=)
+        html = re.sub(r'href="(css/[^"?]+\.css)(?:\?v=[^"]*)?"', rf'href="\1?v={version}"', html)
         html = html.replace('<head>', f'<head>\n  <meta name="site-version" content="{version}">', 1)
         index_html.write_text(html)
 
     # 6. Rewrite relative ES-module imports inside docs/js/ with ?v=<stamp>
+    # Patterns strip any existing ?v=... before inserting the current stamp.
     import_re = re.compile(
-        r"""((?:import|from)\s+(?:[^'"]*?\s+from\s+)?['"])((?:\./|\.\./)[^'"?]+\.js)(['"])"""
+        r"""((?:import|from)\s+(?:[^'"]*?\s+from\s+)?['"])((?:\./|\.\./)[^'"?]+\.js)(?:\?v=[^'"]+)?(['"])"""
     )
-    dyn_import_re = re.compile(r"""(import\(['"])((?:\./|\.\./)[^'"?]+\.js)(['"]\))""")
+    dyn_import_re = re.compile(r"""(import\(['"])((?:\./|\.\./)[^'"?]+\.js)(?:\?v=[^'"]+)?(['"]\))""")
     bust_count = 0
     for js in (DOCS / "js").rglob("*.js"):
         text = js.read_text()
