@@ -145,7 +145,8 @@ dashboard:
 	$(PY) "$(AGENT_DIR)/tools/validate.py"
 	$(PY) "$(AGENT_DIR)/tools/build.py"
 	cd "$(AGENT_DIR)" && \
-	    git add docs/ web/data/ && \
+	    git add -f docs/ web/data/ && \
+	    git add logs/runs/ logs/profiles/ 2>/dev/null || true && \
 	    if git diff --cached --quiet; then \
 	        echo "[dashboard] data unchanged, nothing to push"; \
 	    else \
