@@ -27,5 +27,5 @@ gadi-ci/*.e[0-9]*
 *.o[0-9]*
 *.e[0-9]*
 
-# Raw PBS job output archives (kept on scratch, not needed in repo)
+# Raw PBS job output logs (archived separately)
 logs/jobs/
