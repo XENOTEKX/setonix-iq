@@ -175,7 +175,7 @@ SAMPLER_EOF
     export GOMP_SPINCOUNT=10000
 
     START_EPOCH=$(date +%s)
-    mpirun -np 1 \
+    mpirun -np 1 --bind-to none \
         -x "OMP_NUM_THREADS=${THREADS}" \
         -x "OMP_DYNAMIC=false" \
         -x "OMP_PROC_BIND=close" \
