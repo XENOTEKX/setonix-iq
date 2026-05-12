@@ -3,7 +3,7 @@
 //   colour = (dataset, platform). Gadi is drawn with triangle markers so the
 //   two platforms can be distinguished at a glance.
 
-import { platformColour, dimLegendHidden } from '../utils.js?v=b53a2b04f6be';
+import { platformColour, dimLegendHidden } from '../utils.js?v=9cdc4334baef';
 
 function platformOf(r) {
   return r.platform || (r.pbs_id ? 'gadi' : (r.slurm_id ? 'setonix' : 'unknown'));
