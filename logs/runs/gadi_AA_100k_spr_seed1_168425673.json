@@ -1,0 +1,74 @@
+{
+  "run_id": "gadi_AA_100k_spr_seed1_168425673",
+  "label": "AA_100k_spr_seed1",
+  "platform": "gadi",
+  "run_type": "cpu_bench",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_aa_100k",
+  "data_type": "AA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "threads": 103,
+  "seed": 1,
+  "timing": [
+    {
+      "command": "perf-report ... numactl --localalloc iqtree3 -s alignment_100000.phy -nt 103 -seed 1",
+      "time_s": 1169.556
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 1169.556,
+    "lnL": -7541976.86,
+    "all_pass": true
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "kernel": "",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/sa0557/iqtree2/cpu_opt_merge/builds/build-intel-vanila/iqtree3",
+    "iqtree_version": "",
+    "pbs": {
+      "job_id": "168425673.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "104",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "cpu_opt_merge_icx_avx512_spr",
+  "perf_report": "/scratch/dx61/as1708/cpu_bench/profiles/AA_100k_spr_seed1_168425673/perf_report.html",
+  "profile": {
+    "metrics": {
+      "IPC": 1.8781,
+      "cache-miss-rate": 56.0247,
+      "branch-miss-rate": 0.0204,
+      "L1-dcache-miss-rate": 1.1888,
+      "LLC-miss-rate": 66.9374,
+      "dTLB-miss-rate": 0.0009,
+      "cycles": 286932415594128,
+      "instructions": 538898621070773,
+      "cache-references": 2919852397346,
+      "cache-misses": 1635838928779,
+      "branch-instructions": 58866862503744,
+      "branch-misses": 12020735421,
+      "L1-dcache-loads": 294827719167183,
+      "L1-dcache-load-misses": 3504855553758,
+      "LLC-loads": 247973277892,
+      "LLC-load-misses": 165986817719,
+      "dTLB-loads": 295132876997487,
+      "dTLB-load-misses": 2610897717,
+      "iTLB-load-misses": 88975970
+    },
+    "perf_stat": "/scratch/dx61/as1708/cpu_bench/profiles/AA_100k_spr_seed1_168425673/perf_stat.txt"
+  }
+}

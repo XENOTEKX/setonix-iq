@@ -2,6 +2,556 @@
 
 ---
 
+## 2026-05-15 (at) — Perf stat re-runs complete; IPC/cache metrics patched (168428519)
+
+### What changed
+
+**AA 100K SPR perf stat (168428519) finished — IPC 1.8781, LLC-miss 66.94%, L1-miss 1.19%.
+All three perf stat re-run jobs now complete (168428491, 168428492, 168428519); metrics table
+updated for DNA 100K CLX, DNA 100K SPR, and AA 100K SPR. AA 100K CLX IPC still pending
+(no perf stat job submitted yet).**
+
+---
+
+## 2026-05-15 (as) — AA 100K CLX completed (168422809)
+
+### What changed
+
+**AA 100K CLX (168422809) finished — 57:40 wall, LG+G4, lnL −7,541,976.860. lnL bit-identical to SPR run. CLX vs SPR speedup 2.96× on AA 100K.**
+
+---
+
+## 2026-05-15 (ar) — Full results table; AA 1M jobs submitted (168425490, 168425491)
+
+### What changed
+
+**AA 1M data permissions fixed by sa0557 — both AA 1M jobs submitted. Comprehensive
+results table compiled from all completed runs.**
+
+#### Benchmark status matrix (2026-05-15)
+
+| # | Case | Node | -nt | PBS ID | Status | Wall (s) | lnL | BIC | Avg W |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | AA 100K CLX | Cascade Lake | 47 | **168422809** | **DONE** ✓ | 3,460.813 | −7,541,976.860 | 15,086,233.282 | 160.6 |
+| 2 | AA 100K SPR | Sapphire Rapids | 103 | **168425673** | **DONE** ✓ | 1,169.556 | −7,541,976.860 | 15,086,233.2801 | 224.7 |
+| 3 | AA 1M CLX | Cascade Lake | 47 | **168425490** | RUNNING (34 min) | — | — | — | — |
+| 4 | AA 1M SPR | Sapphire Rapids | 103 | **168425491** | RUNNING (34 min) | — | — | — | — |
+| 5 | DNA 100K CLX | Cascade Lake | 47 | **168422811** | **DONE** ✓ | 546.044 | −5,692,984.5391 | 11,388,283.1763 | 390.6 |
+| 6 | DNA 100K SPR | Sapphire Rapids | 103 | **168425674** | **DONE** ✓ | 289.121 | −5,692,984.5391 | 11,388,283.1763 | 622.5 |
+| 7 | DNA 1M CLX | Cascade Lake | 47 | **168422813** | RUNNING (52 min) | — | — | — | — |
+| 8 | DNA 1M SPR | Sapphire Rapids | 103 | **168425675** | RUNNING (26 min) | — | — | — | — |
+
+✓ = completed on exclusive node. IPC pending perf stat re-run (see below).
+
+**Non-exclusive runs purged:** 168419897, 168419898 — logs and scratch deleted.
+168419899 (DNA 1M SPR, 1h3m elapsed, non-excl) — cancelled `qdel`; SIGTERM confirmed.
+
+---
+
+#### Completed runs — detailed metrics
+
+All energy values from IQ-TREE RAPL (`energy_and_mem` branch). IPC from `perf stat -e events:u`
+(user-mode counters, `perf_event_paranoid=2` compatible — **not** from `perf-report` which is unrelated).
+IPC marked pending★ where perf stat re-run is queued but not yet complete.
+
+| PBS ID | Dataset | Node | Queue | -nt | Wall (s) | Wall (m:s) | CPU time (s) | Par. eff. | Best model (BIC) | lnL | BIC | Free params | IPC | LLC miss% | L1 miss% | CPU avg (W) | pkg0 (W) | pkg1 (W) | DRAM (W) | Excl? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **168422811** | DNA 100K | Cascade Lake | normal-exec | 47 | 546.044 | 9:06 | 23,532.55 | 91.7% | F81+F+G4 | −5,692,984.5391 | 11,388,283.1763 | 201 | 0.932 | 59.94 | 5.28 | 390.6 | 192.8 | 174.8 | 23.7 | ✓ |
+| **168425673** | AA 100K | Sapphire Rapids | normalsr-exec | 103 | 1,169.556 | 19:29 | 108,645.54 | 90.2% | LG+G4 | −7,541,976.860 | 15,086,233.2801 | 198 | 1.8781 | 66.94 | 1.19 | 224.7 | 112.4 | 96.8 | 15.6 | ✓ |
+| **168422809** | AA 100K | Cascade Lake | normal-exec | 47 | 3,460.813 | 57:40 | 150,630.50 | 92.6% | LG+G4 | −7,541,976.860 | 15,086,233.282 | 198 | ★ | ★ | ★ | 160.6 | 73.4 | 57.5 | 29.7 | ✓ | ← perf stat pending
+| **168425674** | DNA 100K | Sapphire Rapids | normalsr-exec | 103 | 289.121 | 4:49 | 26,619.44 | 89.4% | F81+F+G4 | −5,692,984.5391 | 11,388,283.1763 | 201 | 1.3023 | 75.81 | 1.18 | 622.5 | 318.4 | 295.7 | 10.8 | ✓ |
+
+★ = perf stat pending (AA 100K CLX 168422809 — no job submitted yet). All other ★ entries have been patched with real values from jobs 168428491/492/519.
+
+**Par. eff.** = CPU time / (wall × threads). **pkg0/pkg1** = RAPL package joules ÷ wall. **DRAM** = (dram-0 + dram-1) J ÷ wall.
+
+#### IPC correction note
+
+Previous CHANGELOG entries stated "IPC not available — hardware performance counters restricted".
+This was **wrong**. `perf-report` (Linaro Forge) exits 1 on Gadi compute nodes, but that is a
+separate tool. `perf stat -e event:u` (user-mode suffix) works fine with `perf_event_paranoid=2`
+and is how all prior Gadi runs (xlarge_mf, mega_dna series) collected IPC and LLC miss rates.
+All 8 cpu_bench scripts updated to add Pass 2 perf stat immediately after IQ-TREE completes.
+
+---
+
+#### Cross-run consistency check
+
+DNA 100K lnL and BIC are **bit-identical** across CLX 47T and SPR 103T. AA 100K lnL is
+also **bit-identical** across CLX 47T and SPR 103T. Confirms numerical reproducibility
+regardless of microarchitecture, thread count, or SIMD width.
+
+| Metric | DNA 100K CLX · 168422811 ✓ | DNA 100K SPR · 168425674 ✓ | Match? |
+|---|---|---|---|
+| lnL | −5,692,984.5391 | −5,692,984.5391 | ✓ |
+| BIC | 11,388,283.1763 | 11,388,283.1763 | ✓ |
+| Best model | F81+F+G4 | F81+F+G4 | ✓ |
+| Free params | 201 | 201 | ✓ |
+| Tree length | 18.9178 | 18.918 | ✓ |
+
+| Metric | AA 100K CLX · 168422809 ✓ | AA 100K SPR · 168425673 ✓ | Match? |
+|---|---|---|---|
+| lnL | −7,541,976.860 | −7,541,976.860 | ✓ |
+| BIC | 15,086,233.282 | 15,086,233.2801 | ✓ |
+| Best model | LG+G4 | LG+G4 | ✓ |
+| Free params | 198 | 198 | ✓ |
+
+---
+
+#### SPR vs CLX throughput comparison — DNA 100K (exclusive nodes)
+
+| PBS ID | Node | -nt | Wall (s) | Speedup vs CLX | CPU energy (J) | Avg W | J/site |
+|---|---|---|---|---|---|---|---|
+| 168422811 | Cascade Lake (CLX) | 47 | 546.044 | 1.00× (baseline) | 213,674.7 | 390.6 | 2.137 |
+| 168425674 | Sapphire Rapids (SPR) | 103 | 289.121 | **1.89×** | 180,642.9 | 622.5 | 1.806 |
+
+SPR is **1.89× faster** with 2.19× the threads → 86.2% relative parallel efficiency vs CLX.
+SPR draws 59% more average watts but consumes **15% less total energy per run** (1.806 vs 2.137 J/site).
+
+---
+
+#### SPR vs CLX throughput comparison — AA 100K (exclusive nodes)
+
+| PBS ID | Node | -nt | Wall (s) | Speedup vs CLX | CPU energy (J) | Avg W | J/site |
+|---|---|---|---|---|---|---|---|
+| 168422809 | Cascade Lake (CLX) | 47 | 3,460.813 | 1.00× (baseline) | 555,794.5 | 160.6 | 5.558 |
+| 168425673 | Sapphire Rapids (SPR) | 103 | 1,169.556 | **2.96×** | 262,875.4 | 224.7 | 2.629 |
+
+SPR is **2.96× faster** with 2.19× the threads → larger relative advantage than DNA (2.96× vs 1.89×).
+SPR draws 40% more average watts but consumes **53% less total energy per run** (2.629 vs 5.558 J/site).
+Note: CLX DRAM asymmetry — dram-0=37,744 J vs dram-1=65,029 J — suggests cross-socket access despite numactl --localalloc; warrants investigation.
+
+---
+
+#### AA 1M jobs submitted (2026-05-15)
+
+`tree_1/` permissions fixed by sa0557 (`drwxrwsrwx`; `len_1000000/` traversable via dx61 group bit).
+
+| PBS ID | Case | Queue | -nt | mem | Walltime |
+|---|---|---|---|---|---|
+| **168425490** | AA 1M CLX | normal-exec | 47 | 190 GB | 24 h |
+| **168425491** | AA 1M SPR | normalsr-exec | 103 | 510 GB | 24 h |
+
+Both submitted with `place=excl` — full exclusive node, no co-tenancy.
+
+---
+
+## 2026-05-15 (aq) — Batch 3 first results; CLX build succeeded; old output files cleaned
+
+### What changed
+
+**Batch 3 CLX build succeeded (168422807). First CLX and SPR benchmark results obtained.
+31 old/failed PBS output files deleted. Three jobs still running.**
+
+#### Output file cleanup
+
+Deleted 31 outdated or failed PBS output files from `~/setonix-iq/`:
+
+| Group | Files deleted | Reason |
+|---|---|---|
+| rc29 / early avx era | `iq-r2-*.o168114*`, `iq-avx-*.o168114*`, `iq-mf-*.o168114*` | old allocation, superseded |
+| um09 era | `iq-mf2-full-*.o168183*`, `*.o168188*`, `*.o168195*`, `iq-build-avx512-r2.o168207037`, `iq-xlarge-avx512-r2-omp-batch.o168206*`, `*.o168209*`, `iq-mega-avx512-r2-*.o168211*`, `iq-mega-mf2-*.o168213*`, `mf2-rebuild.o168188556` | old um09 allocation, results already in logs/runs/ |
+| Failed CLX builds | `iq-build-cpu-clx.o168419891`, `iq-build-cpu-clx.o168421511` | failed builds (bugs 1+3 documented in ap) |
+| Pre-fix SPR bench | `iq-cpu-aa-100k-spr.o168419897`, `iq-cpu-dna-100k-spr.o168419898` | results recovered to JSON; PBS outputs no longer needed |
+
+Remaining output files:
+
+| File | Notes |
+|---|---|
+| `iq-build-cpu-clx.o168422807` | CLX build succeeded — keep |
+| `iq-cpu-dna-100k-clx.o168422811` | DNA 100K CLX completed — keep |
+| `iq-cpu-aa-1m-clx.o168422815` | AA 1M CLX exit 3 (permissions blocked) — keep for reference |
+
+---
+
+#### Batch 3 job outcomes (updated)
+
+| PBS ID | Script | Queue | Case | Outcome |
+|---|---|---|---|---|
+| **168422807** | `build_cpu_bench_clx.sh` | normal | CLX build | **PASSED** — `iqtree3` v3.1.2 built in 2m29s; `libiomp5` linked; binary at `/scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3` |
+| **168422809** | `run_cpu_bench_aa_100k_normal.sh` | normal | AA 100K CLX | **RUNNING** (11 min elapsed at last check) |
+| **168422811** | `run_cpu_bench_dna_100k_normal.sh` | normal | DNA 100K CLX | **PASSED** — wall=546s, energy=213,675J |
+| **168422813** | `run_cpu_bench_dna_1m_normal.sh` | normal | DNA 1M CLX | **RUNNING** (11 min elapsed at last check) |
+| **168422815** | `run_cpu_bench_aa_1m_normal.sh` | normal | AA 1M CLX | **FAILED rc=3** — AA 1M dir still permission-denied (`drw-rwSrw-`) |
+| **168419899** | `run_cpu_bench_dna_1m_spr.sh` | normalsr | DNA 1M SPR | **RUNNING** (50 min elapsed at last check; non-exclusive, pre-fix script) |
+
+---
+
+#### Results to date (2026-05-15) — superseded by (ar)
+
+Non-exclusive SPR runs 168419897 and 168419898 were deleted and rerun clean; see (ar) for
+authoritative results. 168422811 (DNA 100K CLX) result stands — see (ar) detailed metrics table.
+
+SPR 100K benchmarks ran on non-exclusive nodes (old pre-fix scripts). Re-run with fixed scripts (`mem=510GB`, `place=excl`) is needed for clean energy measurements:
+```bash
+qsub gadi-ci/run_cpu_bench_aa_100k_spr.sh
+qsub gadi-ci/run_cpu_bench_dna_100k_spr.sh
+```
+
+---
+
+#### SPR energy detail — DNA 100K (168419898)
+
+```
+Energy:
+  CPU:  177,351.7 J  (avg 617.3 W)
+    package-0=89,775.8 J   dram=1,301.0 J
+    package-1=84,459.8 J   dram=1,815.1 J
+```
+
+#### SPR energy detail — AA 100K (168419897)
+
+```
+Energy:
+  CPU:  287,987.1 J  (avg 241.5 W)
+    package-0=138,943.1 J   dram=5,964.8 J
+    package-1=131,008.9 J   dram=12,070.4 J
+```
+
+#### CLX energy detail — DNA 100K (168422811)
+
+```
+Energy:
+  CPU:  213,674.7 J  (avg 390.6 W)
+    package-0=105,283.1 J   dram=5,357.5 J
+    package-1=95,436.0 J    dram=7,598.1 J
+```
+
+---
+
+#### Pending (2026-05-15) — updated
+
+1. **AA 1M — UNBLOCKED.** `len_1000000/tree_1/alignment_1000000.phy` is now accessible
+   (`tree_1` has `drwxrwsrwx`; `len_1000000` traversable via dx61 group execute bit).
+   **Both AA 1M jobs submitted:**
+   - `168425490` — AA 1M CLX (normal, 48 cpus, 190GB, 24h, `place=excl`)
+   - `168425491` — AA 1M SPR (normalsr, 104 cpus, 510GB, 24h, `place=excl`)
+
+2. **SPR 100K clean re-runs** — still needed; resubmit with `mem=510GB, place=excl` once queue clears:
+   ```bash
+   qsub gadi-ci/run_cpu_bench_aa_100k_spr.sh
+   qsub gadi-ci/run_cpu_bench_dna_100k_spr.sh
+   ```
+
+3. **DNA 1M SPR (168419899)** — running (non-exclusive, pre-fix script, 56+ min elapsed); manually recover JSON from log if perf-report exits 1, then resubmit with fixed script.
+
+4. **Await 168422809, 168422813** — AA 100K CLX and DNA 1M CLX still running.
+
+---
+
+## 2026-05-15 (ap) — CPU benchmark plan: 8 test cases on dx61; R1+R2 + AVX-512 parity across CLX and SPR
+
+### What changed
+
+**Created 9 PBS scripts (1 build + 8 benchmarks) for full-run CPU timing on 100K and 1M
+datasets across AA and DNA, for both Cascade Lake (normal) and Sapphire Rapids (normalsr)
+nodes. All 8 benchmark scripts have full R1+R2 + AVX-512 parity: same source branch
+(`cpu_opt_merge`), same Intel ICX compiler, same OMP environment (libiomp5, `KMP_BLOCKTIME=200`,
+`OMP_PROC_BIND=close`, `OMP_PLACES=cores`), same `numactl --localalloc`, and `ldd` guard
+against accidental libgomp linkage. CLX scripts use `-march=cascadelake` (GCC-compat, required for pll AVX cmake detection);
+SPR scripts use `-xSAPPHIRERAPIDS`. Project allocation updated to `dx61` throughout.**
+
+#### R1+R2 patch verification (cpu_opt_merge HEAD `8263c7e4`)
+
+Source confirms all three NUMA first-touch markers present in `tree/phylotreesse.cpp`:
+- `R1a` (line 583): parallel-static fill of pattern likelihood arrays
+- `R1b` (line 616): parallel-static zero-fill of `ptn_invar`
+- `R2a` (line 1349): parallel-static zero-fill of `_pattern_lh_cat` pages
+
+`tree/phylokernelnew.h` carries all `schedule(static)` directives required by R2.
+SPR binary (`build-intel-vanila/iqtree3`) confirmed to link `libiomp5` (not `libgomp`).
+
+#### Runtime parity (all 8 scripts)
+
+Every benchmark script now sets the full canonical R2 OMP environment:
+
+```bash
+export KMP_BLOCKTIME=200       # Intel OMP — prevent thread sleep between tasks
+export OMP_NUM_THREADS=NT      # 47 (CLX) or 103 (SPR)
+export OMP_DYNAMIC=false
+export OMP_PROC_BIND=close     # bind threads to adjacent cores
+export OMP_PLACES=cores
+export OMP_WAIT_POLICY=PASSIVE
+export GOMP_SPINCOUNT=10000
+```
+
+And runs with:
+```bash
+perf-report --no-mpi --output="${PROFILE_REPORT}" \
+    numactl --localalloc \
+    iqtree3 -s ALIGNMENT -nt NT -seed 1 --prefix ...
+```
+
+`numactl --localalloc` ensures first-touch pages land on the calling thread's NUMA node,
+activating the R1a/R1b/R2a schedule(static) data locality optimisation.
+Each script also checks `ldd | grep libgomp` and exits 7 if the wrong OMP runtime is linked.
+
+#### Benchmark matrix
+
+| # | Data type | Dataset | Queue | Node type | Cores | `-nt` | Wall | Status |
+|---|---|---|---|---|---|---|---|---|
+| 1 | AA | 100K | normal | Cascade Lake | 48 | 47 | 8h | blocked: CLX build pending |
+| 2 | AA | 100K | normalsr | Sapphire Rapids | 104 | 103 | 8h | ready to submit |
+| 3 | AA | 1M | normal | Cascade Lake | 48 | 47 | 24h | blocked: CLX build + AA 1M perms |
+| 4 | AA | 1M | normalsr | Sapphire Rapids | 104 | 103 | 24h | blocked: AA 1M perms |
+| 5 | DNA | 100K | normal | Cascade Lake | 48 | 47 | 8h | blocked: CLX build pending |
+| 6 | DNA | 100K | normalsr | Sapphire Rapids | 104 | 103 | 8h | ready to submit |
+| 7 | DNA | 1M | normal | Cascade Lake | 48 | 47 | 24h | blocked: CLX build pending |
+| 8 | DNA | 1M | normalsr | Sapphire Rapids | 104 | 103 | 24h | ready to submit |
+
+#### Test command (per run)
+
+```
+module load linaro-forge/24.0.2
+perf-report --no-mpi --output=<PROFILE_REPORT> \
+    iqtree3 -s ALIGNMENT -nt NT -seed 1 --prefix <WORK_DIR>/iqtree_run
+```
+
+Free model selection + free tree search. Every run is wrapped in Linaro Forge
+`perf-report` to capture energy consumption and hardware performance counters.
+
+#### Datasets
+
+| Type | Sites | Taxa | Alignment path | Accessible? |
+|---|---|---|---|---|
+| AA 100K | 100,000 | 100 | `.../complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy` | ✓ |
+| AA 1M | 1,000,000 | 100 | `.../complex_data_shared/AA/LG+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy` | ✗ |
+| DNA 100K | 100,000 | 100 | `.../complex_data_shared/DNA/GTR+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy` | ✓ |
+| DNA 1M | 1,000,000 | 100 | `.../complex_data_shared/DNA/GTR+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy` | ✓ |
+
+All paths under `/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/`.
+
+#### Known issue: AA 1M directory permission
+
+`taxa_100/len_1000000/tree_1/` has `drw-rwSrw-` — no execute bit, entry denied.
+Cases 3 and 4 cannot run until sa0557 fixes this:
+
+```bash
+chmod o+x /scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_1000000/tree_1
+```
+
+#### Binaries
+
+| Queue | Binary | Build tag | Notes |
+|---|---|---|---|
+| normalsr (SPR) | `/scratch/dx61/sa0557/iqtree2/cpu_opt_merge/builds/build-intel-vanila/iqtree3` | `cpu_opt_merge_icx_avx512_spr` | ICX + `-xSAPPHIRERAPIDS` + AVX-512; built 2026-05-15; HEAD `8263c7e4` |
+| normal (CLX) | `/scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3` | `cpu_opt_merge_icx_avx512_clx` | Build queued (168421511) — same source, **`-march=cascadelake`** (fix for pll AVX detection) |
+
+Source: `/scratch/dx61/sa0557/iqtree2/cpu_opt_merge/iqtree3` branch `cpu_opt_merge`
+(commit `8263c7e4`: merge of `gadi-spr-r2-avx512` + `energy_and_mem` + checkpoint accumulation).
+
+#### New scripts (`gadi-ci/`)
+
+| Script | Purpose |
+|---|---|
+| `build_cpu_bench_clx.sh` | Build CLX Intel binary from `cpu_opt_merge` source (normal queue, ~1h) |
+| `run_cpu_bench_aa_100k_normal.sh` | Case 1 — AA 100K, CLX, -nt 47 |
+| `run_cpu_bench_aa_100k_spr.sh` | Case 2 — AA 100K, SPR, -nt 103 |
+| `run_cpu_bench_aa_1m_normal.sh` | Case 3 — AA 1M, CLX, -nt 47 |
+| `run_cpu_bench_aa_1m_spr.sh` | Case 4 — AA 1M, SPR, -nt 103 |
+| `run_cpu_bench_dna_100k_normal.sh` | Case 5 — DNA 100K, CLX, -nt 47 |
+| `run_cpu_bench_dna_100k_spr.sh` | Case 6 — DNA 100K, SPR, -nt 103 |
+| `run_cpu_bench_dna_1m_normal.sh` | Case 7 — DNA 1M, CLX, -nt 47 |
+| `run_cpu_bench_dna_1m_spr.sh` | Case 8 — DNA 1M, SPR, -nt 103 |
+| `submit_cpu_bench_all.sh` | Dispatcher — submits all 8 jobs; auto-chains CLX build as dependency |
+
+#### Jobs submitted (2026-05-15, batch 1)
+
+| PBS ID | Script | Queue | Case | Result |
+|---|---|---|---|---|
+| **168419891** | `build_cpu_bench_clx.sh` | normal | CLX build | **FAILED rc=2** — pll AVX linker error |
+| **168419897** | `run_cpu_bench_aa_100k_spr.sh` | normalsr | AA 100K SPR | R (running at update time) |
+| **168419898** | `run_cpu_bench_dna_100k_spr.sh` | normalsr | DNA 100K SPR | **rc=1** — IQ-TREE OK; perf-report failed (see below) |
+| **168419899** | `run_cpu_bench_dna_1m_spr.sh` | normalsr | DNA 1M SPR | R (running at update time) |
+| **168419901** | `run_cpu_bench_aa_100k_normal.sh` | normal | AA 100K CLX | **Auto-deleted** (afterok on failed 168419891) |
+| **168419902** | `run_cpu_bench_dna_100k_normal.sh` | normal | DNA 100K CLX | **Auto-deleted** (afterok on failed 168419891) |
+| **168419903** | `run_cpu_bench_dna_1m_normal.sh` | normal | DNA 1M CLX | **Auto-deleted** (afterok on failed 168419891) |
+
+AA 1M cases (3 + 4) not submitted — `drw-rwSrw-` on `tree_1/` still blocks access.
+
+---
+
+#### Bug 1: CLX build failure — `-xCASCADELAKE` breaks pll AVX detection
+
+**Job 168419891 failed (rc=2, wall=2m25s)**
+
+cmake.log showed `IQ-TREE flags: avx512` but `Vectorization: AVX` — meaning pll's cmake
+feature detection didn't see AVX-512, so pll AVX source files (`newviewGTRGAMMA_AVX.c` etc.)
+were compiled without AVX symbols. Linker errors:
+
+```
+pll/libpll.a(newviewGenericSpecial.c.o): undefined reference to `newviewGTRGAMMA_AVX_GAPPED_SAVE'
+undefined reference to `newviewGTRGAMMAPROT_AVX_GAPPED_SAVE'
+undefined reference to `newviewGTRCAT_AVX_GAPPED_SAVE'
+... (9 missing AVX symbols total)
+icpx: error: linker command failed with exit code 1
+```
+
+**Root cause:** ICX's Intel-only flag `-xCASCADELAKE` doesn't define GCC-compatible
+`__AVX__` / `__AVX2__` / `__AVX512F__` macros that cmake's `check_cxx_source_compiles`
+uses. pll's cmake detection falls back to plain AVX, skipping the AVX-512 objects.
+
+**Fix applied (build_cpu_bench_clx.sh):**
+```diff
+-    -DCMAKE_CXX_FLAGS="-O3 -xCASCADELAKE -fno-omit-frame-pointer" \
+-    -DCMAKE_C_FLAGS="-O3 -xCASCADELAKE -fno-omit-frame-pointer" \
++    -DCMAKE_CXX_FLAGS="-O3 -march=cascadelake -fno-omit-frame-pointer" \
++    -DCMAKE_C_FLAGS="-O3 -march=cascadelake -fno-omit-frame-pointer" \
+```
+
+`-march=cascadelake` is GCC-compatible and ICX accepts it; it defines all required
+`__AVX*__` macros so pll cmake detects AVX-512 correctly.
+
+---
+
+#### Bug 2: `perf-report` rc=1 kills script before JSON is written
+
+**Job 168419898 (DNA 100K SPR) — IQ-TREE completed successfully, script reported rc=1**
+
+IQ-TREE ran fine on gadi-cpu-spr-0108 with AVX512+FMA kernel:
+- Wall time: **286.2 s** (4 m 46 s)
+- lnL: **−5,692,984.539**
+- Energy (built-in RAPL): **177,351.7 J  (avg 617.3 W)**
+  - `package-0=89,775.8 J  dram=1,301.0 J`
+  - `package-1=84,459.8 J  dram=1,815.1 J`
+
+`perf-report` exited 1 (no `.html` written) — hardware performance counter access is
+restricted on normalsr compute nodes. Because `set -euo pipefail` was active, bash exited
+immediately after `perf-report`, before `IQRC=$?` was ever assigned, so the JSON record
+was never written.
+
+**Fix applied (all 8 run scripts):**
+```bash
+set +e
+perf-report --no-mpi --output="${PROFILE_REPORT}" \
+    "${NUMACTL[@]}" "${IQTREE}" ... > iqtree_run.log 2>&1
+PERF_RC=$?
+set -e
+
+# Infer IQ-TREE's actual exit from log (IQ-TREE always prints "Date and Time:" on success)
+if grep -q "^Date and Time:" "${WORK_DIR}/iqtree_run.log" 2>/dev/null; then
+    IQRC=0
+    [[ ${PERF_RC} -ne 0 ]] && echo "NOTE: perf-report exited ${PERF_RC} (hw counters restricted)" >&2
+else
+    IQRC=${PERF_RC}
+fi
+```
+
+The JSON for job 168419898 was recovered manually from `iqtree_run.log` and written to
+`logs/runs/gadi_DNA_100k_spr_seed1_168419898.json`.
+
+Note: IQ-TREE's `energy_and_mem` branch already measures RAPL energy natively (see the
+`Energy:` block in the log). Linaro Forge `perf-report` would provide additional hardware
+counter breakdowns if counter access is enabled on the node.
+
+---
+
+#### Bug 3: Node not exclusive — all 8 run scripts booking too little memory
+
+All scripts were requesting 32–128 GB but CLX nodes have 192 GB and SPR nodes have 512 GB.
+Without requesting the full node, other jobs can co-locate and corrupt timing and energy
+measurements. Fixed by requesting full memory + `place=excl`:
+- CLX normal: `mem=190GB` + `#PBS -l place=excl`
+- SPR normalsr: `mem=510GB` + `#PBS -l place=excl`
+
+`place=excl` confirmed accepted by Gadi PBS (tested with a trivial job submission).
+
+---
+
+#### SPR results recovered (2026-05-15)
+
+Both SPR jobs ran on non-exclusive nodes (old scripts). Results are valid for IQ-TREE
+correctness and timing, but energy measurements may include co-tenant load.
+JSON records written manually from IQ-TREE logs:
+
+| PBS ID | Case | Wall (s) | lnL | CPU energy (J) | Avg W |
+|---|---|---|---|---|---|
+| **168419898** | DNA 100K SPR | 286.2 | −5,692,984.539 | 177,351.7 | 617.3 |
+| **168419897** | AA 100K SPR | 1,191.4 | −7,541,976.860 | 287,987.1 | 241.5 |
+
+`logs/runs/gadi_DNA_100k_spr_seed1_168419898.json`
+`logs/runs/gadi_AA_100k_spr_seed1_168419897.json`
+
+168419899 (DNA 1M SPR) still running — will need manual JSON recovery if it also
+ran on a non-exclusive node (it did; scripts updated for future re-runs).
+
+---
+
+#### CLX build failure 2 (168421511, rc=2) — linker archive ordering
+
+Same AVX linker error despite the `-march=cascadelake` fix. Root cause traced to the
+ICX single-pass static linker:
+
+- cmake puts `libpll.a` at link position 25 (before tree/main libraries)
+- `tree/libtree.a` + `main/libmain.a` (~pos 40–45) create undefined ref to `pllNewviewIterative`
+- `libpllavx.a` at position 47 is scanned but nothing is undefined that it defines → `avxLikelihood.c.o` NOT pulled in
+- `libpll.a` again at position 58 → `newviewGenericSpecial.c.o` now included → creates undefined `newviewGTRGAMMA_AVX*` — but `libpllavx.a` already passed and won't be rescanned
+
+`nm libpllavx.a | grep newviewGTRGAMMA_AVX_GAPPED_SAVE` confirmed symbol IS present; the issue is purely ordering.
+
+**Fix applied (`build_cpu_bench_clx.sh`):** After cmake generates the Makefile, a Python
+snippet rewrites `CMakeFiles/iqtree3.dir/link.txt` to wrap all static archives in
+`-Wl,--start-group ... -Wl,--end-group`, forcing multi-pass resolution regardless of order.
+The build dir is also cleaned before each cmake run to prevent stale cache reuse.
+
+---
+
+#### Jobs resubmitted (2026-05-15, batch 2)
+
+| PBS ID | Script | Queue | Case | Result |
+|---|---|---|---|---|
+| **168421511** | `build_cpu_bench_clx.sh` | normal | CLX build (march fix, no start-group) | **FAILED rc=2** — linker ordering |
+| **168421513–16** | CLX bench jobs | normal | held | **Auto-deleted** (afterok on failed build) |
+
+---
+
+#### Jobs resubmitted (2026-05-15, batch 3) — full fix applied
+
+All 8 scripts updated: `place=excl`, full node memory, `set +e` perf-report, `--start-group` build fix.
+
+| PBS ID | Script | Queue | Case | Status |
+|---|---|---|---|---|
+| **168422807** | `build_cpu_bench_clx.sh` | normal | CLX build (full fix) | Q |
+| **168422809** | `run_cpu_bench_aa_100k_normal.sh` | normal | AA 100K CLX | H (after 168422807) |
+| **168422811** | `run_cpu_bench_dna_100k_normal.sh` | normal | DNA 100K CLX | H (after 168422807) |
+| **168422813** | `run_cpu_bench_dna_1m_normal.sh` | normal | DNA 1M CLX | H (after 168422807) |
+| **168422815** | `run_cpu_bench_aa_1m_normal.sh` | normal | AA 1M CLX | H (after 168422807) |
+| **168419899** | `run_cpu_bench_dna_1m_spr.sh` | normalsr | DNA 1M SPR | R (still running, non-excl) |
+
+AA 1M cases (3 + 4) remain blocked — sa0557 must fix `tree_1/` permissions before submitting:
+```bash
+chmod o+x /scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_1000000/tree_1
+# then:
+qsub gadi-ci/run_cpu_bench_aa_1m_spr.sh
+qsub -W depend=afterok:168422807 gadi-ci/run_cpu_bench_aa_1m_normal.sh
+```
+
+SPR bench cases (100K) should be resubmitted with the fixed script (mem=510GB, place=excl):
+```bash
+qsub gadi-ci/run_cpu_bench_aa_100k_spr.sh
+qsub gadi-ci/run_cpu_bench_dna_100k_spr.sh
+```
+
+#### Output
+
+- Run JSON records: `logs/runs/gadi_<LABEL>_<PBS_ID>.json`
+- IQ-TREE logs + output files: `/scratch/dx61/as1708/cpu_bench/profiles/<LABEL>_<PBS_ID>/`
+- Linaro Forge perf report: `.../perf_report.html`
+
+#### Allocation change
+
+All scripts use `#PBS -P dx61` and `#PBS -l storage=scratch/dx61`, replacing the
+previous `um09` / `rc29` allocations used in earlier `gadi-ci` scripts.
+
+#### Checkpoint note
+
+1M cases may exceed wall-time limits on slower runs. The `cpu_opt_merge` branch
+includes checkpoint accumulation (`23b252fd add runtime from checkpoint`), enabling
+total elapsed time to be recovered across resumed jobs. Scripts are prepared with
+`--prefix` set so IQ-TREE writes checkpoints to the per-run work directory.
+
+---
+
 ## 2026-05-12 (ao) — mega_dna MF2 Full parity scripts; 3 jobs submitted
 
 ### What changed

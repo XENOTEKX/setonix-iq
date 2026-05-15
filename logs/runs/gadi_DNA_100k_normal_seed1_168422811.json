@@ -1,0 +1,76 @@
+{
+  "run_id": "gadi_DNA_100k_normal_seed1_168422811",
+  "label": "DNA_100k_normal_seed1",
+  "platform": "gadi",
+  "run_type": "cpu_bench",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_dna_100k",
+  "data_type": "DNA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "threads": 47,
+  "seed": 1,
+  "timing": [
+    {
+      "command": "perf-report ... numactl --localalloc iqtree3 -s alignment_100000.phy -nt 47 -seed 1",
+      "time_s": 546.044
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 546.044,
+    "lnL": -5692984.539,
+    "all_pass": true
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "kernel": "",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3",
+    "iqtree_version": "",
+    "pbs": {
+      "job_id": "168422811.gadi-pbs",
+      "queue": "normal-exec",
+      "ncpus": "48",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "cpu_opt_merge_icx_avx512_clx",
+  "perf_report": "/scratch/dx61/as1708/cpu_bench/profiles/DNA_100k_normal_seed1_168422811/perf_report.html",
+  "profile": {
+    "metrics": {
+      "IPC": 0.932,
+      "cache-miss-rate": 53.8622,
+      "branch-miss-rate": 0.0475,
+      "L1-dcache-miss-rate": 5.2815,
+      "LLC-miss-rate": 59.9414,
+      "dTLB-miss-rate": 0.0044,
+      "iTLB-miss-rate": 66.6716,
+      "cycles": 76212596012658,
+      "instructions": 71026715073318,
+      "cache-references": 684301010668,
+      "cache-misses": 368579466325,
+      "branch-instructions": 14598242813471,
+      "branch-misses": 6927368494,
+      "L1-dcache-loads": 29474154628359,
+      "L1-dcache-load-misses": 1556684906460,
+      "LLC-loads": 49100560057,
+      "LLC-load-misses": 29431554596,
+      "dTLB-loads": 29443629208621,
+      "dTLB-load-misses": 1290219302,
+      "iTLB-loads": 146338153,
+      "iTLB-load-misses": 97565988
+    },
+    "perf_stat": "/scratch/dx61/as1708/cpu_bench/profiles/DNA_100k_normal_seed1_168422811/perf_stat.txt"
+  }
+}
