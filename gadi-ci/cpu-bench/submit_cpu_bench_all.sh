@@ -7,7 +7,7 @@
 #
 # Prerequisites (complete before submitting normal-queue jobs):
 #   1. CLX binary built:
-#        qsub gadi-ci/build_cpu_bench_clx.sh
+#        qsub gadi-ci/build/build_cpu_bench_clx.sh
 #        # binary → /scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3
 #
 #   2. AA 1M directory permissions fixed by sa0557:
@@ -19,7 +19,8 @@
 set -euo pipefail
 
 REPO_DIR="${HOME}/setonix-iq"
-CI="${REPO_DIR}/gadi-ci"
+CI="${REPO_DIR}/gadi-ci/cpu-bench"
+BUILD_CI="${REPO_DIR}/gadi-ci/build"
 
 echo "=== CPU Benchmark submission (project dx61) ==="
 echo ""
@@ -47,7 +48,7 @@ CLX_BINARY="/scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3"
 if [[ ! -x "${CLX_BINARY}" ]]; then
     echo "--- CLX binary not found: ${CLX_BINARY} ---"
     echo "  Submitting build job first, then normal-queue bench jobs as dependencies."
-    BUILD_JOB=$(qsub "${CI}/build_cpu_bench_clx.sh")
+    BUILD_JOB=$(qsub "${BUILD_CI}/build_cpu_bench_clx.sh")
     echo "  CLX build job → ${BUILD_JOB}"
     DEPEND="-W depend=afterok:${BUILD_JOB}"
 else

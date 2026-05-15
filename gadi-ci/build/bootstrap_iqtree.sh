@@ -12,10 +12,10 @@
 # Source repo: https://github.com/iqtree/iqtree3.git
 #
 # Usage (submit):
-#   qsub gadi-ci/bootstrap_iqtree.sh
+#   qsub gadi-ci/build/bootstrap_iqtree.sh
 #
 # Usage (direct, e.g. inside `qsub -I -q normalsr -l ncpus=104,mem=500GB`):
-#   bash gadi-ci/bootstrap_iqtree.sh
+#   bash gadi-ci/build/bootstrap_iqtree.sh
 #
 #PBS -N iqtree-bootstrap
 #PBS -P rc29

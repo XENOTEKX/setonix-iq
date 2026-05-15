@@ -3,7 +3,7 @@
 # with LLVM/Clang + libomp (the LLVM OpenMP runtime, ABI-compatible with
 # Intel libiomp5).
 #
-# Companion to gadi-ci/bootstrap_iqtree.sh (gcc + libgomp).  Pairs with
+# Companion to gadi-ci/build/bootstrap_iqtree.sh (gcc + libgomp).  Pairs with
 # setonix-ci/bootstrap_iqtree_aocc.sh on the Pawsey side.  Together these
 # scripts form the cross-platform "Clang/libomp" reference series:
 #
@@ -22,7 +22,7 @@
 # Output: ${PROJECT_DIR}/build-profiling-clang/iqtree3
 #
 # Usage (submit):
-#   qsub gadi-ci/bootstrap_iqtree_clang.sh
+#   qsub gadi-ci/build/bootstrap_iqtree_clang.sh
 #
 #PBS -N iqtree-clang-bootstrap
 #PBS -P rc29

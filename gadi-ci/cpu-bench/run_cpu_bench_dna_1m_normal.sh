@@ -1,20 +1,22 @@
 #!/bin/bash
-# run_cpu_bench_dna_100k_normal.sh — IQ-TREE3 cpu_opt_merge CPU benchmark
-# DNA, 100K sites (100 taxa), Cascade Lake node, -nt 47, seed=1
+# run_cpu_bench_dna_1m_normal.sh — IQ-TREE3 cpu_opt_merge CPU benchmark
+# DNA, 1M sites (100 taxa), Cascade Lake node, -nt 47, seed=1
 # Binary:   cpu_opt_merge build-intel-clx (ICX + AVX-512 + -march=cascadelake + R1+R2 patches)
 # Energy:   Linaro Forge perf-report
 # Runtime:  numactl --localalloc + Intel OMP (libiomp5, KMP_BLOCKTIME=200)
 #
-# PREREQUISITE: qsub gadi-ci/build_cpu_bench_clx.sh
+# PREREQUISITE: qsub gadi-ci/build/build_cpu_bench_clx.sh
 #   → /scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3
 #
-#PBS -N iq-cpu-dna-100k-clx
+# NOTE: 1M-site run may approach 24h wall time. Checkpoint support is in progress.
+#
+#PBS -N iq-cpu-dna-1m-clx
 #PBS -P dx61
 #PBS -q normal
 #PBS -l ncpus=48
 #PBS -l mem=190GB
 #PBS -l place=excl
-#PBS -l walltime=08:00:00
+#PBS -l walltime=24:00:00
 #PBS -l storage=scratch/dx61
 #PBS -l wd
 #PBS -j oe
@@ -22,16 +24,16 @@
 set -euo pipefail
 
 IQTREE="${IQTREE:-/scratch/dx61/as1708/cpu_bench/build-intel-clx/iqtree3}"
-ALIGNMENT="/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy"
+ALIGNMENT="/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy"
 THREADS=47
 SEED=1
 DATA_TYPE="DNA"
-DATASET_SHORT="complex_dna_100k"
+DATASET_SHORT="complex_dna_1m"
 
 REPO_DIR="${HOME}/setonix-iq"
 WORK_ROOT="/scratch/dx61/as1708/cpu_bench"
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"; PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
-RUN_LABEL="${DATA_TYPE}_100k_normal_seed${SEED}"
+RUN_LABEL="${DATA_TYPE}_1m_normal_seed${SEED}"
 WORK_DIR="${WORK_ROOT}/profiles/${RUN_LABEL}_${PBS_ID_SHORT}"
 RUNS_DIR="${REPO_DIR}/logs/runs"
 PROFILE_REPORT="${WORK_DIR}/perf_report"
@@ -43,7 +45,7 @@ module load linaro-forge/24.0.2
 module load intel-compiler-llvm/2024.2.1
 
 [[ -x "${IQTREE}" ]]    || { echo "ERROR: binary not found: ${IQTREE}" >&2
-                              echo "  Run: qsub gadi-ci/build_cpu_bench_clx.sh first" >&2; exit 2; }
+                              echo "  Run: qsub gadi-ci/build/build_cpu_bench_clx.sh first" >&2; exit 2; }
 [[ -f "${ALIGNMENT}" ]] || { echo "ERROR: alignment not found: ${ALIGNMENT}" >&2; exit 3; }
 if ldd "${IQTREE}" 2>/dev/null | grep -q 'libgomp'; then
     echo "ERROR: ${IQTREE} links libgomp — expected libiomp5 (ICX build)." >&2; exit 7
@@ -61,7 +63,7 @@ NUMACTL=()
 command -v numactl >/dev/null 2>&1 && NUMACTL=(numactl --localalloc)
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  CPU Benchmark — DNA 100K · normal (CLX) · -nt ${THREADS}"
+echo "║  CPU Benchmark — DNA 1M · normal (CLX) · -nt ${THREADS}"
 echo "║  binary:  $(basename "${IQTREE}")"
 echo "║  numactl: ${NUMACTL[*]:-disabled}"
 echo "║  pbs_id:  ${PBS_ID_SHORT}"
@@ -151,9 +153,9 @@ record = {
   "run_id": "gadi_${RUN_LABEL}_${PBS_ID_SHORT}", "label": "${RUN_LABEL}",
   "platform": "gadi", "run_type": "cpu_bench",
   "dataset": "${ALIGNMENT}", "dataset_short": "${DATASET_SHORT}",
-  "data_type": "${DATA_TYPE}", "seq_len": 100000, "n_taxa": 100,
+  "data_type": "${DATA_TYPE}", "seq_len": 1000000, "n_taxa": 100,
   "threads": ${THREADS}, "seed": ${SEED},
-  "timing": [{"command": "perf-report ... numactl --localalloc iqtree3 -s alignment_100000.phy -nt ${THREADS} -seed ${SEED}",
+  "timing": [{"command": "perf-report ... numactl --localalloc iqtree3 -s alignment_1000000.phy -nt ${THREADS} -seed ${SEED}",
               "time_s": iq_wall}],
   "summary": {
     "pass": 1 if ${IQRC} == 0 else 0, "fail": 0 if ${IQRC} == 0 else 1,

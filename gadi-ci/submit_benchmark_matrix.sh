@@ -140,7 +140,7 @@ fi
 if command -v module >/dev/null 2>&1; then
     # 2026-04-30 (round 2 audit): keep VTune for profiling but drop the Intel
     # LLVM compiler module — the binary itself is now built with gcc (see
-    # gadi-ci/bootstrap_iqtree.sh).  Loading intel-compiler-llvm here would
+    # gadi-ci/build/bootstrap_iqtree.sh).  Loading intel-compiler-llvm here would
     # shadow the gcc-built libgomp at runtime.
     module load gcc/14.2.0           2>/dev/null || true
     module load intel-vtune/2024.2.0 2>/dev/null || true

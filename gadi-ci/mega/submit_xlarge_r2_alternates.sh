@@ -108,7 +108,7 @@ elif [[ -z "${DEPEND_JID}" ]]; then
         echo "ERROR: ${MPI_BUILD_DIR}/iqtree3-mpi not found." >&2
         echo "       Either:" >&2
         echo "         (a) run --bootstrap to build it now, or" >&2
-        echo "         (b) submit gadi-ci/bootstrap_iqtree_mpi.sh manually and" >&2
+        echo "         (b) submit gadi-ci/build/bootstrap_iqtree_mpi.sh manually and" >&2
         echo "             pass the resulting jobid via --depend <jobid>" >&2
         exit 5
     fi

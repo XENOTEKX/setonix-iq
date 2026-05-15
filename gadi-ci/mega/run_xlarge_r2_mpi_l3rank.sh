@@ -1,76 +1,47 @@
 #!/bin/bash
-# run_xlarge_r2_v312_mpi_2node_fullnode.sh — IQ-TREE **3.1.2** (R2-patched,
-# MPI build) on xlarge_mf.fa across **2 Gadi normalsr SPR nodes**, with
-# **2 MPI ranks × 104 OpenMP threads each**.  v3.1.2 mirror of
-# run_xlarge_r2_mpi_2node_fullnode.sh (which was v3.1.1, PBS 167931341,
-# 334.6 s, the current sweep best).
+# run_xlarge_r2_mpi_l3rank.sh — IQ-TREE 3 (R2-patched, MPI build) on
+# xlarge_mf.fa with **8 MPI ranks × 13 OpenMP threads each**, where every
+# rank is pinned via an OpenMPI rankfile to exactly one L3-cache quadrant
+# (= one of Gadi SPR 8470Q's 8 NUMA nodes / sub-NUMA cluster regions).
 #
-# Provenance:
-#   binary: /scratch/rc29/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi
-#   build:  bootstrap_iqtree_3.1.2_mpi.sh
-#   source: v3.1.2 (4e91dd61) + R2 patches
+# This is alternate placement #2 in the 2026-05-08 (h) sweep. Whereas
+# run_xlarge_r2_mpi_socket.sh splits the work across the two sockets only,
+# this script tightens the binding all the way down to L3-cache granularity:
 #
-# This is alternate placement #3 in the 2026-05-08 sweep, replacing the
-# (abandoned) 2-node L3-rankfile design after the single-node l3rank result
-# showed 13-thread OMP teams are too small for xlarge_mf:
+#                   Sapphire Rapids 8470Q (SNC4 mode):
+#                   2 sockets × 4 sub-NUMA × 13 cores = 104
 #
-#   #1 socket 2×52 (single node, PBS 167895713) → 520.1 s,  −0.7% vs canonical
-#   #2 l3rank 8×13 (single node, PBS 167899378) → 957.8 s,  +83%   vs canonical
-#                                                  → conclusion: 13-thread OMP
-#                                                  is the bottleneck, not L3
-#                                                  cache pressure
-#   #3 2node-fullnode 2×104 (this script)       → 2 nodes × 1 rank each,
-#                                                 each rank owns all 104
-#                                                 cores on its node
+#         ┌─── socket 0 ────┐  ┌─── socket 1 ────┐
+#   NUMA  0    1    2    3      4    5    6    7
+#   cores 0-12 13-  26-  39-    52-  65-  78-  91-
+#               25   38   51    64   77   90   103
+#   rank  0    1    2    3      4    5    6    7   ← OpenMPI rankfile binding
 #
-# This is "scale to 2 nodes with full-node OMP teams" — same 104-thread OMP
-# team size as the canonical 1×104 run, just split across 2 nodes with MPI
-# coordinating bootstrap-replicate distribution between ranks.
+# Each rank's 13-thread OpenMP pool runs entirely within one L3 quadrant.
+# • No cross-L3 cache traffic — the static-scheduled NNI loops touch only
+#   pages first-touched by their own 13 threads.
+# • No cross-NUMA DRAM traffic — every page allocated under numactl
+#   --localalloc lands on the rank's bound node.
+# • UPI / memory-controller contention between OMP threads is eliminated;
+#   only MPI rank-to-rank tree exchange uses the inter-socket fabric.
 #
-#                   2 × Sapphire Rapids 8470Q:
-#                   2 nodes × 104 cores each = 208 cores
+# Hypothesis — three outcomes are possible and each is informative:
+#   (a) Faster than 2-rank socket  → cross-L3 traffic mattered; binding to
+#       L3 grain pays off.
+#   (b) Same as 2-rank socket      → SNC4 first-touch + OMP_PROC_BIND=close
+#       was already pinning per-quadrant; the extra MPI overhead cancels.
+#   (c) Slower than 2-rank socket  → IQ-TREE's MPI tree-exchange dominates
+#       at 8 ranks; the OpenMP-only socket placement is the right grain.
 #
-#         ┌─── node A ──────────────┐  ┌─── node B ──────────────┐
-#         │       all 104 cores     │  │       all 104 cores     │
-#   rank  0                         │  │ 1                       │
-#   OMP   104                       │  │ 104                     │
+# The rankfile is generated dynamically from `numactl -H` so the script
+# is robust against future topology changes; a fallback hard-codes the
+# standard 8×13 SPR layout in case numactl is unavailable.
 #
-# Inside each node, the 104 OMP threads run with OMP_PROC_BIND=close so
-# they stay packed on physical cores (Gadi normalsr SMT is off at user
-# level, so OMP_PLACES=cores keeps each thread on one core).  Each rank's
-# numactl --localalloc keeps its mallocs local to its node.  Cross-node
-# coordination (rank 0 ↔ rank 1) goes over the InfiniBand fabric.
-#
-# Hypothesis — three outcomes possible:
-#   (a) Roughly half of the 1×104 canonical wall (~262 s) → IQ-TREE 3 MPI
-#       bootstrap distribution scales linearly across 2 ranks, inter-node
-#       cost is small relative to the halving of per-rank work.
-#   (b) Same as 1-node 1×104 canonical (~524 s) → InfiniBand round-trip on
-#       every tree-exchange cancels the doubled node count; 2 ranks provide
-#       no speedup over a single 104-thread process.
-#   (c) Slower than canonical (>524 s) → Cross-node MPI traffic dominates;
-#       xlarge_mf doesn't have enough independent work to amortise inter-
-#       node communication.  The right scope is a single node.
-#
-# Full parity with canonical 1×104 R2 ICX (PBS 167865976):
-#   • Same source build (build-profiling-mpi/iqtree3-mpi, R2-patched, icpx)
-#   • Same OpenMP runtime (libiomp5)
-#   • Same OMP env: OMP_PROC_BIND=close, OMP_PLACES=cores, KMP_BLOCKTIME=200,
-#                   OMP_DYNAMIC=false (mandatory for full-node cpusets)
-#   • Same numactl --localalloc per rank
-#   • Same dataset (xlarge_mf.fa, sha256-gated)
-#   • Same -seed 1 (per-rank seed becomes 1+rank_id inside IQ-TREE MPI)
-#
-# Companion to:
-#   gadi-ci/run_xlarge_r2_mpi_socket.sh   (1 node, 2×52 — the topology we scale)
-#   gadi-ci/run_xlarge_r2_mpi_l3rank.sh   (1 node, 8×13 — abandoned at 2 nodes)
-#   gadi-ci/_run_matrix_job.sh             (1 node, single-process baseline)
-#
-#PBS -N iq-xlarge-r2-v312-mpi-2node-fullnode
+#PBS -N iq-xlarge-r2-mpi-l3rank
 #PBS -P rc29
 #PBS -q normalsr
-#PBS -l ncpus=208
-#PBS -l mem=1000GB
+#PBS -l ncpus=104
+#PBS -l mem=500GB
 #PBS -l walltime=02:00:00
 #PBS -l wd
 #PBS -l storage=scratch/rc29
@@ -81,27 +52,25 @@ set -euo pipefail
 PROJECT="${PROJECT:-rc29}"
 USER_ID="${USER:-$(whoami)}"
 REPO_DIR="${REPO_DIR:-${HOME}/setonix-iq}"
-PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-3.1.2}"
+PROJECT_DIR="${PROJECT_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3}"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build-profiling-mpi}"
 IQTREE="${IQTREE:-${BUILD_DIR}/iqtree3-mpi}"
 BENCHMARKS="${PROJECT_DIR}/benchmarks"
 RUNS_DIR="${REPO_DIR}/logs/runs"
 PROFILES_DIR="${PROJECT_DIR}/gadi-ci/profiles"
 
-# Fixed shape: 2 ranks × 104 OMP = 208 = 2 full SPR nodes (104 cores each).
-# Rank 0 = node A (all 104 cores),  rank 1 = node B (all 104 cores).
 DATASET_NAME="${DATASET:-xlarge_mf}"
-NRANKS="${NRANKS:-2}"
-OMP_PER_RANK="${OMP_PER_RANK:-104}"
+NRANKS="${NRANKS:-8}"
+OMP_PER_RANK="${OMP_PER_RANK:-13}"
 TOTAL_THREADS=$(( NRANKS * OMP_PER_RANK ))
 SEED="${SEED:-1}"
-LABEL="${LABEL:-${DATASET_NAME}_${TOTAL_THREADS}t_icx_mpi${NRANKS}x${OMP_PER_RANK}_2node_fullnode_numa_ft_r2_v312}"
+LABEL="${LABEL:-${DATASET_NAME}_${TOTAL_THREADS}t_icx_mpi${NRANKS}x${OMP_PER_RANK}_l3rank_numa_ft_r2}"
 
 DATA_PATH="${BENCHMARKS}/${DATASET_NAME}.fa"
 [[ -f "${DATA_PATH}" ]] || DATA_PATH="${BENCHMARKS}/${DATASET_NAME}"
 DATA_BASENAME="$(basename "${DATA_PATH}")"
 
-# sha256 gate (same canonical hash as every other R2 run).
+# sha256 gate (same as socket runner — preflight before any compute spend).
 SHA256_LOCKFILE="${SHA256_LOCKFILE:-${REPO_DIR}/benchmarks/sha256sums.txt}"
 if [[ ! -s "${DATA_PATH}" ]]; then
     echo "ERROR: dataset ${DATA_PATH} not found or empty." >&2
@@ -112,16 +81,12 @@ if [[ -s "${SHA256_LOCKFILE}" ]]; then
     if [[ -n "${expected}" ]]; then
         actual="$(sha256sum "${DATA_PATH}" | awk '{print $1}')"
         if [[ "${actual}" != "${expected}" ]]; then
-            echo "ERROR: sha256 mismatch for ${DATA_BASENAME}" >&2
-            exit 3
+            echo "ERROR: sha256 mismatch for ${DATA_BASENAME}" >&2; exit 3
         fi
         echo "[preflight] ${DATA_BASENAME} sha256 OK (canonical)."
     fi
 fi
 
-# Module load order: openmpi BEFORE intel-compiler-llvm so mpirun resolves
-# from openmpi (matches what iqtree3-mpi was linked against). intel-compiler-
-# llvm contributes libiomp5 at runtime.
 if command -v module >/dev/null 2>&1; then
     module load openmpi/4.1.7         2>/dev/null || true
     module load intel-compiler-llvm   2>/dev/null || true
@@ -129,21 +94,14 @@ if command -v module >/dev/null 2>&1; then
 fi
 
 if ! command -v mpirun >/dev/null 2>&1; then
-    echo "ERROR: mpirun not found after module load openmpi/4.1.7." >&2
-    exit 4
+    echo "ERROR: mpirun not found after module load openmpi/4.1.7." >&2; exit 4
 fi
 if [[ ! -x "${IQTREE}" ]]; then
-    echo "ERROR: ${IQTREE} not found." >&2
-    echo "       Run gadi-ci/bootstrap_iqtree_mpi.sh first." >&2
+    echo "ERROR: ${IQTREE} not found.  Run gadi-ci/build/bootstrap_iqtree_mpi.sh first." >&2
     exit 5
 fi
 if ! ldd "${IQTREE}" 2>/dev/null | grep -qE 'libmpi(\.|_)' ; then
-    echo "ERROR: ${IQTREE} does not link libmpi — wrong build?" >&2
-    exit 6
-fi
-if ldd "${IQTREE}" 2>/dev/null | grep -q 'libgomp'; then
-    echo "ERROR: ${IQTREE} links libgomp — expected libiomp5/libomp." >&2
-    exit 7
+    echo "ERROR: ${IQTREE} does not link libmpi — wrong build?" >&2; exit 6
 fi
 
 export KMP_BLOCKTIME="${KMP_BLOCKTIME:-200}"
@@ -157,66 +115,119 @@ WORK_DIR="${PROFILES_DIR}/${LABEL}_${PBS_ID_SHORT}"
 mkdir -p "${WORK_DIR}" "${RUNS_DIR}"
 cd "${WORK_DIR}"
 
-# ── Multi-node host discovery ──────────────────────────────────────────
-# PBS_NODEFILE on Gadi normalsr lists one line per allocated CPU (so 208
-# lines for an ncpus=208 job). Unique-sort gives the 2 hostnames.
-if [[ ! -s "${PBS_NODEFILE:-/dev/null}" ]]; then
-    echo "ERROR: PBS_NODEFILE missing — this script must run inside a PBS job." >&2
-    exit 8
-fi
-mapfile -t HOSTS < <(sort -u "${PBS_NODEFILE}")
-if [[ "${#HOSTS[@]}" -ne 2 ]]; then
-    echo "ERROR: expected 2 nodes, got ${#HOSTS[@]} (${HOSTS[*]:-empty})" >&2
-    echo "       Check PBS resource spec — should be #PBS -l ncpus=208 on normalsr." >&2
-    exit 9
-fi
-HOST_A="${HOSTS[0]}"
-HOST_B="${HOSTS[1]}"
-
-# Hostfile (slot-counted) for mpirun --hostfile.  Required by OpenMPI 4.x
-# whenever the rankfile carries hostnames — the hostfile gives the launcher
-# its set of valid targets, the rankfile then pins each rank inside.
-HOSTFILE="${WORK_DIR}/hostfile.txt"
-awk '{c[$1]++} END {for (h in c) print h, "slots=" c[h]}' "${PBS_NODEFILE}" > "${HOSTFILE}"
-
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  IQ-TREE 3 R2 — MPI 2-node full-node placement"
+echo "║  IQ-TREE 3 R2 — MPI L3-cache rankfile placement"
 echo "║  run_id:        ${RUN_ID}"
 echo "║  dataset:       ${DATA_PATH}"
-echo "║  ranks × OMP:   ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS} total threads, 2 nodes)"
-echo "║  node A:        ${HOST_A}  (rank 0, all 104 cores)"
-echo "║  node B:        ${HOST_B}  (rank 1, all 104 cores)"
+echo "║  ranks × OMP:   ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS} total threads)"
 echo "║  binary:        ${IQTREE}"
 echo "║  work_dir:      ${WORK_DIR}"
 echo "╚══════════════════════════════════════════════════════════════╝"
-echo "[2node-fullnode] hostfile:"
-cat "${HOSTFILE}" | sed 's/^/    /'
 
-# ── Build the rankfile for both nodes ──────────────────────────────────
-# OpenMPI rankfile syntax: "rank N=<host> slot=<cpu-list>".  Full-node
-# binding: slot=0-103 gives each rank all 104 physical cores on its node.
-# The lscpu cross-check below confirms we have exactly 104 physical cores
-# before writing the rankfile.
+# ── Build the rankfile from live NUMA topology ──────────────────────────
+# OpenMPI rankfile syntax (one line per rank):
+#   rank N=<host> slot=<cpu-list>
+# We derive the host from PBS_NODEFILE (single-node job) and the cpu-lists
+# from `numactl -H`, which prints one "node N cpus: …" line per NUMA node.
+#
+# CRITICAL: filter SMT siblings out of the cpu list.  Gadi normalsr
+# Sapphire Rapids nodes have 104 physical cores but Linux exposes 208
+# logical CPUs (each core has 2 SMT hwthread siblings, even though SMT
+# is "off" at the user-facing level — `lscpu` reports "Thread(s) per core:
+# 1" because of /sys/devices/system/cpu/smt/control=off, but `numactl -H`
+# still lists the sibling cpu IDs in the NUMA topology).  So a raw NUMA
+# node line looks like:
+#     node 0 cpus: 0 1 2 ... 12 104 105 ... 116
+#                  ^^^ 13 physical cores ^^^ 13 SMT siblings ^^^
+# If we put all 26 cpu IDs into the rankfile, OpenMPI binds each rank to
+# a 26-CPU cpuset and the OMP team can drift onto SMT pairs (losing ~30%
+# IPC).  The fix: keep only CPU IDs strictly less than the physical-core
+# count (sockets × cores-per-socket = 2 × 52 = 104 on SPR 8470Q).
+#
+# Earlier attempts hit two distinct rankfile failure modes:
+#   • PBS 167889452 (initial): the rankfile contained 26 cpus per rank
+#     (13 cores + 13 SMT siblings), AND `mpirun -rf <file>` triggered a
+#     "Conflicting directives: RANK_FILE vs BYCORE" error.
+#   • PBS 167894317 (round 2): `--map-by rankfile:file=<file>` was rejected
+#     as "The mapping request contains an unrecognized modifier" — that
+#     `:file=…` modifier is OpenMPI 5.x syntax, not 4.x.
+# Both fixed in this revision: SMT siblings filtered out here; the mpirun
+# call site uses `--mca rmaps rank_file --rankfile <file>` (the 4.x-native
+# syntax that selects the rank_file MCA component before BYCORE auto-loads).
+#
+# If numactl is missing or output is unparseable, fall back to the standard
+# Gadi SPR 8470Q SNC4 layout (8 nodes × 13 cores: 0-12, 13-25, …, 91-103).
+RANKFILE="${WORK_DIR}/rankfile.txt"
+HOSTNAME_NODE="$(head -n1 "${PBS_NODEFILE:-/dev/null}" 2>/dev/null || hostname)"
+
+# Compute the physical-core ceiling (CPUs >= this are SMT siblings).
 LSCPU_SOCKETS="$(lscpu | awk -F: '/Socket\(s\)/{gsub(/^ +| +$/,"",$2); print $2; exit}')"
 LSCPU_COREPS="$(lscpu  | awk -F: '/Core\(s\) per socket/{gsub(/^ +| +$/,"",$2); print $2; exit}')"
 PHYSICAL_CORES="$(( ${LSCPU_SOCKETS:-2} * ${LSCPU_COREPS:-52} ))"
-echo "[2node-fullnode] head node topology: sockets=${LSCPU_SOCKETS} cores/socket=${LSCPU_COREPS} → physical_cores=${PHYSICAL_CORES}"
-if [[ "${PHYSICAL_CORES}" -ne 104 ]]; then
-    echo "ERROR: head-node has ${PHYSICAL_CORES} physical cores, expected 104 (2×52 SPR)." >&2
-    echo "       Rankfile uses slot=0-103; adjust OMP_PER_RANK and slot range if topology differs." >&2
-    exit 10
+echo "[l3rank] physical core count from lscpu: ${PHYSICAL_CORES}" \
+     "(sockets=${LSCPU_SOCKETS}, cores/socket=${LSCPU_COREPS})"
+
+build_rankfile() {
+    local node_lines
+    node_lines="$(numactl -H 2>/dev/null | grep -E '^node [0-9]+ cpus:' | head -"${NRANKS}")"
+    if [[ -z "${node_lines}" ]]; then
+        return 1
+    fi
+    : > "${RANKFILE}"
+    local rank=0
+    while IFS= read -r line; do
+        # Line shape: "node 0 cpus: 0 1 2 ... 12 104 105 ... 116"
+        local cpus_raw cpus filtered_cnt=0
+        cpus_raw="$(echo "${line}" | sed -E 's/^node [0-9]+ cpus:[[:space:]]*//' | tr -s ' ')"
+        # Filter SMT siblings: drop any CPU id >= PHYSICAL_CORES.
+        cpus=""
+        for c in ${cpus_raw}; do
+            if (( c < PHYSICAL_CORES )); then
+                cpus="${cpus}${cpus:+ }${c}"
+                filtered_cnt=$((filtered_cnt + 1))
+            fi
+        done
+        if (( filtered_cnt == 0 )); then
+            echo "[l3rank] ERROR: no physical-core cpus left for node ${rank}" >&2
+            return 1
+        fi
+        # Convert space-separated list to a hyphenated range when contiguous,
+        # otherwise to a comma-separated list. mpirun accepts either; the
+        # range form is just more readable in logs.
+        local first last contiguous=1 prev=-2
+        for c in ${cpus}; do
+            if (( prev >= 0 )) && (( c != prev + 1 )); then contiguous=0; fi
+            prev=${c}
+        done
+        if (( contiguous == 1 )); then
+            first="${cpus%% *}"; last="${cpus##* }"
+            echo "rank ${rank}=${HOSTNAME_NODE} slot=${first}-${last}" >> "${RANKFILE}"
+        else
+            echo "rank ${rank}=${HOSTNAME_NODE} slot=$(echo ${cpus} | tr ' ' ',')" >> "${RANKFILE}"
+        fi
+        rank=$((rank + 1))
+    done <<< "${node_lines}"
+    [[ "${rank}" -eq "${NRANKS}" ]]
+}
+
+if ! build_rankfile; then
+    echo "[l3rank] WARNING: numactl -H unavailable or unparseable; using SPR-SNC4 fallback."
+    cat > "${RANKFILE}" <<EOF
+rank 0=${HOSTNAME_NODE} slot=0-12
+rank 1=${HOSTNAME_NODE} slot=13-25
+rank 2=${HOSTNAME_NODE} slot=26-38
+rank 3=${HOSTNAME_NODE} slot=39-51
+rank 4=${HOSTNAME_NODE} slot=52-64
+rank 5=${HOSTNAME_NODE} slot=65-77
+rank 6=${HOSTNAME_NODE} slot=78-90
+rank 7=${HOSTNAME_NODE} slot=91-103
+EOF
 fi
 
-RANKFILE="${WORK_DIR}/rankfile.txt"
-cat > "${RANKFILE}" <<EOF
-rank 0=${HOST_A} slot=0-103
-rank 1=${HOST_B} slot=0-103
-EOF
-
-echo "[2node-fullnode] rankfile:"
+echo "[l3rank] rankfile:"
 cat "${RANKFILE}" | sed 's/^/    /'
 
-# ── Environment snapshot (env.json) ─────────────────────────────────────
+# ── Environment snapshot ────────────────────────────────────────────────
 ENV_JSON="${WORK_DIR}/env.json"
 python3 - <<PYENV > "${ENV_JSON}"
 import json, os, subprocess, hashlib
@@ -235,11 +246,8 @@ env = {
   "run_id": "${RUN_ID}", "label": "${LABEL}",
   "threads": ${TOTAL_THREADS},
   "mpi_ranks": ${NRANKS}, "omp_per_rank": ${OMP_PER_RANK},
-  "placement": "mpi_2node_fullnode",
-  "nodes": 2,
-  "hosts": ["${HOST_A}", "${HOST_B}"],
+  "placement": "mpi_l3rank",
   "rankfile": open("${RANKFILE}").read() if os.path.isfile("${RANKFILE}") else None,
-  "hostfile": open("${HOSTFILE}").read() if os.path.isfile("${HOSTFILE}") else None,
   "hostname": sh("hostname"), "kernel": sh("uname -r"),
   "os": sh("grep PRETTY_NAME /etc/os-release | cut -d= -f2- | tr -d '\"'"),
   "cpu": sh("lscpu | grep 'Model name' | head -1 | cut -d: -f2- | xargs"),
@@ -254,7 +262,7 @@ env = {
   "mpi_version": sh("mpirun --version 2>&1 | head -1"),
   "icx":   sh("icx --version 2>/dev/null | head -1"),
   "iqtree_binary":  "${IQTREE}",
-  "iqtree_version": sh("${IQTREE} --version 2>&1 | head -1"),
+  "iqtree_version": sh("mpirun -n 1 ${IQTREE} --version 2>&1 | head -1"),
   "date": sh("date -Iseconds"),
   "dataset": {
     "path": ds, "file": os.path.basename(ds),
@@ -273,11 +281,22 @@ print(json.dumps(env, indent=2))
 PYENV
 echo "  → ${ENV_JSON}"
 
-# ── OMP env (forwarded into each rank via mpirun -x) ────────────────────
-# OMP_NUM_THREADS=104 — one thread per physical core per node (rank).
-# OMP_DYNAMIC=false stops libiomp5 shrinking the team when it observes the
-# rank's 104-core cpuset is "fully utilised", OMP_PROC_BIND=close +
-# OMP_PLACES=cores so the 104 threads stay on physical cores per node.
+# ── OMP env (forwarded into each rank) ─────────────────────────────────
+# OMP_PROC_BIND=close makes the rank's 13 OMP threads stay packed inside
+# the 13-cpu set the rankfile assigned to it.
+#
+# OMP_DYNAMIC=false is *especially* important under rankfile binding
+# because libiomp5/libomp inspect the per-rank cpuset (13 cores) and may
+# decide to spawn fewer threads if it thinks the system is "saturated".
+# Pinning OMP_DYNAMIC=false guarantees `OMP_NUM_THREADS=13` is honoured
+# verbatim — otherwise an 8×13 = 104 run can silently degrade to 8×N<13.
+# This is the explicit Taylor-rule for rankfile-bound MPI+OMP runs.
+#
+# OMP_PLACES=cores satisfies the spirit of Slurm's `--hint=nomultithread`
+# on Gadi (SMT is already off on normalsr — `lscpu` shows threads-per-
+# core=1 — so the rankfile slot=N-M ranges already map to physical cores
+# rather than SMT siblings; OMP_PLACES=cores layers explicit core-grain
+# placement on top of that).
 OMP_ENV=(
     -x "OMP_NUM_THREADS=${OMP_PER_RANK}"
     -x "OMP_DYNAMIC=false"
@@ -288,13 +307,15 @@ OMP_ENV=(
     -x "KMP_BLOCKTIME=${KMP_BLOCKTIME}"
 )
 
-# perf events (':u' suffix mandatory at perf_event_paranoid=2).
 _PERF_EVENTS_BASE="cycles,instructions,branch-instructions,branch-misses,\
 cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,\
 LLC-loads,LLC-load-misses,dTLB-loads,dTLB-load-misses,\
 iTLB-loads,iTLB-load-misses"
 PERF_EVENTS="$(echo "${_PERF_EVENTS_BASE}" | tr ',' '\n' | sed 's/$/:u/' | paste -sd,)"
 
+# Per-rank wrappers: numactl --localalloc inside the rankfile cpu-set
+# guarantees each rank's malloc()s land on its bound NUMA node, so first
+# touch can never spill to a remote L3 quadrant.
 TIME_WRAP="${WORK_DIR}/_time_wrap.sh"
 cat > "${TIME_WRAP}" <<'EOF'
 #!/bin/bash
@@ -312,10 +333,10 @@ exec perf stat -e '${PERF_EVENTS}' \\
 EOF
 chmod +x "${PERF_WRAP}"
 
-# /proc sampler (rank 0 only — lives on node A)
+# ── /proc sampler (rank 0 only) ────────────────────────────────────────
 cat > "${WORK_DIR}/_sampler.py" <<'SAMPLER_EOF'
 #!/usr/bin/env python3
-"""Identical to socket/l3rank single-node samplers — rank 0 timeline."""
+"""Identical to the socket-runner sampler — see that file for commentary."""
 import json, os, subprocess, sys, time, pathlib
 pid = int(sys.argv[1]); out = pathlib.Path(sys.argv[2])
 interval = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
@@ -377,26 +398,43 @@ SAMPLER_EOF
 
 # ── Pass 1: clean timing run (no perf) ────────────────────────────────
 echo ""
-echo "[2node-fullnode] Pass 1: ${NRANKS} ranks × ${OMP_PER_RANK} OMP, rankfile-bound across 2 nodes"
+echo "[mpi-l3rank] Pass 1: 8 ranks × 13 OMP, rankfile-bound, no perf overhead"
 START_EPOCH=$(date +%s)
 
-# Multi-node mpirun:
-#   --hostfile  → required by OpenMPI 4.x when the rankfile carries
-#                 hostnames; gives mpirun the launch targets.
-#   --mca rmaps_base_mapping_policy ""  → cancels Gadi's site-config default
-#                 (rmaps_base_mapping_policy = core), so -rf can install
-#                 RANK_FILE without the BYCORE conflict.  This is the
-#                 round-6-validated form from the single-node l3rank script
-#                 (CHANGELOG entries (h)–(m), 2026-05-08).
-#   -rf <file>  → applies the 2-rank full-node pinning (1 rank per node ×
-#                 2 nodes).
-#   --report-bindings → echo actual binding map to stderr for audit.
+# Empty-string the base mapping policy (overriding Gadi's site config which
+# hardcodes `rmaps_base_mapping_policy = core` in
+# /apps/openmpi-mofed5.8-pbs2021.1/4.1.7/etc/openmpi-mca-params.conf), so
+# that `-rf <file>` can set the policy to RANK_FILE without conflict.
 #
-# OpenMPI 4.1.7 on Gadi auto-selects InfiniBand transport (UCX or openib).
-# orted launches on node B via PBS_TM (Gadi's openmpi was compiled with
-# --with-tm=$PBS_HOME), no SSH involved.
+# Failure timeline that led to this form:
+#   • `-rf <file>` (PBS 167889452):                 RANK_FILE vs BYCORE conflict
+#                                                   from Gadi's site default.
+#   • `--map-by rankfile:file=<file>` (167894317):  "unrecognized modifier" — that
+#                                                   `:file=…` syntax is OpenMPI
+#                                                   5.x, not 4.x.
+#   • `--mca rmaps rank_file --rankfile <file>`     RANK_FILE vs BYCORE again —
+#     (PBS 167895714, round 3):                     `--mca rmaps rank_file` selects
+#                                                   the *component*, not the
+#                                                   base mapping policy.
+#   • `--mca rmaps_base_mapping_policy rank_file …` PBS 167896488, round 4):
+#                                                   underscored value rejected as
+#                                                   "policy not recognized".
+#   • `--mca rmaps_base_mapping_policy rank-file …` (PBS 167898265, round 5):
+#                                                   hyphenated value also rejected.
+#                                                   The valid policy-value list is
+#                                                   {slot,hwthread,core,l1cache,
+#                                                   l2cache,l3cache,socket,numa,
+#                                                   board,node,seq,dist,ppr} —
+#                                                   no `rank-file` token.
+#
+# Login-node-validated working form (round 6):
+#       --mca rmaps_base_mapping_policy "" -rf <file>
+# By empty-stringing the policy we cancel the site default WITHOUT setting
+# any policy of our own; -rf then sets RANK_FILE cleanly. Equivalent
+# OMPI_MCA_rmaps_base_mapping_policy="" env-var form also works; using the
+# --mca command-line form so it appears in --report-bindings audit output.
+# --report-bindings prints the actual binding map to stderr.
 mpirun -np "${NRANKS}" \
-    --hostfile "${HOSTFILE}" \
     --mca rmaps_base_mapping_policy "" \
     -rf "${RANKFILE}" \
     --report-bindings \
@@ -407,16 +445,13 @@ mpirun -np "${NRANKS}" \
     > "${WORK_DIR}/iqtree_run.log" 2> "${WORK_DIR}/iqtree_run.bindings.log" &
 IQTREE_PID=$!
 
-# Sample rank 0 (lives on node A — mother-superior). The sampler can only
-# see processes on its own node; per-rank data on node B is captured via
-# Pass 2's perf wrappers writing to the shared scratch work_dir.
-#
-# `|| true` on pgrep — guards `set -euo pipefail` against zero-match self-
-# kill (CHANGELOG entry (k) fix).
 sleep 5
+# `|| true` guards against `set -euo pipefail` killing us when pgrep finds
+# zero matches (which would otherwise bring down the still-running mpirun
+# in the background — exact symptom seen on PBS 167894316/317 first attempt).
 INNER_PID="$(pgrep -f 'iqtree3-mpi' 2>/dev/null | head -1 || true)"
 [[ -z "${INNER_PID:-}" ]] && INNER_PID="${IQTREE_PID}"
-echo "  → mpirun pid=${IQTREE_PID}, sampler attached to inner pid=${INNER_PID} (node A rank 0)"
+echo "  → mpirun pid=${IQTREE_PID}, sampler attached to inner pid=${INNER_PID}"
 python3 "${WORK_DIR}/_sampler.py" "${INNER_PID}" "${WORK_DIR}/samples.jsonl" 10 &
 SAMPLER_PID=$!
 
@@ -426,15 +461,12 @@ END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
 kill "${SAMPLER_PID}" 2>/dev/null || true
 wait "${SAMPLER_PID}" 2>/dev/null || true
-echo "[2node-fullnode] Pass 1 done: rc=${IQRC} wall=${WALL}s"
+echo "[mpi-l3rank] Pass 1 done: rc=${IQRC} wall=${WALL}s"
 
 # ── Pass 2: per-rank perf stat ────────────────────────────────────────
-# perf is on every Gadi compute node, so each rank writes its own
-# perf_stat.rank<N>.txt into the shared scratch work_dir.
 if [[ "${IQRC}" -eq 0 ]] && command -v perf >/dev/null 2>&1; then
-    echo "[2node-fullnode] Pass 2: ${NRANKS} ranks × ${OMP_PER_RANK} OMP under perf stat"
+    echo "[mpi-l3rank] Pass 2: 8 ranks × 13 OMP under perf stat"
     mpirun -np "${NRANKS}" \
-        --hostfile "${HOSTFILE}" \
         --mca rmaps_base_mapping_policy "" \
         -rf "${RANKFILE}" \
         "${OMP_ENV[@]}" \
@@ -452,7 +484,6 @@ rid, label = "${RUN_ID}", "${LABEL}"
 total_thr = ${TOTAL_THREADS}; nranks=${NRANKS}; omp_per=${OMP_PER_RANK}
 wall, iqrc = int("${WALL}"), int("${IQRC}")
 ds, dpath, ibin = "${DATASET_NAME}", "${DATA_PATH}", "${IQTREE}"
-host_a, host_b = "${HOST_A}", "${HOST_B}"
 def sh(c, d=""):
     try: return subprocess.check_output(c, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
     except Exception: return d
@@ -514,8 +545,6 @@ for rk, pm in perf_per_rank.items():
     c, i = pm.get("cycles"), pm.get("instructions")
     if c and i: per_rank_ipc[rk] = round(i/c, 4)
 
-per_rank_host = {str(rk): (host_a if rk == 0 else host_b) for rk in range(nranks)}
-
 proc_summary = None
 sjf = os.path.join(work, "samples.jsonl")
 if os.path.isfile(sjf):
@@ -542,13 +571,13 @@ if os.path.isfile(bindings_log):
         l for l in open(bindings_log, errors="replace").read().splitlines()
         if "MCW rank" in l or "binding" in l.lower())
 
+# Artefact paths for the dashboard (parity with _run_matrix_job.sh schema).
 artefacts = {}
 for fname, key in [
     ("samples.jsonl",        "proc_timeseries"),
     ("iqtree_run.log",       "iqtree_log"),
     ("iqtree_run.bindings.log", "mpi_bindings_log"),
     ("rankfile.txt",         "rankfile"),
-    ("hostfile.txt",         "hostfile"),
     ("env.json",             "env_json"),
 ]:
     p = os.path.join(work, fname)
@@ -565,11 +594,10 @@ if rep_ll is not None:
 record = {
   "run_id": rid, "pbs_id": "${PBS_ID_SHORT}",
   "platform": "gadi", "run_type": "profile", "label": label,
-  "description": (f"Gadi SPR R2 v3.1.2 — MPI 2-node full-node placement: {nranks} ranks × "
-                  f"{omp_per} OMP, 1 rank per node × 2 nodes"),
+  "description": (f"Gadi SPR R2 — MPI L3-rankfile placement: {nranks} ranks × "
+                  f"{omp_per} OMP, 1 rank per L3 quadrant (NUMA node)"),
   "timing": [{
     "command": (f"mpirun -np {nranks} "
-                f"--hostfile hostfile.txt "
                 f'--mca rmaps_base_mapping_policy "" '
                 f"-rf rankfile.txt "
                 f"numactl --localalloc {ibin} -s {os.path.basename(dpath)} "
@@ -582,6 +610,8 @@ record = {
     "hostname": sh("hostname"), "date": sh("date -Iseconds"),
     "cpu":      sh("lscpu | grep 'Model name' | head -1 | cut -d: -f2- | xargs"),
     "cores":    int(sh("nproc","0") or 0),
+    # gcc/icc/icx/vtune_version mirror canonical R2 schema so tools/canonicalize_runs.py
+    # and the dashboard see the same env-key set on MPI runs as on the 1×104 R2 baseline.
     "gcc":      sh("gcc --version | head -1"),
     "icc":      sh("icc --version 2>/dev/null | head -1"),
     "icx":      sh("icx --version 2>/dev/null | head -1"),
@@ -589,10 +619,7 @@ record = {
     "mpi":      sh("mpirun --version 2>&1 | head -1"),
     "kernel":   sh("uname -r"),
     "os":       sh("grep PRETTY_NAME /etc/os-release | cut -d= -f2- | tr -d '\"'"),
-    "nodes":    2,
-    "hosts":    [host_a, host_b],
     "rankfile": open(os.path.join(work,"rankfile.txt")).read() if os.path.isfile(os.path.join(work,"rankfile.txt")) else None,
-    "hostfile": open(os.path.join(work,"hostfile.txt")).read() if os.path.isfile(os.path.join(work,"hostfile.txt")) else None,
     "pbs": {
       "job_id":      os.environ.get("PBS_JOBID"),
       "job_name":    os.environ.get("PBS_JOBNAME"),
@@ -612,28 +639,27 @@ record = {
   "profile": {
     "dataset":    os.path.basename(dpath),
     "threads":    total_thr,
-    "placement":  "mpi_2node_fullnode",
+    "placement":  "mpi_l3rank",
     "mpi_ranks":  nranks,
     "omp_per_rank": omp_per,
-    "nodes":      2,
     "perf_cmd":   perf_cmd,
     "metrics":    metrics,
     "per_rank_ipc": per_rank_ipc,
-    "per_rank_host": per_rank_host,
     "bindings":   bindings_excerpt,
-    "vtune":        None,
+    "vtune":        None,  # parity with canonical schema; populated only if VTune ran
     "vtune_uarch":  None,
     "proc_summary": proc_summary,
     "artefacts":    artefacts,
   },
-  "build_tag":           f"icx_mpi{nranks}x{omp_per}_2node_fullnode_numa_ft_r2_v312",
+  # Dashboard ingest tags — mirrors canonical R2 classification.
+  "build_tag":           f"icx_mpi{nranks}x{omp_per}_l3rank_numa_ft_r2",
   "non_canonical":       True,
-  "non_canonical_label": f"ICX · MPI {nranks}×{omp_per} 2-node full-node · R2 · v3.1.2",
+  "non_canonical_label": f"ICX · MPI {nranks}×{omp_per} L3-rankfile · R2",
 }
 out_path = os.path.join(runs, rid + ".json")
 json.dump(record, open(out_path,"w"), indent=2, default=str)
-print(f"[2node-fullnode] wrote {out_path}")
+print(f"[mpi-l3rank] wrote {out_path}")
 PYEOF
 
-echo "[2node-fullnode] done."
+echo "[mpi-l3rank] done."
 exit "${IQRC}"

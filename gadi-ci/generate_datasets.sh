@@ -44,7 +44,7 @@ SRC_DIR="${SRC_DIR:-${PROJECT_DIR}/src/iqtree3}"
 mkdir -p "${BENCHMARKS}"
 
 if [[ ! -x "${IQTREE}" ]]; then
-    echo "ERROR: ${IQTREE} not found. Run gadi-ci/bootstrap_iqtree.sh first." >&2
+    echo "ERROR: ${IQTREE} not found. Run gadi-ci/build/bootstrap_iqtree.sh first." >&2
     exit 2
 fi
 

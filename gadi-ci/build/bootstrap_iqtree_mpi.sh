@@ -3,9 +3,9 @@
 # with **MPI + LLVM/Clang(icpx) + libiomp5**.
 #
 # Companion to:
-#   gadi-ci/bootstrap_iqtree.sh        — gcc + libgomp        (no MPI)
-#   gadi-ci/bootstrap_iqtree_clang.sh  — icpx + libiomp5      (no MPI)
-#   gadi-ci/bootstrap_iqtree_mpi.sh    — icpx + libiomp5 + MPI  (THIS FILE)
+#   gadi-ci/build/bootstrap_iqtree.sh        — gcc + libgomp        (no MPI)
+#   gadi-ci/build/bootstrap_iqtree_clang.sh  — icpx + libiomp5      (no MPI)
+#   gadi-ci/build/bootstrap_iqtree_mpi.sh    — icpx + libiomp5 + MPI  (THIS FILE)
 #
 # Why an MPI build?
 #   The R2 NUMA-first-touch sweep (logs/runs/gadi_xlarge_mf_*_icx_omp_pin_numa_ft_r2.json)
@@ -38,7 +38,7 @@
 #   Output:      ${PROJECT_DIR}/build-profiling-mpi/iqtree3-mpi
 #
 # Usage (submit on Gadi):
-#   qsub gadi-ci/bootstrap_iqtree_mpi.sh
+#   qsub gadi-ci/build/bootstrap_iqtree_mpi.sh
 #
 #PBS -N iqtree-mpi-bootstrap
 #PBS -P rc29

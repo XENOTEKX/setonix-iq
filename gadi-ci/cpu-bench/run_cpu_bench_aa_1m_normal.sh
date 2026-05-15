@@ -6,7 +6,7 @@
 # Runtime:  numactl --localalloc + Intel OMP (libiomp5, KMP_BLOCKTIME=200)
 #
 # BLOCKED (two issues):
-#   1. CLX binary must be built first: qsub gadi-ci/build_cpu_bench_clx.sh
+#   1. CLX binary must be built first: qsub gadi-ci/build/build_cpu_bench_clx.sh
 #   2. AA 1M tree_1 has drw-rwSrw- (no execute bit).
 #      Ask sa0557: chmod o+x .../AA/LG+I+G4/taxa_100/len_1000000/tree_1
 #
@@ -48,7 +48,7 @@ module load linaro-forge/24.0.2
 module load intel-compiler-llvm/2024.2.1
 
 [[ -x "${IQTREE}" ]] || { echo "ERROR: binary not found: ${IQTREE}" >&2
-                           echo "  Run: qsub gadi-ci/build_cpu_bench_clx.sh first" >&2; exit 2; }
+                           echo "  Run: qsub gadi-ci/build/build_cpu_bench_clx.sh first" >&2; exit 2; }
 if ldd "${IQTREE}" 2>/dev/null | grep -q 'libgomp'; then
     echo "ERROR: ${IQTREE} links libgomp — expected libiomp5 (ICX build)." >&2; exit 7
 fi

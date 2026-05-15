@@ -73,7 +73,7 @@ if ! command -v mpirun >/dev/null 2>&1; then
 fi
 if [[ ! -x "${IQTREE}" ]]; then
     echo "ERROR: ${IQTREE} not found." >&2
-    echo "       Run gadi-ci/bootstrap_iqtree_3.1.2_mpi.sh first (gadi-spr-r2-avx512 branch)." >&2
+    echo "       Run gadi-ci/build/bootstrap_iqtree_3.1.2_mpi.sh first (gadi-spr-r2-avx512 branch)." >&2
     exit 5
 fi
 if ! ldd "${IQTREE}" 2>/dev/null | grep -qE 'libmpi(\.|_)'; then
