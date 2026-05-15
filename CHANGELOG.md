@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-15 (av) — DNA 1M SPR completed (168425675)
+
+### What changed
+
+**DNA 1M SPR (168425675) finished — 6,114.450 s (1h:41:54), F81+F+G4 (BIC), lnL −59,208,019.212.
+Status matrix row 8 updated. Three jobs still running: 168422813 (DNA 1M CLX), 168425490 (AA 1M CLX),
+168425491 (AA 1M SPR).**
+
+#### DNA 1M SPR — phase breakdown
+
+| Phase | Wall (s) | Wall (h:m:s) | % of total |
+|-------|---------|--------------|------------|
+| ModelFinder | 3,500.825 | 0:58:20 | 57.3% |
+| Tree search | 2,596.995 | 0:43:16 | 42.5% |
+| **Total** | **6,114.450** | **1:41:54** | 100% |
+
+Models tested: 968 DNA models (same as 100K run). Per-model wall time ≈ 372.5 s·thread
+(vs 6.57 s·thread for DNA 100K SPR) — **56.7× more per-model cost for 10× the sites**.
+Tree search scaled 11.47× (near-linear with 10× sites, consistent with O(n·patterns) kernel).
+MF super-linear scaling explained by: NNI convergence requiring more iterations at larger
+lnL gradients; heavier memory pressure reducing effective MF parallelism.
+
+**Energy note:** DNA 1M SPR ran for 6,114 s. RAPL 32-bit counters overflow at ~262 KJ/domain
+(~1,310 s at 200 W). With ~4–5 overflow events per domain, reported values (394 KJ total,
+avg 64.4 W) are severe underestimates — true average power is closer to 530–600 W
+(consistent with 100K SPR at 622.5 W). Energy values marked ⚠ in the metrics table.
+
+**IPC/cache:** No perf stat job submitted for 168425675 — ★ markers in table.
+
+---
+
 ## 2026-05-15 (au) — Output files shared for all 4 completed 100K runs
 
 ### What changed
@@ -58,8 +89,8 @@ results table compiled from all completed runs.**
 | 4 | AA 1M SPR | Sapphire Rapids | 103 | **168425491** | RUNNING (34 min) | — | — | — | — |
 | 5 | DNA 100K CLX | Cascade Lake | 47 | **168422811** | **DONE** ✓ | 546.044 | −5,692,984.5391 | 11,388,283.1763 | 390.6 |
 | 6 | DNA 100K SPR | Sapphire Rapids | 103 | **168425674** | **DONE** ✓ | 289.121 | −5,692,984.5391 | 11,388,283.1763 | 622.5 |
-| 7 | DNA 1M CLX | Cascade Lake | 47 | **168422813** | RUNNING (52 min) | — | — | — | — |
-| 8 | DNA 1M SPR | Sapphire Rapids | 103 | **168425675** | RUNNING (26 min) | — | — | — | — |
+| 7 | DNA 1M CLX | Cascade Lake | 47 | **168422813** | RUNNING | — | — | — | — |
+| 8 | DNA 1M SPR | Sapphire Rapids | 103 | **168425675** | **DONE** ✓ | 6,114.450 | −59,208,019.212 | 118,418,815.234 | 64.4⚠ |
 
 ✓ = completed on exclusive node. IPC pending perf stat re-run (see below).
 
@@ -80,8 +111,10 @@ IPC marked pending★ where perf stat re-run is queued but not yet complete.
 | **168425673** | AA 100K | Sapphire Rapids | normalsr-exec | 103 | 1,169.556 | 19:29 | 108,645.54 | 90.2% | LG+G4 | −7,541,976.860 | 15,086,233.2801 | 198 | 1.8781 | 66.94 | 1.19 | 224.7 | 112.4 | 96.8 | 15.6 | ✓ |
 | **168422809** | AA 100K | Cascade Lake | normal-exec | 47 | 3,460.813 | 57:40 | 150,630.50 | 92.6% | LG+G4 | −7,541,976.860 | 15,086,233.282 | 198 | ★ | ★ | ★ | 160.6 | 73.4 | 57.5 | 29.7 | ✓ | ← perf stat pending
 | **168425674** | DNA 100K | Sapphire Rapids | normalsr-exec | 103 | 289.121 | 4:49 | 26,619.44 | 89.4% | F81+F+G4 | −5,692,984.5391 | 11,388,283.1763 | 201 | 1.3023 | 75.81 | 1.18 | 622.5 | 318.4 | 295.7 | 10.8 | ✓ |
+| **168425675** | DNA 1M | Sapphire Rapids | normalsr-exec | 103 | 6,114.450 | 1h:41:54 | 558,655.09 | 88.7% | F81+F+G4 | −59,208,019.212 | 118,418,815.234 | 201 | ★ | ★ | ★ | 64.4⚠ | 33.9⚠ | 25.3⚠ | 5.28⚠ | ✓ |
 
-★ = perf stat pending (AA 100K CLX 168422809 — no job submitted yet). All other ★ entries have been patched with real values from jobs 168428491/492/519.
+★ = perf stat pending (168422809 AA 100K CLX — no job submitted yet; 168425675 DNA 1M SPR — no job submitted yet). All other ★ entries have been patched with real values from jobs 168428491/492/519.
+⚠ = RAPL counter overflow suspected (run > 1,310 s/domain): reported energy is a severe underestimate; true avg power ≈ 530–600 W for 168425675.
 
 **Par. eff.** = CPU time / (wall × threads). **pkg0/pkg1** = RAPL package joules ÷ wall. **DRAM** = (dram-0 + dram-1) J ÷ wall.
 

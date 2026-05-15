@@ -36,6 +36,7 @@ Both runs used identical alignment lengths (100,000 sites), 100 taxa, identical 
 | AA SPR  |   399.456 s (34%) |   764.478 s (65%) | 1,169.556 s | 1,232 models | 102 iters |
 | DNA CLX |   159.084 s (29%) |   384.838 s (70%) |   546.044 s |   968 models | 102 iters |
 | DNA SPR |    61.740 s (21%) |   226.447 s (78%) |   289.121 s |   968 models | 102 iters |
+| DNA 1M SPR |  3,500.825 s (57%) | 2,596.995 s (42%) | 6,114.450 s | 968 models | 102 iters |
 
 **AA/DNA ratios within same hardware:**
 
@@ -281,6 +282,30 @@ Per-model wall time (approximate single-thread equivalent):
 - **Ratio: 42.3/7.72 = 5.48×**
 
 This ~5.5× per-model ratio is consistent across hardware and directly reflects the O(nstates²) likelihood kernel cost.
+
+#### 4.1.1 Super-Linear ModelFinder Scaling with Site Count
+
+The DNA 1M SPR run (168425675) provides a striking comparison. Despite testing the same 968 DNA
+models on the same 100-taxon tree topology, ModelFinder took **3,500.825 s** on SPR (vs 61.740 s
+for DNA 100K SPR) — a **56.7× increase for 10× more sites**.
+
+| Run | MF wall (s) | Models | Per-model (s·thread) | Sites |
+|-----|------------|--------|--------------------|-------|
+| DNA 100K SPR | 61.740 | 968 | 6.57 | 100,000 |
+| DNA 1M SPR | 3,500.825 | 968 | 372.5 | 1,000,000 |
+| **Scale ratio** | **56.7×** | 1.0× | **56.7×** | **10.0×** |
+
+The tree search scaled 11.47× (near-linear: 2,596.995 / 226.447), confirming O(n·patterns) kernel
+behaviour. ModelFinder's super-linear scaling is driven by two compounding effects:
+1. **NNI convergence takes more iterations at larger lnL gradients** — with 10× more sites, each
+   parameter step changes lnL by ~10× more, so the `epsilon=0.1` tolerance requires more rounds
+   to distinguish signal from numerical noise in the gradient.
+2. **Memory pressure** — 1M sites × 4 rate categories × nstates × ~(2n−1) nodes creates partial_lh
+   arrays ~10× larger, saturating L3 cache and increasing memory traffic per MF model evaluation.
+
+This super-linear MF scaling (56.7× for 10× sites) implies that for very long alignments (1M+),
+ModelFinder becomes the dominant cost — an important consideration for AA 1M runs where the per-model
+kernel is already 5.5× more expensive than DNA. Predicted AA 1M MF wall on SPR: ~399.456 × 56.7 ≈ 22,641 s.
 
 ### 4.2 F81 vs LG Eigendecomposition
 
