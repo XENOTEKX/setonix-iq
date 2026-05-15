@@ -150,6 +150,10 @@ def normalize_run(run: dict) -> dict:
             run["platform"] = "setonix"
 
     hints = infer_from_commands(run)
+    # Propagate explicit top-level fields when command parsing yields nothing
+    # (cpu_bench runs use -nt instead of -T, and dataset is a full path).
+    if hints["threads"] is None and run.get("threads") is not None:
+        hints["threads"] = run["threads"]
     profile = run.get("profile") or {}
     if not profile.get("dataset") and hints["dataset"]:
         profile["dataset"] = hints["dataset"]
@@ -175,8 +179,8 @@ def summarize_run(run: dict) -> dict:
     # counts) — fall back to those before the curated lookup.
     ds_gt = run.get("dataset_info") or {}
     fallback = dataset_lookup(dataset) or {}
-    taxa = ds_gt.get("taxa") or ds_gt.get("fasta_taxa") or fallback.get("taxa")
-    sites = ds_gt.get("sites") or ds_gt.get("fasta_sites") or fallback.get("sites")
+    taxa = ds_gt.get("taxa") or ds_gt.get("fasta_taxa") or fallback.get("taxa") or run.get("n_taxa")
+    sites = ds_gt.get("sites") or ds_gt.get("fasta_sites") or fallback.get("sites") or run.get("seq_len")
     patterns = ds_gt.get("patterns") or ds_gt.get("fasta_patterns")
     if ds_gt.get("file_size_bytes"):
         size_mb = round(ds_gt["file_size_bytes"] / 1_000_000, 2)
@@ -194,13 +198,13 @@ def summarize_run(run: dict) -> dict:
         "description": run.get("description", ""),
         "run_type": run.get("run_type", "pipeline"),
         "dataset": dataset,
-        "dataset_short": os.path.splitext(os.path.basename(dataset))[0] if dataset else None,
+        "dataset_short": run.get("dataset_short") or (os.path.splitext(os.path.basename(dataset))[0] if dataset else None),
         "taxa": taxa,
         "sites": sites,
         "patterns": patterns,
         "informative_sites": ds_gt.get("informative_sites"),
         "constant_sites": ds_gt.get("constant_sites"),
-        "sequence_type": ds_gt.get("sequence_type"),
+        "sequence_type": run.get("data_type") or ds_gt.get("sequence_type"),
         "size_mb": size_mb,
         "size_estimated": size_estimated,
         "model": mf.get("model_selected") or hints.get("model"),
@@ -209,7 +213,7 @@ def summarize_run(run: dict) -> dict:
         "gamma_alpha": mf.get("gamma_alpha"),
         "tree_length": mf.get("tree_length"),
         "log_likelihood": mf.get("log_likelihood"),
-        "threads": p.get("threads") or hints.get("threads"),
+        "threads": p.get("threads") or hints.get("threads") or run.get("threads"),
         "hostname": env.get("hostname"),
         "cpu": env.get("cpu"),
         "date": env.get("date"),

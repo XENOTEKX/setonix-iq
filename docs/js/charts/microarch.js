@@ -1,6 +1,6 @@
 // web/js/charts/microarch.js — radar-style comparison of CPU microarch metrics
 
-import { hashColour } from '../utils.js?v=83b0e61d71e6';
+import { hashColour } from '../utils.js?v=6873bad6b67e';
 
 let chart;
 
