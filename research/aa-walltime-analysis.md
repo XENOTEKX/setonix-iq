@@ -50,9 +50,190 @@ The tree-search ratio is dramatically different on CLX vs SPR (6.07× vs 3.38×)
 
 ---
 
-## 2. The Algorithmic Root Cause: O(n²) Inner Product Loops
+## 2. IQ-TREE Phase Pipeline
 
-### 2.1 How IQ-TREE Computes Partial Likelihoods
+### 2.1 Phase Sequence
+
+For a 100K AA alignment (100 taxa), IQ-TREE runs these phases in strict sequence:
+
+```
+INPUT: alignment_100000.phy (100K sites, 100 taxa, AA)
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 0 — STARTUP                              ~1–2 s  │
+│  • Read alignment, detect format                        │
+│  • Count distinct patterns (→ 96,017 for AA 100K)      │
+│  • Composition test for each sequence                   │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 1 — PARSIMONY TREE                       ~1–2 s  │
+│  • PLL builds a fast parsimony tree                     │
+│  • No branch lengths yet — topology only                │
+│  • Used as the STARTING POINT for Phase 2               │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 2 — FAST ML TREE (LG+I+G)               ~12 s   │
+│  • NNI moves on the parsimony tree                      │
+│  • epsilon=5 then epsilon=1 convergence                 │
+│  • Produces a reasonable tree + branch lengths          │
+│  • Used as the FIXED TREE for ModelFinder               │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 3 — MODELFINDER                        ~399 s    │  ← BIG ONE
+│  • Tests all 1,232 AA models on the FIXED Phase 2 tree  │
+│  • For each model:                                      │
+│     1. Set rate matrix (LG, WAG, JTT, Q.mammal …)       │
+│     2. Eigendecompose Q (once per model)                │
+│     3. Compute partial likelihoods for ALL sites        │
+│     4. Optimize rate parameters (alpha, I, …)           │
+│     5. Compute BIC score                                │
+│  • Pick best BIC → "LG+G4"                              │
+│  • ⚠ No topology changes here — same NJ tree            │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 4 — CANDIDATE TREE INITIALISATION       ~165 s   │
+│  • Apply LG+G4 parameters on a RapidNJ tree (0.1 s)    │
+│  • Generate 98 FRESH parsimony trees (131 s)            │
+│  • Compute lnL of all 98 candidate trees (34 s)         │
+│  • NNI-refine the top 20 candidates                     │
+│  • Select the best starting topology                    │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 5 — MAIN TREE SEARCH (102 iterations)   ~600 s   │
+│  • Iteration = one round of SPR moves                   │
+│  • Each SPR: try regrafting every subtree,              │
+│    evaluate lnL for each candidate regraft              │
+│  • Accept moves that improve the best score             │
+│  • Reoptimise branch lengths after each accepted move   │
+│  • Converges when no improvement found                  │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────┐
+│ PHASE 6 — FINALISATION                          ~2 s   │
+│  • Final model parameter optimisation (epsilon=0.010)   │
+│  • Write .treefile, .iqtree, .log, .mldist             │
+└─────────────────────────────────────────────────────────┘
+│
+▼
+OUTPUT: best tree + LG+G4 parameters + lnL −7,541,976.860
+```
+
+### 2.2 Time Budget — 100K AA
+
+**SPR node (168425673, 1,169 s total)** — timings from `iqtree_run.log`:
+
+```
+Phase                      │ Wall (s)  │ ████████████████████████ (%)
+───────────────────────────┼───────────┼──────────────────────────────────
+0  Startup + parsimony     │     1.0   │  (< 1%)
+1  Fast ML tree (LG+I+G)   │    12.1   │ █  (1.0%)
+2  ModelFinder (1,232 mdl) │   399.5   │ █████████████  (34.2%)
+3  Init candidate trees    │   164.6   │ █████  (14.1%)
+4  Main tree search        │   590.8   │ ████████████████████  (50.5%)
+5  Finalisation            │     1.6   │  (< 1%)
+───────────────────────────┼───────────┼──────────────────────────────────
+   TOTAL                   │ 1,169.6   │ 100%
+```
+
+**CLX node (168422809, 3,461 s total):**
+
+```
+Phase                      │ Wall (s)  │ ████████████████████████ (%)
+───────────────────────────┼───────────┼──────────────────────────────────
+0  Startup + parsimony     │     ~3    │  (< 1%)
+1  Fast ML tree            │    ~35    │ █  (1%)
+2  ModelFinder (1,232 mdl) │ 1,108.8   │ █████████████  (32%)
+3  Init candidate trees    │   ~460    │ █████  (13%)
+4  Main tree search        │ 1,877     │ ████████████████████  (54%)
+5  Finalisation            │     ~2    │  (< 1%)
+───────────────────────────┼───────────┼──────────────────────────────────
+   TOTAL                   │ 3,460.8   │ 100%
+```
+
+### 2.3 What Happens Inside ModelFinder
+
+For each of the 1,232 models, IQ-TREE does this loop (all 1,232 dispatched in parallel across
+103 threads — each thread owns one model at a time):
+
+```
+For each model (e.g. LG+G4, WAG+F+G4, JTT+I+G4 …):
+   ┌──────────────────────────────────────────────────────┐
+   │ 1. Set rate matrix Q (load empirical matrix)         │  < 1 ms
+   │ 2. Eigendecompose Q → evec, eval                     │  < 1 ms (O(n³) but one-off)
+   │ 3. Pre-compute echild arrays for every branch        │  O(nstates²) × 2n-1 branches
+   │ 4. For each site pattern (96,017 patterns):          │
+   │      compute partial likelihoods up the tree         │  O(nstates²) × patterns × nodes
+   │ 5. Optimize +G4 alpha (or +R3 rates) with 1D search  │  calls steps 3-4 ~10-20 times
+   │ 6. Compute lnL → BIC = -2lnL + k·ln(n)              │  < 1 ms
+   └──────────────────────────────────────────────────────┘
+   → store (model_name, BIC)
+Pick model with lowest BIC.
+```
+
+Steps 3–5 are the expensive part — O(nstates²) per pattern per node. For AA (nstates=20) this
+is 25× more FLOPs than DNA (nstates=4). That is why AA MF takes 399 s vs 61.7 s for DNA 100K
+on the same SPR hardware (6.47× observed ratio; the difference from 25× is explained by
+memory-bandwidth limitations making DNA already partially serialised).
+
+### 2.4 MPI ModelFinder: How It Helps
+
+The model testing loop is **embarrassingly parallel across models** — each model is independent.
+MPI distributes models across nodes, so N nodes each test 1,232/N models:
+
+```
+WITHOUT MPI (single node, 103 threads):
+┌──────────────────────────────────────────────────────────────────┐
+│ Node 0 (103 threads):                                            │
+│  model 1 ─► 2 ─► 3 ─► … ─► 1,232 models (sequential dispatch)  │
+└──────────────────────────────────────────────────────────────────┘
+Total MF wall: 399 s
+
+WITH MPI (4 nodes × 103 threads = 412 threads):
+┌────────────────────────────────────────┐
+│ Node 0 (103T): models   1 –  308       │  ~100 s
+│ Node 1 (103T): models 309 –  616       │  ~100 s   ← all run in parallel
+│ Node 2 (103T): models 617 –  924       │  ~100 s
+│ Node 3 (103T): models 925 – 1,232      │  ~100 s
+└────────────────────────────────────────┘
+  MPI_Allgather BIC scores (< 1 s)
+  All nodes agree: LG+G4 is best
+Total MF wall: ~100 s  (4× speedup)
+```
+
+After ModelFinder, the tree search (Phase 5) runs on a **single node** in the standard workflow
+— MPI does not help there directly. That is the key limitation: MPI MF cuts 34% of the runtime
+by ~4×, but the 54% tree search phase is unaffected.
+
+Net effect on total runtime (100K AA SPR, 1,169 s):
+
+| Scenario | MF wall | Tree search | Total | Speedup |
+|---|---|---|---|---|
+| Current (1 node SPR) | 399 s | 764 s | 1,169 s | 1.0× |
+| MPI MF × 2 nodes | ~200 s | 764 s | ~970 s | **1.21×** |
+| MPI MF × 4 nodes | ~100 s | 764 s | ~870 s | **1.34×** |
+| MPI MF × 8 nodes | ~55 s | 764 s | ~825 s | **1.42×** |
+
+The MPI MF speedup hits a ceiling because tree search dominates. For **1M AA** (predicted
+MF ~22,600 s, tree search ~8,000 s), the MPI MF payoff is far greater — ModelFinder becomes
+the dominant cost and distributing it across nodes is essential.
+
+---
+
+## 3. The Algorithmic Root Cause: O(n²) Inner Product Loops
+
+### 3.1 How IQ-TREE Computes Partial Likelihoods
 
 IQ-TREE's likelihood computation follows Felsenstein's pruning algorithm. For each internal node, the partial likelihood vector is built from its two children. The core kernel is in `tree/phylokernelnew.h`, specifically the `computePartialLikelihoodSIMD` function.
 
@@ -98,7 +279,7 @@ With 4 rate categories (`ncat_mix = 4`), the cost per site-pattern-batch per nod
 
 The O(nstates²) scaling is fundamental — it comes from multiplying the pre-computed branch-transition vector (length nstates) against the child partial-likelihood vector (also length nstates) for each of the nstates output states.
 
-### 2.2 The Pre-Computation Step: computePartialInfo
+### 3.2 The Pre-Computation Step: computePartialInfo
 
 Before the main loop, `computePartialInfo` (called once per node per tree traversal) pre-computes the `echildren` buffers: `echild[x][i] = evec[x][i] * exp(eigenvalue[i] * branch_length)`. This is also O(nstates²):
 
@@ -119,7 +300,7 @@ Cost (Vec4d per branch per rate category):
 - AA: (20/4=5) exp-Vec4d + (20 × 20/4=100) mul-Vec4d = 105 per category → 420 total
 - **Ratio: 420/20 = 21×**
 
-### 2.3 SIMD Kernel Level: AVX+FMA, Not AVX-512
+### 3.3 SIMD Kernel Level: AVX+FMA, Not AVX-512
 
 A critical finding from the IQ-TREE logs:
 
@@ -161,9 +342,9 @@ This is a secondary issue: even if the AVX-512 dispatch bug were fixed, the non-
 
 ---
 
-## 3. Memory Hierarchy: Where the Bottlenecks Actually Are
+## 4. Memory Hierarchy: Where the Bottlenecks Actually Are
 
-### 3.1 Working Set Per Node
+### 4.1 Working Set Per Node
 
 The hot data that must be accessed for each internal node traversal:
 
@@ -192,7 +373,7 @@ ModelFinder speedup is roughly proportional to thread count (103/47 = 2.19×) fo
 
 Tree search, however, repeatedly re-traverses the **same tree** with the **same model**: the echild arrays are reused across SPR iterations. For AA on SPR, the 26.6 KB node working set fits in the 48 KB L1 — so those echild arrays stay hot. For AA on CLX, they spill to L2 on every other node visit, paying 12-cycle L2 latency instead of 4-cycle L1 latency. For DNA on both CLX and SPR, the 1.25 KB hot set fits in L1 either way — no cache benefit from SPR's larger L1.
 
-### 3.2 Perf Counter Evidence
+### 4.2 Perf Counter Evidence
 
 **SPR runs — raw hardware counters (aggregated over all threads × wall time):**
 
@@ -213,7 +394,7 @@ Notable observations:
 - AA has **1.44× higher IPC** despite being slower overall
 - Branch ratio (4.07×) roughly tracks nstates ratio (20/4 = 5×), confirming branches scale with outer loop iterations
 
-### 3.3 Why AA Has Higher IPC Despite Being Slower
+### 4.3 Why AA Has Higher IPC Despite Being Slower
 
 This is counterintuitive but follows directly from the FMA chain structure.
 
@@ -245,7 +426,7 @@ SPR's larger reorder buffer (~512 entries vs ~352 on CLX) can hold more of these
 
 Ratio: 170/30 = **5.7×** — matching the observed 6× on CLX.
 
-### 3.4 DRAM NUMA Imbalance for AA on CLX
+### 4.4 DRAM NUMA Imbalance for AA on CLX
 
 From the RAPL energy data for AA CLX (168422809):
 
@@ -266,9 +447,9 @@ The imbalanced DRAM access adds ~15-20% overhead on top of the algorithmic AA sl
 
 ---
 
-## 4. ModelFinder: Why Protein Models Are Especially Expensive
+## 5. ModelFinder: Why Protein Models Are Especially Expensive
 
-### 4.1 Model Count
+### 5.1 Model Count
 
 ModelFinder tested 1,232 protein models vs 968 DNA models (1.27× more). Protein model space is larger because:
 - ~20 base empirical rate matrices (LG, WAG, JTT, Blosum62, cpREV, Dayhoff, mtART, Q.mammal, Q.bird, etc.)
@@ -283,7 +464,7 @@ Per-model wall time (approximate single-thread equivalent):
 
 This ~5.5× per-model ratio is consistent across hardware and directly reflects the O(nstates²) likelihood kernel cost.
 
-#### 4.1.1 Super-Linear ModelFinder Scaling with Site Count
+#### 5.1.1 Super-Linear ModelFinder Scaling with Site Count
 
 The DNA 1M SPR run (168425675) provides a striking comparison. Despite testing the same 968 DNA
 models on the same 100-taxon tree topology, ModelFinder took **3,500.825 s** on SPR (vs 61.740 s
@@ -307,7 +488,7 @@ This super-linear MF scaling (56.7× for 10× sites) implies that for very long 
 ModelFinder becomes the dominant cost — an important consideration for AA 1M runs where the per-model
 kernel is already 5.5× more expensive than DNA. Predicted AA 1M MF wall on SPR: ~399.456 × 56.7 ≈ 22,641 s.
 
-### 4.2 F81 vs LG Eigendecomposition
+### 5.2 F81 vs LG Eigendecomposition
 
 The best DNA model was `F81+F+G4`. F81 (Felsenstein 1981) is a special-cased model in `model/modelmarkov.cpp`:
 
@@ -330,15 +511,15 @@ LG's 20×20 empirical rate matrix has 20 distinct irrational eigenvalues — it 
 
 The real advantage of F81 is that its **transition matrix** has simple structure: all off-diagonal elements are proportional to the equilibrium frequency. This means F81 is a "one-parameter model" that converges faster during the `--eps 5` and `--eps 1` pre-optimization passes in ModelFinder. Fewer parameter optimization iterations means fewer full-tree likelihood evaluations during model selection.
 
-### 4.3 Site Pattern Counts
+### 5.3 Site Pattern Counts
 
 AA had 96,017 distinct patterns, DNA had 94,532 — a difference of only 1.6%. This is negligible and confirms that the AA/DNA slowdown is NOT due to having more unique patterns.
 
 ---
 
-## 5. Optimization Pathways
+## 6. Optimization Pathways
 
-### 5.1 Enable AVX-512 Likelihood Kernel on Modern AVX-512F Hardware
+### 6.1 Enable AVX-512 Likelihood Kernel on Modern AVX-512F Hardware
 
 **Impact: ~2× throughput, requires code change**
 
@@ -359,7 +540,7 @@ However, this alone is **not sufficient** due to the `nstates % VectorClass::siz
 - DNA (4 states): `4 % 8 ≠ 0` → falls to non-vectorized `computePartialInfo` path
 - AA (20 states): `20 % 8 ≠ 0` → also falls to non-vectorized path
 
-### 5.2 State-Count Padding to Enable AVX-512
+### 6.2 State-Count Padding to Enable AVX-512
 
 **Impact: ~2× throughput for AA when combined with 5.1, requires memory layout change**
 
@@ -384,7 +565,7 @@ Alternatively, add explicit specialisations for `nstates=20` with `VCsize=8` tha
 
 **Memory overhead:** AA padded to 24 stores 20% more zeros per eigenvector row — but this is already accounted for in the existing `mix_addr_malign` offsets. The main per-site partial_lh array does NOT use malign padding (it uses `nstates` directly, not `get_safe_upper_limit`), so the partial_lh arrays would need a separate change.
 
-### 5.3 NUMA-Aware Tree Data Allocation
+### 6.3 NUMA-Aware Tree Data Allocation
 
 **Impact: ~10-20% on AA CLX, low implementation cost**
 
@@ -401,7 +582,7 @@ neighbor->partial_lh = (double*)numa_alloc_onnode(size, numa_node);
 
 A simpler approach: use `numactl --interleave=all` instead of `--localalloc` for AA runs. Interleaving spreads memory pages round-robin across NUMA nodes, halving the average cross-NUMA traffic. This sacrifices local-allocation locality for balance, and is beneficial when 50% of accesses are already remote.
 
-### 5.4 Single-Precision (Float32) for SPR Move Screening
+### 6.4 Single-Precision (Float32) for SPR Move Screening
 
 **Impact: ~2× throughput for topology search, requires separate float32 kernel path**
 
@@ -431,7 +612,7 @@ A mixed-precision workflow would:
 
 Expected speedup for AA tree search: 1.5-2× from float32 SPR.
 
-### 5.5 GPU Offload for Partial Likelihood Computation
+### 6.5 GPU Offload for Partial Likelihood Computation
 
 **Impact: potential 5-10× for the hot kernel, high implementation cost**
 
@@ -456,7 +637,7 @@ Transfer cost (1.6ms) is small compared to compute (31ms) → **compute bound on
 
 **Practical GPU approach:** Process the tree in subtree batches of 20-30 nodes simultaneously, streaming partial_lh data to/from the GPU. The `phylotreegpu.cpp` file in the `cpu_opt_merge` branch suggests this is already being explored. Key challenge: the sequential dependency in Felsenstein's algorithm (parent must wait for both children) limits how many nodes can be processed concurrently. A wavefront scheduling approach (process all nodes at tree depth D simultaneously before D+1) maximises parallelism.
 
-### 5.6 Vectorised Reduction via `hadd` Optimisation
+### 6.6 Vectorised Reduction via `hadd` Optimisation
 
 **Impact: 5-15% for the reduction step, minimal code change**
 
@@ -476,7 +657,7 @@ This second O(nstates²) pass could be fused with the first using a 2D accumulat
 
 A fused loop would compute both `dotProductDualVec` and `productVecMat` together: for each output state x, accumulate `inv_evec[x][j] × (sum_i eleft[j][i] × pleft[i]) × (sum_i eright[j][i] × pright[i])` in a single triple-nested loop. This would be O(nstates³) per state per category, which is worse; so the current two-pass structure is likely optimal. However, caching `partial_lh_tmp` in registers (rather than memory) between the two passes could help.
 
-### 5.7 OpenMP SIMD Acceleration of the echild Inner Loop
+### 6.7 OpenMP SIMD Acceleration of the echild Inner Loop
 
 **Impact: 10-20% for computePartialInfo, low implementation cost**
 
@@ -497,7 +678,7 @@ Would allow the compiler to auto-vectorize the inner multiply loop. The `exp()` 
 
 ---
 
-## 6. Summary: Root Cause Hierarchy
+## 7. Summary: Root Cause Hierarchy
 
 | Rank | Root Cause | Factor | Evidence |
 |------|-----------|--------|----------|
@@ -512,31 +693,31 @@ The **combined effective AA/DNA slowdown** of 4-6× (vs theoretical 25× FLOPs) 
 
 ---
 
-## 7. Quantitative Projection: Potential Improvements
+## 8. Quantitative Projection: Potential Improvements
 
 If implemented together (conservative estimates):
 
 | Optimisation | AA SPR wall improvement | AA CLX wall improvement |
 |-------------|------------------------|------------------------|
-| AVX-512 + state padding (§5.1-5.2) | ~1.5× | ~1.5× |
-| Float32 SPR screening (§5.4) | ~1.3× tree search | ~1.3× |
-| NUMA-aware allocation (§5.3) | — | ~1.1-1.2× |
-| GPU offload for partial_lh (§5.5) | ~3-5× tree search | ~3-5× |
-| Combined (§5.1 + §5.4, no GPU) | ~1.7× total | ~1.8× total |
+| AVX-512 + state padding (§6.1-6.2) | ~1.5× | ~1.5× |
+| Float32 SPR screening (§6.4) | ~1.3× tree search | ~1.3× |
+| NUMA-aware allocation (§6.3) | — | ~1.1-1.2× |
+| GPU offload for partial_lh (§6.5) | ~3-5× tree search | ~3-5× |
+| Combined (§6.1 + §6.4, no GPU) | ~1.7× total | ~1.8× total |
 | Combined with GPU offload | ~4× total | ~4× total |
 
 Target: AA SPR 1,169s → **~290s** (matching current DNA SPR wall time!) with full AVX-512 + float32 SPR + GPU partial_lh.
 
 ---
 
-## 8. Appendix: Key Source Code Locations
+## 9. Appendix: Key Source Code Locations
 
 | Purpose | File | Key symbol |
 |---------|------|-----------|
 | Core partial likelihood kernel | `tree/phylokernelnew.h:1307` | `computePartialLikelihoodSIMD` |
 | Pre-compute eigenvector × exp | `tree/phylokernelnew.h:900` | `computePartialInfo` |
 | AVX-512 kernel dispatch | `tree/phylokernelavx512.cpp:38` | `setLikelihoodKernelAVX512` |
-| Runtime SIMD dispatch (KNL gate) | `tree/phylotreesse.cpp:92` | `setLikelihoodKernel` |
+| Runtime SIMD dispatch (KNL gate)  | `tree/phylotreesse.cpp:92` | `setLikelihoodKernel` |
 | Safe upper limit (state padding) | `utils/tools.h:3014` | `get_safe_upper_limit` |
 | F81 analytical eigendecomp | `model/modelmarkov.cpp:1482` | `decomposeRateMatrix` (num_params==-1 branch) |
 | LG numerical eigendecomp | `model/modelmarkov.cpp:1570` | `SelfAdjointEigenSolver` |
