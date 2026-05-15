@@ -217,14 +217,18 @@ After ModelFinder, the tree search (Phase 5) runs on a **single node** in the st
 — MPI does not help there directly. That is the key limitation: MPI MF cuts 34% of the runtime
 by ~4×, but the 54% tree search phase is unaffected.
 
-Net effect on total runtime (100K AA SPR, 1,169 s):
+**AA 100K MF2 scaling benchmark** (group `aa_100k_mf2_scaling`, submitted 2026-05-16):
+Scripts `run_cpu_bench_aa_100k_mf2_{1,2,4}node.sh` test this directly — same alignment,
+seed, `-T 103`, `numactl --localalloc`, `KMP_BLOCKTIME=200` as the baseline SPR run
+(168425673). Predicted vs measured (real data pending):
 
-| Scenario | MF wall | Tree search | Total | Speedup |
+| Scenario | MF wall | Tree search | Total | Speedup vs 168425673 |
 |---|---|---|---|---|
-| Current (1 node SPR) | 399 s | 764 s | 1,169 s | 1.0× |
-| MPI MF × 2 nodes | ~200 s | 764 s | ~970 s | **1.21×** |
-| MPI MF × 4 nodes | ~100 s | 764 s | ~870 s | **1.34×** |
-| MPI MF × 8 nodes | ~55 s | 764 s | ~825 s | **1.42×** |
+| Baseline 1-node SPR (168425673) | 399 s | 764 s | 1,169 s | 1.0× |
+| MF2 MPI × 1 node  | ~399 s | ~764 s | ~1,170 s | ~1.00× |
+| MF2 MPI × 2 nodes | ~200 s | ~764 s | ~965 s | **~1.21×** |
+| MF2 MPI × 4 nodes | ~100 s | ~764 s | ~866 s | **~1.35×** |
+| MF2 MPI × 8 nodes |  ~50 s | ~764 s | ~816 s | **~1.43×** |
 
 The MPI MF speedup hits a ceiling because tree search dominates. For **1M AA** (predicted
 MF ~22,600 s, tree search ~8,000 s), the MPI MF payoff is far greater — ModelFinder becomes

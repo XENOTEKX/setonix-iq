@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-16 (ax) — AA 100K MF2 scaling series scripts created
+
+### What changed
+
+**Three MF2 AA 100K benchmark scripts created and submitted (1-node, 2-node, 4-node).
+All charge to dx61. Group: `aa_100k_mf2_scaling`. PBS IDs: 168446151 (1-node), 168446152 (2-node), 168446153 (4-node).**
+
+#### Scripts added
+
+| Script | PBS queue | ncpus | Ranks × OMP | walltime |
+|--------|-----------|-------|------------|----------|
+| `gadi-ci/run_cpu_bench_aa_100k_mf2_1node.sh` | normalsr | 104 | 1×103 | 3h |
+| `gadi-ci/run_cpu_bench_aa_100k_mf2_2node.sh` | normalsr | 208 | 2×103 | 3h |
+| `gadi-ci/run_cpu_bench_aa_100k_mf2_4node.sh` | normalsr | 416 | 4×103 | 3h |
+| `gadi-ci/run_cpu_bench_aa_100k_mf2_batch.sh` | — (submitter) | — | — | — |
+
+#### Parity with baseline
+
+- Same alignment: `complex_data_shared/AA/.../alignment_100000.phy`
+- Same seed=1, `-T 103`, `numactl --localalloc`, `KMP_BLOCKTIME=200`
+- Reference: AA 100K SPR (168425673): MF=399.456 s, tree=764.478 s, total=1,169.556 s
+- Binary: `iqtree3-mpi` (MF2 LPT dispatch, R2+AVX-512) from `/scratch/um09/as1708/iqtree3-mf2/`
+- Build tag: `mf2_full_icx_avx512_r2_lpt`
+- run_type: `cpu_bench`, group: `aa_100k_mf2_scaling`
+
+#### Expected MF2 speedups (Amdahl, tree-search=65% unparallelised)
+
+| Nodes | MF wall | Tree wall | Total | Speedup vs 168425673 |
+|-------|---------|-----------|-------|----------------------|
+| 1 | ~399 s | ~764 s | ~1,170 s | ~1.00× |
+| 2 | ~200 s | ~764 s | ~965 s | **~1.21×** |
+| 4 | ~100 s | ~764 s | ~866 s | **~1.35×** |
+
+Pass 2 perf stat runs per-rank (rank0 = tree+MF master, rank1+ = MF workers).
+
+---
+
 ## 2026-05-16 (aw) — DNA 1M CLX completed (168422813)
 
 ### What changed
