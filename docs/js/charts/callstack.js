@@ -1,6 +1,6 @@
 // web/js/charts/callstack.js — callstack visualisation from folded_stacks
 
-import { escHtml } from '../utils.js?v=6873bad6b67e';
+import { escHtml } from '../utils.js?v=5bc6e1776821';
 
 function colourFrame(frame) {
   if (!frame || frame === '[unknown]') return 'cs-unk';

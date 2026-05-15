@@ -37,6 +37,7 @@ Both runs used identical alignment lengths (100,000 sites), 100 taxa, identical 
 | DNA CLX |   159.084 s (29%) |   384.838 s (70%) |   546.044 s |   968 models | 102 iters |
 | DNA SPR |    61.740 s (21%) |   226.447 s (78%) |   289.121 s |   968 models | 102 iters |
 | DNA 1M SPR |  3,500.825 s (57%) | 2,596.995 s (42%) | 6,114.450 s | 968 models | 102 iters |
+| DNA 1M CLX | 10,230.229 s (58%) | 7,481.884 s (42%) | 17,752.858 s | 968 models | 102 iters |
 
 **AA/DNA ratios within same hardware:**
 
@@ -466,27 +467,46 @@ This ~5.5× per-model ratio is consistent across hardware and directly reflects 
 
 #### 5.1.1 Super-Linear ModelFinder Scaling with Site Count
 
-The DNA 1M SPR run (168425675) provides a striking comparison. Despite testing the same 968 DNA
-models on the same 100-taxon tree topology, ModelFinder took **3,500.825 s** on SPR (vs 61.740 s
-for DNA 100K SPR) — a **56.7× increase for 10× more sites**.
+Both the DNA 1M SPR run (168425675) and DNA 1M CLX run (168422813) show striking super-linear
+scaling versus their 100K counterparts. Despite testing the same 968 DNA models on the same
+100-taxon tree topology, ModelFinder cost grew far more than the 10× increase in site count.
 
 | Run | MF wall (s) | Models | Per-model (s·thread) | Sites |
 |-----|------------|--------|--------------------|-------|
-| DNA 100K SPR | 61.740 | 968 | 6.57 | 100,000 |
-| DNA 1M SPR | 3,500.825 | 968 | 372.5 | 1,000,000 |
-| **Scale ratio** | **56.7×** | 1.0× | **56.7×** | **10.0×** |
+| DNA 100K CLX | 159.084 | 968 | 7.72 | 100,000 |
+| DNA 100K SPR |  61.740 | 968 | 6.57 | 100,000 |
+| DNA 1M CLX | 10,230.229 | 968 | 496.7 | 1,000,000 |
+| DNA 1M SPR |  3,500.825 | 968 | 372.5 | 1,000,000 |
+| **Scale ratio (CLX)** | **64.3×** | 1.0× | **64.3×** | **10.0×** |
+| **Scale ratio (SPR)** | **56.7×** | 1.0× | **56.7×** | **10.0×** |
 
-The tree search scaled 11.47× (near-linear: 2,596.995 / 226.447), confirming O(n·patterns) kernel
-behaviour. ModelFinder's super-linear scaling is driven by two compounding effects:
+CLX shows **more** super-linear MF scaling (64.3×) than SPR (56.7×). With 1M patterns the
+partial_lh working set overflows L3 on both platforms, but CLX's smaller per-thread L3
+saturates sooner, increasing DRAM traffic more steeply.
+
+**Tree search scaling:**
+- DNA CLX: 7,481.884 / 384.838 = **19.4×** (for 10× more sites)
+- DNA SPR: 2,596.995 / 226.447 = **11.5×** (near-linear)
+
+CLX tree search (19.4×) also scales more super-linearly than SPR (11.5×), consistent with the
+same cache-saturation effect. SPR's larger per-core L3 keeps more partial_lh arrays hot during
+tree traversal, yielding near-linear scaling; CLX spills to DRAM earlier.
+
+**CLX vs SPR speedup at 1M scale:** 17,752.858 / 6,114.450 = **2.90×** total (vs 103/47 = 2.19×
+thread ratio). At 100K the DNA CLX→SPR speedup was only 1.89× (well below thread ratio, memory-bound);
+at 1M both CLX and SPR are DRAM-saturated, and SPR's additional memory bandwidth channels provide
+extra throughput, raising the speedup above the thread ratio.
+
+ModelFinder's super-linear scaling is driven by two compounding effects:
 1. **NNI convergence takes more iterations at larger lnL gradients** — with 10× more sites, each
    parameter step changes lnL by ~10× more, so the `epsilon=0.1` tolerance requires more rounds
    to distinguish signal from numerical noise in the gradient.
 2. **Memory pressure** — 1M sites × 4 rate categories × nstates × ~(2n−1) nodes creates partial_lh
    arrays ~10× larger, saturating L3 cache and increasing memory traffic per MF model evaluation.
 
-This super-linear MF scaling (56.7× for 10× sites) implies that for very long alignments (1M+),
-ModelFinder becomes the dominant cost — an important consideration for AA 1M runs where the per-model
-kernel is already 5.5× more expensive than DNA. Predicted AA 1M MF wall on SPR: ~399.456 × 56.7 ≈ 22,641 s.
+This super-linear MF scaling implies that for very long alignments (1M+), ModelFinder becomes the
+dominant cost — an important consideration for AA 1M runs where the per-model kernel is already
+5.5× more expensive than DNA. Predicted AA 1M MF wall on SPR: ~399.456 × 56.7 ≈ 22,641 s.
 
 ### 5.2 F81 vs LG Eigendecomposition
 

@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-16 (aw) — DNA 1M CLX completed (168422813)
+
+### What changed
+
+**DNA 1M CLX (168422813) finished — 17,752.858 s (4h:55:52), F81+F+G4 (BIC), lnL −59,208,019.212.
+Status matrix row 7 updated. Two jobs still running: 168425490 (AA 1M CLX), 168425491 (AA 1M SPR).**
+
+#### DNA 1M CLX — phase breakdown
+
+| Phase | Wall (s) | Wall (h:m:s) | % of total |
+|-------|---------|--------------|------------|
+| ModelFinder | 10,230.229 | 2:50:30 | 57.6% |
+| Tree search | 7,481.884 | 2:04:41 | 42.1% |
+| **Total** | **17,752.858** | **4:55:52** | 100% |
+
+Models tested: 968 DNA models. Per-model wall time ≈ 10,230.229 × 47 / 968 ≈ 496.9 s·thread
+(vs 372.5 s·thread for DNA 1M SPR) — **64.3× more per-model cost for 10× the sites** on CLX
+(vs 56.7× on SPR). Tree search scaled 19.4× (vs 11.5× on SPR) — CLX shows more super-linear
+tree-search scaling due to smaller L2/L3 cache and heavier DRAM pressure at 1M sites.
+
+lnL = −59,208,019.212, bit-identical to DNA 1M SPR (168425675). Model F81+F+G4.
+
+**Energy:** 505,373.194 J total (avg 28.5 W). package-0: 228,185 J + dram: 59,827 J;
+package-1: 159,634 J + dram: 57,727 J. DRAM roughly balanced (ratio 1.04×).
+
+**IPC/cache:** No perf stat (hw counters restricted on this CLX node — perf-report exited rc=1).
+IPC left as — in metrics table.
+
+---
+
 ## 2026-05-15 (av) — DNA 1M SPR completed (168425675)
 
 ### What changed
@@ -89,7 +119,7 @@ results table compiled from all completed runs.**
 | 4 | AA 1M SPR | Sapphire Rapids | 103 | **168425491** | RUNNING (34 min) | — | — | — | — |
 | 5 | DNA 100K CLX | Cascade Lake | 47 | **168422811** | **DONE** ✓ | 546.044 | −5,692,984.5391 | 11,388,283.1763 | 390.6 |
 | 6 | DNA 100K SPR | Sapphire Rapids | 103 | **168425674** | **DONE** ✓ | 289.121 | −5,692,984.5391 | 11,388,283.1763 | 622.5 |
-| 7 | DNA 1M CLX | Cascade Lake | 47 | **168422813** | RUNNING | — | — | — | — |
+| 7 | DNA 1M CLX | Cascade Lake | 47 | **168422813** | **DONE** ✓ | 17,752.858 | −59,208,019.212 | 118,418,815.234 | 28.5 |
 | 8 | DNA 1M SPR | Sapphire Rapids | 103 | **168425675** | **DONE** ✓ | 6,114.450 | −59,208,019.212 | 118,418,815.234 | 64.4⚠ |
 
 ✓ = completed on exclusive node. IPC pending perf stat re-run (see below).
