@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-05-15 (au) — Output files shared for all 4 completed 100K runs
+
+### What changed
+
+**`chmod -R a+rw` applied to all 4 completed 100K run output directories on
+`/scratch/dx61/as1708/cpu_bench/profiles/`. Output files (tree, log, model, distances)
+are now world-readable.**
+
+| PBS ID | Dataset | Directory |
+|---|---|---|
+| 168422809 | AA 100K CLX | `/scratch/dx61/as1708/cpu_bench/profiles/AA_100k_normal_seed1_168422809/` |
+| 168425673 | AA 100K SPR | `/scratch/dx61/as1708/cpu_bench/profiles/AA_100k_spr_seed1_168425673/` |
+| 168422811 | DNA 100K CLX | `/scratch/dx61/as1708/cpu_bench/profiles/DNA_100k_normal_seed1_168422811/` |
+| 168425674 | DNA 100K SPR | `/scratch/dx61/as1708/cpu_bench/profiles/DNA_100k_spr_seed1_168425674/` |
+
+Each directory contains: `iqtree_run.treefile`, `iqtree_run.iqtree`, `iqtree_run.log`,
+`iqtree_run.model.gz`, `iqtree_run.mldist`, `iqtree_run.bionj`, `iqtree_run.ckp.gz`.
+
+---
+
 ## 2026-05-15 (at) — Perf stat re-runs complete; IPC/cache metrics patched (168428519)
 
 ### What changed
