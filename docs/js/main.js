@@ -1,15 +1,15 @@
 // web/js/main.js — entry point
 
-import { store } from './state.js?v=90425e8d7d0c';
-import { loadManifest, loadIndexes } from './data.js?v=90425e8d7d0c';
-import * as router from './router.js?v=90425e8d7d0c';
+import { store } from './state.js?v=7e7e4f7cef00';
+import { loadManifest, loadIndexes } from './data.js?v=7e7e4f7cef00';
+import * as router from './router.js?v=7e7e4f7cef00';
 
-import * as overview from './pages/overview.js?v=90425e8d7d0c';
-import * as runs from './pages/runs.js?v=90425e8d7d0c';
-import * as tests from './pages/tests.js?v=90425e8d7d0c';
-import * as profiling from './pages/profiling.js?v=90425e8d7d0c';
-import * as gpu from './pages/gpu.js?v=90425e8d7d0c';
-import * as environment from './pages/environment.js?v=90425e8d7d0c';
+import * as overview from './pages/overview.js?v=7e7e4f7cef00';
+import * as runs from './pages/runs.js?v=7e7e4f7cef00';
+import * as tests from './pages/tests.js?v=7e7e4f7cef00';
+import * as profiling from './pages/profiling.js?v=7e7e4f7cef00';
+import * as gpu from './pages/gpu.js?v=7e7e4f7cef00';
+import * as environment from './pages/environment.js?v=7e7e4f7cef00';
 
 const PAGE_MOUNT = {
   overview: overview.mount,

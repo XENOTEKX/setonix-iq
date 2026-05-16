@@ -689,6 +689,36 @@ as the original non-MPI OMP-across-models design.
 **Expected performance after Fix F (AA 100K):** same as Fix A+B+C projections in §2.4.1.
 Each rank evaluates ~150 post-pruning models in parallel across `num_threads` OMP threads.
 
+#### §2.4.3 Measured results — Fix A+C+D+E binary (`eddbf45d`, 2026-05-16)
+
+Job 168467032 (np=2) completed. Binary: `iqtree3-mpi` built May 10 2026, commit `eddbf45d`
+(Fix A+C+D+E active; Fix E = sequential outer loop in MPI builds, Fix F not yet applied).
+Remaining jobs 168467031 (np=1) and 168467033 (np=4) still running at time of writing.
+
+| PBS ID | Scenario | Fix set | MF wall | Tree wall | Total | vs SPR baseline | lnL | IPC | LLC miss% |
+|--------|----------|---------|---------|-----------|-------|-----------------|-----|-----|-----------|
+| 168425673 | Baseline — SPR standard, 1 node, 103T | — | 399 s | 764 s | 1,169 s | 1.00× | −7,541,976.860 | 1.878 | 66.94% |
+| 168446151 | MF2 np1, 1×103T | A+B (early) | 1,309 s | 717 s | 2,030 s | 0.58× | −7,541,976.862 | 1.961 | 67.76% |
+| 168446152 | MF2 np2, 2×103T | A+B (early) | 969 s | 383 s | 1,355 s | 0.86× | −7,541,976.862 | 2.028 | 66.26% |
+| 168446153 | MF2 np4, 4×103T | A+B (early) | 573 s | 198 s | 776 s | **1.51×** | −7,541,976.862 | 2.025 | 66.31% |
+| 168467031 | MF2 np1, 1×103T | A+C+D+E | — | — | — | pending | — | — | — |
+| **168467032** | **MF2 np2, 2×103T** | **A+C+D+E** | **481 s** | **390 s** | **875 s** | **1.34×** ✓ | **−7,541,976.865** | **1.999** | **67.3%** |
+| 168467033 | MF2 np4, 4×103T | A+C+D+E | — | — | — | pending | — | — | — |
+
+**np=2 Fix E improvement over earlier binary:** 1,355 s → 875 s = **1.55× faster** (Fix C
+restores `filterRates` pruning per rank; Fix D improves NUMA bandwidth; Fix E serialises
+the per-rank model loop to avoid the Issue 5 `std::map` race).
+
+**np=2 Fix E vs SPR baseline:** 875 s vs 1,169 s = **1.34× faster**. ✓ MF2 2-node with
+these fixes beats the standard 1-node binary. Break-even is well under 2 nodes.
+
+**MF phase analysis for 168467032 (Fix E):** 481 s with the sequential outer loop across
+~616 models/rank, each model using all 103 OMP threads for site-likelihood kernels.
+Fix F (thread-local snapshot, commit `a9b50164`) restores the OMP parallel outer loop;
+theoretical MF time with Fix F ≈ 481 s × (comparable to Fix E due to identical per-model
+cost), with real gains possible from eliminating serial model dispatch overhead. Fix F
+benchmark pending.
+
 ---
 
 ## 3. The Algorithmic Root Cause: O(n²) Inner Product Loops

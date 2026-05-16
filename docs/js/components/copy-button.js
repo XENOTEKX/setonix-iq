@@ -1,7 +1,7 @@
 // web/js/components/copy-button.js
 
-import { copyToClipboard } from '../utils.js?v=90425e8d7d0c';
-import { showToast } from './toast.js?v=90425e8d7d0c';
+import { copyToClipboard } from '../utils.js?v=7e7e4f7cef00';
+import { showToast } from './toast.js?v=7e7e4f7cef00';
 
 export function bindCopyButtons(root = document) {
   root.querySelectorAll('[data-copy]').forEach((btn) => {
