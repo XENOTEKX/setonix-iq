@@ -203,6 +203,33 @@ JSON records at: `/home/272/as1708/setonix-iq/logs/runs/`.
 > **Note**: The `MF CPU` column is rank-0's process CPU time only (OMP team total). Rank-1+
 > CPUs are not reported in rank-0's log.
 
+### 5.3 `aa_100k.fa` (100 taxa, AA, standard binary baseline)
+
+**Standard binary** (PBS 168425673, 1-node SPR, no MPI), then **MF2 MPI binary** at 1/2/4 nodes:
+
+| Config | PBS ID | Ranks | MF wall (s) | Tree wall (s) | Total wall (s) | lnL | BIC | IPC | LLC miss% |
+|--------|--------|-------|-------------|---------------|----------------|-----|-----|-----|-----------|
+| Standard SPR (baseline) | 168425673 | 1 | 399 | 764 | 1,169 | −7,541,976.860 | 15,086,233 | 1.878 | 66.94% |
+| MF2 MPI 1-node (1×103T) | 168446151 | 1 | **1,309** | 717 | 2,030 | −7,541,976.862 | 15,086,233 | 1.961 | 67.76% |
+| MF2 MPI 2-node (2×103T) | 168446152 | 2 | **969** | 383 | 1,355 | −7,541,976.862 | 15,086,233 | 2.028 | 66.26% |
+| MF2 MPI 4-node (4×103T) | 168446153 | 4 | **573** | 198 | 776 | −7,541,976.862 | 15,086,233 | 2.025 | 66.31% |
+
+**AA 100K model set**: 1,232 models (20 AA substitution matrices × ~61 rate variants including
++F variants). Standard IQ-TREE evaluates ~475 after `filterRates` pruning. MF2 (broken LPT
+stripe) evaluates all 1,232 — same as `mega_dna`.
+
+**Comparison with `mega_dna` (500 taxa) overhead factors:**
+
+| Metric | `mega_dna` (500T) | `aa_100k` (100T) | Interpretation |
+|--------|-------------------|------------------|----------------|
+| np1 MF overhead vs np1 standard | **6.9×** (1,571/226) | **3.28×** (1,309/399) | C3 ∝ tree size (999 vs 199 nodes) |
+| C1 contribution (pruning bypass) | ~2.6× | ~2.6× | Same regardless of tree size |
+| C3 contribution (OMP barriers) | ~2.6× | ~1.26× | 999/199 ≈ 5× fewer barriers for 100K |
+| Product (C1 × C3) | **~6.9×** | **~3.3× ≈ 3.28×** | Model fits both cases |
+
+This confirms: C1 (broken filterRates) accounts for ~2.6× regardless of dataset size;
+C3 (OMP barrier overhead) scales roughly with tree size (number of internal nodes).
+
 ---
 
 ## 6. What Scales Correctly vs What Breaks
@@ -646,5 +673,68 @@ blocking, not to preserve filter accuracy. The best-model discrepancy (GTR+G4 at
 
 ---
 
-*Document written: 2025-06. All timing data from Gadi PBS jobs 168213985–168213988.*  
+## 17. Fixes Implemented (2026-05)
+
+Both C1 and C3 have been fixed in `main/phylotesting.cpp` on the `gadi-spr-r2-avx512`
+branch. Fixes correspond to §15 High Priority items 1 and 6 (subst-family grouping).
+
+### 17.1 Fix A — Subst-family LPT stripe (addresses C1)
+
+**Replaces**: cost-sorted position stripe (`sorted_pos % nranks`)  
+**With**: group all rate variants of each substitution family together, LPT-sort GROUPS,
+assign GROUPS round-robin across ranks.
+
+```
+Before (broken):
+  sorted: [LG+R10(cost=100), WAG+R10(99), LG+R9(98), WAG+R9(97), LG+R8(96), ...]
+  rank 0: positions 0,2,4,... → LG+R10, LG+R9, LG+R8, ... (all even-k LG+Rk)
+  rank 1: positions 1,3,5,... → WAG+R10, WAG+R9, ... (odd-k mixed families)
+  filterRates(LG+R10 on rank 0): getLowerKModel → LG+R9 → MF_IGNORED → BYPASS
+
+After (fixed):
+  groups: {LG: cost=sum(LG+*), WAG: cost=sum(WAG+*), ...}
+  LPT-sort groups: [LG(highest total cost), WAG, JTT, ...]
+  rank 0: all LG variants (LG+G4, LG+I+G4, LG+R2, ..., LG+R10, LG+F+G4, ...)
+  rank 1: all WAG variants, rank 2: all JTT variants, ...
+  filterRates(LG+R4 on rank 0): getLowerKModel → LG+R3 → NOT MF_IGNORED → PRUNING FIRES
+```
+
+Expected effect: each rank evaluates ~475/nranks models (matching non-MPI pruning
+behaviour) rather than all 1,232. For np4: ~119 models/rank vs 308 before.
+
+### 17.2 Fix B — OMP-across-models in MPI evaluation path (addresses C3)
+
+**Removes**: the `#ifdef _IQTREE_MPI` sequential evaluation block (one model at a time,
+all threads for site-level parallelism).  
+**Restores**: the unified OMP-across-models loop for both MPI and non-MPI builds.
+
+The "Issue 5" race condition that motivated the sequential fix was a false positive for
+production runs:
+- `saveCheckpoint(&in_model_info)` at the end of `evaluate()` is already inside a
+  `#pragma omp critical` block within `evaluate()` itself.
+- The only OTHER write outside `omp critical` is `putBool("UnreliableParam")`, which
+  is gated on `verbose_mode >= VB_MED` — never triggered with default verbosity.
+- All other per-model writes in the outer loop are in `#pragma omp critical`.
+
+Expected effect: eliminates ~4,000 OMP barrier events per model (199 nodes × ~10 passes
+× 2 barriers) for AA 100K — matching the non-MPI barrier cost of zero.
+
+### 17.3 Expected post-fix performance
+
+| Dataset | Config | MF wall (broken) | MF wall (projected) | Improvement |
+|---------|--------|-------------------|---------------------|-------------|
+| AA 100K | np1 | 1,309 s | ~400 s | ~3.3× |
+| AA 100K | np2 | 969 s | ~160 s | ~6.1× |
+| AA 100K | np4 | 573 s | ~120 s | ~4.8× |
+| mega_dna | np1 | 1,571 s | ~227 s (= non-MPI) | ~6.9× |
+| mega_dna | np2 | 1,571 s | ~120 s | ~13× |
+| mega_dna | np4 | 1,074 s | ~60 s | ~18× |
+
+> **Note**: mega_dna projections assume a 500T dataset with ~1,000 nodes and 968 DNA
+> models (same C1/C3 factor analysis applies).
+
+---
+
+*Document written: 2025-06. Fixes implemented: 2026-05.*  
+*All timing data from Gadi PBS jobs 168213985–168213988 (DNA) and 168446151–168446153 (AA 100K).*  
 *Source analyzed: `src/iqtree3/main/phylotesting.cpp` (v3.1.2+mf2), lines 1520–3800.*

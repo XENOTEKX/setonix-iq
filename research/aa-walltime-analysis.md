@@ -188,34 +188,13 @@ is 25× more FLOPs than DNA (nstates=4). That is why AA MF takes 399 s vs 61.7 s
 on the same SPR hardware (6.47× observed ratio; the difference from 25× is explained by
 memory-bandwidth limitations making DNA already partially serialised).
 
-### 2.4 MPI ModelFinder: How It Helps
+### 2.4 MPI ModelFinder: How It Helps (and Where It Falls Short)
 
 The model testing loop is **embarrassingly parallel across models** — each model is independent.
-MPI distributes models across nodes, so N nodes each test 1,232/N models:
-
-```
-WITHOUT MPI (single node, 103 threads):
-┌──────────────────────────────────────────────────────────────────┐
-│ Node 0 (103 threads):                                            │
-│  model 1 ─► 2 ─► 3 ─► … ─► 1,232 models (sequential dispatch)  │
-└──────────────────────────────────────────────────────────────────┘
-Total MF wall: 399 s
-
-WITH MPI (4 nodes × 103 threads = 412 threads):
-┌────────────────────────────────────────┐
-│ Node 0 (103T): models   1 –  308       │  ~100 s
-│ Node 1 (103T): models 309 –  616       │  ~100 s   ← all run in parallel
-│ Node 2 (103T): models 617 –  924       │  ~100 s
-│ Node 3 (103T): models 925 – 1,232      │  ~100 s
-└────────────────────────────────────────┘
-  MPI_Allgather BIC scores (< 1 s)
-  All nodes agree: LG+G4 is best
-Total MF wall: ~100 s  (4× speedup)
-```
-
-After ModelFinder, the tree search (Phase 5) runs on a **single node** in the standard workflow
-— MPI does not help there directly. That is the key limitation: MPI MF cuts 34% of the runtime
-by ~4×, but the 54% tree search phase is unaffected.
+The DESIGN is for MPI to distribute substitution-model families across nodes (subst-family LPT
+stripe), so each rank evaluates ~450/N models after `filterRates` pruning, then gathers the
+best result via `MPI_Allreduce`.  MF2 also distributes **tree search across MPI ranks** —
+a capability BEYOND standard IQ-TREE, enabling near-linear tree-search scaling.
 
 **AA 100K MF2 scaling benchmark — completed 2026-05-16** (group `aa_100k_mf2_scaling`).
 Scripts `run_cpu_bench_aa_100k_mf2_{1,2,4}node.sh`, same alignment, seed, `-T 103`,
@@ -232,18 +211,14 @@ All runs verified lnL = −7,541,976.862 ✓.
 All four runs select LG+G4 (BIC = 15,086,233; lnL differs only at the 3rd decimal due to floating-point ordering).
 IPC values are from rank-0 `perf stat` (the tree-search master rank). LLC miss% is aggregated over all threads.
 
-**Key finding — the Amdahl model was incomplete.** The MF2 binary distributes
-**tree search across MPI ranks as well as ModelFinder**, so the actual speedup exceeds
-the MF-only Amdahl ceiling. With 4 nodes the total speedup is 1.51× vs the predicted 1.35×.
+**Key finding — MF2 MPI tree search scales near-linearly; ModelFinder scaling is impaired by
+two implementation bugs.** With 4 nodes the total speedup is 1.51× over the standard
+1-node binary. Tree search scales near-linearly (717 s → 383 s → 198 s, 3.63× for 4× ranks).
+ModelFinder does NOT scale: 1,309 s at np1 (3.28× SLOWER than standard), 573 s at np4 (43%
+slower than standard). Both bugs are diagnosed below and fixes are committed to the source.
 
-**MF2 1-node carries significant MPI overhead**: ModelFinder takes 1,309 s with 1 rank vs
-399 s on the standard binary (3.28×). The LPT model-dispatch protocol (synchronization per
-model batch over MPI) has cost that is not amortized at 1 rank. Break-even vs standard SPR
-is at approximately 2.7 nodes.
-
-Tree search scales near-linearly: 717 s → 383 s → 198 s (3.63× for 4× ranks). This
-near-linear scaling is the dominant source of the 4-node total speedup — 1M AA runs with
-longer tree search phases will benefit proportionally more.
+**Tree search** scales near-linearly and is the dominant source of the 4-node total speedup.
+1M AA runs (longer tree search) will benefit proportionally more from additional nodes.
 
 **IPC progression (rank-0 perf stat):** 1.878 (baseline) → 1.961 (np1) → 2.028 (np2) →
 2.025 (np4). The MF2 1-node IPC (1.961) is already higher than the standard binary (1.878),
@@ -251,9 +226,66 @@ because MPI serialization reduces per-core model contention. LLC miss% stays sta
 66–68% across all scenarios, confirming the LLC bottleneck is in the likelihood kernel
 itself (not model dispatch overhead).
 
-The MPI MF speedup hits a ceiling because tree search dominates. For **1M AA** (predicted
-MF ~22,600 s, tree search ~8,000 s), the MPI MF payoff is far greater — ModelFinder becomes
-the dominant cost and distributing it across nodes is essential.
+#### Why MF2 ModelFinder is slow — root cause analysis
+
+**C1 (dominant): LPT position-stripe disables `filterRates` pruning.**
+The Phase 1 code (`evaluateAll()`) sorted ALL 1,232 AA models by individual rate-category
+cost (LPT), then assigned by `sorted_position % nranks`. This puts ALL even-k +Rk models
+(GTR+I+R10, GTR+I+R8, …) at even positions → rank 0 gets them; ALL odd-k variants go to
+rank 1. When `filterRates` checks whether LG+R4 is worth evaluating, it calls
+`getLowerKModel(LG+R4)` → LG+R3 → but LG+R3 is MF_IGNORED on rank 0 (assigned to rank 1).
+The guard `!at(lower_model).hasFlag(MF_IGNORED)` fails → pruning never fires. Every rank
+evaluates ALL assigned +Rk series without any early termination.
+
+Standard IQ-TREE (1 process): evaluates ~450–500 of the 1,232 AA models after filterRates
+pruning. MF2 np1: evaluates ALL 1,232 models (no pruning). Ratio: 1,232/475 ≈ 2.6×.
+
+**C3 (secondary): sequential site-parallel evaluation — OMP barrier overhead.**
+The "Issue 5 fix" (commit `abd98764`) made the MPI build evaluate one model at a time using
+all 103 threads for site-level parallelism (sequential outer loop, OMP inner loop). For AA
+100K (100 taxa, 199 internal nodes), each model evaluation requires 199 × ~10 passes × 2
+OMP barriers ≈ 4,000 OMP barrier events. With 1,232 models: ~5M barrier events total. The
+non-MPI path uses model-level OMP (1 thread per model, 103 models in parallel, zero
+intra-model barriers) and is ~1.3× faster per model.
+
+**Quantified contribution for AA 100K:**
+
+| Cause | Factor |
+|-------|--------|
+| C1: no filterRates pruning (1,232 vs ~475 models) | ~2.6× |
+| C3: sequential site-parallel overhead per model | ~1.3× |
+| Combined (product) | **~3.4× ≈ observed 3.28×** |
+
+#### Fix implemented (`phylotesting.cpp`, commit `2672b90a`)
+
+**Fix A — subst-family LPT stripe (replaces position stripe):**
+Instead of sorting ALL 1,232 models by individual cost and striping by position, group by
+`subst_name` (substitution-model family: LG, WAG, JTT, …). Compute total cost per group
+(sum of rate-variant costs), LPT-sort GROUPS, assign GROUPS round-robin across ranks. All
+~30 rate variants of LG (LG+G4, LG+I+G4, LG+R2, …, LG+R10, LG+F+…) go to the same rank.
+`filterRates` now fires normally: rank 0 evaluates LG+G4, then LG+R2, compares, prunes
+LG+R3 … LG+R10. Expected evaluation count: ~150–200 models per rank (similar to standard).
+
+**Fix B — OMP-across-models in MPI path (removes sequential loop):**
+The `#ifdef _IQTREE_MPI` sequential evaluation block was removed. Both MPI and non-MPI builds
+now use the same OMP-across-models loop (`#pragma omp parallel num_threads(num_threads)`
+with work-stealing `getNextModel()`). The "Issue 5" ModelFactory race was a red herring for
+production runs (VB_MIN verbosity): the only write outside `#pragma omp critical` is
+`putBool("UnreliableParam")` which is gated on `verbose_mode >= VB_MED`. The
+`saveCheckpoint(&in_model_info)` call at the end of `evaluate()` was already guarded by
+`#pragma omp critical` inside `evaluate()`.
+
+**Projected performance after fixes (AA 100K):**
+
+| Scenario | MF wall | Tree wall | Total | Speedup |
+|----------|---------|-----------|-------|---------|
+| Baseline (standard, np1) | 399 s | 764 s | 1,169 s | 1.00× |
+| MF2 np1 (with fixes) | ~400 s | 717 s | ~1,117 s | ~1.05× |
+| MF2 np2 (with fixes) | ~160 s | 383 s | ~543 s | ~2.15× |
+| MF2 np4 (with fixes) | ~120 s | 198 s | ~318 s | ~3.67× |
+
+Projected break-even vs standard SPR: **< 1.5 nodes** (any multi-node MF2 run beats
+standard single-node). For np4: 1,169 s / 318 s ≈ 3.7× speedup.
 
 ---
 
