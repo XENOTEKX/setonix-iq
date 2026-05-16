@@ -2882,20 +2882,36 @@ bool isMixtureModel(ModelsBlock *models_block, string &model_str) {
 void CandidateModelSet::filterRates(int finished_model) {
     if (Params::getInstance().score_diff_thres < 0)
         return;
+    // MF-MPI Fix C: use the first non-ignored substitution family as the
+    // reference for computing best_score.  In MPI mode ranks 1-3 have all
+    // LG/GTR models marked MF_IGNORED (they belong to rank 0), so using
+    // at(0).subst_name would always yield best_score = DBL_MAX and no pruning.
+    // Using the rank's own first assigned family (e.g. WAG on rank 1) gives
+    // a valid BIC reference and enables cross-family rate pruning on all ranks.
+    string ref_subst = at(0).subst_name;
+    for (int i = 0; i < (int)size(); i++) {
+        if (!at(i).hasFlag(MF_IGNORED)) {
+            ref_subst = at(i).subst_name;
+            break;
+        }
+    }
     double best_score = DBL_MAX;
     ASSERT(finished_model >= 0);
     int model;
     for (model = 0; model <= finished_model; model++)
-        if (at(model).subst_name == at(0).subst_name) {
+        if (at(model).subst_name == ref_subst) {
             if (!at(model).hasFlag(MF_DONE + MF_IGNORED))
                 return; // only works if all models done
-            best_score = min(best_score, at(model).getScore());
+            if (!at(model).hasFlag(MF_IGNORED))
+                best_score = min(best_score, at(model).getScore());
         }
-    
+    if (best_score == DBL_MAX)
+        return; // ref family not yet evaluated (all still running or all ignored)
+
     double ok_score = best_score + Params::getInstance().score_diff_thres;
     set<string> ok_rates;
     for (model = 0; model <= finished_model; model++)
-        if (at(model).getScore() <= ok_score) {
+        if (!at(model).hasFlag(MF_IGNORED) && at(model).getScore() <= ok_score) {
             string rate_name = at(model).orig_rate_name;
             ok_rates.insert(rate_name);
         }
@@ -3533,6 +3549,30 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         cout << "MF-MPI: rank " << my_rank << "/" << nranks
              << " assigned " << my_count << "/" << num_models
              << " models (subst-family LPT stripe, filterRates active)" << endl;
+    }
+
+    // MF-MPI Fix C: recompute rate_block per-rank.
+    // rate_block was computed above from the global model list as the last
+    // index of the first substitution family (LG for AA, GTR for DNA).
+    // For MPI ranks 1-3 all LG/GTR models are MF_IGNORED, so the global
+    // rate_block is meaningless — filterRates() would fire against an entirely
+    // IGNORED family and produce best_score = DBL_MAX (no pruning).
+    // Fix: set rate_block to the last index of the first non-ignored family
+    // assigned to this rank, so filterRates fires after the rank's reference
+    // family is fully evaluated and can supply a valid BIC reference score.
+    if (MPIHelper::getInstance().getNumProcesses() > 1 && auto_rate) {
+        string ref_subst;
+        for (int64_t i = 0; i < num_models; i++) {
+            if (!at(i).hasFlag(MF_IGNORED)) {
+                ref_subst = at(i).subst_name;
+                break;
+            }
+        }
+        if (!ref_subst.empty()) {
+            rate_block = 0;
+            for (int64_t i = 0; i < num_models; i++)
+                if (at(i).subst_name == ref_subst) rate_block = (int)i;
+        }
     }
 #endif
 
