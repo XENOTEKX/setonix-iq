@@ -641,52 +641,64 @@ to prevent double-assignment. **Our local code already had the equivalent fix** 
 `current_model = next_model` and `at(next_model).setFlag(MF_RUNNING)` are both inside
 `#pragma omp critical` in our `getNextModel()`.
 
-**Fix F implementation:**
+**Fix F implementation (incomplete — superseded by Fix G):**
 
-At the start of `evaluate()`, extend the existing `#pragma omp critical` for
-`iqtree->restoreCheckpoint()` to also take a **per-thread snapshot** of `in_model_info`:
+At the start of `evaluate()`, took a per-thread snapshot of `in_model_info` under
+`#pragma omp critical`, but placed the snapshot copy **after** `iqtree->initializeModel()`.
+All `restoreCheckpointRminus1`, `initFromCatMinusOne`, and `putBool` calls were redirected
+to the local copy. The early-exit `restoreCheckpoint()` call was also moved inside the
+critical section.
+
+**Fix F defect — missed races in `initializeModel()` and `getModelFactory()->restoreCheckpoint()`:**
+
+Fix F placed the snapshot copy too late. Two critical reads still used the shared `in_model_info`:
+
+1. `iqtree->setCheckpoint(&in_model_info)` (before Fix F's copy) set iqtree's internal
+   checkpoint pointer to the shared map.
+2. `iqtree->restoreCheckpoint()` was protected by `#pragma omp critical` — safe.
+3. `iqtree->initializeModel(params, ...)` — **UNPROTECTED**. The `ModelFactory` constructor
+   reads from the iqtree checkpoint (still pointing to shared `in_model_info`) to restore
+   saved model parameters. This read races with any other thread's concurrent
+   `saveCheckpoint(&in_model_info)` write.
+4. `iqtree->getModelFactory()->restoreCheckpoint()` — also read from shared `in_model_info`,
+   also unprotected.
+
+`std::map::find()` concurrent with `std::map::insert()` is undefined behaviour → red-black
+tree corruption → heap corruption → SIGABRT at first model evaluation attempt.
+
+#### Fix G — move thread-local snapshot before `setCheckpoint` (`phylotesting.cpp`, commit `10107158`)
+
+Fix G moves the `local_in_info = in_model_info` copy to **before** `iqtree->setCheckpoint()`,
+so ALL checkpoint reads use the per-thread copy:
 
 ```cpp
+// Fix G: copy BEFORE setCheckpoint/restoreCheckpoint/initializeModel
 ModelCheckpoint local_in_info;
-{
-    bool already_evaluated;
-#ifdef _OPENMP
 #pragma omp critical
-{
-#endif
-    local_in_info = in_model_info;                    // thread-local snapshot
-    already_evaluated = restoreCheckpoint(&local_in_info);
-#ifdef _OPENMP
-}
-#endif
-    if (already_evaluated) { delete iqtree; return ""; }
-}
+{ local_in_info = in_model_info; }          // per-thread snapshot
+
+iqtree->setCheckpoint(&local_in_info);      // point iqtree at per-thread copy
+iqtree->restoreCheckpoint();                // reads local_in_info — no race
+ASSERT(iqtree->root);
+iqtree->initializeModel(params, ...);       // reads local_in_info — no race
+// ...
+if (restoreCheckpoint(&local_in_info)) { delete iqtree; return ""; }
+iqtree->getModelFactory()->restoreCheckpoint();  // reads local_in_info — no race
 ```
 
-All subsequent reads of `in_model_info` use `local_in_info` instead:
-- `restoreCheckpointRminus1(&local_in_info, this)` — read from per-thread copy ✓
-- `iqtree->setCheckpoint(&local_in_info)` in `!prev_rate_present` path ✓
-- `initFromCatMinusOne(local_in_info, ...)` — both calls ✓
-- `local_in_info.getString(...)` for mixture init path ✓
+The `#pragma omp critical` guards around `iqtree->restoreCheckpoint()` and
+`getModelFactory()->restoreCheckpoint()` are removed (per-thread storage needs no
+serialisation). The only writes to the shared `in_model_info` remain the final
+`saveCheckpoint(&in_model_info)` and the VB_MED-only `putBool` (both under `#pragma omp
+critical`).
 
-The only writes to the shared `in_model_info` remain:
-- `saveCheckpoint(&in_model_info)` at end of `evaluate()` — already under `#pragma omp critical` ✓
-- `in_model_info.putBool("UnreliableParam", ...)` — now also under `#pragma omp critical` ✓
+**Copy overhead:** unchanged from Fix F analysis — < 0.1% of per-model evaluate time.
 
-**Copy overhead:** `local_in_info = in_model_info` copies the entire map. At 1,232 AA
-models × ~2 entries each × ~100 B/entry ≈ 250 KB. A `std::map` copy of ~2,500 entries
-takes ~1–5 ms on modern hardware. Each `evaluate()` call takes 5–100 s. Overhead: < 0.1%.
+**Result:** All checkpoint reads in `evaluate()` use per-thread storage. The parallel
+outer loop (`#pragma omp parallel num_threads(num_threads) proc_bind(spread)`) is retained.
+Combined with Fix A LPT striping, this gives full model-level OMP parallelism per rank.
 
-**Result:** The `#if defined(_OPENMP) && !defined(_IQTREE_MPI)` guard from Fix E is
-removed. Both MPI and non-MPI builds use:
-```cpp
-#pragma omp parallel num_threads(num_threads) proc_bind(spread)
-```
-Full model-level OMP parallelism within each MPI rank is restored. Combined with Fix A
-LPT striping (~1/nranks subst-families per rank), this delivers the same parallelism
-as the original non-MPI OMP-across-models design.
-
-**Expected performance after Fix F (AA 100K):** same as Fix A+B+C projections in §2.4.1.
+**Expected performance after Fix G (AA 100K):** same as Fix A+B+C projections in §2.4.1.
 Each rank evaluates ~150 post-pruning models in parallel across `num_threads` OMP threads.
 
 #### §2.4.3 Measured results — `abd98764` binary (May 10 position-LPT, no Fix C/E/F)
@@ -740,20 +752,33 @@ standard SPR comes from running MF on rank 0 with tree search on all ranks in pa
 **np=2 vs SPR baseline:** 875 s vs 1,169 s = **1.34× faster**. ✓ Even the broken binary
 beats standard at np=2 because the tree search benefits from 2 nodes.
 
-#### §2.4.4 Fix F benchmark — first clean build (2026-05-16 13:39, commit `a9b50164`)
+#### §2.4.4 Fix F benchmark — all jobs crashed (SIGABRT/SIGKILL at 18/148/23 s)
 
-Fix F binary is the **first compilation of any MF2 fix** (Fixes A+B+C+D+F compiled into one
-binary for the first time; Fix E is superseded by Fix F’s thread-safe parallel outer loop).
+Fix F binary (commit `a9b50164`, built 2026-05-16 13:39) was submitted immediately after
+the binary investigation but contained the defect described above. All three jobs crashed
+at the first model evaluation attempt:
 
-Jobs submitted 2026-05-16 after completing binary investigation:
+| PBS ID | Scenario | Fix set | Exit | Wall |
+|--------|----------|---------|------|------|
+| 168468220 | MF2 np1, 1×103T | A+B+C+D+F | rc=134 SIGABRT | 18 s |
+| 168468221 | MF2 np2, 2×103T | A+B+C+D+F | rc=137 SIGKILL | 148 s |
+| 168468222 | MF2 np4, 4×103T | A+B+C+D+F | rc=134 SIGABRT | 23 s |
+
+Error in all logs: `*** IQ-TREE CRASHES WITH SIGNAL ABORTED` immediately after
+`ModelFinder will test 1232 protein models`. Fix G was applied and binary rebuilt at 14:16.
+
+#### §2.4.5 Fix G benchmark — first crash-free MPI+OMP parallel build (2026-05-16 14:16, commit `10107158`)
+
+Fix G (commit `10107158`, binary rebuilt at 14:16) corrects the race as described above.
+Jobs submitted immediately:
 
 | PBS ID | Scenario | Fix set | Status |
 |--------|----------|---------|--------|
-| **168468220** | MF2 np1, 1×103T | A+B+C+D+F | queued |
-| **168468221** | MF2 np2, 2×103T | A+B+C+D+F | queued |
-| **168468222** | MF2 np4, 4×103T | A+B+C+D+F | queued |
+| **168468375** | MF2 np1, 1×103T | A+B+C+D+G | queued |
+| **168468376** | MF2 np2, 2×103T | A+B+C+D+G | queued |
+| **168468377** | MF2 np4, 4×103T | A+B+C+D+G | queued |
 
-**Expected performance (Fix A+B+C+D+F, AA 100K):**
+**Expected performance (Fix A+B+C+D+G, AA 100K):**
 
 | Scenario | MF wall | Tree wall | Total | vs SPR baseline |
 |----------|---------|-----------|-------|-----------------|
@@ -762,8 +787,9 @@ Jobs submitted 2026-05-16 after completing binary investigation:
 | np4 | ~100 s | ~198 s | ~298 s | ~3.9× |
 
 Fix B restores OMP-across-models parallelism in MPI builds; Fix A ensures balanced model
-assignment (subst-family LPT); Fix C restores filterRates pruning per rank. Together these
-should deliver MF time matching the §2.4.1 projections for the first time.
+assignment (subst-family LPT); Fix C restores filterRates pruning per rank; Fix G ensures
+all checkpoint reads use per-thread storage. Together these should deliver MF time
+matching the §2.4.1 projections for the first time.
 
 ---
 
