@@ -50,12 +50,12 @@ export function render(canvas, runsIndex) {
       const refLabel = r.non_canonical_label || family || 'ref';
       const key = `${platformLabel(plat)} · ${ds} · ${refLabel}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds, family, points: [] });
-      byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
+      byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s, n: r.n_mpi_ranks || null, t: r.threads_per_node || null });
     } else {
       // Canonical: group by (platform, dataset) — all canonical variants share one line.
       const key = `${platformLabel(plat)} · ${ds}`;
       if (!byKey.has(key)) byKey.set(key, { plat, ds, family, points: [] });
-      byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
+      byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s, n: r.n_mpi_ranks || null, t: r.threads_per_node || null });
     }
   }
 
@@ -110,7 +110,11 @@ export function render(canvas, runsIndex) {
         legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}s @ T=${ctx.parsed.x}`,
+            label: (ctx) => {
+              const r = ctx.raw;
+              const tLabel = (r.n && r.t) ? `${r.n} nodes \xd7 ${r.t}T` : `T=${ctx.parsed.x}`;
+              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}s @ ${tLabel}`;
+            },
           },
         },
       },

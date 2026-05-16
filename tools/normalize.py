@@ -189,6 +189,16 @@ def summarize_run(run: dict) -> dict:
         size_mb = fallback.get("size_mb")
         size_estimated = fallback.get("size_estimated", False)
 
+    # MPI / total-threads resolution.
+    # run.get("threads") stores *total* threads for cpu_bench runs (set by
+    # the batch submission script: np * T_per_rank). p.get("threads") is
+    # the per-rank count inferred from the "-T N" command argument.
+    # Prefer the explicit total; fall back to per-rank for old profile-style
+    # runs that never carried a top-level threads field.
+    _nranks    = env.get("mpi_nranks") or p.get("nranks") or None
+    _per_rank  = p.get("threads") or hints.get("threads")
+    _total     = run.get("threads") or p.get("threads") or hints.get("threads")
+
     return {
         "run_id": run.get("run_id"),
         "slurm_id": run.get("slurm_id"),
@@ -213,7 +223,9 @@ def summarize_run(run: dict) -> dict:
         "gamma_alpha": mf.get("gamma_alpha"),
         "tree_length": mf.get("tree_length"),
         "log_likelihood": mf.get("log_likelihood") or run.get("summary", {}).get("lnL"),
-        "threads": p.get("threads") or hints.get("threads") or run.get("threads"),
+        "threads": _total,
+        "n_mpi_ranks": _nranks if _nranks and int(_nranks) > 1 else None,
+        "threads_per_node": _per_rank if _nranks and int(_nranks) > 1 else None,
         "hostname": env.get("hostname"),
         "cpu": env.get("cpu"),
         "date": env.get("date"),
