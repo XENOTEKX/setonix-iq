@@ -719,19 +719,47 @@ production runs:
 Expected effect: eliminates ~4,000 OMP barrier events per model (199 nodes × ~10 passes
 × 2 barriers) for AA 100K — matching the non-MPI barrier cost of zero.
 
-### 17.3 Expected post-fix performance
+### 17.3 Fix C — filterRates per-rank reference family (addresses load imbalance)
+
+**Fixes**: `filterRates()` using `at(0).subst_name` (global first family = LG/GTR)
+as reference. On MPI ranks 1-3, all LG/GTR models are `MF_IGNORED` with
+`BIC_score = DBL_MAX`. The early-return guard passes (IGNORED counts as "done"),
+but `best_score = DBL_MAX` → `ok_score = DBL_MAX` → every rate type qualifies →
+**nothing pruned** on ranks 1-3.
+
+**Part 1 — filterRates()**: Scan for the first non-IGNORED model's `subst_name`
+to use as per-rank reference (e.g. WAG on rank 1, JTT on rank 2). Exclude IGNORED
+models from `best_score` update. Add `if (best_score == DBL_MAX) return` guard.
+Exclude IGNORED models from `ok_rates` build (avoids DBL_MAX contamination).
+
+**Part 2 — evaluateAll()**: After Phase 1 stripe, recompute `rate_block` to the
+last index of the rank's own reference family. The global `rate_block` = last LG
+index (e.g., 60). If filterRates fires when only WAG+G4 (index 61) is done,
+`ok_rates = {+G4}` → over-aggressive pruning after just one data point. Setting
+`rate_block` = last WAG index (e.g., 122) ensures filterRates fires after WAG+R10
+(the heaviest WAG model), when all 61 WAG models are available.
+
+Expected effect: ranks 1-3 now prune ~70% of +R3-R10 models (same as rank 0).
+Load imbalance reduces from ~12-15% to ~5-8% (residual LPT static-cost vs
+actual-pruned-cost mismatch). See `research/lb-analysis.md` for detailed analysis.
+
+**filterSubst() is unaffected**: uses `at(0).rate_name` (+G4) and collects scores
+from ALL families' +G4 variants. IGNORED cross-rank +G4 models score DBL_MAX;
+`min()` naturally discards these. No fix needed.
+
+### 17.4 Expected post-fix performance (Fix A + Fix B + Fix C)
 
 | Dataset | Config | MF wall (broken) | MF wall (projected) | Improvement |
 |---------|--------|-------------------|---------------------|-------------|
 | AA 100K | np1 | 1,309 s | ~400 s | ~3.3× |
-| AA 100K | np2 | 969 s | ~160 s | ~6.1× |
-| AA 100K | np4 | 573 s | ~120 s | ~4.8× |
+| AA 100K | np2 | 969 s | ~145 s | ~6.7× |
+| AA 100K | np4 | 573 s | ~100 s | ~5.7× |
 | mega_dna | np1 | 1,571 s | ~227 s (= non-MPI) | ~6.9× |
-| mega_dna | np2 | 1,571 s | ~120 s | ~13× |
-| mega_dna | np4 | 1,074 s | ~60 s | ~18× |
+| mega_dna | np2 | 1,571 s | ~115 s | ~14× |
+| mega_dna | np4 | 1,074 s | ~58 s | ~18× |
 
-> **Note**: mega_dna projections assume a 500T dataset with ~1,000 nodes and 968 DNA
-> models (same C1/C3 factor analysis applies).
+> Fix C reduces per-rank model count from ~220 to ~130-150 (matching rank 0),
+> improving np2/np4 projections by ~10% over Fix A+B alone.
 
 ---
 

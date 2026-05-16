@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-05-xx (ba) — MF2 filterRates load-imbalance fix (Fix C)
+
+### What changed
+
+`filterRates()` in `main/phylotesting.cpp` used `at(0).subst_name` (global first
+substitution family = LG for AA, GTR for DNA) as the reference for cross-family
+rate-type pruning. On MPI ranks 1-3, all LG/GTR models are `MF_IGNORED` with
+`BIC_score = DBL_MAX`. This caused:
+
+- `best_score = DBL_MAX` → `ok_score = DBL_MAX` → every rate type passes → **nothing pruned**
+  on ranks 1-3, while rank 0 pruned ~70% of +R3-R10 models.
+- Estimated **12-15% wall-time load imbalance** (ranks 1-3 evaluate ~220/308 models;
+  rank 0 evaluates ~130/308 after pruning).
+
+**Fix C — two-part change** (commit TBD on `gadi-spr-r2-avx512`):
+
+1. **filterRates()**: Scan for the first non-IGNORED model's `subst_name` to use
+   as per-rank reference. Skip IGNORED models in `best_score` update (they have
+   `DBL_MAX`). Add `if (best_score == DBL_MAX) return` guard. Exclude IGNORED
+   models from `ok_rates` build.
+
+2. **evaluateAll()**: After Phase 1 stripe, recompute `rate_block` to the last
+   index of the rank's own reference family (e.g. last WAG index on rank 1).
+   This ensures `filterRates` fires after the reference family is **fully evaluated**
+   (WAG+R10 finishes last, analogous to LG+R10 on rank 0), not prematurely after
+   just one model.
+
+`filterSubst()` is unaffected — it uses `at(0).rate_name` (+G4), and IGNORED
+cross-rank +G4 models score `DBL_MAX`; `min()` naturally discards these. No fix
+needed there.
+
+### Impact
+
+| Aspect | Before Fix C | After Fix C |
+|--------|-------------|-------------|
+| filterRates effective on ranks 1-3 | No (always DBL_MAX best_score) | Yes (own-family BIC reference) |
+| Per-rank models evaluated (AA 100K) | rank 0: ~130; ranks 1-3: ~220 | ~130-150 all ranks |
+| Load imbalance | ~12-15% | ~5-8% (residual LPT static-vs-actual) |
+| Projected AA 100K np4 wall time | ~120 s (Fix A+B only) | ~100 s (Fix A+B+C) |
+
+For DNA datasets: same fix applies; GTR → per-rank reference (e.g. TVM on rank 1).
+
+### Literature basis
+
+- **Graham (1969)** LPT bound: ≤4/3 × OPT for m=4 (≤1.25×). Assumes accurate
+  static costs; asymmetric filterRates violated this assumption pre-Fix C.
+- **Blumofe & Leiserson (1999)** work stealing: E[T] = T₁/P + O(T∞). The OMP
+  `getNextModel()` loop IS work stealing within each rank. Inter-rank imbalance
+  is addressed by Fix C; residual ~5-8% would require Phase 1.5 dynamic
+  family redistribution (see `research/lb-analysis.md` §6, future work).
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.cpp` | Fix C (filterRates + rate_block recompute); commit `b9b04a1c` |
+| `setonix-iq/research/lb-analysis.md` | New: load-balance analysis with literature (Graham/Blumofe/Minh) |
+| `setonix-iq/research/modelfinder-mpi.md` | §17.3 Fix C + §17.4 updated projected perf |
+
+---
+
 ## 2026-05-16 (az) — MF2 ModelFinder scaling root causes diagnosed and fixed
 
 ### What changed
