@@ -1957,10 +1957,27 @@ string CandidateModel::evaluate(Params &params,
         rate_name = iqtree->getRateName();
     }
 
-
-    if (restoreCheckpoint(&in_model_info)) {
-        delete iqtree;
-        return "";
+    // Fix F: take a thread-local snapshot of the shared in_model_info checkpoint.
+    // All subsequent reads of in_model_info use local_in_info instead, ensuring
+    // std::map traversal (find/getString) is never concurrent with another OMP
+    // thread's saveCheckpoint write, which would be a C++ data race on std::map.
+    // The copy is O(N_evaluated_models) but negligible vs. per-model optimize time.
+    ModelCheckpoint local_in_info;
+    {
+        bool already_evaluated;
+#ifdef _OPENMP
+#pragma omp critical
+{
+#endif
+        local_in_info = in_model_info;
+        already_evaluated = restoreCheckpoint(&local_in_info);
+#ifdef _OPENMP
+}
+#endif
+        if (already_evaluated) {
+            delete iqtree;
+            return "";
+        }
     }
 
 #ifdef _OPENMP
@@ -2030,11 +2047,11 @@ string CandidateModel::evaluate(Params &params,
         // try to initialise +R[k+1] from +R[k] if not restored from checkpoint
 
         CandidateModel prev_info;
-        bool prev_rate_present = prev_info.restoreCheckpointRminus1(&in_model_info, this);
+        bool prev_rate_present = prev_info.restoreCheckpointRminus1(&local_in_info, this);
 
         if (!prev_rate_present){
-            iqtree->getModelFactory()->setCheckpoint(&in_model_info);
-            iqtree->setCheckpoint(&in_model_info);
+            iqtree->getModelFactory()->setCheckpoint(&local_in_info);
+            iqtree->setCheckpoint(&local_in_info);
             bool init_success;
             if (mixture_action != MA_FIND_RATE && iqtree->aln->seq_type == SEQ_DNA) {
                 init_success = iqtree->getModelFactory()->initFromNestedModel(nest_network);
@@ -2050,10 +2067,10 @@ string CandidateModel::evaluate(Params &params,
                 // obtain the likelihood value from the (k-1)-class mixture model
                 string criteria_str = criterionName(params.model_test_criterion);
                 string best_model;
-                bool check = in_model_info.getString("best_model_" + criteria_str, best_model);
+                bool check = local_in_info.getString("best_model_" + criteria_str, best_model);
                 ASSERT(check);
                 string best_model_logl_df;
-                check = in_model_info.getString(best_model, best_model_logl_df);
+                check = local_in_info.getString(best_model, best_model_logl_df);
                 ASSERT(check);
                 stringstream ss (best_model_logl_df);
                 double pre_logl;
@@ -2067,9 +2084,16 @@ string CandidateModel::evaluate(Params &params,
                             init_weight = 1e-10; //set the weight to 0 at last time
 
                         if (step == 1) { // the weight of last class is too small, this model should not be restored by next model
+#ifdef _OPENMP
+#pragma omp critical
+{
+#endif
                             in_model_info.startStruct("OptModel");
                             in_model_info.putBool(getName()+".UnreliableParam",true);
                             in_model_info.endStruct();
+#ifdef _OPENMP
+}
+#endif
                         }
                         cout << getName() << " reinitialized from " + best_model + " with initial weight: " << init_weight << endl;
                     }
@@ -2103,7 +2127,7 @@ string CandidateModel::evaluate(Params &params,
             // try to initialise +R[k+1] from +R[k] if not restored from checkpoint
             double weight_rescale = 1.0;
             if (!rate_restored) {
-                iqtree->getRate()->initFromCatMinusOne(in_model_info, weight_rescale);
+                iqtree->getRate()->initFromCatMinusOne(local_in_info, weight_rescale);
                 if (verbose_mode >= VB_MED)
                     cout << iqtree->getRate()->name << " initialized from " << prev_info.rate_name << endl;
             }
@@ -2119,7 +2143,7 @@ string CandidateModel::evaluate(Params &params,
                 // if (!prev_rate_present) break;
                 if (prev_info.logl < new_logl + params.modelfinder_eps) break;
                 weight_rescale *= 0.5;
-                iqtree->getRate()->initFromCatMinusOne(in_model_info, weight_rescale);
+                iqtree->getRate()->initFromCatMinusOne(local_in_info, weight_rescale);
                 cout << iqtree->getRate()->name << " reinitialized from " << prev_info.rate_name
                      << " with factor " << weight_rescale << endl;
             }
@@ -3591,26 +3615,25 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     // rank's model set — cheaper rate variants (+G4) are evaluated first and
     // prune expensive +Rk series early, matching standard IQ-TREE behaviour.
     //
-    // Race-condition (Issue 5): evaluate() calls initializeModel() with the
-    // iqtree checkpoint still pointing at the shared model_info (before the
-    // switch to out_model_info at line ~1974).  ModelFactory::ctor writes to
-    // model_info via saveCheckpoint() during initialisation; concurrent writes
-    // from multiple OMP threads corrupt the shared std::map → glibc SIGABRT or
-    // garbage allocation sizes.  The #pragma omp critical around
-    // restoreCheckpoint() does NOT cover initializeModel().
+    // Race-condition (Issue 5) — FIXED by Fix F:
+    // The shared model_info (in_model_info in evaluate()) is a std::map that is
+    // NOT thread-safe for concurrent read + write.  Before Fix F, several reads
+    // from in_model_info in evaluate() (restoreCheckpoint early-exit,
+    // restoreCheckpointRminus1, initFromCatMinusOne) happened outside any
+    // #pragma omp critical, racing with another thread's protected
+    // saveCheckpoint write at the end of evaluate().  Concurrent map::find +
+    // map::insert corrupt the red-black tree → heap corruption → SIGABRT.
     //
-    // Fix B (reverted): for MPI builds run the outer loop sequentially on one
-    // thread; each sequential evaluate() call still uses all num_threads OMP
-    // threads internally (site-likelihood level).  Fix A LPT stripe limits each
-    // rank to its ~1/nranks assigned subst-family models via MF_IGNORED, so the
-    // sequential path scales well across ranks despite having no outer OMP loop.
-    //
-    // Non-MPI builds retain OMP parallel across models (no shared model_info
-    // race because each non-MPI run has only one MPI rank and no Phase 1 stripe;
-    // the contention window is narrow enough in practice for ≤103 threads).
+    // Fix F takes a per-thread snapshot (local_in_info = in_model_info) under
+    // the existing #pragma omp critical at the start of evaluate(), then
+    // replaces all subsequent in_model_info reads with reads from local_in_info.
+    // The only writes to the shared in_model_info are the final
+    // saveCheckpoint(&in_model_info) (protected) and the VB_MED-only putBool
+    // write (now also protected).  This eliminates all map data races and
+    // restores the full OMP parallel outer loop for MPI builds.
     {
-#if defined(_OPENMP) && !defined(_IQTREE_MPI)
-    // Non-MPI only: OMP parallel outer loop across models.
+#ifdef _OPENMP
+    // OMP parallel outer loop across models for both MPI and non-MPI builds.
     // proc_bind(spread): distribute threads evenly across both NUMA domains
     // so aggregate DRAM bandwidth is maximised for sub-full-thread counts.
 #pragma omp parallel num_threads(num_threads) proc_bind(spread)
