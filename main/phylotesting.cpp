@@ -3599,7 +3599,17 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     // are inside the #pragma omp critical section below.
     {
 #ifdef _OPENMP
-#pragma omp parallel num_threads(num_threads)
+    // proc_bind(spread): distribute threads evenly across both NUMA domains
+    // (sockets) so that aggregate DRAM bandwidth is maximised when
+    // num_threads < total cores. With 103 threads on 104 SPR cores, spread
+    // and close produce nearly identical placement, but spread is the correct
+    // semantic for independent per-model work and remains correct if the job
+    // is ever run with fewer threads (e.g. T=52 → without spread all 52
+    // threads would pack on socket 0, halving available bandwidth).
+    // This overrides the global OMP_PROC_BIND=close for this region only;
+    // the test() path and hot-kernel site-level loops continue to use close
+    // (with schedule(static) + NUMA first-touch R1a/R1b/R2a).
+#pragma omp parallel num_threads(num_threads) proc_bind(spread)
 #endif
     {
     int64_t model;
