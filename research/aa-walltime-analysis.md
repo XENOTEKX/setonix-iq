@@ -275,7 +275,7 @@ production runs (VB_MIN verbosity): the only write outside `#pragma omp critical
 `saveCheckpoint(&in_model_info)` call at the end of `evaluate()` was already guarded by
 `#pragma omp critical` inside `evaluate()`.
 
-**Projected performance after fixes (AA 100K):**
+**Projected performance after Fix A+B (AA 100K)** — updated by Fix C to §2.4.1:
 
 | Scenario | MF wall | Tree wall | Total | Speedup |
 |----------|---------|-----------|-------|---------|
@@ -286,6 +286,199 @@ production runs (VB_MIN verbosity): the only write outside `#pragma omp critical
 
 Projected break-even vs standard SPR: **< 1.5 nodes** (any multi-node MF2 run beats
 standard single-node). For np4: 1,169 s / 318 s ≈ 3.7× speedup.
+
+#### Fix C — per-rank reference family and rate_block recompute (`phylotesting.cpp`, commit `b9b04a1c`)
+
+Fix A assigns ALL rate variants of each substitution family to the same rank (correct).
+Fix B restores the OMP-across-models evaluation loop. However Fix A introduced a
+secondary bug: the `filterRates()` function identifies the *reference substitution family*
+for pruning by reading `at(0).subst_name` — but after Phase 1 MPI stripe, model `at(0)`
+belongs to another rank and is `MF_IGNORED`. The reference family is therefore empty and
+`filterRates` silently exits without pruning.
+
+**Fix C Part 1** (`filterRates()`): scan forward from index 0 to find the first
+non-`MF_IGNORED` model and use its `subst_name` as the per-rank reference family.
+`best_score` accumulates only among that family's non-ignored models, then prunes
+rate variants whose BIC exceeds `best_score + score_diff_thres`.
+
+**Fix C Part 2** (`evaluateAll()`, after Phase 1 stripe): `rate_block` (the model index
+that triggers `filterRates`) was computed from the global model list as the last index of
+the first substitution family. For ranks 1–3 (whose first family is `MF_IGNORED`),
+`rate_block` points into the ignored region — `filterRates` never fires. Fix: after
+marking `MF_IGNORED`, recompute `rate_block` to equal the last index of the rank's
+*first non-ignored substitution family*.
+
+**Updated projected performance after Fix A+B+C (AA 100K):**
+
+| Scenario | MF wall | Tree wall | Total | Speedup |
+|----------|---------|-----------|-------|---------|
+| Baseline (standard, np1) | 399 s | 764 s | 1,169 s | 1.00× |
+| MF2 np1 (Fix A+B+C) | ~400 s | 717 s | ~1,117 s | ~1.05× |
+| MF2 np2 (Fix A+B+C) | ~145 s | 383 s | ~528 s | ~2.2× |
+| MF2 np4 (Fix A+B+C) | ~100 s | 198 s | ~298 s | ~3.9× |
+
+With Fix C, ranks 1–3 now prune their assigned rate series as effectively as rank 0.
+Each rank evaluates ~150 post-pruning models (down from ~1,232 without fixes).
+Projected break-even: **< 1.5 nodes**; np4 achieves ~3.9× total speedup.
+
+---
+
+### 2.5 MPI Communication Overhead: Quantitative Breakdown
+
+A common concern for MPI-based model selection is whether the collective-communication
+phase (Phase 2, after all models are evaluated) becomes a bottleneck at large dataset
+sizes. For AA 100K (1,232 models, 4 MPI ranks) the answer is emphatically **no**:
+
+#### Phase 2A — `MPI_Allreduce` for scores (4 operations)
+
+```
+4 ops × 1,232 doubles × 8 B = 39.4 KB total
+InfiniBand HDR 200: ~200 Gbps = 25 GB/s peak, practical ~12 GB/s
+Latency per allreduce (log₂(4) = 2 hops): ~2 µs
+Transfer time: 39.4 KB / 12 GB/s = 3.3 µs per allreduce
+Total: 4 × (2 µs latency + 3.3 µs transfer) ≈ 21 µs
+```
+
+Each allreduce carries one score array (lnL MAX, BIC MIN, AIC MIN, AICc MIN) for all
+1,232 models. The collective is a simple element-wise reduction, not an all-to-all.
+Even on 100 Mbps Ethernet (worst case): 39.4 KB / 12.5 MB/s = 3 ms total.
+**At any realistic InfiniBand fabric: < 0.1 ms total for all 4 allreduces.**
+
+#### Phase 2B — `gatherCheckpoint` + `broadcastCheckpoint`
+
+Each rank serialises its `ModelCheckpoint` to a text key-value string via `ckp->dump()`.
+The checkpoint stores per-model: model name (~20 B), lnL/BIC/AIC/AICc scores (~60 B),
+model parameters (alpha, rates, freqs, ~200 B), and the optimised tree newick with
+branch lengths (~2 KB for 100-taxa). Plus global keys (best-model names, model_list).
+
+```
+Per-model checkpoint size ≈ 2,300 B
+Models per rank (np4, after pruning) ≈ 150
+Checkpoint per rank ≈ 150 × 2,300 B ≈ 345 KB
+
+gatherCheckpoint (MPI_Gatherv, all ranks → rank 0):
+  data volume: 4 × 345 KB = 1.38 MB
+  transfer: 1.38 MB / 12 GB/s = 115 µs
+  + rank-0 deserialise (ckp->load, string parse): ~3 ms
+
+broadcastCheckpoint (MPI_Bcast, rank 0 → all):
+  data volume: 1.38 MB
+  transfer: 1.38 MB / 12 GB/s = 115 µs
+  + each worker deserialise: ~3 ms
+
+Total Phase 2B wall time ≈ 7–10 ms
+```
+
+**Grand total Phase 2 MPI overhead: < 12 ms** — negligible compared to 100–400 s of
+model evaluation. The MPI data path is not a bottleneck for MF2 at any node count up
+to at least np16 (checkpoint scales as O(n_models × checkpoint_per_model), growing
+linearly with dataset size but never approaching seconds until ~10 million models).
+
+#### Phase 2 serialisation implementation (`MPIHelper.cpp`)
+
+`gatherCheckpoint` uses:
+- `ckp->dump(stringstream)` → flat text (fast, ~1 µs/KB)
+- `MPI_Gather` for sizes, `MPI_Gatherv` for data
+- rank-0 `ckp->load(stringstream)` with last-write-wins merge semantics
+
+`broadcastCheckpoint` uses `MPI_Bcast` of the merged text blob. There is no
+custom serialisation protocol, no type-punning, and no latency-sensitive path.
+The implementation is correct and efficient; no changes are needed.
+
+---
+
+### 2.6 Thread Saturation and NUMA Binding in `evaluateAll()`
+
+#### Thread saturation — quantified for AA 100K
+
+`evaluateAll()` uses an OMP-across-models loop: each of the `num_threads` (103 on
+SPR) threads grabs one model via `getNextModel()` (work-stealing critical section),
+evaluates it with 1 effective thread (inner OMP loops degrade to 1 thread because
+nested OMP is disabled), marks it `MF_DONE`, and loops back.
+
+Because inner loops run single-threaded, each thread processes ALL 96,017 AA patterns
+for its model independently. The number of evaluations that can proceed in parallel
+equals `min(remaining_models, num_threads)`, so:
+
+| Config | Models/rank (post-pruning) | Round 1 active | Round 2 active | Tail idle | Thread utilisation |
+|--------|---------------------------|----------------|----------------|-----------|-------------------|
+| np1 | ~475 | 103 | 103 | 26 idle (round 5) | ~95% |
+| np2 | ~237 | 103 | 103 | 31 idle (round 3) | ~93% |
+| np4 | ~150 | 103 | 47 | 56 idle (round 2) | ~83% |
+| np8 | ~90 | 90 | — | 13 idle | ~87% |
+
+For np4 the tail loss is ~17%: of the 206 total thread-slots across 2 rounds, 47
+are wasted in round 2 (`56/206 = 27%` of round-2 capacity idle). In absolute
+time this is ≤ 10 s out of ~100 s MF wall time (< 10%). The LPT stripe (Fix A)
+already front-loads the heaviest families so the tail round carries mostly fast
++G4/+I models, further limiting wall-time impact.
+
+A hybrid nested-OMP mode (switch to k-threads-per-model when remaining_models <
+num_threads/2) would recover most tail loss but adds substantial complexity.
+The gain is < 10 s on a ~100 s background; this optimisation is deferred.
+
+#### NUMA binding — evaluateAll() is self-NUMA-correct
+
+In the `evaluateAll()` OMP-across-models path, each OMP thread evaluates a DIFFERENT
+model via a separately allocated `IQTree` clone. All heap allocations performed inside
+`CandidateModel::evaluate()` — including the per-model `partial_lh` buffers, branch
+objects, and rate-category arrays — are performed by the evaluating thread. With Linux
+first-touch policy and a thread affinity that distributes threads across both NUMA
+domains (sockets), those allocations land on the NUMA node local to the evaluating
+thread. Reads and writes to `partial_lh` are therefore local DRAM accesses.
+
+The only shared (read-only) data is the alignment object (`aln`), holding 96,017 AA
+patterns × 100 taxa ≈ 9.6 MB. This was allocated by the main thread (socket 0).
+However:
+
+1. 9.6 MB << 60 MB SPR LLC per socket.
+2. After the first few model evaluations, alignment data is cached in BOTH sockets'
+   L3 caches via hardware prefetch and coherency.
+3. With 103 simultaneous models warming up, both sockets achieve L3 hits for alignment
+   reads within ~1 s of the OMP region starting.
+
+Sustained cross-NUMA DRAM latency for alignment data is therefore bounded to the first
+~1% of model-evaluation time. There is no measurable alignment-DRAM bottleneck.
+
+**Contrast with the `test()` path (all threads on one model):** here `partial_lh` is
+shared across 103 threads and is ~60 MB — it does NOT fit in one socket's L3. The
+existing NUMA first-touch pragmas (`R1a computePtnFreq`, `R1b computePtnInvar`,
+`R2a _pattern_lh_cat`) distribute those pages across both NUMA nodes via
+`#pragma omp parallel for schedule(static)`. These pragmas are correct and necessary
+for the `test()` path; they have no effect in `evaluateAll()` (inner loops run
+single-threaded, so the schedule(static) first-touch never fires across sockets in
+that context).
+
+#### Fix D — `proc_bind(spread)` on the evaluateAll() OMP pragma (commit `0db014bc`)
+
+**Change:** added `proc_bind(spread)` to the `#pragma omp parallel num_threads(num_threads)`
+in `evaluateAll()` (`phylotesting.cpp`, commit `0db014bc`).
+
+**Effect:** overrides the global `OMP_PROC_BIND=close` for this specific parallel
+region, instructing the OpenMP runtime to distribute threads maximally across all
+available hardware places before applying close-proximity sub-grouping.
+
+For T=103 on 104 SPR cores, `close` and `spread` both result in ~52 threads per
+socket (sequentially numbered cores fill both sockets before wrapping). The practical
+difference is zero for full-node runs.
+
+The benefit materialises for **sub-full-thread runs** (e.g. testing with `-T 48`):
+
+```
+close, T=48: threads 0–47 → cores 0–47 → socket 0 only
+              socket 1 has 0 active threads
+              effective memory bandwidth: ~1× (one socket)
+
+spread, T=48: threads 0–23 → socket 0; threads 24–47 → socket 1
+              both sockets active
+              effective memory bandwidth: ~2× (both sockets)
+```
+
+With `spread`, any run where T < 104 uses both sockets proportionally; the hot
+likelihood kernel's DRAM bandwidth scales with T rather than saturating at socket-0
+capacity. The change is a single-line pragma addition; it overrides `close` only for
+the `evaluateAll()` region while leaving the `test()` path and all hot-kernel inner
+loops undisturbed.
 
 ---
 

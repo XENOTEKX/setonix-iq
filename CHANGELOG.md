@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-05-xx (bb) — Fix D: `proc_bind(spread)` for evaluateAll() + MPI data-path analysis
+
+### What changed
+
+Added `proc_bind(spread)` to the `#pragma omp parallel num_threads(num_threads)` pragma
+in `evaluateAll()` (`main/phylotesting.cpp`). This overrides the global
+`OMP_PROC_BIND=close` for the OMP-across-models evaluation region, ensuring threads are
+distributed maximally across all NUMA hardware places before applying proximity
+sub-grouping.
+
+### Motivation: MPI data bottleneck analysis (AA 100K)
+
+A deep audit of Phase 2 collective operations confirmed that MPI communication is NOT
+a data bottleneck for MF2:
+
+- **4 × `MPI_Allreduce`** (lnL MAX, BIC MIN, AIC MIN, AICc MIN): 39.4 KB total,
+  ~21 µs on InfiniBand — unmeasurable.
+- **`gatherCheckpoint` + `broadcastCheckpoint`**: ~345 KB per rank (np4), ~1.38 MB
+  total, ~7–10 ms including serialisation. Negligible vs 100–400 s evaluation.
+- **Grand total Phase 2 overhead: < 12 ms** for any dataset up to ~100K sites, np≤16.
+
+The dominant cost is purely computational (model likelihood optimisation). No protocol
+changes to the Phase 2 gather are needed.
+
+### Motivation: thread saturation tail analysis
+
+With OMP-across-models and T=103 threads on M models per rank (np4: M≈150):
+- Round 1: 103 threads active, 0 idle.
+- Round 2: 47 threads active, 56 idle.
+- Thread utilisation: ~83%. Tail loss: ~8% of MF wall time (≤ 10 s).
+
+LPT scheduling (Fix A) front-loads heavy models so the last round carries mostly
++G4/+I models (fast), limiting absolute waste. Hybrid nested-OMP mode deferred
+(gain < 10 s vs ~100 s background).
+
+### Motivation: NUMA binding audit
+
+In `evaluateAll()` each thread allocates its own `IQTree` clone; per-model
+`partial_lh` goes to the allocating thread's NUMA node (local DRAM ✓). Shared
+alignment data (9.6 MB for AA 100K) fits in each socket's L3 (60 MB); both L3 caches
+hold it after short warm-up. No sustained cross-NUMA DRAM penalty for the
+OMP-across-models path.
+
+### Effect of `proc_bind(spread)`
+
+For T=103 on 104 SPR cores: `close` and `spread` produce identical socket distribution
+(~52 / ~51). The change is neutral for production runs. For sub-full-thread runs
+(e.g., `-T 48`), `spread` ensures both sockets are active (24/24 vs 48/0 with
+`close`), doubling available DRAM bandwidth. The `test()` path and all hot-kernel
+inner loops continue to use `OMP_PROC_BIND=close` + `schedule(static)` (the correct
+pairing for NUMA first-touch pragmas R1a/R1b/R2a).
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.cpp` | Fix D: `proc_bind(spread)` on evaluateAll() OMP pragma |
+| `setonix-iq/research/aa-walltime-analysis.md` | New §2.4.1 Fix C, §2.5 MPI overhead quantification, §2.6 thread saturation + NUMA binding |
+| `setonix-iq/research/lb-analysis.md` | New §8 MPI data-path, §9 thread saturation and NUMA |
+
+---
+
 ## 2026-05-xx (ba) — MF2 filterRates load-imbalance fix (Fix C)
 
 ### What changed

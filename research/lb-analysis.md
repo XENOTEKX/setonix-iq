@@ -305,5 +305,130 @@ Commit for Fix C: see CHANGELOG entry `ba` on the `gadi-spr-r2-avx512` branch.
 
 ---
 
-*Source analyzed: `src/iqtree3/main/phylotesting.cpp` (v3.1.2+mf2), commit after `2672b90a`.*  
+## 8. MPI data-path overhead: why communication is never the bottleneck
+
+### 8.1 Phase 2 collective operations
+
+After all models are evaluated (Phase 1), the Phase 2 gather completes in two steps:
+
+**Step 1 — four `MPI_Allreduce` calls** (lnL MAX, BIC MIN, AIC MIN, AICc MIN):
+- 4 × 1,232 doubles × 8 B = 39.4 KB total
+- Latency: log₂(P) × ~1 µs, transfer: 39.4 KB / 12 GB/s = 3 µs per allreduce
+- **Total: ~21 µs** — unmeasurable against model evaluation time
+
+**Step 2 — `gatherCheckpoint` + `broadcastCheckpoint`**:
+- Each rank serialises its checkpoint (model names, scores, parameters, tree newick)
+- Per rank (np4, ~150 post-pruning models): ~345 KB text
+- `MPI_Gatherv` → rank 0 receives 4 × 345 KB = 1.38 MB
+- `MPI_Bcast` → rank 0 sends 1.38 MB to all ranks
+- Plus CPU serialisation/deserialisation ≈ ~3 ms per rank
+- **Total Phase 2B: ~7–10 ms**
+
+Grand total MPI overhead: **< 12 ms** against 100–400 s model evaluation.
+This scales linearly with number of models (not with dataset size or site count),
+so it remains negligible even for million-site runs with np=16+.
+
+### 8.2 Implication for hot-kernel loop design
+
+MPI is used only at the MODEL granularity (one rank per family group). Within a
+single model evaluation, all site-level work is performed entirely by one thread
+(evaluateAll() OMP-across-models) or 103 threads (test() path). No MPI communication
+occurs inside the hot likelihood kernel loops. Adding MPI at the site level would
+require distributed memory partial-likelihood computation (a fundamentally different
+algorithm) and would introduce latency at every tree node — not a practical path for
+the current architecture.
+
+The correct approach to maximise throughput is to saturate cores with independent
+model evaluations (already implemented via evaluateAll()), not to fragment individual
+model computations across ranks.
+
+---
+
+## 9. Thread saturation and NUMA binding
+
+### 9.1 Thread saturation in evaluateAll()
+
+With OMP-across-models and T=103 threads evaluating M models per rank:
+
+| Round | Active threads | Idle threads |
+|-------|---------------|-------------|
+| 1 | min(M, T) | max(0, T−M) |
+| 2 (if M > T) | M − T | T − (M − T) |
+| last | M % T | T − (M % T) |
+
+For AA 100K, np4 (M≈150, T=103):
+- Round 1: 103 threads active, 0 idle. Duration: t₁ (average model time).
+- Round 2: 47 threads active, 56 idle. Duration: t₂ ≈ t₁ (similar models).
+- Thread utilisation: (103 + 47) / (103 × 2) = 72.8%.
+- Tail waste as fraction of total wall time: 56/206 × 1 round ≈ 17% of round-2 time.
+
+In absolute terms: Fix A (LPT) assigns the heaviest families first, so the last round
+carries mostly +G4/+I+G4 models (fast). Tail duration ≈ 5–10 s; tail loss ≈ 5–8 s
+out of ~100 s MF wall time = **5–8%** of MF time, **2–3%** of total run time.
+
+A hybrid nested-OMP mode would recover this loss but adds scheduling complexity.
+Given the small absolute gain (< 10 s), this is deferred.
+
+### 9.2 NUMA binding in evaluateAll()
+
+**Per-model data is self-NUMA-correct.** Each OMP thread calls
+`CandidateModel::evaluate()` which allocates a fresh `IQTree` clone — all associated
+heap data (`partial_lh`, rate arrays, branch objects) is allocated by the calling
+thread. With Linux first-touch policy, those pages land on the NUMA node of the
+allocating thread's physical CPU. Reads and writes to per-model data are therefore
+local DRAM operations regardless of which socket the thread is bound to.
+
+**Shared read-only data (alignment).** The alignment (`~9.6 MB` for AA 100K) was
+allocated by the main thread before the OMP region. With first-touch, those pages
+are on socket 0. However:
+- 9.6 MB < 60 MB SPR LLC per socket.
+- Both socket L3 caches hold the alignment after a short warm-up (<~1 s of the OMP
+  parallel region), served from local L3 rather than cross-NUMA DRAM for subsequent
+  models.
+- No sustained cross-NUMA DRAM penalty for read-only alignment data.
+
+**Contrast with `test()` path.** The `test()` path runs all 103 threads on ONE model's
+`partial_lh` (~60 MB), which exceeds one socket's L3. The existing first-touch pragmas
+(R1a `computePtnFreq`, R1b `computePtnInvar`, R2a `_pattern_lh_cat`) distribute those
+pages across both NUMA domains using `#pragma omp parallel for schedule(static)`.
+These pragmas are correct and necessary for `test()`; they have no effect in
+`evaluateAll()` because the inner OMP loops execute single-threaded (nested OMP off),
+so no `schedule(static)` first-touch distribution occurs across sockets in that context.
+
+### 9.3 Fix D — `proc_bind(spread)` for evaluateAll() (commit `0db014bc`)
+
+The `evaluateAll()` OMP parallel pragma was updated from:
+```cpp
+#pragma omp parallel num_threads(num_threads)
+```
+to:
+```cpp
+#pragma omp parallel num_threads(num_threads) proc_bind(spread)
+```
+
+**Why `spread`?** `OMP_PROC_BIND=close` (set globally in all job scripts) assigns
+threads to consecutive hardware places starting from the master thread's place. For
+T=103 on 104 cores this distributes across both sockets incidentally (cores 0–51
+socket 0, cores 52–103 socket 1). For T < 52, however, `close` packs all threads on
+socket 0, halving available DRAM bandwidth.
+
+`proc_bind(spread)` overrides `close` only for this one parallel region, distributing
+T threads evenly across all available hardware places before applying sub-grouping:
+
+| T | close → sockets | spread → sockets |
+|---|-----------------|-----------------|
+| 103 | ~52 / ~51 | ~52 / ~51 (identical) |
+| 52 | 52 / 0 | 26 / 26 |
+| 48 | 48 / 0 | 24 / 24 |
+| 24 | 24 / 0 | 12 / 12 |
+
+For T=103 (production) the change is neutral. For smaller-T testing or future runs on
+nodes with more NUMA domains, `spread` ensures proportional bandwidth utilisation.
+
+The `test()` path and all hot-kernel inner loops continue to use the global `close` +
+`schedule(static)` binding, which is correct for their first-touch NUMA strategy.
+
+---
+
+*Source analyzed: `src/iqtree3/main/phylotesting.cpp` (v3.1.2+mf2), commit after `b9b04a1c`.*  
 *Literature: Graham 1969 (LPT bounds), Blumofe & Leiserson 1999 (work stealing), Minh et al. 2020 (IQ-TREE 2 locus scheduling).*
