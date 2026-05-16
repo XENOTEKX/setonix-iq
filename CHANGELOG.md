@@ -78,6 +78,47 @@ Pass 2 perf stat runs per-rank (rank0 = tree+MF master, rank1+ = MF workers).
 
 ---
 
+## 2026-05-16 (az) — AA 1M CLX and SPR completed (168425490, 168425491)
+
+### What changed
+
+Both AA 1M runs completed. lnL verified identical (−78,605,196.573 ✓). Model: LG+G4.
+
+| PBS ID | Platform | Threads | MF wall | Tree wall | Total wall | Memory |
+|--------|----------|---------|---------|-----------|------------|--------|
+| 168425490 | CLX (normal-exec) | 47 | 16,308.318 s | 34,821.973 s | 51,328.252 s | 88.2 GB |
+| 168425491 | SPR (normalsr-exec) | 103 | 7,587.459 s | 15,098.605 s | 22,776.226 s | 88.4 GB |
+
+**CLX vs SPR speedup at 1M:** 51,328 / 22,776 = **2.25×** (vs thread ratio 103/47 = 2.19×).
+
+Energy (RAPL): CLX = 492,588 J (9.60 W avg), SPR = 202,325 J (8.88 W avg). SPR uses **2.44× less energy**.
+
+#### Key findings
+
+1. **AA MF scales near-linearly with site count** — MF wall grows only 19.0× (SPR) and 14.7× (CLX)
+   for 10× more sites, vs DNA MF which grew 56.7× (SPR) and 64.3× (CLX). AA MF is FLOP-dominated
+   (IPC~2.0), so memory-bandwidth saturation plays a much smaller role than for DNA.
+
+2. **Prediction was 3× too high** — §5.1.1 predicted AA 1M MF~22,641 s by applying the DNA SPR
+   scale factor (56.7×) to AA 100K. Actual: 7,587 s (19.0× scale). The DNA super-linear factor is
+   not transferable to AA because DNA's MF is memory-bandwidth bound at 100K, while AA's is FLOP-bound.
+
+3. **CLX→SPR gap collapses at 1M** — AA 100K: CLX = 2.96× slower than SPR (above thread ratio,
+   memory-bound). AA 1M: CLX = 2.25× slower (near thread ratio, both FLOP-bound). Per-model
+   thread cost: CLX 622.4 s vs SPR 634.4 s — essentially identical.
+
+4. **AA 1M scale factors vs 100K (SPR):** MF 19.0×, tree 19.7×, total 19.5×. All three phases
+   scale similarly (~20×), suggesting uniform FLOP-dominated scaling rather than the phase-specific
+   super-linearity seen in DNA.
+
+| Phase | AA 100K SPR (168425673) | AA 1M SPR (168425491) | Scale |
+|-------|------------------------|----------------------|-------|
+| ModelFinder | 399.5 s | 7,587.5 s | **19.0×** |
+| Tree search | 764.5 s | 15,098.6 s | **19.7×** |
+| Total | 1,169.6 s | 22,776.2 s | **19.5×** |
+
+---
+
 ## 2026-05-16 (aw) — DNA 1M CLX completed (168422813)
 
 ### What changed

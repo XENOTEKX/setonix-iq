@@ -523,9 +523,32 @@ ModelFinder's super-linear scaling is driven by two compounding effects:
 2. **Memory pressure** — 1M sites × 4 rate categories × nstates × ~(2n−1) nodes creates partial_lh
    arrays ~10× larger, saturating L3 cache and increasing memory traffic per MF model evaluation.
 
-This super-linear MF scaling implies that for very long alignments (1M+), ModelFinder becomes the
-dominant cost — an important consideration for AA 1M runs where the per-model kernel is already
-5.5× more expensive than DNA. Predicted AA 1M MF wall on SPR: ~399.456 × 56.7 ≈ 22,641 s.
+These effects are **not equally strong for all data types.** DNA at 100K is already memory-bandwidth
+bound (IPC~1.3), so 10× more sites triggers disproportionate DRAM saturation. AA at 100K is
+FLOP-dominated (IPC~2.0), so scaling is far more linear. The AA 1M SPR and CLX runs confirm this:
+
+**Actual AA 1M results (168425490 CLX, 168425491 SPR):**
+
+| Run | MF wall (s) | Tree wall (s) | Total (s) | Per-model (s·thread) |
+|-----|-------------|---------------|-----------|---------------------|
+| AA 100K CLX (168422809) | 1,108.8 | ~1,877 | 3,460.8 | 42.3 |
+| AA 100K SPR (168425673) | 399.5 | 764.5 | 1,169.6 | 33.4 |
+| AA 1M CLX (168425490) | 16,308.318 | 34,821.973 | 51,328.252 | 622.4 |
+| AA 1M SPR (168425491) | 7,587.459 | 15,098.605 | 22,776.226 | 634.4 |
+| **Scale (CLX)** | **14.7×** | **~18.6×** | **14.8×** | **14.7×** |
+| **Scale (SPR)** | **19.0×** | **19.7×** | **19.5×** | **19.0×** |
+
+The DNA MF scale factor (56.7× on SPR) is not transferable to AA. AA MF scales at only 19.0× —
+close to linear with site count. The earlier prediction of ~22,641 s (by applying the DNA factor)
+overestimated by 3×; the actual SPR MF time is 7,587 s.
+
+**CLX vs SPR speedup at 1M scale (AA): 51,328 / 22,776 = 2.25×** — near the thread ratio (2.19×).
+At 100K, AA CLX was 2.96× slower (above thread ratio, memory-bound). At 1M, both platforms are
+FLOP-bound: per-model thread cost CLX 622 s vs SPR 634 s — essentially identical, no bandwidth gap.
+
+Compare to DNA 1M: CLX was still 2.90× slower than SPR at 1M (bandwidth gap persisted). This
+confirms that AA is fundamentally more compute-bound than DNA at every alignment scale tested, and
+that DNA's L3→DRAM spill threshold is reached at smaller site counts than AA's.
 
 ### 5.2 F81 vs LG Eigendecomposition
 
