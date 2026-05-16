@@ -3591,24 +3591,28 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     // rank's model set — cheaper rate variants (+G4) are evaluated first and
     // prune expensive +Rk series early, matching standard IQ-TREE behaviour.
     //
-    // Race-condition (Issue 5 historical note): evaluate() calls
-    // saveCheckpoint(&in_model_info) which is already guarded by
-    // #pragma omp critical inside evaluate() itself.  The only other write
-    // path (putBool UnreliableParam) is gated on VB_MED verbosity, never
-    // triggered in production.  All other model_info writes in this loop
-    // are inside the #pragma omp critical section below.
+    // Race-condition (Issue 5): evaluate() calls initializeModel() with the
+    // iqtree checkpoint still pointing at the shared model_info (before the
+    // switch to out_model_info at line ~1974).  ModelFactory::ctor writes to
+    // model_info via saveCheckpoint() during initialisation; concurrent writes
+    // from multiple OMP threads corrupt the shared std::map → glibc SIGABRT or
+    // garbage allocation sizes.  The #pragma omp critical around
+    // restoreCheckpoint() does NOT cover initializeModel().
+    //
+    // Fix B (reverted): for MPI builds run the outer loop sequentially on one
+    // thread; each sequential evaluate() call still uses all num_threads OMP
+    // threads internally (site-likelihood level).  Fix A LPT stripe limits each
+    // rank to its ~1/nranks assigned subst-family models via MF_IGNORED, so the
+    // sequential path scales well across ranks despite having no outer OMP loop.
+    //
+    // Non-MPI builds retain OMP parallel across models (no shared model_info
+    // race because each non-MPI run has only one MPI rank and no Phase 1 stripe;
+    // the contention window is narrow enough in practice for ≤103 threads).
     {
-#ifdef _OPENMP
+#if defined(_OPENMP) && !defined(_IQTREE_MPI)
+    // Non-MPI only: OMP parallel outer loop across models.
     // proc_bind(spread): distribute threads evenly across both NUMA domains
-    // (sockets) so that aggregate DRAM bandwidth is maximised when
-    // num_threads < total cores. With 103 threads on 104 SPR cores, spread
-    // and close produce nearly identical placement, but spread is the correct
-    // semantic for independent per-model work and remains correct if the job
-    // is ever run with fewer threads (e.g. T=52 → without spread all 52
-    // threads would pack on socket 0, halving available bandwidth).
-    // This overrides the global OMP_PROC_BIND=close for this region only;
-    // the test() path and hot-kernel site-level loops continue to use close
-    // (with schedule(static) + NUMA first-touch R1a/R1b/R2a).
+    // so aggregate DRAM bandwidth is maximised for sub-full-thread counts.
 #pragma omp parallel num_threads(num_threads) proc_bind(spread)
 #endif
     {
