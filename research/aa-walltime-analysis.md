@@ -222,12 +222,15 @@ Scripts `run_cpu_bench_aa_100k_mf2_{1,2,4}node.sh`, same alignment, seed, `-T 10
 `numactl --localalloc`, `KMP_BLOCKTIME=200` as the baseline SPR run (168425673).
 All runs verified lnL = −7,541,976.862 ✓.
 
-| Scenario | PBS ID | MF wall | Tree wall | Total | Speedup vs 168425673 |
-|---|---|---|---|---|---|
-| Baseline 1-node SPR, standard binary (168425673) | — | 399 s | 764 s | 1,169 s | 1.00× |
-| MF2 MPI × 1 node | 168446151 | **1,309 s** | 717 s | 2,030 s | **0.58×** |
-| MF2 MPI × 2 nodes | 168446152 | 969 s | 383 s | 1,355 s | **0.86×** |
-| MF2 MPI × 4 nodes | 168446153 | 573 s | 198 s | 776 s | **1.51×** |
+| PBS ID | Scenario | MF wall | Tree wall | Total | Speedup | lnL | BIC | IPC (rank 0) | LLC miss% |
+|--------|----------|---------|-----------|-------|---------|-----|-----|-------------|-----------|
+| 168425673 | Baseline — 1-node SPR, standard binary | 399 s | 764 s | 1,169 s | 1.00× | −7,541,976.860 | 15,086,233 | 1.878 | 66.94% |
+| 168446151 | MF2 MPI × 1 node (1×103T) | **1,309 s** | 717 s | 2,030 s | **0.58×** | −7,541,976.862 | 15,086,233 | 1.961 | 67.76% |
+| 168446152 | MF2 MPI × 2 nodes (2×103T) | 969 s | 383 s | 1,355 s | **0.86×** | −7,541,976.862 | 15,086,233 | 2.028 | 66.26% |
+| 168446153 | MF2 MPI × 4 nodes (4×103T) | 573 s | 198 s | 776 s | **1.51×** | −7,541,976.862 | 15,086,233 | 2.025 | 66.31% |
+
+All four runs select LG+G4 (BIC = 15,086,233; lnL differs only at the 3rd decimal due to floating-point ordering).
+IPC values are from rank-0 `perf stat` (the tree-search master rank). LLC miss% is aggregated over all threads.
 
 **Key finding — the Amdahl model was incomplete.** The MF2 binary distributes
 **tree search across MPI ranks as well as ModelFinder**, so the actual speedup exceeds
@@ -242,8 +245,11 @@ Tree search scales near-linearly: 717 s → 383 s → 198 s (3.63× for 4× rank
 near-linear scaling is the dominant source of the 4-node total speedup — 1M AA runs with
 longer tree search phases will benefit proportionally more.
 
-IPC (rank-0 perf stat): 1.96 (np1) → 2.03 (np2) → 2.02 (np4) — consistent with reduced
-LLC contention per node as the model workload is distributed.
+**IPC progression (rank-0 perf stat):** 1.878 (baseline) → 1.961 (np1) → 2.028 (np2) →
+2.025 (np4). The MF2 1-node IPC (1.961) is already higher than the standard binary (1.878),
+because MPI serialization reduces per-core model contention. LLC miss% stays stable at
+66–68% across all scenarios, confirming the LLC bottleneck is in the likelihood kernel
+itself (not model dispatch overhead).
 
 The MPI MF speedup hits a ceiling because tree search dominates. For **1M AA** (predicted
 MF ~22,600 s, tree search ~8,000 s), the MPI MF payoff is far greater — ModelFinder becomes
