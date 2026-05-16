@@ -3,7 +3,7 @@
 // a modal with a fresh, larger render of the chart. When runsIndex is provided,
 // dataset, build-variant, and thread filter chips are rendered above the chart.
 
-import { buildFamily, BUILD_FAMILIES } from '../utils.js?v=4094d3bf7673';
+import { buildFamily, BUILD_FAMILIES } from '../utils.js?v=f9a57fc31e39';
 
 const EXPAND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 
