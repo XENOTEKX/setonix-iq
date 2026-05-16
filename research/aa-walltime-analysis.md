@@ -856,6 +856,191 @@ MPI builds due to OOM (§2.4.5). The tree-search component (387 s) shows near-pe
 
 ---
 
+### §2.4.7 Root cause: why single-node MF (399 s) beats 2-node MF (475 s)
+
+**Question:** Fix H np=2 uses 206 threads across 2 nodes for ModelFinder, yet takes
+*longer* than the single-node standard binary (399 s vs 475 s). How is that possible?
+
+The answer lies in the **OMP parallelism strategy**: the two binaries use fundamentally
+different approaches to parallelise ModelFinder, with very different efficiency
+characteristics.
+
+#### Two parallelism modes
+
+| Mode | Strategy | Kernel threading | Effective speedup |
+|------|----------|-----------------|-------------------|
+| Standard non-MPI | **Model-parallel**: 103 OMP threads in outer `evaluateAll()` loop; each thread evaluates one complete model | Nested OMP disabled → inner `#pragma omp parallel for num_threads(103)` gets **1 thread** → single-threaded per model | ≈ **103×** for MF |
+| Fix H MPI | **Site-parallel**: outer loop sequential (`#ifndef _IQTREE_MPI` guard); one model at a time | Inner `#pragma omp parallel for schedule(static) num_threads(103)` fires with **103 threads** over site packets | ≈ **27×** per model |
+
+**Model-parallel (standard non-MPI) — code path:**
+
+```cpp
+// phylotesting.cpp, evaluateAll()  [NON-MPI only]
+#if defined(_OPENMP) && !defined(_IQTREE_MPI)
+#pragma omp parallel num_threads(num_threads) proc_bind(spread)
+#endif
+{
+    int64_t model;
+    do {
+        model = getNextModel();          // work-stealing from shared queue
+        tree_string = at(model).evaluate(..., num_threads, ...);
+    } while (model != -1);
+}
+```
+
+Each of the 103 outer OMP threads calls `evaluate()` with `num_threads=103`, but
+because `OMP_NESTED=false` the inner `#pragma omp parallel for num_threads(103)` inside
+`phylokernelnew.h` gets **1 thread**. Each model is evaluated **single-threadedly** —
+only SIMD (AVX-512) vectorisation, no thread parallelism. The 103× speedup comes
+entirely from 103 *independent* models running concurrently.
+
+**Site-parallel (Fix H MPI) — code path:**
+
+```cpp
+// phylotesting.cpp, evaluateAll()  [MPI builds — outer loop is sequential]
+{
+    int64_t model;
+    do {
+        model = getNextModel();
+        tree_string = at(model).evaluate(..., num_threads=103, ...);
+    } while (model != -1);
+}
+
+// phylokernelnew.h, computePartialLikelihood kernel:
+#pragma omp parallel for schedule(static) num_threads(103)
+for (int packet_id = 0; packet_id < 206; ++packet_id) {   // num_packets = 2×103
+    for (auto it : traversal_info) {
+        computePartialLikelihood(*it,
+            limits[packet_id], limits[packet_id+1], packet_id);
+    }
+}
+```
+
+There is no outer parallel region. The inner `#pragma omp parallel for` fires with 103
+threads for every likelihood evaluation, every branch-length Newton step, every
+convergence check — all sequenced through one model at a time.
+
+#### Amdahl analysis
+
+**Derived quantities from measurements:**
+
+```
+T1  = effective single-model wall time in model-parallel mode
+    = (399 s total MF) × 103 threads / 475 models = 86.7 s per model
+
+T‖  = site-parallel wall time per model (Fix H np=2)
+    = 475 s total MF / 150 models per rank = 3.17 s per model
+
+Speedup₁₀₃ = T1 / T‖ = 86.7 / 3.17 = 27.4×
+```
+
+Applying Amdahl's law:
+
+$$S = \frac{1}{f_s + \frac{1-f_s}{103}} = 27.4 \quad\Rightarrow\quad f_s = 2.76\%$$
+
+The implied serial fraction is **2.76% of T1 = 2.39 s per model evaluation**. Over 150
+sequential models this accumulates to **≈ 359 s of wall time that cannot be parallelised**.
+
+**Breakdown of Fix H np=2 MF wall time (per model):**
+
+$$T_{\parallel} = \underbrace{f_s \cdot T_1}_{\text{serial}\approx 2.39\text{ s}} + \underbrace{\frac{(1-f_s)\cdot T_1}{103}}_{\text{parallel}\approx 0.82\text{ s}} = 3.21\text{ s} \approx 3.17\text{ s (obs.)}$$
+
+$$T_{MF,\text{Fix H}} = 150 \times 3.17\text{ s} = 475\text{ s}$$
+
+In model-parallel mode the same 2.39 s serial fraction runs **concurrently** across 103
+threads — its wall-time contribution is ≈ 2.4 s regardless of model count, not 359 s.
+
+#### What constitutes the 2.39 s serial fraction per model
+
+The per-model serial overhead in the sequential Fix H outer loop comes from the lifecycle
+of each `IQTree` instance created and destroyed for every `evaluate()` call:
+
+1. **`new IQTree()` + `initializeAllPartialLh()`** — allocates `central_partial_lh`
+   via `posix_memalign` (→ glibc `mmap`). On Gadi, THP is in `madvise` mode and
+   IQ-TREE never calls `madvise(MADV_HUGEPAGE)`, so all 6.27 GB of
+   `central_partial_lh` use **4 KB pages**. The `mmap` syscall is O(1 μs); first
+   writes (during the first OMP-parallel kernel call) trigger
+   6.27 GB / 4 KB = 1,568,000 page faults distributed across 103 threads ≈ 15,000
+   faults per thread × ~1 μs = **15 ms** serial-equivalent per model. Minor.
+
+2. **`delete iqtree`** → destructor → `aligned_free(central_partial_lh)` → glibc
+   `free()` → `munmap(6.27 GB)`. The kernel must walk and free 1,568,000 PTEs.
+   With 4 KB pages (THP inactive): **~10–30 ms** per munmap call. Minor.
+
+3. **Serial BFGS steps between OMP parallel sections**: for each of the ~197 branches,
+   the Newton-Raphson branch-length optimiser runs as `computeLikelihoodDerv()` (OMP
+   parallel) followed by a serial Newton update. With ≈5 outer iterations ×
+   197 branches × 15 Newton steps = ~14,775 serial Newton updates per model, each
+   ~1–3 μs, the total is **15–45 ms**. Minor.
+
+4. **Model-parameter BFGS** (optimise α for +G, frequencies, etc.): serial steps
+   between OMP likelihood calls. Eigendecomposition for 20×20 matrix: ~50 μs. Over
+   ~50 BFGS iterations: **2.5 ms**. Negligible.
+
+5. **Memory-bandwidth saturation at 103 threads** — the dominant contributor.
+   The `central_partial_lh` buffer (6.27 GB) is accessed by all 103 threads
+   simultaneously. The `schedule(static)` NUMA fix (R2b, confirmed present in commit
+   `257485e5`) ensures each thread accesses NUMA-local pages, but with 103 threads
+   sharing the 400 GB/s DDR5 bus, the per-thread effective bandwidth =
+   **400 / 103 ≈ 3.9 GB/s**. In model-parallel mode each single-thread benefits
+   from the hardware prefetcher on its own model's sequential 64 MB node arrays; in
+   site-parallel mode all 103 threads simultaneously issue reads to the shared buffer
+   at 64 MB strides (node-major layout: `partial_lh[node_i]` at `base + i×64MB`),
+   reducing prefetcher effectiveness between nodes. The combined effect limits the
+   achievable parallel speedup to ~27× — mathematically equivalent to the 2.76%
+   Amdahl serial fraction.
+
+#### NUMA first-touch patches are already applied
+
+The R1/R2 NUMA patches (described in `numa_first_touch.html`) **are confirmed present**
+in the Fix H build (`gadi-spr-r2-avx512`, commit `257485e5`):
+
+- `phylokernelnew.h` lines 1275, 2386, 3595: all use `schedule(static)` ✓
+- `phylotreesse.cpp` line 546 (`computePtnFreq`): `#pragma omp parallel for schedule(static)` ✓
+- `phylotreesse.cpp` line 578 (`computePtnInvar`): `#pragma omp parallel for schedule(static)` ✓
+- `phylotreesse.cpp` line 1302 (`_pattern_lh_cat` zero-fill): `#pragma omp parallel for schedule(static)` ✓
+
+Without these patches the unpatched 104T baseline would be **1111.6 s** — the
+cross-socket cliff (104T slower than 64T = 897.4 s). With the patches: 104T = 523.7 s
+(2.12× faster). Our Fix H np=2 at 103T achieves 475 s for MF, consistent with the
+patched baseline on a comparable problem size.
+
+#### Why the tree phase benefits from np=2 but MF does not
+
+| Phase | Parallelism available | np=1 → np=2 result |
+|-------|----------------------|-------------------|
+| **ModelFinder** | Model-level (independent models can run concurrently) | Standard np=1 uses 103-way model-parallel (103× speedup). Fix H np=2 uses site-parallel (27× per model, <103×) — **degraded** |
+| **Tree search (SPR)** | Site-level only (only ONE tree is being optimised at a time; SPR moves are sequential) | Both np=1 and np=2 use site-parallel for each NNI evaluation. At np=2: 2× more independent subtrees searched → 2× throughput at same per-NNI cost — **improved** |
+
+The tree phase has no model-level parallelism to exploit (there is only one tree at a
+time); site-parallel OMP with 103 threads is the natural and only available strategy.
+Fix H np=2 tree (387 s) is therefore faster than the ~480–520 s expected for a
+single-node tree search on this problem. MF is the anomaly: the standard binary already
+achieves near-perfect parallelism through model-level independence, making site-parallel
+redundant for MF while efficient for tree search.
+
+#### Summary
+
+| Quantity | Value |
+|---------|-------|
+| Standard MF (model-parallel, 103 threads) | 399 s for 475 models |
+| Fix H np=2 MF (site-parallel, 103 threads/rank) | 475 s for 150 models/rank |
+| Effective T₁ per model | 86.7 s |
+| Site-parallel speedup (103 threads) | 27.4× |
+| Amdahl serial fraction | 2.76% ≈ 2.39 s/model |
+| Accumulated serial overhead (150 models) | ≈ 359 s out of 475 s total (75%) |
+| NUMA R1/R2 patches present | ✓ confirmed |
+| THP for 6.27 GB partial_lh allocations | ✗ — `madvise` mode, no MADV_HUGEPAGE call |
+| Speedup needed to match standard MF at np=2 | ≥ 150 × 103 / 475 = **32.5×** (have 27.4×) |
+
+The gap is fundamental: Fix H's sequential outer loop exposes the per-model Amdahl
+serial fraction that model-parallel OMP hides by overlapping 103 models' serial work
+concurrently. There is no code change that can close this gap without either restoring
+the parallel outer loop in MPI builds (blocked by OOM at this scale, §2.4.5) or
+reducing per-model memory footprint to allow concurrent model evaluations.
+
+---
+
 ## 3. The Algorithmic Root Cause: O(n²) Inner Product Loops
 
 ### 3.1 How IQ-TREE Computes Partial Likelihoods
