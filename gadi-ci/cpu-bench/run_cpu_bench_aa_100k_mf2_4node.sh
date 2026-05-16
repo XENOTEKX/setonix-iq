@@ -348,9 +348,9 @@ record = {
     },
     "profile": {"nranks": nranks, "omp_per_rank": omp_per_rank,
                 "placement": "mpi_4node_fullnode", "perf_cmd": perf_cmd, "metrics": metrics},
-    "build_tag":           "mf2_full_icx_avx512_r2_lpt",
+    "build_tag":           "mf2_full_icx_avx512_r2_fixh",
     "non_canonical":       True,
-    "non_canonical_label": "MF2 Full \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512",
+    "non_canonical_label": "MF2 Full (Fix A\u2013H) \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512",
     "group":               "aa_100k_mf2_scaling",
 }
 out_path = os.path.join(runs, rid + ".json")

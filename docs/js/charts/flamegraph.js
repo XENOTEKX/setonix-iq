@@ -1,6 +1,6 @@
 // web/js/charts/flamegraph.js — minimal flamegraph from folded_stacks
 
-import { escHtml, hashColour, shortFn } from '../utils.js?v=fce11610f524';
+import { escHtml, hashColour, shortFn } from '../utils.js?v=61f8ca791376';
 
 export function render(container, foldedStacks) {
   if (!foldedStacks || !foldedStacks.length) {
