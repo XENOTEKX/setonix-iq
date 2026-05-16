@@ -357,14 +357,13 @@ Instead of sorting ALL 1,232 models by individual cost and striping by position,
 `filterRates` now fires normally: rank 0 evaluates LG+G4, then LG+R2, compares, prunes
 LG+R3 … LG+R10. Expected evaluation count: ~150–200 models per rank (similar to standard).
 
-**Fix B — OMP-across-models in MPI path (removes sequential loop):**
+**Fix B — OMP-across-models in MPI path (removes sequential loop) — REVERTED by Fix E:**
 The `#ifdef _IQTREE_MPI` sequential evaluation block was removed. Both MPI and non-MPI builds
-now use the same OMP-across-models loop (`#pragma omp parallel num_threads(num_threads)`
-with work-stealing `getNextModel()`). The "Issue 5" ModelFactory race was a red herring for
-production runs (VB_MIN verbosity): the only write outside `#pragma omp critical` is
-`putBool("UnreliableParam")` which is gated on `verbose_mode >= VB_MED`. The
-`saveCheckpoint(&in_model_info)` call at the end of `evaluate()` was already guarded by
-`#pragma omp critical` inside `evaluate()`.
+used the same OMP-across-models loop (`#pragma omp parallel num_threads(num_threads)`
+with work-stealing `getNextModel()`). Initial analysis claimed the "Issue 5" race was
+a red herring; this was **incorrect** — see Fix E and Fix F below for the full analysis.
+Fix B applied as commit `…`, then reverted / superseded by Fix E (`eddbf45d`), and
+ultimately replaced by the correct Fix F (`a9b50164`).
 
 **Projected performance after Fix A+B (AA 100K)** — updated by Fix C to §2.4.1:
 
@@ -570,6 +569,125 @@ likelihood kernel's DRAM bandwidth scales with T rather than saturating at socke
 capacity. The change is a single-line pragma addition; it overrides `close` only for
 the `evaluateAll()` region while leaving the `test()` path and all hot-kernel inner
 loops undisturbed.
+
+#### Fix E — Restore sequential outer loop for MPI builds (`phylotesting.cpp`, commit `eddbf45d`)
+
+**Trigger:** Fix B (OMP-across-models in MPI path) caused SIGABRT crashes during
+the 100K AA MF2 benchmark jobs (168466947/948/949). Symptoms:
+- `np=1`: SIGABRT (rc=134) with no error message
+- `np=2/4`: "Not enough memory, allocation of 131996370853047072 bytes" then SIGABRT
+
+These are classic heap-corruption signatures from `std::map` red-black tree corruption.
+
+**Workaround (Fix E):** Guarded the outer `#pragma omp parallel` in `evaluateAll()` with
+`#if defined(_OPENMP) && !defined(_IQTREE_MPI)` so MPI builds use a sequential outer
+loop (one model at a time per OMP-thread group). Each sequential `evaluate()` call still
+uses all `num_threads` OMP threads for site-likelihood parallelism. Combined with Fix A
+LPT striping, this still scales across MPI ranks, but each rank is effectively
+single-threaded at the model-evaluation level.
+
+Fix E was a **workaround**, not a root-cause fix. It was committed to unblock benchmark
+resubmission while the actual race mechanism was diagnosed.
+
+#### Fix F — Thread-local `in_model_info` snapshot eliminates OMP data race (`phylotesting.cpp`, commit `a9b50164`)
+
+**Root cause analysis (corrected):**
+
+The shared `ModelCheckpoint in_model_info` (a `std::map<string,string>`) is accessed by
+multiple OMP threads in `evaluateAll()`. While writes to `in_model_info` are protected by
+`#pragma omp critical`, several **reads** from `in_model_info` inside `evaluate()` happen
+**outside** any critical section:
+
+| Race point | Location | Access type | Protected? |
+|-----------|----------|-------------|-----------|
+| `CandidateModel::restoreCheckpoint(&in_model_info)` — early-exit check | ~line 1960 | READ | ✗ |
+| `prev_info.restoreCheckpointRminus1(&in_model_info, this)` | ~line 2033 | READ | ✗ |
+| `iqtree->getRate()->initFromCatMinusOne(in_model_info, ...)` | ~lines 2106, 2122 | READ | ✗ |
+| `in_model_info.putBool("UnreliableParam", ...)` | ~line 2071 | WRITE | ✗ (VB_MED only) |
+
+The **write** path (`saveCheckpoint(&in_model_info)`) at the end of `evaluate()` IS
+protected by `#pragma omp critical`. But `#pragma omp critical` only serialises
+concurrent writers — it does NOT prevent a **reader outside** the critical section from
+running concurrently with a **writer inside** the critical section.
+
+`std::map::find()` (read traversal of the red-black tree) concurrent with
+`std::map::operator[]` or `std::map::insert()` (write, rebalancing the tree) is
+**undefined behaviour** in C++. This causes heap corruption → SIGABRT.
+
+Additionally, `Checkpoint::getString()` reads `checkpoint->struct_name` to build the map
+key. `startCheckpoint()/endCheckpoint()` modify `struct_name` inside the critical section.
+Concurrent `struct_name` read + write is also undefined behaviour on `std::string`.
+
+**Prior incorrect diagnosis:** An earlier analysis stated "ModelFactory::ctor writes to
+`in_model_info` via `saveCheckpoint()` during initialisation." This was **wrong**.
+Confirmed by reading `modelfactory.cpp` lines 153–1050: the `ModelFactory::ModelFactory()`
+constructor does NOT call `saveCheckpoint()` anywhere. Similarly `RateFree`, `RateGamma`,
+`ModelProtein`, and `ModelMarkov` constructors do not call `saveCheckpoint()`. The
+constructor only creates model/rate objects via string parsing and parameter initialisation.
+
+**Upstream IQ-TREE2 approach:** Upstream (`iqtree/iqtree2:master`) avoids the race
+entirely by blocking MPI for model selection:
+```
+outError("Please use only 1 MPI process! We are currently working on
+the MPI parallelization of model selection.")
+```
+The upstream `evaluateAll()` uses `#pragma omp parallel num_threads(num_threads)` freely
+because there is always exactly one MPI rank and thus no concurrent MPI writes. The race
+does not manifest upstream.
+
+Upstream commit `1ff47eb` (stelzch, Mar 19 2025) fixed a separate race in `getNextModel()`:
+moved `setFlag(MF_RUNNING)` and `current_model = next_model` inside the critical section
+to prevent double-assignment. **Our local code already had the equivalent fix** —
+`current_model = next_model` and `at(next_model).setFlag(MF_RUNNING)` are both inside
+`#pragma omp critical` in our `getNextModel()`.
+
+**Fix F implementation:**
+
+At the start of `evaluate()`, extend the existing `#pragma omp critical` for
+`iqtree->restoreCheckpoint()` to also take a **per-thread snapshot** of `in_model_info`:
+
+```cpp
+ModelCheckpoint local_in_info;
+{
+    bool already_evaluated;
+#ifdef _OPENMP
+#pragma omp critical
+{
+#endif
+    local_in_info = in_model_info;                    // thread-local snapshot
+    already_evaluated = restoreCheckpoint(&local_in_info);
+#ifdef _OPENMP
+}
+#endif
+    if (already_evaluated) { delete iqtree; return ""; }
+}
+```
+
+All subsequent reads of `in_model_info` use `local_in_info` instead:
+- `restoreCheckpointRminus1(&local_in_info, this)` — read from per-thread copy ✓
+- `iqtree->setCheckpoint(&local_in_info)` in `!prev_rate_present` path ✓
+- `initFromCatMinusOne(local_in_info, ...)` — both calls ✓
+- `local_in_info.getString(...)` for mixture init path ✓
+
+The only writes to the shared `in_model_info` remain:
+- `saveCheckpoint(&in_model_info)` at end of `evaluate()` — already under `#pragma omp critical` ✓
+- `in_model_info.putBool("UnreliableParam", ...)` — now also under `#pragma omp critical` ✓
+
+**Copy overhead:** `local_in_info = in_model_info` copies the entire map. At 1,232 AA
+models × ~2 entries each × ~100 B/entry ≈ 250 KB. A `std::map` copy of ~2,500 entries
+takes ~1–5 ms on modern hardware. Each `evaluate()` call takes 5–100 s. Overhead: < 0.1%.
+
+**Result:** The `#if defined(_OPENMP) && !defined(_IQTREE_MPI)` guard from Fix E is
+removed. Both MPI and non-MPI builds use:
+```cpp
+#pragma omp parallel num_threads(num_threads) proc_bind(spread)
+```
+Full model-level OMP parallelism within each MPI rank is restored. Combined with Fix A
+LPT striping (~1/nranks subst-families per rank), this delivers the same parallelism
+as the original non-MPI OMP-across-models design.
+
+**Expected performance after Fix F (AA 100K):** same as Fix A+B+C projections in §2.4.1.
+Each rank evaluates ~150 post-pruning models in parallel across `num_threads` OMP threads.
 
 ---
 
