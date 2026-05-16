@@ -1,8 +1,8 @@
 // web/js/pages/tests.js — aggregated verification across all runs
 
-import { store } from '../state.js?v=f9a57fc31e39';
-import { loadRun } from '../data.js?v=f9a57fc31e39';
-import { escHtml, fmtNum } from '../utils.js?v=f9a57fc31e39';
+import { store } from '../state.js?v=9c96908afbb3';
+import { loadRun } from '../data.js?v=9c96908afbb3';
+import { escHtml, fmtNum } from '../utils.js?v=9c96908afbb3';
 
 export async function mount(root) {
   root.innerHTML = `

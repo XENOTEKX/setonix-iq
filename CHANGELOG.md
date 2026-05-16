@@ -2,7 +2,7 @@
 
 ---
 
-## 2026-05-16 (bc) — Fix E–H: OMP race fix + sequential MPI outer loop; first Fix H result (168468562)
+## 2026-05-16 (bc) — Fix E–H: OMP race fix + sequential MPI outer loop; all Fix H results (168468561–563)
 
 ### What changed
 
@@ -18,43 +18,36 @@ Four commits between Fix D (`bb`) and the current HEAD resolve the OMP data-race
 
 Fix G's `local_in_info` snapshot is retained in Fix H (correct for non-MPI; no-op for sequential MPI).
 
-### First measured result — 168468562 (Fix A+C+D+G+H, np=2, 2026-05-16)
+### All measured results — Fix A+C+D+G+H, AA 100K, 2026-05-16
 
-| Metric | Value |
-|--------|-------|
-| MF wall | 475 s |
-| Tree wall | 387 s |
-| **Total wall** | **866 s** |
-| **vs baseline (168425673, 1,169 s)** | **1.35×** |
-| lnL | −7,541,976.865 ✓ |
-| IPC (rank 0) | 2.005 |
-| LLC miss% | 67.40% |
+| PBS ID | Scenario | MF wall | Tree wall | Total | vs baseline | lnL | IPC | LLC miss% |
+|--------|----------|---------|-----------|-------|-------------|-----|-----|--------|
+| 168425673 | Baseline (std, 1 node) | 399 s | 764 s | 1,169 s | 1.00× | −7,541,976.860 | 1.878 | 66.94% |
+| 168468561 | Fix A–H, np=1, 1×103T | 1,289 s | 720 s | 2,012 s | 0.58× | −7,541,976.862 ✓ | 1.975 | 68.14% |
+| **168468562** | **Fix A–H, np=2, 2×103T** | **475 s** | **387 s** | **866 s** | **1.35×** | **−7,541,976.865** ✓ | **2.005** | **67.40%** |
+| 168468563 | Fix A–H, np=4, 4×103T | **2,335 s** ⚠ | 200 s | 2,541 s | 0.46× ⚠ | −7,541,976.852 ✓ | 2.135 | 68.48% |
 
-**np=1 (168468561) and np=4 (168468563) still running.**
+**np=2 — best result (1.35×):** MF 475 s (site-parallel 27× speedup vs model-parallel
+103×, explained by Amdahl serial fraction in §2.4.7). Tree 387 s = near-perfect 2-node
+scaling. Total **866 s = 1.35×** speedup over 1-node baseline.
 
-### Comparison: all AA 100K MF2 variants (completed runs)
+**np=1 — unchanged (0.58×):** Fix H filterRates pruning reduces models 1,232→~475 but
+per-model cost rises 1.06→2.71 s (site-parallel OMP); effects cancel. MF 1,289 s; Tree
+720 s ≈ baseline 764 s.
 
-| Run | Scenario | MF wall | Tree wall | Total | vs baseline |
-|-----|----------|---------|-----------|-------|-------------|
-| 168425673 | Baseline (std, 1 node) | 399 s | 764 s | 1,169 s | 1.00× |
-| 168446151 | Pre-fix MF2, np=1 | 1,309 s | 717 s | 2,030 s | 0.58× |
-| 168446152 | Pre-fix MF2, np=2 | 969 s | 383 s | 1,355 s | 0.86× |
-| 168446153 | Pre-fix MF2, np=4 | 573 s | 198 s | 776 s | 1.51× |
-| 168467032 | Cost-sort LPT, np=2 | 481 s | 390 s | 875 s | 1.34× |
-| **168468562** | **Fix A–H, np=2** | **475 s** | **387 s** | **866 s** | **1.35×** |
-
-ModelFinder at np=2 improved 2.04× vs pre-fix (969 s → 475 s) from Fix A (subst-family
-LPT) + Fix C (per-rank filterRates). Tree search unchanged across all np=2 variants
-(383–390 s) — MPI tree parallelism is unaffected by the MF dispatch fixes. The 1.35×
-total speedup is below the ~2.0× projection because sequential outer loop carries the
-C3 penalty (~1.3×); parallel outer loop OOMs at 100K AA scale (§2.4.5).
+**np=4 — REGRESSION ⚠ (0.46×):** MF 2,335 s is **4.1× worse** than pre-fix np=4
+(573 s). Tree 200 s is correct (1.94× scaling from np=2). Suspected cause: Fix C
+`rate_block` recompute edge case at np=4 disables filterRates on a worker rank; that rank
+evaluates all ~308 assigned models (incl. costly +F variants at ~7.6 s/model) without
+pruning, stalling the MPI gather. Pre-fix np=4 MF (573 s, 1.51×) was faster because it
+used OMP-across-models parallelism per rank before sequential mode was mandated.
 
 ### Files changed
 
 | File | Change |
 |------|--------|
 | `src/iqtree3/main/phylotesting.cpp` | Fix E (revert Fix B), Fix F (local snapshot — BUGGY), Fix G (correct placement), Fix H (`!defined(_IQTREE_MPI)` guard) |
-| `setonix-iq/research/aa-walltime-analysis.md` | §2.4.6 updated with 168468562 results and cross-variant comparison |
+| `setonix-iq/research/aa-walltime-analysis.md` | §2.4.6 updated with all three Fix H results; §2.4.7 added (root cause: model-parallel vs site-parallel OMP); np=4 regression documented |
 | `setonix-iq/CHANGELOG.md` | This entry |
 
 ---

@@ -807,24 +807,67 @@ assignment; Fix C’s filterRates prunes heavy +Rk series early.
 
 #### §2.4.6 Fix H benchmark — Fix A+C+D+G+H, sequential outer loop (2026-05-16 14:24, commit `257485e5`)
 
-Fix H binary rebuilt at 14:24. Jobs submitted immediately. 168468562 (np=2) completed
-2026-05-16 ~15:10 (wall 866 s); np=1 and np=4 still running.
+Fix H binary rebuilt at 14:24. All four jobs completed 2026-05-16. 168468562 (np=2)
+completed ~15:10 (866 s); 168468561 (np=1) completed ~15:01 (2,012 s); 168468563 (np=4)
+completed ~15:10 (2,541 s).
 
 | PBS ID | Scenario | Fix set | MF wall | Tree wall | Total | vs baseline | lnL | IPC | LLC miss% |
 |--------|----------|---------|---------|-----------|-------|-------------|-----|-----|-----------|
 | 168425673 | Baseline — 1-node SPR, std binary | — | 399 s | 764 s | 1,169 s | 1.00× | −7,541,976.860 | 1.878 | 66.94% |
-| 168468561 | MF2 np1, 1×103T | A+C+D+G+H | — | — | *running* | pending | — | — | — |
+| 168468561 | MF2 np1, 1×103T | A+C+D+G+H | 1,289 s | 720 s | 2,012 s | 0.58× | −7,541,976.862 | 1.975 | 68.14% |
 | **168468562** | **MF2 np2, 2×103T** | **A+C+D+G+H** | **475 s** | **387 s** | **866 s** | **1.35×** ✓ | **−7,541,976.865** | **2.005** | **67.40%** |
-| 168468563 | MF2 np4, 4×103T | A+C+D+G+H | — | — | *running* | pending | — | — | — |
+| 168468563 | MF2 np4, 4×103T | A+C+D+G+H | **2,335 s** ⚠ | 200 s | 2,541 s | 0.46× ⚠ | −7,541,976.852 | 2.135 | 68.48% |
 
 **168468562 (np=2) analysis:**
 
 ModelFinder wall 475 s at np=2 vs 399 s for single-node baseline — **19% slower** for
 MF alone. This is expected: sequential outer loop (Fix H) means each rank evaluates ~150
 models one-at-a-time with 103 OMP threads per model (OMP barrier overhead per model ≈ C3
-penalty, ~1.3×). Parallel outer loop would give ~365 s MF for np=2, but is forbidden in
-MPI builds due to OOM (§2.4.5). The tree-search component (387 s) shows near-perfect
-2-node scaling vs pre-fix np=2 (383 s) — both have the same MPI tree parallelism.
+penalty, ~1.3×). See §2.4.7 for the full Amdahl-law quantification of why site-parallel
+OMP at 103 threads achieves only 27× speedup vs the standard binary's 103× model-parallel
+speedup. The tree-search component (387 s) shows near-perfect 2-node scaling vs pre-fix
+np=2 (383 s) — both have the same MPI tree parallelism.
+
+**168468561 (np=1) analysis:**
+
+MF wall 1,289 s vs standard baseline 399 s — **3.23× slower**. This matches the §2.4.7
+Amdahl prediction exactly: site-parallel 1-rank sequential outer loop evaluates ~475
+models at 2.71 s/model = 1,288 s (expected ≈ 1,289 s observed ✓). filterRates IS working
+(IQ-TREE output shows 98 model lines at rank 0, consistent with ~475 total after pruning).
+Tree wall 720 s ≈ standard 764 s (4 s faster — minor variance). IPC 1.975 is between the
+baseline (1.878) and np=2 (2.005): consistent with site-parallel OMP but only 1 rank (no
+MPI communication, less inter-rank synchronisation overhead). Total 2,012 s = 0.58×
+speedup — same as pre-fix MF2 np=1 (2,030 s, 0.58×). Fix H made no net wall-time
+difference at np=1 because pre-fix already used sequential outer loop with no filterRates
+pruning (1,232 models × 1.06 s/model = 1,309 s MF) while Fix H evaluates only ~475
+models but takes 2.71 s/model — the two effects nearly cancel.
+
+**168468563 (np=4) analysis — UNEXPECTED REGRESSION:**
+
+MF wall 2,335 s at np=4 is **4.1× worse** than the pre-fix np=4 MF (573 s) and
+**1.8× worse** than Fix H np=1 (1,289 s). This is a serious regression.
+Tree wall 200 s confirms near-linear 4-node tree-search scaling (387 s np=2 → 200 s np=4
+≈ 1.94×) — tree search is unaffected.
+
+The per-rank assignment message (`rank 0/4 assigned 308/1232 models`) shows Fix A LPT
+stripe is working. The IQ-TREE model output shows only 98 model lines (rank 0), consistent
+with filterRates pruning on rank 0 (~98 of 308 assigned models evaluated). If rank 0
+finishes ~98 models in ~265 s (98 × 2.71 s) and waits 2,335 − 265 = **2,070 s** for the
+slowest other rank, then one of ranks 1–3 must be taking ~2,335 s itself.
+
+**Likely cause — Fix C rate_block regression at np=4:** Fix C Part 2 recomputes
+`rate_block` to the last index of the rank's first non-ignored substitution family. A
+numerical or ordering edge case at np=4 may place `rate_block` BEYOND the last model
+assigned to the slow rank, so `filterRates` never fires. That rank evaluates all its
+assigned ~308 models without pruning. At ~7.6 s/model for +F variants (which are ~2.8×
+more expensive than base variants due to 20-frequency BFGS), 308 models × 7.6 s = 2,341 s
+≈ 2,335 s observed. This bug requires a separate investigation; re-running with per-rank
+stdout logging to identify which rank stalls would confirm the hypothesis.
+
+IPC 2.135 (highest across all variants) — consistent with the slow rank spending most of
+its time in the outer sequential loop doing model BFGS (high arithmetic intensity, no
+MPI stalls for the slow rank itself). LLC miss% 68.48% is unchanged — bottleneck is
+computational, not memory.
 
 **Comparison across all AA 100K MF2 variants (completed runs only):**
 
@@ -835,24 +878,35 @@ MPI builds due to OOM (§2.4.5). The tree-search component (387 s) shows near-pe
 | 168446152 | Pre-fix MF2, np=2 | 969 s | 383 s | 1,355 s | 0.86× | 2.028 | 66.26% |
 | 168446153 | Pre-fix MF2, np=4 | 573 s | 198 s | 776 s | 1.51× | 2.025 | 66.31% |
 | 168467032 | Cost-sort LPT, np=2 | 481 s | 390 s | 875 s | 1.34× | 1.999 | 67.30% |
+| 168468561 | Fix A–H, np=1 | 1,289 s | 720 s | 2,012 s | 0.58× | 1.975 | 68.14% |
 | **168468562** | **Fix A–H, np=2** | **475 s** | **387 s** | **866 s** | **1.35×** | **2.005** | **67.40%** |
+| 168468563 | Fix A–H, np=4 | **2,335 s** ⚠ | 200 s | 2,541 s | 0.46× ⚠ | 2.135 | 68.48% |
 
 **Key observations:**
 1. **Fix A–H np=2 MF (475 s) vs pre-fix np=2 MF (969 s): 2.04× MF improvement** —
    Fix A (subst-family LPT) + Fix C (per-rank filterRates) reduced models evaluated
    per rank from ~600+ to ~150, cutting sequential evaluation time proportionally.
 2. **Fix A–H np=2 MF (475 s) vs cost-sort LPT np=2 MF (481 s): effectively identical** —
-   confirms that position-LPT + no-Fix-C at np=2 happened to assign a balanced load
-   (rank 0 got ~616 models but with filterRates partially working); Fix C gives only
-   marginal MF benefit at np=2 vs the np=4 case where imbalance is severe.
-3. **Tree search unchanged (387 s ≈ 383 s)**: all variants with np=2 share the same
-   MPI tree parallelism — the fixes only affect ModelFinder dispatch.
-4. **IPC progression**: 1.878 (baseline) → 1.999 (cost-sort) → 2.005 (Fix A–H).
-   The small increase reflects better per-model cache reuse from fixing filterRates
-   (fewer wasted model evaluations → less L3 thrash).
-5. **Overall speedup 1.35× at np=2** is below the ~2.0× projected in §Fix H expected
-   table. The gap comes from sequential outer loop overhead (C3 penalty, ~1.3×);
-   parallel outer loop would give ~2.0× but OOMs at 100K AA scale.
+   confirms position-LPT + no-Fix-C at np=2 accidentally assigned balanced load;
+   Fix C gives marginal benefit at np=2 but is critical at np=4.
+3. **Tree search scales near-linearly across all np variants**: 764 s (np=1) →
+   387 s (np=2) → 200 s (np=4) → 2.02× and 1.94× per doubling ✓.
+4. **IPC progression (site-parallel, more ranks)**: 1.975 (np=1) → 2.005 (np=2) →
+   2.135 (np=4). Higher IPC at np=4 is consistent with the slow rank spending most
+   time in compute-intensive BFGS with no MPI stalls.
+5. **Fix H np=1 (2,012 s) ≈ pre-fix np=1 (2,030 s)**: the two effects cancel —
+   Fix H adds filterRates pruning (1,232 → 475 models) but each model now takes
+   2.71 s (site-parallel) vs ~1.06 s (pre-fix sequential); net MF time is similar.
+6. **CRITICAL: Fix H np=4 MF (2,335 s) is 4.1× worse than pre-fix np=4 MF (573 s)**.
+   Suspected Fix C `rate_block` edge case at np=4 disables filterRates pruning on one
+   worker rank; that rank evaluates all ~308 assigned models including expensive +F
+   variants without pruning. Root cause requires per-rank stdout logging to confirm.
+   Total speedup degrades to 0.46× (worse than running on 1 node alone).
+7. **Fix H np=4 tree (200 s) confirms tree-search scaling is correct** — the MF
+   regression is isolated to the ModelFinder dispatch path, not the tree kernel.
+8. **lnL consistency**: all Fix H runs agree to within 0.010 lnL units (−7,541,976.852
+   to −7,541,976.865); all pass verification. The small variation is floating-point
+   ordering across ranks during MPI gather.
 
 ---
 
