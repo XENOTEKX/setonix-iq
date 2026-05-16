@@ -1945,10 +1945,22 @@ string CandidateModel::evaluate(Params &params,
     iqtree->optimize_by_newton = params.optimize_by_newton;
     iqtree->setNumThreads(num_threads);
 
-    iqtree->setCheckpoint(&in_model_info);
+    // Fix G: take a thread-local snapshot of in_model_info BEFORE any iqtree checkpoint
+    // operations.  Fix F placed this copy after initializeModel(), which was too late:
+    // initializeModel() (ModelFactory ctor) and getModelFactory()->restoreCheckpoint()
+    // both read from the iqtree checkpoint pointer, which still pointed to the shared
+    // in_model_info — racing with other OMP threads' saveCheckpoint writes and causing
+    // concurrent std::map::find + std::map::insert (UB) → heap corruption → SIGABRT.
+    // Fix G moves the per-thread copy to before setCheckpoint so ALL checkpoint reads
+    // (restoreCheckpoint, initializeModel, getModelFactory()->restoreCheckpoint) use
+    // the per-thread local_in_info with no concurrent writes possible.
+    ModelCheckpoint local_in_info;
 #ifdef _OPENMP
 #pragma omp critical
 #endif
+    { local_in_info = in_model_info; }
+
+    iqtree->setCheckpoint(&local_in_info);
     iqtree->restoreCheckpoint();
     ASSERT(iqtree->root);
     iqtree->initializeModel(params, getName(), models_block);
@@ -1957,32 +1969,11 @@ string CandidateModel::evaluate(Params &params,
         rate_name = iqtree->getRateName();
     }
 
-    // Fix F: take a thread-local snapshot of the shared in_model_info checkpoint.
-    // All subsequent reads of in_model_info use local_in_info instead, ensuring
-    // std::map traversal (find/getString) is never concurrent with another OMP
-    // thread's saveCheckpoint write, which would be a C++ data race on std::map.
-    // The copy is O(N_evaluated_models) but negligible vs. per-model optimize time.
-    ModelCheckpoint local_in_info;
-    {
-        bool already_evaluated;
-#ifdef _OPENMP
-#pragma omp critical
-{
-#endif
-        local_in_info = in_model_info;
-        already_evaluated = restoreCheckpoint(&local_in_info);
-#ifdef _OPENMP
-}
-#endif
-        if (already_evaluated) {
-            delete iqtree;
-            return "";
-        }
+    if (restoreCheckpoint(&local_in_info)) {
+        delete iqtree;
+        return "";
     }
 
-#ifdef _OPENMP
-#pragma omp critical
-#endif
     iqtree->getModelFactory()->restoreCheckpoint();
     
     bool rate_restored = iqtree->getRate()->hasCheckpoint();
