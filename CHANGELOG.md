@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-05-16 (az) — MF2 ModelFinder scaling root causes diagnosed and fixed
+
+### What changed
+
+Two bugs in `main/phylotesting.cpp` caused MF2 ModelFinder to be 3.28× **slower** than the
+standard binary at 1-node (AA 100K). Both are now fixed (commit `2672b90a` on
+`gadi-spr-r2-avx512`). Research docs updated in `research/aa-walltime-analysis.md` §2.4
+and new `research/modelfinder-mpi.md` §5.3 / §17 (commit `3fe95a7a`).
+
+#### Root causes
+
+**C1 (dominant ~2.6×): LPT position-stripe disabled `filterRates` pruning.**
+Phase 1 sorted ALL 1,232 AA models by individual rate-category cost (LPT) and assigned by
+`sorted_position % nranks`. This placed all even-k +Rk models (LG+R10, LG+R8, …) on rank 0
+and odd-k variants on rank 1. `filterRates` calls `getLowerKModel(LG+R4) → LG+R3`, but
+LG+R3 was `MF_IGNORED` on rank 0 (assigned to rank 1), so the pruning guard failed. Every
+rank evaluated ALL assigned +Rk series. Standard IQ-TREE evaluates ~475 of the 1,232 AA
+models after pruning; MF2 evaluated all 1,232 — a 2.6× excess.
+
+**C3 (secondary ~1.3×): sequential site-parallel eval — OMP barrier overhead.**
+The "Issue 5 fix" (commit `abd98764`) serialised model evaluation in MPI builds: one model
+at a time using all 103 threads for site-level parallelism. For 100 taxa (199 internal
+nodes), each model paid ~4,000 OMP barrier events (199 × ~10 passes × 2). The non-MPI path
+uses model-level OMP (103 models in parallel, zero intra-model barriers) and is ~1.3× faster.
+
+Combined: 2.6× × 1.3× ≈ **3.4× ≈ observed 3.28× overhead at np1**.
+
+#### Fixes applied (`phylotesting.cpp`, commit `2672b90a`)
+
+- **Fix A — subst-family LPT stripe**: Groups all rate variants of each substitution family
+  (LG, WAG, JTT, …) together. LPT-sort GROUPS, assign GROUPS round-robin. All ~30 LG rate
+  variants stay on the same rank → `filterRates` fires normally within each rank's model set.
+  Expected: ~150–200 models evaluated per rank instead of all 1,232.
+- **Fix B — OMP-across-models restored for MPI builds**: Removed the sequential
+  `#ifdef _IQTREE_MPI` evaluation block. Both MPI and non-MPI builds now use the same
+  `#pragma omp parallel` loop. The "Issue 5" race was a false positive: `saveCheckpoint()`
+  inside `evaluate()` was already `#pragma omp critical`, and the only unguarded write
+  (`putBool("UnreliableParam")`) is gated on `verbose_mode >= VB_MED` — never triggered in
+  production.
+
+#### Projected performance after fixes (AA 100K)
+
+| Scenario | MF wall | Tree wall | Total | Speedup |
+|----------|---------|-----------|-------|---------|
+| Standard baseline (168425673) | 399 s | 764 s | 1,169 s | 1.00× |
+| MF2 np1 post-fix | ~400 s | 717 s | ~1,117 s | ~1.05× |
+| MF2 np2 post-fix | ~160 s | 383 s | ~543 s | ~2.15× |
+| MF2 np4 post-fix | ~120 s | 198 s | ~318 s | ~3.67× |
+
+Break-even vs standard SPR drops from ~2.7 nodes to **< 1.5 nodes**.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.cpp` | Fix A (Phase 1 stripe) + Fix B (eval path); commit `2672b90a` |
+| `research/aa-walltime-analysis.md` | §2.4: root cause + fix + projected performance |
+| `research/modelfinder-mpi.md` | §5.3 AA 100K data; §17 Fixes Implemented |
+
+---
+
 ## 2026-05-16 (ay) — AA 100K MF2 scaling series completed (168446151/152/153)
 
 ### What changed
@@ -20,9 +81,10 @@ IPC (rank 0 perf stat): 1.96 (np1) → 2.03 (np2) → 2.02 (np4)
 
 #### Key findings
 
-1. **MF2 1-node carries heavy MPI overhead** — ModelFinder takes 1,308.938 s with 1 rank vs
-   399.456 s on the standard binary (3.28× slower). The LPT dispatch protocol adds
-   synchronization cost that is not amortized with a single rank.
+1. **MF2 1-node is 3.28× SLOWER than standard** — ModelFinder takes 1,308.938 s with 1 rank
+   vs 399.456 s on the standard binary. Root cause diagnosed and fixed in entry `az`: LPT
+   position-stripe disabling `filterRates` pruning (C1, ~2.6×) + sequential OMP barrier
+   overhead (C3, ~1.3×).
 
 2. **Tree search scales near-linearly across MPI ranks** — 717 s → 383 s → 198 s (3.63× for
    4× ranks). The MF2 binary distributes tree search across ranks in addition to ModelFinder
@@ -31,7 +93,8 @@ IPC (rank 0 perf stat): 1.96 (np1) → 2.03 (np2) → 2.02 (np4)
 3. **4-node exceeds the Amdahl prediction** — 1.51× actual vs 1.35× predicted. The bonus
    comes from MPI-parallel tree search, not accounted for in the original model.
 
-4. **Break-even vs standard SPR** is between 2 and 4 nodes (~2.7 nodes extrapolated).
+4. **Break-even vs standard SPR** is between 2 and 4 nodes with the broken dispatch (~2.7
+   nodes); drops to **< 1.5 nodes** after the `az` fixes.
 
 | Metric | np1 | np2 | np4 |
 |--------|-----|-----|-----|
