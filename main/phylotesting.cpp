@@ -3615,18 +3615,27 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     // saveCheckpoint write at the end of evaluate().  Concurrent map::find +
     // map::insert corrupt the red-black tree → heap corruption → SIGABRT.
     //
-    // Fix F takes a per-thread snapshot (local_in_info = in_model_info) under
-    // the existing #pragma omp critical at the start of evaluate(), then
-    // replaces all subsequent in_model_info reads with reads from local_in_info.
-    // The only writes to the shared in_model_info are the final
-    // saveCheckpoint(&in_model_info) (protected) and the VB_MED-only putBool
-    // write (now also protected).  This eliminates all map data races and
-    // restores the full OMP parallel outer loop for MPI builds.
+    // Fix G takes a per-thread snapshot (local_in_info = in_model_info) before
+    // iqtree->setCheckpoint(), so ALL checkpoint reads (restoreCheckpoint,
+    // initializeModel, getModelFactory()->restoreCheckpoint) use per-thread
+    // storage.  This is correct for both parallel (non-MPI) and sequential
+    // (MPI) outer-loop modes.
+    //
+    // Fix H restricts the parallel outer loop to non-MPI builds.  In MPI builds
+    // the outer loop is sequential: each rank evaluates its assigned models one
+    // at a time using num_threads OMP threads inside each evaluate() call.
+    // Parallel outer loop in MPI builds would require num_threads concurrent
+    // IQTree instances, each holding full partial-lh buffers (~12 GB for AA 100K
+    // on 100 taxa), causing OOM on 512 GB nodes.
     {
-#ifdef _OPENMP
-    // OMP parallel outer loop across models for both MPI and non-MPI builds.
-    // proc_bind(spread): distribute threads evenly across both NUMA domains
-    // so aggregate DRAM bandwidth is maximised for sub-full-thread counts.
+#if defined(_OPENMP) && !defined(_IQTREE_MPI)
+    // OMP parallel outer loop across models for non-MPI builds only.
+    // In MPI builds the outer loop is sequential: each rank evaluates its
+    // assigned models one at a time, using num_threads OMP threads inside each
+    // evaluate() call (for the partial-likelihood kernel).  Parallel outer loop
+    // in MPI builds would require num_threads concurrent IQTree instances each
+    // holding full partial-lh buffers (~12 GB for AA 100K), causing OOM.
+    // proc_bind(spread): distribute threads evenly across both NUMA domains.
 #pragma omp parallel num_threads(num_threads) proc_bind(spread)
 #endif
     {
