@@ -81,8 +81,8 @@
       "dTLB-load-misses": 2070233848
     }
   },
-  "build_tag": "mf2_full_icx_avx512_r2_abd98764",
+  "build_tag": "mf2_full_icx_avx512_r2_costsort",
   "non_canonical": true,
-  "non_canonical_label": "MF2 Full (abd98764) \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512",
+  "non_canonical_label": "MF2 Full (cost-sort LPT) \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512",
   "group": "aa_100k_mf2_scaling"
 }
