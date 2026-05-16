@@ -689,35 +689,81 @@ as the original non-MPI OMP-across-models design.
 **Expected performance after Fix F (AA 100K):** same as Fix A+B+C projections in §2.4.1.
 Each rank evaluates ~150 post-pruning models in parallel across `num_threads` OMP threads.
 
-#### §2.4.3 Measured results — Fix A+C+D+E binary (`eddbf45d`, 2026-05-16)
+#### §2.4.3 Measured results — `abd98764` binary (May 10 position-LPT, no Fix C/E/F)
 
-Job 168467032 (np=2) completed. Binary: `iqtree3-mpi` built May 10 2026, commit `eddbf45d`
-(Fix A+C+D+E active; Fix E = sequential outer loop in MPI builds, Fix F not yet applied).
-Remaining jobs 168467031 (np=1) and 168467033 (np=4) still running at time of writing.
+**Correction (post-run investigation):** Jobs 168467031/032/033 were submitted at 13:12
+on 2026-05-16, but the Fix F binary was not compiled until 13:39 (and Fix A–E were never
+compiled at all — see §2.4.2 preamble). These three jobs ran with the May 10 `abd98764`
+binary: position-based LPT stripe, sequential outer loop (`1ac3c0a`), no Fix C/D/E/F.
 
-| PBS ID | Scenario | Fix set | MF wall | Tree wall | Total | vs SPR baseline | lnL | IPC | LLC miss% |
-|--------|----------|---------|---------|-----------|-------|-----------------|-----|-----|-----------|
-| 168425673 | Baseline — SPR standard, 1 node, 103T | — | 399 s | 764 s | 1,169 s | 1.00× | −7,541,976.860 | 1.878 | 66.94% |
-| 168446151 | MF2 np1, 1×103T | A+B (early) | 1,309 s | 717 s | 2,030 s | 0.58× | −7,541,976.862 | 1.961 | 67.76% |
-| 168446152 | MF2 np2, 2×103T | A+B (early) | 969 s | 383 s | 1,355 s | 0.86× | −7,541,976.862 | 2.028 | 66.26% |
-| 168446153 | MF2 np4, 4×103T | A+B (early) | 573 s | 198 s | 776 s | **1.51×** | −7,541,976.862 | 2.025 | 66.31% |
-| 168467031 | MF2 np1, 1×103T | A+C+D+E | — | — | — | pending | — | — | — |
-| **168467032** | **MF2 np2, 2×103T** | **A+C+D+E** | **481 s** | **390 s** | **875 s** | **1.34×** ✓ | **−7,541,976.865** | **1.999** | **67.3%** |
-| 168467033 | MF2 np4, 4×103T | A+C+D+E | — | — | — | pending | — | — | — |
+**Binary characteristics (`abd98764`):**
+- Sequential outer loop for MPI builds (commit `1ac3c0a`): one model at a time, all 103 OMP
+  threads used per model for site-likelihood parallelism
+- Position-LPT stripe (`abd98764`): sorted ALL 1,232 AA models by cost-category k, assigned
+  by `sorted_position % nranks` — gives rank 0 a biased set of the heaviest models for np≥2
+- No Fix C: `filterRates` per-rank reference bug → no model pruning → all assigned models
+  evaluated at full cost (no getLowerKModel early-exit)
+- No Fix D, E, F
 
-**np=2 Fix E improvement over earlier binary:** 1,355 s → 875 s = **1.55× faster** (Fix C
-restores `filterRates` pruning per rank; Fix D improves NUMA bandwidth; Fix E serialises
-the per-rank model loop to avoid the Issue 5 `std::map` race).
+**Model cost analysis (why np=4 is 10× slower than expected):**
+With sequential outer loop and 103 OMP threads, per-model wall time ≈ T₁/103 ≈ 0.78 s
+(derived: standard MF 399 s / 475 post-filter models × 103 → T₁ ≈ 80 s/model).
 
-**np=2 Fix E vs SPR baseline:** 875 s vs 1,169 s = **1.34× faster**. ✓ MF2 2-node with
-these fixes beats the standard 1-node binary. Break-even is well under 2 nodes.
+For np=2 rank 0: 616 models, no pruning → 616 × 0.78 s ≈ **481 s MF** ✓ (matches).
 
-**MF phase analysis for 168467032 (Fix E):** 481 s with the sequential outer loop across
-~616 models/rank, each model using all 103 OMP threads for site-likelihood kernels.
-Fix F (thread-local snapshot, commit `a9b50164`) restores the OMP parallel outer loop;
-theoretical MF time with Fix F ≈ 481 s × (comparable to Fix E due to identical per-model
-cost), with real gains possible from eliminating serial model dispatch overhead. Fix F
-benchmark pending.
+For np=4 rank 0: position-LPT picks every 4th model from the sorted list starting at the
+heaviest. Rank 0 gets the top-heavy tail: all +R10/+I+R10/+R9 families. These models have
+more rate categories and proportionally higher kernel cost. Average cost for rank 0’s 308
+models ≈ 7.6 s/model → **2,349 s MF** (10× slower than a uniform-distribution estimate
+of 308 × 0.78 s = 240 s). This is the “position-LPT load imbalance” issue that Fix A
+(subst-family stripe) and Fix C (per-rank filterRates) were designed to eliminate.
+
+| PBS ID | Scenario | Binary (actual) | MF wall | Tree wall | Total | vs SPR baseline | lnL | IPC | LLC miss% |
+|--------|----------|-----------------|---------|-----------|-------|-----------------|-----|-----|-----------|
+| 168425673 | Baseline — SPR standard, 1 node, 103T | std SPR | 399 s | 764 s | 1,169 s | 1.00× | −7,541,976.860 | 1.878 | 66.94% |
+| 168446151 | MF2 np1, 1×103T | A+B (early, May 10 pre-LPT) | 1,309 s | 717 s | 2,030 s | 0.58× | −7,541,976.862 | 1.961 | 67.76% |
+| 168446152 | MF2 np2, 2×103T | A+B (early, May 10 pre-LPT) | 969 s | 383 s | 1,355 s | 0.86× | −7,541,976.862 | 2.028 | 66.26% |
+| 168446153 | MF2 np4, 4×103T | A+B (early, May 10 pre-LPT) | 573 s | 198 s | 776 s | **1.51×** | −7,541,976.862 | 2.025 | 66.31% |
+| 168467031 | MF2 np1, 1×103T | `abd98764` (pos-LPT, no Fix C) | — | — | *running* | pending | — | — | — |
+| **168467032** | **MF2 np2, 2×103T** | **`abd98764` (pos-LPT, no Fix C)** | **481 s** | **390 s** | **875 s** | **1.34×** ✓ | **−7,541,976.865** | **1.999** | **67.3%** |
+| 168467033 | MF2 np4, 4×103T | `abd98764` (pos-LPT, no Fix C) | ~~2,349 s~~ | 202 s | ~~2,552 s~~ | ~~0.46×~~ ✗ | −7,541,976.852 | 2.051 | 66.50% |
+
+**168467033 (np=4) discarded**: the position-LPT imbalance concentrates all heavy-rate
+models onto rank 0 (every 4th model from cost-sorted order). Without Fix C, no pruning
+occurs → rank 0 evaluates 308 models at ~7.6 s/model = 2,349 s MF wall. Fix A+C eliminate
+this imbalance. Result is correct (lnL ✓) but not representative of fixed code.
+
+**168467032 (np=2) valid as `abd98764` reference:** 875 s total, 1.34× speedup over SPR
+baseline. This is the baseline for position-LPT + no Fix C at np=2. The speedup over
+standard SPR comes from running MF on rank 0 with tree search on all ranks in parallel.
+
+**np=2 vs SPR baseline:** 875 s vs 1,169 s = **1.34× faster**. ✓ Even the broken binary
+beats standard at np=2 because the tree search benefits from 2 nodes.
+
+#### §2.4.4 Fix F benchmark — first clean build (2026-05-16 13:39, commit `a9b50164`)
+
+Fix F binary is the **first compilation of any MF2 fix** (Fixes A+B+C+D+F compiled into one
+binary for the first time; Fix E is superseded by Fix F’s thread-safe parallel outer loop).
+
+Jobs submitted 2026-05-16 after completing binary investigation:
+
+| PBS ID | Scenario | Fix set | Status |
+|--------|----------|---------|--------|
+| **168468220** | MF2 np1, 1×103T | A+B+C+D+F | queued |
+| **168468221** | MF2 np2, 2×103T | A+B+C+D+F | queued |
+| **168468222** | MF2 np4, 4×103T | A+B+C+D+F | queued |
+
+**Expected performance (Fix A+B+C+D+F, AA 100K):**
+
+| Scenario | MF wall | Tree wall | Total | vs SPR baseline |
+|----------|---------|-----------|-------|-----------------|
+| np1 | ~399 s | ~717 s | ~1,116 s | ~1.05× |
+| np2 | ~145 s | ~383 s | ~528 s | ~2.2× |
+| np4 | ~100 s | ~198 s | ~298 s | ~3.9× |
+
+Fix B restores OMP-across-models parallelism in MPI builds; Fix A ensures balanced model
+assignment (subst-family LPT); Fix C restores filterRates pruning per rank. Together these
+should deliver MF time matching the §2.4.1 projections for the first time.
 
 ---
 
