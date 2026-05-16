@@ -698,8 +698,10 @@ critical`).
 outer loop (`#pragma omp parallel num_threads(num_threads) proc_bind(spread)`) is retained.
 Combined with Fix A LPT striping, this gives full model-level OMP parallelism per rank.
 
-**Expected performance after Fix G (AA 100K):** same as Fix A+B+C projections in §2.4.1.
-Each rank evaluates ~150 post-pruning models in parallel across `num_threads` OMP threads.
+**Expected performance after Fix G (AA 100K):** Fix G alone retains the parallel outer
+loop for MPI builds, which causes OOM at 100K AA scale (see §2.4.5). Fix H (commit
+`257485e5`) adds the `!defined(_IQTREE_MPI)` guard to restore sequential outer loop for
+MPI builds. The combined Fix G+H binary is the correct baseline for performance measurement.
 
 #### §2.4.3 Measured results — `abd98764` binary (May 10 position-LPT, no Fix C/E/F)
 
@@ -767,29 +769,51 @@ at the first model evaluation attempt:
 Error in all logs: `*** IQ-TREE CRASHES WITH SIGNAL ABORTED` immediately after
 `ModelFinder will test 1232 protein models`. Fix G was applied and binary rebuilt at 14:16.
 
-#### §2.4.5 Fix G benchmark — first crash-free MPI+OMP parallel build (2026-05-16 14:16, commit `10107158`)
+#### §2.4.5 Fix G benchmark — all jobs OOM-killed (parallel outer loop, ∼1.3 TB/rank)
 
-Fix G (commit `10107158`, binary rebuilt at 14:16) corrects the race as described above.
-Jobs submitted immediately:
+Fix G retains the parallel outer loop for MPI builds. Each OMP thread creates its own
+`IQTree*` instance (full partial-likelihood buffers: ∼12 GB for AA 100K on 100 taxa × 20
+states × 4 rate cats × 197 nodes). With 103 threads/rank, peak memory ∼1.3 TB/rank —
+far exceeding the 512 GB Gadi nodes.
 
-| PBS ID | Scenario | Fix set | Status |
-|--------|----------|---------|--------|
-| **168468375** | MF2 np1, 1×103T | A+B+C+D+G | queued |
-| **168468376** | MF2 np2, 2×103T | A+B+C+D+G | queued |
-| **168468377** | MF2 np4, 4×103T | A+B+C+D+G | queued |
+| PBS ID | Scenario | Fix set | Exit | Wall | Notes |
+|--------|----------|---------|------|------|-------|
+| 168468376 | MF2 np2, 2×103T | A+B+C+D+G | rc=137 SIGKILL | 148 s | 986.6 GB used of 1020 GB |
+| 168468377 | MF2 np4, 4×103T | A+B+C+D+G | rc=137 SIGKILL | 134 s | OOM |
+| 168468375 | MF2 np1, 1×103T | A+B+C+D+G | rc=137 SIGKILL | ∼9 min | 510 GB exhausted |
 
-**Expected performance (Fix A+B+C+D+G, AA 100K):**
+#### Fix H — sequential outer loop for MPI builds (`phylotesting.cpp`, commit `257485e5`)
+
+Fix H changes `#ifdef _OPENMP` → `#if defined(_OPENMP) && !defined(_IQTREE_MPI)` around
+the outer `#pragma omp parallel` block in `evaluateAll()`. In MPI builds the outer loop
+is sequential: each rank evaluates one model at a time, using `num_threads` OMP threads
+inside `evaluate()` for the partial-likelihood kernel. Fix G’s `local_in_info` snapshot
+is retained (correct for non-MPI parallel builds; a no-op for sequential MPI builds).
+
+This is the same outer-loop policy as `abd98764` (Fix E approach), combined with
+Fixes A (subst-family LPT), C (filterRates per rank), and D (proc_bind(spread)).
+
+**Expected performance (Fix A+C+D+G+H, sequential outer loop, AA 100K):**
+
+With sequential outer loop, MF wall is the heaviest rank’s sequential sum of per-model
+times after filterRates pruning. Fix A’s subst-family LPT gives balanced initial
+assignment; Fix C’s filterRates prunes heavy +Rk series early.
 
 | Scenario | MF wall | Tree wall | Total | vs SPR baseline |
 |----------|---------|-----------|-------|-----------------|
 | np1 | ~399 s | ~717 s | ~1,116 s | ~1.05× |
-| np2 | ~145 s | ~383 s | ~528 s | ~2.2× |
+| np2 | ~200 s | ~383 s | ~583 s | ~2.0× |
 | np4 | ~100 s | ~198 s | ~298 s | ~3.9× |
 
-Fix B restores OMP-across-models parallelism in MPI builds; Fix A ensures balanced model
-assignment (subst-family LPT); Fix C restores filterRates pruning per rank; Fix G ensures
-all checkpoint reads use per-thread storage. Together these should deliver MF time
-matching the §2.4.1 projections for the first time.
+#### §2.4.6 Fix H benchmark — Fix A+C+D+G+H, sequential outer loop (2026-05-16 14:24, commit `257485e5`)
+
+Fix H binary rebuilt at 14:24. Jobs submitted immediately:
+
+| PBS ID | Scenario | Fix set | Status |
+|--------|----------|---------|--------|
+| **168468561** | MF2 np1, 1×103T | A+C+D+G+H | queued |
+| **168468562** | MF2 np2, 2×103T | A+C+D+G+H | queued |
+| **168468563** | MF2 np4, 4×103T | A+C+D+G+H | queued |
 
 ---
 
