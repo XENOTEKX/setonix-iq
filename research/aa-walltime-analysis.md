@@ -217,18 +217,33 @@ After ModelFinder, the tree search (Phase 5) runs on a **single node** in the st
 — MPI does not help there directly. That is the key limitation: MPI MF cuts 34% of the runtime
 by ~4×, but the 54% tree search phase is unaffected.
 
-**AA 100K MF2 scaling benchmark** (group `aa_100k_mf2_scaling`, submitted 2026-05-16):
-Scripts `run_cpu_bench_aa_100k_mf2_{1,2,4}node.sh` test this directly — same alignment,
-seed, `-T 103`, `numactl --localalloc`, `KMP_BLOCKTIME=200` as the baseline SPR run
-(168425673). Predicted vs measured (real data pending):
+**AA 100K MF2 scaling benchmark — completed 2026-05-16** (group `aa_100k_mf2_scaling`).
+Scripts `run_cpu_bench_aa_100k_mf2_{1,2,4}node.sh`, same alignment, seed, `-T 103`,
+`numactl --localalloc`, `KMP_BLOCKTIME=200` as the baseline SPR run (168425673).
+All runs verified lnL = −7,541,976.862 ✓.
 
-| Scenario | MF wall | Tree search | Total | Speedup vs 168425673 |
-|---|---|---|---|---|
-| Baseline 1-node SPR (168425673) | 399 s | 764 s | 1,169 s | 1.0× |
-| MF2 MPI × 1 node  | ~399 s | ~764 s | ~1,170 s | ~1.00× |
-| MF2 MPI × 2 nodes | ~200 s | ~764 s | ~965 s | **~1.21×** |
-| MF2 MPI × 4 nodes | ~100 s | ~764 s | ~866 s | **~1.35×** |
-| MF2 MPI × 8 nodes |  ~50 s | ~764 s | ~816 s | **~1.43×** |
+| Scenario | PBS ID | MF wall | Tree wall | Total | Speedup vs 168425673 |
+|---|---|---|---|---|---|
+| Baseline 1-node SPR, standard binary (168425673) | — | 399 s | 764 s | 1,169 s | 1.00× |
+| MF2 MPI × 1 node | 168446151 | **1,309 s** | 717 s | 2,030 s | **0.58×** |
+| MF2 MPI × 2 nodes | 168446152 | 969 s | 383 s | 1,355 s | **0.86×** |
+| MF2 MPI × 4 nodes | 168446153 | 573 s | 198 s | 776 s | **1.51×** |
+
+**Key finding — the Amdahl model was incomplete.** The MF2 binary distributes
+**tree search across MPI ranks as well as ModelFinder**, so the actual speedup exceeds
+the MF-only Amdahl ceiling. With 4 nodes the total speedup is 1.51× vs the predicted 1.35×.
+
+**MF2 1-node carries significant MPI overhead**: ModelFinder takes 1,309 s with 1 rank vs
+399 s on the standard binary (3.28×). The LPT model-dispatch protocol (synchronization per
+model batch over MPI) has cost that is not amortized at 1 rank. Break-even vs standard SPR
+is at approximately 2.7 nodes.
+
+Tree search scales near-linearly: 717 s → 383 s → 198 s (3.63× for 4× ranks). This
+near-linear scaling is the dominant source of the 4-node total speedup — 1M AA runs with
+longer tree search phases will benefit proportionally more.
+
+IPC (rank-0 perf stat): 1.96 (np1) → 2.03 (np2) → 2.02 (np4) — consistent with reduced
+LLC contention per node as the model workload is distributed.
 
 The MPI MF speedup hits a ceiling because tree search dominates. For **1M AA** (predicted
 MF ~22,600 s, tree search ~8,000 s), the MPI MF payoff is far greater — ModelFinder becomes

@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-16 (ay) — AA 100K MF2 scaling series completed (168446151/152/153)
+
+### What changed
+
+All three MF2 AA 100K scaling runs completed. All lnL verified (−7,541,976.862 ✓).
+
+| PBS ID | Nodes | Ranks × OMP | MF wall | Tree wall | Total wall | vs 168425673 |
+|--------|-------|-------------|---------|-----------|------------|--------------|
+| 168446151 | 1 | 1×103 | 1,308.938 s | 717.499 s | 2,029.853 s | **0.58×** ← 1.73× slower |
+| 168446152 | 2 | 2×103 |   968.700 s | 383.105 s | 1,355.215 s | **0.86×** ← 1.16× slower |
+| 168446153 | 4 | 4×103 |   573.036 s | 197.746 s |   775.906 s | **1.51×** ← faster ✓ |
+
+Reference baseline — SPR 1-node standard (168425673): MF=399.456 s, tree=764.478 s, total=1,169.556 s
+
+IPC (rank 0 perf stat): 1.96 (np1) → 2.03 (np2) → 2.02 (np4)
+
+#### Key findings
+
+1. **MF2 1-node carries heavy MPI overhead** — ModelFinder takes 1,308.938 s with 1 rank vs
+   399.456 s on the standard binary (3.28× slower). The LPT dispatch protocol adds
+   synchronization cost that is not amortized with a single rank.
+
+2. **Tree search scales near-linearly across MPI ranks** — 717 s → 383 s → 198 s (3.63× for
+   4× ranks). The MF2 binary distributes tree search across ranks in addition to ModelFinder
+   — the Amdahl prediction assumed single-node tree search only.
+
+3. **4-node exceeds the Amdahl prediction** — 1.51× actual vs 1.35× predicted. The bonus
+   comes from MPI-parallel tree search, not accounted for in the original model.
+
+4. **Break-even vs standard SPR** is between 2 and 4 nodes (~2.7 nodes extrapolated).
+
+| Metric | np1 | np2 | np4 |
+|--------|-----|-----|-----|
+| MF speedup (vs np1 MF2) | 1.00× | 1.35× | 2.28× |
+| Tree speedup (vs np1 MF2) | 1.00× | 1.87× | 3.63× |
+| Total speedup (vs 168425673) | 0.58× | 0.86× | **1.51×** |
+
+---
+
 ## 2026-05-16 (ax) — AA 100K MF2 scaling series scripts created
 
 ### What changed
