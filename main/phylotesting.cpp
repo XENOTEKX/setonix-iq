@@ -3454,42 +3454,29 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
 
 #ifdef _IQTREE_MPI
     // Phase 1: stripe models across ranks so each rank evaluates only its share.
-    // generate() has already populated this CandidateModelSet — size() is now the
-    // full model count (e.g. 968 for DNA). We mark every model that is NOT ours
-    // with MF_IGNORED so getNextModel() skips it.
-    // Use MF_IGNORED (bitmask value 2) — already in the bitmask checked by
-    // getNextModel() (MF_IGNORED+MF_WAITING+MF_RUNNING = 14).  A new flag value
-    // outside 14 would silently evaluate all models on every rank.
+    // generate() has already populated this CandidateModelSet.
+    //
+    // SUBST-FAMILY STRIPING — assigns all rate variants of each substitution
+    // model (e.g. every LG+* rate variant: LG+G4, LG+I+G4, LG+R2 … LG+R10,
+    // LG+F+G4, …) to the SAME rank.  This preserves filterRates() pruning:
+    // when rank 0 evaluates LG+G4 and then LG+R2, it can compare against the
+    // already-computed LG+G4 result and prune LG+R3, LG+R4, … as usual.
+    //
+    // Why the old per-model LPT position stripe was wrong:
+    //   stable_sort puts all even-k +Rk models (GTR+I+R10, GTR+I+R8, …) at
+    //   even positions → rank 0 gets them; GTR+I+R9, GTR+I+R7, … (odd-k) go
+    //   to rank 1.  getLowerKModel(GTR+I+R10) returns GTR+I+R9 which is
+    //   MF_IGNORED on rank 0 → filterRates guard fails → pruning never fires
+    //   → every rank evaluates ALL assigned +Rk models without any pruning.
+    //   At np=1 this caused ~2.5× more model evaluations than standard IQ-TREE
+    //   (1,232 evaluated vs ~500 after pruning) and ~3.3× slower MF wall-time.
     if (MPIHelper::getInstance().getNumProcesses() > 1) {
         int my_rank = MPIHelper::getInstance().getProcessID();
         int nranks  = MPIHelper::getInstance().getNumProcesses();
 
-        // Phase 1 — cost-sorted stripe dispatch.
-        //
-        // Problem with plain i%nranks (index-based round-robin):
-        //   1. MF_WAITING: +Rk models (k > min_rate_cats) start as WAITING and
-        //      are promoted only after their +R(k-1) neighbour is evaluated.
-        //      With cross-rank stripping the promoter (+R(k-1)) belongs to a
-        //      different rank that never signals this rank.  Result: most +Rk
-        //      models remain permanently WAITING on each rank → severe load
-        //      imbalance (rank 0 evaluates ~24 models, ranks 1-3 evaluate ~66+).
-        //   2. Cost variation: models with more rate categories (+R10) are ~10×
-        //      slower than base models (JC+""). Plain i%nranks gives equal
-        //      MODEL COUNTS but unequal WORK.
-        //
-        // Fix (two-part):
-        //   A. Build a cost-sorted index (heaviest models first) and assign
-        //      by sorted position mod nranks (LPT-inspired load balancing).
-        //      Cost proxy: rate-category count from rate_name string.
-        //   B. After stripe assignment, clear MF_WAITING on all own models
-        //      so each rank evaluates its full assigned stripe regardless of
-        //      whether the +R(k-1) promoter belongs to another rank.
-        //      Phase 2 MPI_Allreduce gathers the globally correct best model.
-
-        // Step A: build cost estimate and sort by descending cost.
+        // Cost proxy: rate-category count from orig_rate_name.
         auto modelCost = [&](int idx) -> int {
             const string &r = at(idx).orig_rate_name;
-            // +Rk / +I+Rk: cost proportional to k
             for (const char *tag : {"+R", "*R", "+H", "*H", "+I+R", "+I*R"}) {
                 size_t p = r.find(tag);
                 if (p != string::npos && p + strlen(tag) < r.size()
@@ -3501,111 +3488,75 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
             if (r.find("+I+G") != string::npos || r.find("+ASC+G") != string::npos) return 5;
             if (r.find("+G")   != string::npos) return 4;
             if (r.find("+I")   != string::npos) return 2;
-            return 1; // bare substitution model or +ASC
+            return 1;
         };
 
-        vector<int> sorted_idx(num_models);
-        std::iota(sorted_idx.begin(), sorted_idx.end(), 0);
-        // Stable sort: ties preserve generate() order (ensures determinism).
-        stable_sort(sorted_idx.begin(), sorted_idx.end(),
-                    [&](int a, int b){ return modelCost(a) > modelCost(b); });
-
-        // Mark cross-rank models MF_IGNORED based on sorted position.
-        int my_count = 0;
-        for (int p = 0; p < (int)num_models; p++) {
-            if (p % nranks != my_rank)
-                at(sorted_idx[p]).setFlag(MF_IGNORED);
-            else
-                my_count++;
+        // Step A: collect unique subst_names in generate() order; accumulate
+        //         total cost per substitution-model group.
+        vector<string> group_order;
+        map<string, int> group_cost;
+        for (int i = 0; i < (int)num_models; i++) {
+            const string &sn = at(i).subst_name;
+            if (group_cost.find(sn) == group_cost.end()) {
+                group_order.push_back(sn);
+                group_cost[sn] = 0;
+            }
+            group_cost[sn] += modelCost(i);
         }
 
-        // Step B: clear MF_WAITING on all own models so the sequential
-        // evaluation loop is not blocked by the cross-rank promotion chain.
-        // The within-rank getLowerKModel guard (below) still prevents incorrect
-        // pruning; Phase 2 MPI_Allreduce produces the globally correct result.
+        // Step B: LPT — sort groups by descending total cost; assign groups to
+        //         ranks round-robin so heavy groups are spread across ranks.
+        stable_sort(group_order.begin(), group_order.end(),
+                    [&](const string &a, const string &b){
+                        return group_cost[a] > group_cost[b]; });
+        map<string, int> group_rank;
+        for (int p = 0; p < (int)group_order.size(); p++)
+            group_rank[group_order[p]] = p % nranks;
+
+        // Step C: mark cross-rank models MF_IGNORED; clear MF_WAITING on own
+        //         models (generate() sets +Rk models WAITING until their
+        //         +R(k-1) sibling is evaluated — but since all rate variants
+        //         for each subst family go to the same rank, getNextModel()
+        //         will naturally return models in generate() order, so the
+        //         WAITING promotion happens correctly; clearing it proactively
+        //         avoids any residual state from an unrelated previous pass).
+        int my_count = 0;
         for (int i = 0; i < (int)num_models; i++) {
-            if (!at(i).hasFlag(MF_IGNORED))
+            if (group_rank[at(i).subst_name] != my_rank) {
+                at(i).setFlag(MF_IGNORED);
+            } else {
                 at(i).resetFlag(MF_WAITING);
+                my_count++;
+            }
         }
 
         cout << "MF-MPI: rank " << my_rank << "/" << nranks
              << " assigned " << my_count << "/" << num_models
-             << " models (cost-sorted LPT stripe, MF_WAITING cleared)" << endl;
+             << " models (subst-family LPT stripe, filterRates active)" << endl;
     }
 #endif
 
-#ifdef _IQTREE_MPI
-    // Issue 5 fix: evaluateAll() parallelises across models via OMP threads, each
-    // calling evaluate() → initializeModel() → new ModelFactory().  ModelFactory's
-    // constructor may write to the shared model_info (std::map) through the iqtree
-    // checkpoint pointer.  Concurrent std::map writes from multiple OMP threads is
-    // undefined behaviour; on xlarge datasets the collision window is wide enough to
-    // corrupt glibc's tcache → SIGSEGV ("malloc(): unaligned tcache chunk detected").
+    // OMP-across-models path — used by both MPI and non-MPI builds.
     //
-    // Fix: in MPI rank-stripe mode, evaluate models SEQUENTIALLY (no outer OMP
-    // parallel section).  Each sequential evaluate() call is free to use the full
-    // num_threads OMP budget for within-model (site-level) parallelism — the correct
-    // granularity.  The across-rank parallelism is provided by the MPI dispatch itself
-    // (Phase 1 stripes 1/N of the models to each rank).
-    // Always use the sequential evaluation loop in MPI builds regardless of nranks.
-    // This eliminates the OMP data race (ModelFactory writes to shared model_info)
-    // and ensures np=1 and np=N use identical evaluation paths for consistent results.
-    {
-        int64_t model;
-        do {
-            model = getNextModel();
-            if (model == -1)
-                break;
-            string orig_model_name = at(model).getName();
-            ModelCheckpoint out_model_info;
-            at(model).set_name = at(model).aln->name;
-            string tree_string;
-            tree_string = at(model).evaluate(params, model_info, out_model_info,
-                                             models_block, num_threads, brlen_type);
-            at(model).computeICScores();
-            at(model).setFlag(MF_DONE);
-            int lower_model = getLowerKModel(model);
-            if (lower_model >= 0
-                && !at(lower_model).hasFlag(MF_IGNORED)
-                && at(lower_model).getScore() < at(model).getScore()) {
-                for (int higher_model = model; higher_model != -1;
-                    higher_model = getHigherKModel(higher_model)) {
-                    at(higher_model).setFlag(MF_IGNORED);
-                }
-            }
-            if (best_score > at(model).getScore()) {
-                best_score = at(model).getScore();
-                model_info.putSubCheckpoint(&out_model_info, "");
-            }
-            model_info.dump();
-            if (write_info) {
-                cout.width(3);
-                cout << right << model+1 << "  ";
-                cout.width(13);
-                cout << left << at(model).getName() << " ";
-                cout.precision(3);
-                cout << fixed;
-                cout.width(12);
-                cout << -at(model).logl << " ";
-                cout.width(3);
-                cout << at(model).df << " ";
-                cout.width(12);
-                cout << at(model).AIC_score << " ";
-                cout.width(12);
-                cout << at(model).AICc_score << " " << at(model).BIC_score;
-                cout << endl;
-            }
-            if (model >= rate_block)
-                filterRates(model);
-            if (model >= subst_block)
-                filterSubst(model);
-            // Save post-evaluation names for Phase 2 gather (same as OMP path below).
-            model_info.put("mf_subst_" + convertIntToString(model), at(model).subst_name);
-            model_info.put("mf_rate_"  + convertIntToString(model), at(model).rate_name);
-        } while (model != -1);
-    }
-#else
-    // Non-MPI build: use OMP parallel across models (original path).
+    // Each OMP thread grabs one model via getNextModel() (work-stealing) and
+    // evaluates it.  Because nested OMP is off by default, inner omp_parallel
+    // regions inside evaluate() degrade to 1 thread, giving site-level
+    // parallelism at the cost of intra-model barriers.  With ~103 models
+    // running concurrently there are essentially no such barriers — each
+    // thread traverses its own model independently.
+    //
+    // For MPI builds Phase 1 (above) pre-assigned all rate variants for each
+    // substitution-model family to the same rank via MF_IGNORED marking.
+    // This ensures filterRates() pruning is fully effective within each
+    // rank's model set — cheaper rate variants (+G4) are evaluated first and
+    // prune expensive +Rk series early, matching standard IQ-TREE behaviour.
+    //
+    // Race-condition (Issue 5 historical note): evaluate() calls
+    // saveCheckpoint(&in_model_info) which is already guarded by
+    // #pragma omp critical inside evaluate() itself.  The only other write
+    // path (putBool UnreliableParam) is gated on VB_MED verbosity, never
+    // triggered in production.  All other model_info writes in this loop
+    // are inside the #pragma omp critical section below.
     {
 #ifdef _OPENMP
 #pragma omp parallel num_threads(num_threads)
@@ -3693,8 +3644,7 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
 #endif
     } while (model != -1);
     }
-    } // end non-MPI OMP parallel path
-#endif // _IQTREE_MPI
+    } // end OMP-across-models path
     
     // store the best model
     ModelTestCriterion criteria[] = {MTC_AIC, MTC_AICC, MTC_BIC};
@@ -3768,6 +3718,37 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
                 at(i).subst_name = sname;
             if (model_info.getString("mf_rate_"  + convertIntToString(i), rname))
                 at(i).rate_name  = rname;
+        }
+        // Fix pre-gather checkpoint corruption: the "store the best model" block above
+        // wrote best_model_AIC/AICc/BIC and best_score_* from each rank's local MF_DONE
+        // subset (only ~n/nranks models, on whichever starting tree that rank found).
+        // gatherCheckpoint() merges all ranks' checkpoint entries with last-write-wins
+        // semantics, so the highest-numbered rank's stale local-best name silently
+        // overwrites master's correct value (e.g. "SYM+I+R2" replaces "GTR+R4" for np4).
+        // Now that all n models have post-Allreduce globally-correct scores and
+        // post-evaluation names restored from checkpoint, re-write all criteria keys and
+        // rebuild the full model_list (replaces the rank-local partial list, e.g. 23 models
+        // for one rank's +I+R2 stripe vs the full 968-model view).
+        {
+            const ModelTestCriterion all_criteria[] = {MTC_AIC, MTC_AICC, MTC_BIC};
+            for (auto mtc : all_criteria) {
+                int bm = getBestModelID(mtc);
+                model_info.put("best_model_" + criterionName(mtc), at(bm).getName());
+                model_info.put("best_score_" + criterionName(mtc), at(bm).getScore(mtc));
+            }
+            // Rebuild model_list from all n gathered models sorted by active criterion score.
+            multimap<double,int> global_sorted;
+            for (int i = 0; i < n; i++)
+                global_sorted.insert(multimap<double,int>::value_type(at(i).getScore(), i));
+            string global_list;
+            for (auto it = global_sorted.begin(); it != global_sorted.end(); it++) {
+                if (it != global_sorted.begin()) global_list += " ";
+                global_list += at(it->second).getName();
+            }
+            model_info.putBestModelList(global_list);
+            // Re-dump to persist the corrected keys to .model.gz.
+            // Workers have setFileName("") so their dump() is a no-op.
+            model_info.dump();
         }
         cout << "MF-MPI: gather complete, " << n << " model scores consolidated" << endl;
     }
