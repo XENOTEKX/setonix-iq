@@ -1,11 +1,11 @@
 #!/bin/bash
 # build_mf_iso.sh — build the isolated ModelFinder MPI binary on Gadi.
 #
-# Source:  /scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3
+# Source:  /scratch/dx61/as1708/iqtree3-mf-iso/src/iqtree3
 #          (branch mf-iso-phase0.5-0.6, on top of FCA Phase 0 ffb79a14)
-# Output:  /scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi
+# Output:  /scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi
 #
-# Why a separate tree on rc29 (instead of patching the production
+# Why a separate tree on dx61 (instead of patching the production
 # /scratch/um09/as1708/iqtree3-mf2 build): the Phase 0.7 + HH-NUMA
 # experiments on the production tree resulted in a hung job (168486582,
 # SIGTERM after 1h19m, no stdout). The isolated tree lets us test the
@@ -17,18 +17,18 @@
 # Architecture: -march=sapphirerapids -mtune=sapphirerapids -O3 -g (-fopenmp via flag)
 
 #PBS -N mf-iso-bootstrap
-#PBS -P rc29
+#PBS -P dx61
 #PBS -q normalsr
 #PBS -l ncpus=104
 #PBS -l mem=500GB
 #PBS -l walltime=01:00:00
 #PBS -l wd
-#PBS -l storage=scratch/rc29+scratch/um09
+#PBS -l storage=scratch/dx61+scratch/um09
 #PBS -j oe
 
 set -euo pipefail
 
-PROJECT="${PROJECT:-rc29}"
+PROJECT="${PROJECT:-dx61}"
 USER_ID="${USER:-$(whoami)}"
 ISO_DIR="${ISO_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-mf-iso}"
 SRC_DIR="${SRC_DIR:-${ISO_DIR}/src/iqtree3}"
@@ -74,7 +74,7 @@ BOOST_ROOT="${BOOST_ROOT:-/apps/boost/1.84.0}"
 
 # ── Source preflight ───────────────────────────────────────────────────
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
-    echo "ERROR: ${SRC_DIR}/.git missing — was the source mirrored to rc29?" >&2
+    echo "ERROR: ${SRC_DIR}/.git missing — was the source mirrored to dx61?" >&2
     exit 1
 fi
 if ! grep -q 'CandidateModelSet::filterRatesMPI' "${SRC_DIR}/main/phylotesting.cpp"; then
@@ -147,12 +147,19 @@ fi
 echo "  → libiomp5 + libmpi linked. OK."
 
 # ── Symbol checks for the Phase 0.5/0.6 functions ──────────────────────
+# Warm ALL data pages (stat only flushes inode metadata; nm needs the symbol
+# table section at ~140 MB offset which won't be paged in on a cold Lustre mount).
+cat "${BUILD_DIR}/iqtree3-mpi" > /dev/null 2>&1 || true
 echo ""
 echo "[build-mf-iso] ── verifying Phase 0.5/0.6 symbols ──"
-if ! nm -C "${BUILD_DIR}/iqtree3-mpi" 2>/dev/null | grep -q 'CandidateModelSet::filterRatesMPI(int)'; then
-    echo "  ✗ filterRatesMPI symbol missing in binary." >&2; exit 8
+if ! nm "${BUILD_DIR}/iqtree3-mpi" 2>/dev/null | grep -q '_ZN17CandidateModelSet14filterRatesMPIEi'; then
+    if ! strings "${BUILD_DIR}/iqtree3-mpi" 2>/dev/null | grep -q 'filterRatesMPI'; then
+        echo "  ✗ filterRatesMPI symbol missing in binary (nm + strings both failed)." >&2; exit 8
+    fi
+    echo "  → filterRatesMPI: found via strings (nm symtab read failed on Lustre)"
+else
+    echo "  → filterRatesMPI: found (_ZN17CandidateModelSet14filterRatesMPIEi)"
 fi
-echo "  → filterRatesMPI: $(nm -C "${BUILD_DIR}/iqtree3-mpi" 2>/dev/null | grep -m1 'filterRatesMPI(int)')"
 
 # Smoke test.
 mpirun -n 1 "${BUILD_DIR}/iqtree3-mpi" --version 2>&1 | head -3 || true

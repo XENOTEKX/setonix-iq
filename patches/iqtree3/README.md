@@ -55,6 +55,44 @@ See [avx512-audit.md](../../docs/avx512-audit.md) for full analysis.
 
 ---
 
+### `0003-mf-fca-dispatch.patch` — FCA ModelFinder MPI dispatch
+
+**Apply on top of `gadi-spr-r2-avx512` HEAD (commit `257485e5`, Fix H).**
+
+Replaces the Fix A subst-family round-robin LPT stripe + Fix C `rate_block`
+recompute with a single-pass FCA (Family-Local + Cost-Aware + Always-Filter)
+design that closes the np=4 AA 100K regression (2,335 s → projected ~100 s).
+
+| File | Change |
+|------|--------|
+| `main/phylotesting.cpp` | (1) closed-form cost predictor: `nstates² · npat · rate_mult · freq_mult · log2(ntaxa)`; (2) greedy LPT (argmin rank_load) replaces round-robin; (3) per-rank state machine `mpi_ref_remaining` replaces `model >= rate_block` trigger; (4) `MF-MPI-DIAG:` log lines per rank |
+
+Why FCA fixes np=4: the old `modelCost` lambda ignored `subst_name` entirely,
+so +F (ML frequency) variants — empirically ~3× heavier than +FC/+FQ/+FU —
+were not weighted in LPT and concentrated on one rank. The new `freq_mult`
+weight at 3.0 spreads +F families across all ranks. Independently, the
+state-machine trigger eliminates Fix C's fragile `rate_block` cliff (Block-2
+vs Block-3 ordering races from `generate()` `auto_model` block layout).
+
+Expected effect on AA 100K (SPR 2×52T), pending T1–T3 PBS validation:
+
+| Config       | Fix A–H actual | FCA projected | Speedup |
+|--------------|---------------:|--------------:|--------:|
+| np=1         | 1,289 s        |   ≤ 400 s     |   3.2×  |
+| np=2         |   475 s        |   ≤ 175 s     |   2.7×  |
+| **np=4**     | **2,335 s ⚠** |   **≤ 100 s** |  **23×** |
+
+Backwards-compatible: non-MPI builds and np=1 MPI keep the legacy
+`model >= rate_block` trigger path. Diagnostic logging is always on for
+MPI np>1, with `verbose_mode >= VB_MED` adding per-trigger detail lines.
+
+Build verified at commit `ffb79a14` on branch `gadi-spr-r2-mf-fca`
+(icpx 2025.1.1 + OpenMPI 4.1.7, Gadi login). Full design rationale, phased
+implementation plan, and risk register at
+[`research/updated-modelfinder-dispatch.md`](../../research/updated-modelfinder-dispatch.md).
+
+---
+
 ## How to Apply
 
 ```bash
@@ -69,6 +107,12 @@ git am 0001-r1r2-numa-first-touch.patch
 # Option B — NUMA + AVX-512 (R1+R2 + P2+P3):
 git am 0001-r1r2-numa-first-touch.patch
 git am 0002-p2p3-avx512-cmake-kernel.patch
+
+# Option C — NUMA + AVX-512 + FCA dispatch (R1+R2 + P2+P3 + Fix A–H + MF-FCA):
+# Note: Fix A–H stack lives in branch gadi-spr-r2-avx512 (not as patches);
+#       0003 below applies on top of that branch's HEAD (commit 257485e5).
+git checkout gadi-spr-r2-avx512
+git am 0003-mf-fca-dispatch.patch
 ```
 
 Then build with:
@@ -98,7 +142,8 @@ These patches were generated from local branches on top of `v3.1.2`:
 | Branch | Commits above v3.1.2 | Contents |
 |--------|----------------------|----------|
 | `gadi-spr-r2-numa` | 1 | R1 + R2 NUMA first-touch |
-| `gadi-spr-r2-avx512` | 2 | R1 + R2 + P2 + P3 AVX-512 |
+| `gadi-spr-r2-avx512` | 2 + 9 (Fix A–H) | R1 + R2 + P2 + P3 AVX-512 + ModelFinder MPI Fix A–H (HEAD `257485e5`) |
+| `gadi-spr-r2-mf-fca` | `gadi-spr-r2-avx512` + 1 | FCA dispatch (`ffb79a14`); supersedes Fix A + Fix C |
 
 The `iqtree3` upstream is `https://github.com/iqtree/iqtree3.git`.
 To push branches there you would need a fork and PR.

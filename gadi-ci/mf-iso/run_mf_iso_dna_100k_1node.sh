@@ -1,30 +1,23 @@
 #!/bin/bash
-# run_mf_iso_aa_100k_1node.sh — IQ-TREE3 MF-iso ModelFinder benchmark, 1-node MPI.
+# run_mf_iso_dna_100k_1node.sh — IQ-TREE3 MF-iso ModelFinder benchmark, 1-node MPI.
 #
-# AA, 100K sites (100 taxa), 1 MPI rank × 103 OpenMP threads.
+# DNA, 100K sites (100 taxa), 1 MPI rank × 103 OpenMP threads.
 #
 # PURPOSE
 #   Establish a Phase 0.5/0.6 ModelFinder baseline at np=1 (where FCA is
-#   a no-op — both runs hit the same Amdahl-limited sequential outer loop)
-#   to confirm correctness BEFORE scaling to 2-node. The np=1 wall is
-#   ~1,289 s (Fix H) / ~1,277 s (Phase 0); we expect this run to land in
-#   the same band.
+#   a no-op) to confirm correctness BEFORE scaling to 2-node.  At np=1,
+#   both mf-iso and the standard binary should give the same lnL.
 #
-# ISOLATION KEY: --m TESTONLY stops after the ModelFinder phase. This
-# saves the ~700 s tree-search tail and gives us per-iteration debug
-# turnaround of ~22 min instead of ~33 min on this dataset.
+# ISOLATION KEY: --m TESTONLY stops after the ModelFinder phase.
+#
+# EXPECTED_LNL: TBD — run run_baseline_dna_100k_spr.sh first, then update
+#   the EXPECTED_LNL constant in the Python block below.
 #
 # Binary:  /scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi
-#          (branch mf-iso-phase0.5-0.6, on top of FCA Phase 0 ffb79a14)
+#          (branch mf-iso-phase0.5-0.6)
 # Parity:  OMP_PER_RANK=103, numactl --localalloc, KMP_BLOCKTIME=200, seed=1
-#          — exact match to run_cpu_bench_aa_100k_mf2_1node.sh
-#
-# Build tag:    mf_iso_phase0.5_0.6_icx_avx512_mftime
-# Expected lnL: −7,541,976.860  (bit-identical to 168425673 / 168422809)
-#
-# Group:   mf_iso_scaling  (1-node, 2-node — 4-node only after 2-node passes)
 
-#PBS -N mf-iso-aa-100k-1n
+#PBS -N mf-iso-dna-100k-1n
 #PBS -P dx61
 #PBS -q normalsr
 #PBS -l ncpus=104
@@ -43,7 +36,7 @@ USER_ID="${USER:-$(whoami)}"
 REPO_DIR="${REPO_DIR:-${HOME}/setonix-iq}"
 ISO_DIR="${ISO_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-mf-iso}"
 IQTREE="${IQTREE:-${ISO_DIR}/build-mpi-iso/iqtree3-mpi}"
-ALIGNMENT="${ALIGNMENT:-/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy}"
+ALIGNMENT="${ALIGNMENT:-/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy}"
 RUNS_DIR="${REPO_DIR}/logs/runs"
 PROFILES_DIR="/scratch/${PROJECT}/${USER_ID}/mf_iso/profiles"
 
@@ -51,11 +44,11 @@ NRANKS=1
 OMP_PER_RANK="${OMP_PER_RANK:-103}"
 TOTAL_THREADS=$(( NRANKS * OMP_PER_RANK ))
 SEED="${SEED:-1}"
-DATA_TYPE="AA"
-DATASET_SHORT="complex_aa_100k"
+DATA_TYPE="DNA"
+DATASET_SHORT="complex_dna_100k"
 
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"; PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
-LABEL="AA_100k_mfiso_np1_seed${SEED}"
+LABEL="DNA_100k_mfiso_np1_seed${SEED}"
 RUN_ID="gadi_${LABEL}_${PBS_ID_SHORT}"
 WORK_DIR="${PROFILES_DIR}/${LABEL}_${PBS_ID_SHORT}"
 
@@ -78,16 +71,6 @@ fi
 if ldd "${IQTREE}" 2>/dev/null | grep -q 'libgomp'; then
     echo "ERROR: ${IQTREE} links libgomp — expected libiomp5." >&2; exit 6
 fi
-# Verify the binary is fully readable on this OST before running the symbol scan.
-# Root cause of past failures: binary was copied on the login node and submitted
-# before Lustre flushed the dirty pages to the OST (~2 min write-back lag).
-# ldd reads only the first ~4 KB (ELF dynamic section) and passes even when the
-# rest of the 140 MB file is not yet visible from the compute node. nm and strings
-# need all 140 MB, so they fail — silently, because we had '|| true' on the cat.
-# FIX: make the cat error visible with a clear diagnostic, and downgrade the
-# nm/strings check to WARNING-only (ldd already confirmed MPI+libiomp5 build;
-# the post-run lnL check validates correctness).
-# MITIGATION: run 'sync' on the login node immediately after cp/build before submitting.
 if ! cat "${IQTREE}" > /dev/null; then
     echo "ERROR: ${IQTREE} not readable on this node (Lustre OST not yet synced?)." >&2
     echo "       On the login node: run 'sync' after copying the binary, then resubmit." >&2
@@ -119,14 +102,14 @@ OMP_ENV=(
 )
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  AA 100K MF-iso Benchmark — 1-node, ModelFinder only (-m TESTONLY)"
+echo "║  DNA 100K MF-iso Benchmark — 1-node, ModelFinder only (-m TESTONLY)"
 echo "║  run_id:       ${RUN_ID}"
 echo "║  ranks × OMP: ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS}T)"
 echo "║  binary:       $(basename "${IQTREE}")"
 echo "║  alignment:    $(basename "${ALIGNMENT}")"
 echo "║  work_dir:     ${WORK_DIR}"
 echo "║  branch:       mf-iso-phase0.5-0.6"
-echo "║  baseline ref: 168425673 (MF ~405 s, total 1,169.556 s)"
+echo "║  baseline ref: run_baseline_dna_100k_spr.sh (EXPECTED_LNL TBD)"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -135,13 +118,10 @@ echo ""
 probe_hw_sw "${IQTREE}"
 probe_env
 
-# Per-rank binding probe wrapper (prints RANK-PROBE: lines on stderr).
 RANK_PROBE="${REPO_DIR}/gadi-ci/mf-iso/tools/rank_probe.sh"
 [[ -x "${RANK_PROBE}" ]] || { echo "ERROR: rank_probe.sh not found at ${RANK_PROBE}" >&2; exit 9; }
 
 # ── ModelFinder-only run ──────────────────────────────────────────────
-# `-m TESTONLY` runs ModelFinder and exits BEFORE tree reconstruction —
-# saves ~700 s on this dataset, gives ~3× faster debug iteration.
 echo "[1node] ModelFinder-only run, ${NRANKS} rank × ${OMP_PER_RANK} OMP"
 START_EPOCH=$(date +%s)
 
@@ -158,30 +138,21 @@ IQRC=$?
 END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
 
-# Extract RANK-PROBE and OpenMPI --report-bindings lines from stderr.
 grep -E '^RANK-PROBE: |\[.*\]' "${WORK_DIR}/iqtree_run.bindings.log" > "${WORK_DIR}/rank_bindings.log" 2>/dev/null || true
 
-# Always echo the run log to job stdout so PBS .o file is self-contained.
 cat "${WORK_DIR}/iqtree_run.log" || true
 echo ""
 echo "[1node] done: rc=${IQRC} wall=${WALL}s"
 
-# Extract MF-TIME markers for downstream analysis (they're already in the
-# main log but a flat per-line dump is easier for grep/awk).
-grep -E '^MF-TIME: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_time.log" || true
-grep -E '^MF-MPI-DIAG: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_diag.log" || true
-grep -E '^PROBE: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/probe.log" 2>/dev/null || true
+grep -E '^MF-TIME: '     "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_time.log"  || true
+grep -E '^MF-MPI-DIAG: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_diag.log"  || true
+grep -E '^PROBE: '        "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/probe.log"    2>/dev/null || true
 
-# Per-rank model list summary (rank 0 only at np=1).
-# Each MF-TIME line carries the model index + name + subst family.
 {
     echo "# rank, model_idx, model_name, subst, rate, dt_seconds, ref_remaining"
     awk -F' ' '
     /^MF-TIME: rank / {
-        for (i=1; i<=NF; i++) {
-            split($i, kv, "=");
-            v[kv[1]] = kv[2];
-        }
+        for (i=1; i<=NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2]; }
         printf "%s, %s, %s, %s, %s, %s, %s\n",
             v["rank"], v["model"], v["name"], v["subst"], v["rate"], v["dt"], v["ref_remaining"];
     }' "${WORK_DIR}/mf_time.log"
@@ -215,7 +186,6 @@ if os.path.isfile(log):
         m = re.search(r"Best-fit model:\s+(\S+)", line)
         if m: best_model = m.group(1)
 
-# Per-rank MF-TIME aggregation.
 mf_time_log = os.path.join(work, "mf_time.log")
 per_rank = {}
 if os.path.isfile(mf_time_log):
@@ -224,7 +194,6 @@ if os.path.isfile(mf_time_log):
         if not m: continue
         r = int(m.group(1)); dt = float(m.group(2))
         per_rank.setdefault(r, []).append(dt)
-
 mf_time_summary = {
     f"rank_{r}": {"n_models": len(v), "total_eval_s": round(sum(v),3),
                   "mean_s": round(sum(v)/len(v),3) if v else None,
@@ -232,12 +201,18 @@ mf_time_summary = {
     for r, v in sorted(per_rank.items())
 }
 
-EXPECTED_LNL = -7541976.860
+# Prior SPR full-run reference (job 168425674, standard binary, 103T SPR, seed=1):
+#   lnL -5692984.539, F81+F+G4, MF wall 61.740 s
+# TESTONLY lnL (NJ tree) vs full-run lnL (SPR tree) can differ by < 1.0 unit.
+# Update to the run_baseline_dna_100k_spr.sh TESTONLY result once available.
+EXPECTED_LNL = -5692984.539
+
 verify = []
-if rep_ll is not None:
+if rep_ll is not None and EXPECTED_LNL is not None:
     diff = abs(rep_ll - EXPECTED_LNL)
-    verify.append({"file": os.path.basename(alignment), "status": "pass" if diff < 0.1 else "fail",
-                   "expected": EXPECTED_LNL, "reported": rep_ll, "diff": round(diff, 6)})
+    verify.append({"file": os.path.basename(alignment), "status": "pass" if diff < 1.0 else "fail",
+                   "expected_spr_ref": EXPECTED_LNL, "reported": rep_ll, "diff": round(diff, 6),
+                   "note": "NJ-tree TESTONLY lnL vs SPR-tree full-run ref; tol=1.0"})
 
 record = {
     "run_id": rid, "label": label,
@@ -246,10 +221,8 @@ record = {
     "data_type": "${DATA_TYPE}", "seq_len": 100000, "n_taxa": 100,
     "threads": threads, "seed": ${SEED},
     "model_finder_only": True,
-    "timing": [{
-        "command": f"mpirun -np {nranks} numactl --localalloc iqtree3-mpi -s alignment_100000.phy -m TESTONLY -T {omp_per_rank} -seed ${SEED}",
-        "time_s": iqwall if iqwall is not None else wall,
-    }],
+    "timing": [{"command": f"mpirun -np {nranks} numactl --localalloc iqtree3-mpi -s alignment_100000.phy -m TESTONLY -T {omp_per_rank} -seed ${SEED}",
+                "time_s": iqwall if iqwall is not None else wall}],
     "verify": verify,
     "summary": {
         "pass": 1 if iqrc == 0 else 0, "fail": 0 if iqrc == 0 else 1,
@@ -262,9 +235,7 @@ record = {
     "env": {
         "hostname": sh("hostname"), "date": sh("date -Iseconds"),
         "cpu": sh("lscpu | grep 'Model name' | head -1 | cut -d: -f2- | xargs"),
-        "cores": int(sh("nproc","0") or 0), "kernel": sh("uname -r"),
-        "omp": {"proc_bind": "close", "places": "cores", "kmp_blocktime": 200,
-                "wait_policy": "PASSIVE", "numactl": "--localalloc"},
+        "cores": int(sh("nproc","0") or 0),
         "iqtree_binary": ibin,
         "iqtree_version": sh(f"{ibin} --version 2>&1 | head -1"),
         "mpi_nranks": nranks,
@@ -276,12 +247,14 @@ record = {
     "build_tag":     "mf_iso_phase0.5_0.6_icx_avx512_mftime",
     "branch":        "mf-iso-phase0.5-0.6",
     "non_canonical": True,
-    "non_canonical_label": "MF-iso Phase 0.5+0.6 (filterRatesMPI Bcast + getNextModel ref-priority + MF-TIME) · ICX+MPI · AVX-512",
+    "non_canonical_label": "MF-iso Phase 0.5+0.6 · ICX+MPI · AVX-512",
     "group":         "mf_iso_scaling",
 }
 out_path = os.path.join(runs, rid + ".json")
 json.dump(record, open(out_path,"w"), indent=2, default=str)
 print(f"[1node] wrote {out_path}")
+print(f"[1node] lnL      = {rep_ll}")
+print(f"[1node] best_mdl = {best_model}")
 PYEOF
 
 echo "[1node] done."

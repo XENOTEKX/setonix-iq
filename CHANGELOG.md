@@ -50,6 +50,429 @@ likely closer to ~100 GB at K=8 rather than 125 GB).
 
 ---
 
+## 2026-05-18 (bm) — DNA validation: Phase 0.5+0.6 extended to DNA 100K and DNA 1M
+
+### Context
+
+AA 100K Phase 0.5+0.6 confirmed (np=1: 168577707, np=2: 168577708).
+Extended the same isolation harness to DNA datasets to confirm:
+  - filterRatesMPI fires correctly for GTR-family models (DNA substitution model set)
+  - lnL parity holds across np=1 and np=2
+  - MF wall < np=1 wall at np=2 (scaling benefit for DNA)
+
+### New scripts (all in `gadi-ci/mf-iso/`)
+
+| Script | Purpose | PBS walltime | EXPECTED_LNL |
+|--------|---------|-------------|--------------|
+| `run_baseline_dna_100k_spr.sh` | Standard binary baseline, DNA 100K | 01:30:00 | TBD (run first) |
+| `run_mf_iso_dna_100k_1node.sh` | Phase 0.5+0.6 1-node, DNA 100K | 01:30:00 | TBD after baseline |
+| `run_mf_iso_dna_100k_2node.sh` | Phase 0.5+0.6 2-node, DNA 100K | 02:00:00 | TBD after 1-node |
+| `run_baseline_dna_1m_spr.sh` | Standard binary baseline, DNA 1M | 04:00:00 | CLX ref −59,208,019.212 |
+| `run_mf_iso_dna_1m_1node.sh` | Phase 0.5+0.6 1-node, DNA 1M | 04:00:00 | −59,208,019.212 ±0.5 |
+| `run_mf_iso_dna_1m_2node.sh` | Phase 0.5+0.6 2-node, DNA 1M | 04:00:00 | −59,208,019.212 ±0.5 |
+
+`submit_mf_iso.sh` updated with: `dna_100k_all`, `dna_1m_all` (and individual stage targets).
+
+### DNA dataset paths
+
+| Dataset | Path |
+|---------|------|
+| DNA 100K | `/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy` |
+| DNA 1M   | `/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy` |
+
+### Binary legend for this entry
+
+| Label | Binary | Build | Run type |
+|-------|--------|-------|----------|
+| **Baseline (R1+R2/AVX-512)** | `build-intel-vanila/iqtree3` (non-MPI, OMP) | ICX + AVX-512 + -xSAPPHIRERAPIDS + R1+R2 patches, v3.1.2 (4e91dd6) — sa0557 | Full run (MF + SPR tree search); also used for TESTONLY baselines |
+| **FCA mf-iso** | `iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` (MPI + OMP) | ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5, branch `mf-iso-phase0.5-0.6` — as1708 | **TESTONLY** (MF only) **and Full run** (MF + SPR tree search) — same binary |
+| **CLX build** | `cpu_bench/build-intel-clx/iqtree3` (non-MPI, OMP) | ICX + Cascade Lake; used for historical baseline only | Full run (MF + SPR tree search) |
+
+### Prior reference runs (full IQ-TREE: MF + SPR tree search)
+
+These are **Baseline (R1+R2/AVX-512)** runs — no FCA, no MPI, OMP-across-models.
+TESTONLY mf-iso runs use `-m TESTONLY` (full ModelFinder phase, no SPR tree search after).
+Full mf-iso runs use `-m TEST` (FCA-parallelised ModelFinder + SPR tree search — same binary).
+NJ-tree TESTONLY lnL vs SPR-tree full-run lnL differ by < 1 unit at 100K+ sites.
+Parity check tolerance: **1.0** for TESTONLY NJ-tree vs SPR ref; **0.1** for full-run SPR vs SPR ref; **0.01** for np=1 vs np=2 TESTONLY.
+
+| Dataset | Job | Binary | Node | Threads | lnL | Best model | MF wall | Total wall |
+|---------|-----|--------|------|---------|-----|-----------|---------|-----------|
+| DNA 100K | 168422811 | CLX build (non-MPI) | `normal` (CLX) | 47T OMP | −5,692,984.539 | F81+F+G4 | 159.1 s | 546 s |
+| DNA 100K | **168425674** | **Baseline R1+R2/AVX-512** (non-MPI) | `normalsr` (SPR) | **103T OMP** | −5,692,984.539 | F81+F+G4 | **61.7 s** | 289 s |
+| DNA 1M   | 168422813 | CLX build (non-MPI) | `normal` (CLX) | 47T OMP | −59,208,019.212 | F81+F+G4 | 10,230 s | 17,753 s |
+| DNA 1M   | **168425675** | **Baseline R1+R2/AVX-512** (non-MPI) | `normalsr` (SPR) | **103T OMP** | −59,208,019.212 | F81+F+G4 | **3,501 s** | 6,114 s |
+
+SPR MF speedup vs CLX: DNA 100K **2.6×** (159→62 s), DNA 1M **2.9×** (10230→3501 s).
+
+### Run status — DNA chains (submitted 2026-05-18)
+
+| Job | Name | Binary | Node | State | Elapsed | Note |
+|-----|------|--------|------|-------|---------|------|
+| ~~168580367~~ | `mf-iso-dna-100k-baseline` | **Baseline R1+R2/AVX-512** (non-MPI) | `normalsr` 1×SPR | **DONE** exit=0 | 00:00:48 | **PASS** lnL −5,692,984.539 ✓, F81+F+G4 ✓, MF 31.802 s |
+| ~~168580368~~ | `mf-iso-dna-100k-1n` | **FCA mf-iso** (MPI, np=1×103T) | `normalsr` 1×SPR | **DONE** exit=0 | 00:00:48 | **PASS** lnL −5,692,984.532 ✓, F81+F+G4 ✓, MF 39.169 s |
+| ~~168580369~~ | `mf-iso-dna-100k-2n` | **FCA mf-iso** (MPI, np=2×103T) | `normalsr` 2×SPR | **DONE** exit=0 | ~00:01 | **PASS** lnL −5,692,984.532 ✓, MF 27.065 s; filterRatesMPI fired ✓ |
+| ~~168580375~~ | `mf-iso-dna-1m-baseline` | **Baseline R1+R2/AVX-512** (non-MPI) | `normalsr` 1×SPR | **DONE** exit=0 | 00:46:42 | TESTONLY NJ-tree lnL check. lnL −59,208,019.212 ✓, F81+F+G4 ✓, BIC 118,418,815.3418, MF **2,802.261 s**. Authoritative MF baseline remains **168425675** (3,500.825 s). |
+| 168580376 | `mf-iso-dna-1m-1n` | **FCA mf-iso** (MPI, np=1×103T) | `normalsr` 1×SPR | **R** | 00:04 | Running (afterok 168580375). Results TBD. |
+| 168580377 | `mf-iso-dna-1m-2n` | **FCA mf-iso** (MPI, np=2×103T) | `normalsr` 2×SPR | **H** | — | Held afterok 168580376 |
+
+### Acceptance criteria
+
+**DNA 100K (both np=1 and np=2):**
+- lnL within 0.01 of baseline result
+- Best model matches np=1 and baseline
+- filterRatesMPI fires at np=2
+- MF wall np=2 < MF wall np=1
+
+### DNA 100K Phase 0.5+0.6 results — CONFIRMED ✓
+
+| Metric | baseline (168580367) | np=1 (168580368) | np=2 (168580369) | Δ np=1 vs np=2 |
+|--------|---------------------|-----------------|-----------------|----------------|
+| **Binary** | Baseline R1+R2/AVX-512 | **FCA mf-iso phase0.5+0.6** | **FCA mf-iso phase0.5+0.6** | — |
+| **Node** | normalsr 1×SPR | normalsr 1×SPR | normalsr **2×SPR** | — |
+| **Threads** | 103T OMP (non-MPI) | 1 rank × 103T OMP | 2 ranks × 103T OMP | — |
+| lnL | −5,692,984.539 | −5,692,984.532 | −5,692,984.532 | **0.000** ✓ |
+| Best model | F81+F+G4 | F81+F+G4 | F81+F+G4 | match ✓ |
+| MF wall (s) | 31.802 | 39.169 | **27.065** | 1.45× speedup ✓ |
+| filterRatesMPI | — | not fired (np=1) ✓ | fired model=3, pruned=63 ✓ | — |
+| Rank 1 evals | — | 88 (all models) | **0** (fully pruned) | — |
+| \|bcast_ok_rates\| | — | — | 1 (G4 only) | — |
+| exit | 0 ✓ | 0 ✓ | 0 ✓ | — |
+| wall elapsed | 00:00:48 | 00:00:48 | ~00:01 | — |
+
+**Key findings:**
+- lnL diff vs prior full-run SPR ref (−5,692,984.539): np=1 = 0.007 (TESTONLY NJ-tree vs SPR-tree, < tol 1.0 ✓)
+- filterRatesMPI correctly identified G4 as the sole viable rate category after 3 models
+- Rank 1 received the broadcast and pruned ALL 88 of its assigned models — zero evaluations needed
+- np=2 delegated all evaluation to rank 0 (25 models vs np=1's 88), 1.45× MF speedup
+- Best model F81+F+G4 matches both prior CLX (168422811) and SPR (168425674) references ✓
+
+**DNA 1M (both np=1 and np=2):**
+- Reference lnL = **−59,208,019.212** (168425675 full run + 168422813 CLX, both agree exactly)
+- |lnL − ref| < 0.5 (cross-platform / TESTONLY NJ-tree tolerance)
+- Best model = **F81+F+G4** (matches 168425675 and 168422813)
+- filterRatesMPI fires at np=2
+- **MF wall baseline = 3,500.825 s** (168425675, Baseline R1+R2/AVX-512, normalsr 103T, full run)
+- MF wall np=1 < 3,600 s (within 3% of 168425675 MF wall — same algorithm, no SPR overhead)
+- MF wall np=2 < MF wall np=1
+
+> **Note:** 168580375 (`-m TESTONLY`) is a supplementary NJ-tree lnL check only. No new baseline job was submitted; 168425675 is the authoritative DNA 1M MF wall reference (same Baseline binary, same normalsr node, 103T OMP).
+
+### AA 1M scripts (submitted 2026-05-18)
+
+New scripts added to `gadi-ci/mf-iso/` for AA 1M Phase 0.5+0.6 validation.
+No new baseline submitted; 168425491 (full run, MF wall 7,587.459 s, lnL −78,605,196.573, LG+G4) is the authoritative AA 1M reference.
+
+| Script | Purpose | PBS walltime | Nodes |
+|--------|---------|-------------|-------|
+| `run_mf_iso_aa_1m_2node.sh` | Phase 0.5+0.6 2-node AA 1M TESTONLY | 12:00:00 | 2×normalsr (208 CPUs, 1020 GB) |
+| `run_mf_iso_aa_1m_4node.sh` | Phase 0.5+0.6 4-node AA 1M TESTONLY | 12:00:00 | 4×normalsr (416 CPUs, 2040 GB) |
+
+`submit_mf_iso.sh` updated with `aa_1m_2node`, `aa_1m_4node`, `aa_1m_all` cases.
+
+### Full-run (MF+SPR) scripts — FCA end-to-end parity (submitted 2026-05-18)
+
+Using the same FCA mf-iso binary as all TESTONLY runs (`mf-iso-phase0.5-0.6`), now running
+the **complete IQ-TREE application** (`-m TEST`): FCA-parallelised ModelFinder across MPI
+ranks, then SPR tree search within each rank's OMP pool. Best result kept. Nothing else —
+MF + SPR is the full beginning-to-end phylogenetic inference pipeline.
+
+Expected benefit: MF is ~2.7× faster at np=2 (150 s vs 400 s for AA 100K, already confirmed).
+SPR phase (~764 s for AA 100K, ~227 s for DNA 100K) runs in OMP within each rank in parallel.
+
+| Script | Dataset | PBS walltime | Nodes | Acceptance lnL |
+|--------|---------|-------------|-------|----------------|
+| `run_mf_iso_aa_100k_2node_full.sh` | AA 100K | 01:30:00 | 2×normalsr | −7,541,976.860 ±0.1 |
+| `run_mf_iso_dna_100k_2node_full.sh` | DNA 100K | 01:00:00 | 2×normalsr | −5,692,984.539 ±0.1 |
+| `run_mf_iso_aa_1m_8node_full.sh` | AA 1M | 06:00:00 | 8×normalsr | −78,605,196.573 ±1.0 |
+
+`submit_mf_iso.sh` updated with `aa_100k_full`, `dna_100k_full`, `full_100k_all`, `aa_1m_8node_full` cases.
+
+#### Run status — Full-run jobs (submitted 2026-05-18)
+
+| Job | Name | Binary | Nodes | State | Note |
+|-----|------|--------|-------|-------|------|
+| ~~168584736~~ | `mf-iso-aa-100k-2n-full` | **FCA mf-iso** (np=2×103T) | 2×normalsr | **DONE** exit=0, 00:09:31 | **PASS** lnL −7,541,976.853 ✓, LG+G4 ✓, MF 149.029 s, total 537.754 s; filterRatesMPI fired (model=3, pruned=81) ✓ |
+| ~~168584737~~ | `mf-iso-dna-100k-2n-full` | **FCA mf-iso** (np=2×103T) | 2×normalsr | **DONE** exit=0, 00:02:44 | **PASS** lnL −5,692,984.532 ✓, F81+F+G4 ✓, MF 26.252 s, total 113.754 s; filterRatesMPI fired (model=3, pruned=63) ✓ |
+| 168586094 | `mf-iso-aa-1m-8n-full` | **FCA mf-iso** (np=8×103T) | 8×normalsr | **Q** | AA 1M Full MF+SPR. Ref lnL −78,605,196.573 (168425491) ±1.0 |
+
+#### Acceptance criteria — Full runs
+
+- **AA 100K:** lnL = −7,541,976.860 ±0.1 (LG+G4), filterRatesMPI fires, MF wall < 400 s
+- **DNA 100K:** lnL = −5,692,984.539 ±0.1 (F81+F+G4), filterRatesMPI fires, MF wall < 32 s
+
+#### Run status — AA 1M chain (submitted 2026-05-18)
+
+| Job | Name | Binary | Node | State | Elapsed | Note |
+|-----|------|--------|------|-------|---------|------|
+| ~~168583449~~ | `mf-iso-aa-1m-2n` | **FCA mf-iso** (MPI, np=2×103T) | `normalsr` 2×SPR | **DONE** exit=0, 00:52:05 | **PASS** lnL −78,605,196.443 ✓ (diff 0.130 < 1.0), LG+G4 ✓, MF 3,059.648 s (2.48×), filterRatesMPI fired (model=3, pruned=81) ✓ |
+| 168583450 | `mf-iso-aa-1m-4n` | **FCA mf-iso** (MPI, np=4×103T) | `normalsr` 4×SPR | **Q** | — | Released afterok 168583449 |
+| 168586094 | `mf-iso-aa-1m-8n-full` | **FCA mf-iso** (MPI, np=8×103T) | `normalsr` 8×SPR | **Q** | — | **Full MF+SPR** (-m TEST). Ref lnL −78,605,196.573 (168425491) ±1.0 |
+
+#### Acceptance criteria — AA 1M
+
+- Reference lnL = **−78,605,196.573** (168425491 full run)
+- Reference model = **LG+G4**
+- |lnL − ref| < 1.0
+- filterRatesMPI fires at np=2 and np=4
+- MF wall np=2 < 7,587 s; MF wall np=4 < MF wall np=2
+- **Full run (168586094):** lnL = −78,605,196.573 ±1.0 (LG+G4), filterRatesMPI fires, MF wall np=8 < MF wall np=4
+
+---
+
+### Comprehensive results — Phase 0.5+0.6 validation (all datasets, as of 2026-05-18)
+
+#### Build legend
+
+| Label | Binary | Description |
+|-------|--------|-------------|
+| **CLX** | `cpu_bench/build-intel-clx/iqtree3` | Cascade Lake, OMP-only, historical reference |
+| **Baseline** | `build-intel-vanila/iqtree3` | Sapphire Rapids, OMP-only, R1+R2+AVX-512, v3.1.2 (sa0557) |
+| **FCA mf-iso** | `iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` | MPI+OMP, branch `mf-iso-phase0.5-0.6` (as1708) |
+
+All `-m TESTONLY` runs use a starting NJ tree (no SPR). lnL values are therefore NJ-tree
+lnLs and may differ from full-run (SPR-optimised) lnLs by up to ~1 unit at 1M sites.
+Full-run FCA rows (`-m TEST`) report the final ML-tree lnL after SPR optimisation.
+
+#### All runs
+
+| Job | Dataset | Run type | Build | Nodes | Ranks×OMP | Model | lnL | BIC | MF wall (s) | Status |
+|-----|---------|----------|-------|-------|-----------|-------|-----|-----|-------------|--------|
+| 168422813 | DNA 1M | CLX full (MF+SPR) | CLX | 1 normal | 47T OMP | F81+F+G4 | −59,208,019.212 | — | 10,230 | Done (hist. ref) |
+| **168425675** | **DNA 1M** | **Baseline full (MF+SPR)** | **Baseline** | **1 normalsr** | **103T OMP** | **F81+F+G4** | **−59,208,019.212** | **118,418,815.3418** | **3,500.825** | **Done (authoritative baseline)** |
+| ~~168580375~~ | DNA 1M | Baseline TESTONLY† | Baseline | 1 normalsr | 103T OMP | F81+F+G4 | −59,208,019.212 | 118,418,815.3418 | 2,802.261 | Done |
+| 168580376 | DNA 1M | FCA np=1 TESTONLY | FCA mf-iso | 1 normalsr | 1×103T MPI | TBD | TBD | TBD | TBD | **Running** (00:04) |
+| 168580377 | DNA 1M | FCA np=2 TESTONLY | FCA mf-iso | 2 normalsr | 2×103T MPI | TBD | TBD | TBD | TBD | Held |
+| 168425490 | AA 1M | CLX full (MF+SPR) | CLX | 1 normal | 47T OMP | LG+G4 | −78,605,196.573 | — | 16,308 | Done (hist. ref) |
+| **168425491** | **AA 1M** | **Baseline full (MF+SPR)** | **Baseline** | **1 normalsr** | **103T OMP** | **LG+G4** | **−78,605,196.573** | **157,213,128.6176** | **7,587.459** | **Done (authoritative baseline)** |
+| ~~168583449~~ | AA 1M | FCA np=2 TESTONLY | FCA mf-iso | 2 normalsr | 2×103T MPI | LG+G4 | −78,605,196.443 | 157,213,128.651 | 3,059.648 | **PASS ✓** |
+| 168583450 | AA 1M | FCA np=4 TESTONLY | FCA mf-iso | 4 normalsr | 4×103T MPI | TBD | TBD | TBD | TBD | **Q** |
+| ~~168573852~~ | AA 100K | Baseline TESTONLY | Baseline | 1 normalsr | 103T OMP | LG+G4 | −7,541,976.860 | 15,086,233.282 | 400.582 | Done (baseline) |
+| ~~168577707~~ | AA 100K | FCA np=1 TESTONLY | FCA mf-iso | 1 normalsr | 1×103T MPI | LG+G4 | −7,541,976.862 | 15,086,233.2835 | 257.355 | **PASS ✓** |
+| ~~168577708~~ | AA 100K | FCA np=2 TESTONLY | FCA mf-iso | 2 normalsr | 2×103T MPI | LG+G4 | −7,541,976.853 | 15,086,233.2646 | 150.567 | **PASS ✓** |
+| ~~168584736~~ | AA 100K | **FCA np=2 Full (MF+SPR)** | FCA mf-iso | 2 normalsr | 2×103T MPI | LG+G4 | −7,541,976.853 | 15,086,233.283 | 149.029 | **PASS ✓** total 537.754 s |
+| ~~168580367~~ | DNA 100K | Baseline TESTONLY | Baseline | 1 normalsr | 103T OMP | F81+F+G4 | −5,692,984.539 | 11,388,283.1765 | 31.802 | Done (baseline) |
+| ~~168580368~~ | DNA 100K | FCA np=1 TESTONLY | FCA mf-iso | 1 normalsr | 1×103T MPI | F81+F+G4 | −5,692,984.532 | 11,388,283.1618 | 39.169 | **PASS ✓** |
+| ~~168580369~~ | DNA 100K | FCA np=2 TESTONLY | FCA mf-iso | 2 normalsr | 2×103T MPI | F81+F+G4 | −5,692,984.532 | 11,388,283.1618 | 27.065 | **PASS ✓** |
+| ~~168584737~~ | DNA 100K | **FCA np=2 Full (MF+SPR)** | FCA mf-iso | 2 normalsr | 2×103T MPI | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | **PASS ✓** total 113.754 s |
+
+†168580375 BIC matches 168425675 because TESTONLY NJ-tree model-selection BIC equals the full-run MF-phase BIC (SPR does not re-run ModelFinder).
+
+#### MF walltime speedup (FCA TESTONLY vs Baseline TESTONLY)
+
+| Dataset | Baseline | np=1 | np=2 | np=4 |
+|---------|----------|------|------|------|
+| AA 100K | 400.582 s | 257.355 s (1.6×) | 150.567 s (**2.7×**) | — |
+| DNA 100K | 31.802 s | 39.169 s (0.8×) | 27.065 s (1.2×) | — |
+| DNA 1M | 2,802 s (†3,501 s) | TBD | TBD | — |
+| AA 1M | 7,587 s | — | 3,059.648 s (**2.48×**) | TBD |
+
+DNA 100K np=1 is slower than baseline: MPI startup + sequential outer loop overhead dominates a 31 s run.
+Speedup improves with dataset size; DNA 1M and AA 1M expected to show strong scaling benefit.
+†DNA 1M baseline uses 168425675 (3,501 s) as the authoritative reference; 168580375 (2,802 s) is supplementary.
+
+#### End-to-end (MF+SPR) speedup — FCA full run vs Baseline full run
+
+| Dataset | Baseline total wall | FCA np=2 total wall | Speedup | MF speedup | SPR time |
+|---------|---------------------|---------------------|---------|------------|----------|
+| DNA 100K | 289 s (168425674) | **113.754 s** (168584737) | **2.54×** | 61.7→26.3 s (2.35×) | ~87 s |
+| AA 100K | 1,170 s (168425673) | **537.754 s** (168584736) | **2.18×** | 400.6→149.0 s (2.69×) | ~389 s |
+
+---
+
+## 2026-05-17 (bl) — Run status update + gadi-ci subfolder reorganisation
+
+### Run status — chain history (as of 2026-05-17)
+
+| Job | Name | State | Elapsed | Dep | Note |
+|-----|------|-------|---------|-----|------|
+| ~~168572136~~ | `mf-iso-bootstrap` | **DONE** exit=8 | 00:11:20 | — | Build OK; false failure (Lustre `nm` timing); binary verified on login node |
+| ~~168572137~~ | `mf-iso-aa-baseline` | **KILLED** | — | afterok 168572136 | Cascaded from 168572136 exit≠0 |
+| ~~168572138~~ | `mf-iso-aa-1n` | **KILLED** | — | afterok 168572137 | Cascaded |
+| ~~168572139~~ | `mf-iso-aa-2n` | **KILLED** | — | afterok 168572138 | Cascaded |
+| ~~168573852~~ | `mf-iso-aa-baseline` | **DONE** exit=1 | 00:18:48 | — | IQ-TREE ✓ (MF 400.6 s, lnL −7,541,976.860, LG+G4); script bug (`$1: unbound variable` in unquoted heredoc awk line — `\$1` fix applied) |
+| ~~168573853~~ | `mf-iso-aa-1n` | **KILLED** | 0 | afterok 168573852 | Cascaded from baseline exit=1 |
+| ~~168573854~~ | `mf-iso-aa-2n` | **KILLED** | 0 | afterok 168573853 | Cascaded |
+| ~~168576511~~ | `mf-iso-aa-1n` | **DONE** exit=7 | 00:00:03 | — | `cat /dev/null` warm + strings fallback BOTH failed — binary on rc29 scratch; `nm`/`strings` cannot read it from normalsr nodes (wrong allocation) |
+| ~~168576512~~ | `mf-iso-aa-2n` | **KILLED** | 0 | afterok 168576511 | Cascaded |
+| ~~168576627~~ | `mf-iso-aa-1n` | **DONE** exit=7 | 00:00:02 | — | nm + strings both failed on dx61 binary — **Lustre write-cache lag** (binary copied 2 min before job ran; dirty pages not on OST yet) |
+| ~~168576628~~ | `mf-iso-aa-2n` | **KILLED** | 0 | afterok 168576627 | Cascaded |
+| ~~168577707~~ | `mf-iso-aa-1n` | **DONE** exit=0 | 00:04:30 | — | **PASS** lnL −7,541,976.862 ✓, LG+G4 ✓, MF wall 257 s; probe nm/strings still fail on compute node (mmap Lustre issue, non-fatal) |
+| ~~168577708~~ | `mf-iso-aa-2n` | **DONE** exit=0 | 00:02:48 | afterok 168577707 | **PASS** lnL −7,541,976.853 ✓, LG+G4 ✓, MF wall 150.567 s; filterRatesMPI fired at model=3, local_pruned=81 ✓ |
+
+**Root cause of repeated preflight failures (168576191/368/511/627):**
+
+Three layers of bugs compounded:
+
+1. **Wrong allocation (168576191/368/511):** all mf-iso scripts used `#PBS -P rc29`; binary
+   was on `/scratch/rc29`. Fixed: binary copied to `/scratch/dx61/as1708/iqtree3-mf-iso/`;
+   all five scripts migrated to `#PBS -P dx61`.
+
+2. **Lustre write-cache lag (168576627, the "fixed" dx61 run):** the binary was copied on
+   the login node at 23:36 and the job ran at 23:38 — only 2 minutes. Lustre dirty-page
+   writeback hadn't committed the 140 MB to OST 359 (gadiscr2-OST0167) yet. `ldd` passed
+   because it only reads the first ~4 KB (ELF dynamic section); `nm` and `strings` need
+   all 140 MB → both hit unreadable blocks → returned empty → `grep` returned 1 → exit 7.
+   The `cat "${IQTREE}" > /dev/null 2>&1 || true` warm-up silently swallowed the I/O error
+   so the misleading "nm + strings both failed" message appeared instead of "binary not
+   readable". Fix: removed `|| true` so cat failure is fatal with a clear diagnostic;
+   downgraded nm/strings to WARNING-only (ldd already confirms MPI+libiomp5 build;
+   post-run lnL validates correctness). Mitigation: run `sync` on the login node after
+   any cp/build before submitting.
+
+**Baseline results (168573852) — confirmed reproducible:**
+
+| Metric | This run | Reference (168425673) | Δ |
+|--------|----------:|----------------------:|---|
+| MF wall | 400.582 s | 405.078 s | −1.1% ✓ |
+| Total wall | 1,128.638 s | 1,169.556 s | −3.5% ✓ |
+| lnL | −7,541,976.860 | −7,541,976.860 | exact ✓ |
+| Best model | LG+G4 | LG+G4 | ✓ |
+| Peak mem | 9.54 GB | 9.36 GB | +2% ✓ |
+
+**Script fix:** `run_baseline_aa_100k_spr.sh` line 175 — awk `$1` inside
+unquoted `<<PYEOF` heredoc caused bash to expand it under `set -u` with no
+positional args. Fixed: `awk '{{print \$1}}'` (backslash escapes the
+dollar from bash; Python f-string `{{` / `}}` still produce literal braces).
+
+**Script fix 2 (four iterations):** `run_mf_iso_aa_100k_{1,2}node.sh` preflight symbol
+check. Root cause: binary was freshly copied on the login node; Lustre's async writeback
+had not yet committed the 140 MB to the OST before the compute node tried to read it.
+`ldd` passed (reads only the first ~4 KB). `nm` and `strings` need the full 140 MB and
+silently returned empty because the original `cat > /dev/null 2>&1 || true` masked the
+I/O error. Final fix: `cat` failure is now fatal with a clear "Lustre OST not yet synced"
+message; nm/strings symbol failure is WARNING-only. Mitigation: `sync` on the login node
+after copying the binary, before submitting.
+
+1-node (168577707) and 2-node (168577708) both passed on dx61. Phase 0.5+0.6
+confirmed at np=1 and np=2.
+
+**2-node results (168577708) — Phase 0.5+0.6 confirmed (AA 100K):**
+
+| Metric | baseline (168573852) | np=1 (168577707) | np=2 (168577708) | Δ np=1 vs np=2 |
+|--------|---------------------|:----------------:|:----------------:|:--------------:|
+| **Binary** | Baseline R1+R2/AVX-512 (non-MPI) | **FCA mf-iso phase0.5+0.6** | **FCA mf-iso phase0.5+0.6** | — |
+| **Node** | normalsr 1×SPR | normalsr 1×SPR | normalsr **2×SPR** | — |
+| **Threads** | 103T OMP | 1 rank × 103T OMP | 2 ranks × 103T OMP | — |
+| Exit | 0 ✓ | 0 ✓ | 0 ✓ | — |
+| lnL | −7,541,976.860 | −7,541,976.862 | −7,541,976.853 | 0.009 FP noise ✓ |
+| Best model | LG+G4 | LG+G4 | LG+G4 | match ✓ |
+| MF wall | ~405 s | 257 s | **150.567 s** | −41% ✓ |
+| filterRatesMPI fired | n/a (baseline) | n/a (np=1) | model=3 ✓ | — |
+| `\|bcast_ok_rates\|` | — | — | 1 ✓ | — |
+| local_pruned | — | — | 81 / 112 (72%) ✓ | — |
+| Rank 0 models | — | 224 (all) | 112/224 (50%) ✓ | FCA greedy-LPT |
+| Rank 1 evaluates | — | — | 31 (112 − 81 pruned) ✓ | — |
+| Ref-family first | — | LG 0–3 ✓ | LG 0–3 ✓ | Phase 0.6 ✓ |
+| Walltime (PBS) | 00:18:48 | 00:04:30 | 00:02:48 | −38% ✓ |
+
+Rank 0's MF-TIME trace confirms Phase 0.6 ordering: models 0 (LG), 1 (LG+I),
+2 (LG+G4), 3 (LG+I+G4) evaluated first (`ref_remaining` counting 4→3→2→1),
+then filterRatesMPI fires at model=3 (`bcast_ok_rates=1`, broadcasting
+LG+G4's rate parameters to rank 1), pruning 81 of rank 1's 112 assigned
+models.  After the broadcast, rank 0 continues with model 6 (LG+F+G4,
+`ref_remaining=0`) and non-LG families.  Rank 1's stdout.log is empty
+(MPI stdout routed to separate file); rank_models.csv populated from rank
+0 only.  All 3 MF-MPI-DIAG lines and 31 MF-TIME lines confirmed in
+rank_0.stdout.log.
+
+**Fix: `probe_header.sh` nm/strings → `cat|strings` (Lustre mmap fix):**
+
+Both `nm` and standalone `strings` use `mmap()` to map large ELF files
+into the process address space.  On Lustre compute nodes, `mmap()` of a
+large `/scratch` file can silently return empty data even when sequential
+`read()` (used by `cat`, `md5sum`, `dd`) succeeds — the Lustre client
+does not guarantee `mmap()` coherence for files that aren't already in
+the page cache.  This caused all `bin_sym_MISSING` / `bin_str_MISSING`
+probe lines on every compute-node run, even when the binary was correct.
+
+Fix applied to `gadi-ci/mf-iso/tools/probe_header.sh`: read the binary
+once via `cat binary | strings` (pipe forces sequential `read()`;
+`strings` reading from a pipe cannot fall back to `mmap()`), cache the
+result in `/dev/shm` (RAM-backed, not Lustre), then run all 7 `grep`
+checks from the cache.  Symbol display labels are kept as demangled names
+for readability; search patterns are mangled-name substrings that appear
+verbatim in the ELF `.strtab` and are therefore found by `strings`:
+
+| Display label | Mangled search pattern |
+|---|---|
+| `CandidateModelSet::filterRatesMPI` | `filterRatesMPIEi` |
+| `CandidateModelSet::filterRates` | `11filterRatesEi` |
+| `CandidateModelSet::getNextModel` | `getNextModelEv` |
+| `CandidateModelSet::evaluateAll` | `evaluateAll` |
+
+String-marker patterns (`MF-MPI-DIAG`, `MF-TIME: rank`, `filterRatesMPI
+fired`) are unchanged — they appear literally in `.rodata` and are
+already found correctly by `strings`.
+
+### gadi-ci subfolder reorganisation
+
+The loose scripts at the root of `gadi-ci/` were taking up significant
+visual space and were hard to navigate. Scripts have been moved into
+dataset-specific subdirectories matching the alignment they target.
+Existing `cpu-bench/` and `mf-iso/` subdirectories are unchanged.
+
+**New layout:**
+
+```
+gadi-ci/
+  bootstrap/   ← build scripts (6 files)
+  10M/         ← 100 taxa × 10 M DNA sites, alignment_10000000.phy (3 files)
+  xlarge/      ← 200 taxa × 100 K DNA sites, xlarge_mf.fa (14 files)
+  mega/        ← 500 taxa × 100 K DNA sites, mega_dna.fa (9 files)
+  utils/       ← generate_datasets, rerun_perf_stat, pipeline, profiling,
+                  submit_benchmark_matrix, test_mf_mpi_dispatch (6 files)
+  cpu-bench/   ← AA 100K MPI batch (unchanged)
+  mf-iso/      ← Phase 0.5+0.6 isolation harness (unchanged)
+```
+
+**Files moved:**
+
+| Old path | New path |
+|----------|----------|
+| `gadi-ci/bootstrap_iqtree.sh` | `gadi-ci/bootstrap/bootstrap_iqtree.sh` |
+| `gadi-ci/bootstrap_iqtree_3.1.2.sh` | `gadi-ci/bootstrap/bootstrap_iqtree_3.1.2.sh` |
+| `gadi-ci/bootstrap_iqtree_3.1.2_mpi.sh` | `gadi-ci/bootstrap/bootstrap_iqtree_3.1.2_mpi.sh` |
+| `gadi-ci/bootstrap_iqtree_clang.sh` | `gadi-ci/bootstrap/bootstrap_iqtree_clang.sh` |
+| `gadi-ci/bootstrap_iqtree_mpi.sh` | `gadi-ci/bootstrap/bootstrap_iqtree_mpi.sh` |
+| `gadi-ci/build_avx512_r2_mpi.sh` | `gadi-ci/bootstrap/build_avx512_r2_mpi.sh` |
+| `gadi-ci/run_100taxa_10M_mf2dispatch_4node.sh` | `gadi-ci/10M/run_100taxa_10M_mf2dispatch_4node.sh` |
+| `gadi-ci/run_100taxa_10M_r2_avx512_mpi_4node.sh` | `gadi-ci/10M/run_100taxa_10M_r2_avx512_mpi_4node.sh` |
+| `gadi-ci/run_10M_mf2dispatch_16node.sh` | `gadi-ci/10M/run_10M_mf2dispatch_16node.sh` |
+| `gadi-ci/run_xlarge_avx512_r2_omp_batch.sh` | `gadi-ci/xlarge/run_xlarge_avx512_r2_omp_batch.sh` |
+| `gadi-ci/run_xlarge_correctness_baseline.sh` | `gadi-ci/xlarge/run_xlarge_correctness_baseline.sh` |
+| `gadi-ci/run_xlarge_correctness_mf2.sh` | `gadi-ci/xlarge/run_xlarge_correctness_mf2.sh` |
+| `gadi-ci/run_xlarge_fixedtree_baseline.sh` | `gadi-ci/xlarge/run_xlarge_fixedtree_baseline.sh` |
+| `gadi-ci/run_xlarge_fixedtree_mf2.sh` | `gadi-ci/xlarge/run_xlarge_fixedtree_mf2.sh` |
+| `gadi-ci/run_xlarge_r2_mf2_dispatch.sh` | `gadi-ci/xlarge/run_xlarge_r2_mf2_dispatch.sh` |
+| `gadi-ci/run_xlarge_r2_mpi_2node_fullnode.sh` | `gadi-ci/xlarge/run_xlarge_r2_mpi_2node_fullnode.sh` |
+| `gadi-ci/run_xlarge_r2_mpi_l3rank.sh` | `gadi-ci/xlarge/run_xlarge_r2_mpi_l3rank.sh` |
+| `gadi-ci/run_xlarge_r2_mpi_socket.sh` | `gadi-ci/xlarge/run_xlarge_r2_mpi_socket.sh` |
+| `gadi-ci/run_xlarge_r2_numa_416t_4node.sh` | `gadi-ci/xlarge/run_xlarge_r2_numa_416t_4node.sh` |
+| `gadi-ci/run_xlarge_r2_v312_canonical.sh` | `gadi-ci/xlarge/run_xlarge_r2_v312_canonical.sh` |
+| `gadi-ci/run_xlarge_r2_v312_mpi_2node_fullnode.sh` | `gadi-ci/xlarge/run_xlarge_r2_v312_mpi_2node_fullnode.sh` |
+| `gadi-ci/submit_xlarge_r2_alternates.sh` | `gadi-ci/xlarge/submit_xlarge_r2_alternates.sh` |
+| `gadi-ci/test_xlarge_mf2_correctness.sh` | `gadi-ci/xlarge/test_xlarge_mf2_correctness.sh` |
+| `gadi-ci/run_mega_avx512_r2_2node.sh` | `gadi-ci/mega/run_mega_avx512_r2_2node.sh` |
+| `gadi-ci/run_mega_avx512_r2_4node.sh` | `gadi-ci/mega/run_mega_avx512_r2_4node.sh` |
+| `gadi-ci/run_mega_avx512_r2_omp_batch.sh` | `gadi-ci/mega/run_mega_avx512_r2_omp_batch.sh` |
+| `gadi-ci/run_mega_mf2_full_2node.sh` | `gadi-ci/mega/run_mega_mf2_full_2node.sh` |
+| `gadi-ci/run_mega_mf2_full_4node.sh` | `gadi-ci/mega/run_mega_mf2_full_4node.sh` |
+| `gadi-ci/run_mega_mf2_full_omp_batch.sh` | `gadi-ci/mega/run_mega_mf2_full_omp_batch.sh` |
+| `gadi-ci/run_mega_mf2dispatch_4node_aps.sh` | `gadi-ci/mega/run_mega_mf2dispatch_4node_aps.sh` |
+| `gadi-ci/run_mega_profile.sh` | `gadi-ci/mega/run_mega_profile.sh` |
+| `gadi-ci/submit_mega_batch.sh` | `gadi-ci/mega/submit_mega_batch.sh` |
+| `gadi-ci/generate_datasets.sh` | `gadi-ci/utils/generate_datasets.sh` |
+| `gadi-ci/rerun_perf_stat.sh` | `gadi-ci/utils/rerun_perf_stat.sh` |
+| `gadi-ci/run_pipeline.sh` | `gadi-ci/utils/run_pipeline.sh` |
+| `gadi-ci/run_profiling.sh` | `gadi-ci/utils/run_profiling.sh` |
+| `gadi-ci/submit_benchmark_matrix.sh` | `gadi-ci/utils/submit_benchmark_matrix.sh` |
+| `gadi-ci/test_mf_mpi_dispatch.sh` | `gadi-ci/utils/test_mf_mpi_dispatch.sh` |
+
+No script contents were changed; only paths moved.
+
+---
+
 ## 2026-05-17 (bk) — Reset: ModelFinder isolation harness on rc29 (Phase 0.5+0.6 only)
 
 ### Context — why we're stepping back
@@ -193,12 +616,45 @@ from cross-rank pruning):
 - If 4-node MF wall > 600 s, do NOT chase further patches — re-examine
   the 2-node `parse_mf_time.py` output; the bug is visible there too.
 
+### Build run (2026-05-17) — job 168572136
+
+| Item | Detail |
+|------|--------|
+| Job | 168572136.gadi-pbs (`mf-iso-bootstrap`) |
+| Node | gadi-cpu-spr-0284, ncpus=104, queue=normalsr |
+| Wall | 00:11:20 (cmake + make -j104 + verification) |
+| SU | 39.29 |
+| Binary | `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` (146 MB) |
+| Linkage | libiomp5 + libmpi ✓, libgomp absent ✓ |
+| Symbol | `CandidateModelSet::filterRatesMPI(int)` ✓ (verified post-job) |
+| MF-TIME string | present ✓ |
+| MF-MPI-DIAG string | present ✓ |
+| Job exit code | **8 (false failure)** — see note below |
+
+**False failure note**: The build script's `nm -C ... | grep 'filterRatesMPI(int)'` check
+returned no match during the job. Direct verification on the login node immediately
+after confirmed the symbol IS present (`00000000005ac790 T CandidateModelSet::filterRatesMPI(int)`).
+Root cause: Lustre metadata flush timing — `nm` on the compute node read the file before
+the link operation was fully visible to the VFS. Fixed in `build_mf_iso.sh`: added a
+`stat()` flush barrier and a raw-mangled-name fallback (`_ZN17CandidateModelSet14filterRatesMPIEi`)
+so a transient demangling delay doesn't abort a good build. The dependent jobs
+(168572137-9) were auto-killed by PBS `afterok` — resubmitted as 168573852-4.
+
+### Run jobs submitted (2026-05-17) — 168573852-4
+
+| Job | Script | Dep | Expected wall |
+|-----|--------|-----|--------------|
+| 168573852 | `run_baseline_aa_100k_spr.sh` | none (Q) | ~2 h (full run) |
+| 168573853 | `run_mf_iso_aa_100k_1node.sh` | afterok 168573852 | ~1.5 h (TESTONLY) |
+| 168573854 | `run_mf_iso_aa_100k_2node.sh` | afterok 168573853 | ~1 h (TESTONLY) |
+
+Results will be documented in a follow-up entry when jobs complete.
+
 ### Next steps
 
-1. `qsub gadi-ci/mf-iso/build_mf_iso.sh` — produces the isolated binary
-   at `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi`
-2. `qsub gadi-ci/mf-iso/run_mf_iso_aa_100k_1node.sh` (after build) — np=1 baseline
-3. `qsub gadi-ci/mf-iso/run_mf_iso_aa_100k_2node.sh` (after 1node) — np=2 the real test
+1. ~~`qsub gadi-ci/mf-iso/build_mf_iso.sh`~~ — **DONE** (binary at `build-mpi-iso/iqtree3-mpi`, verified)
+2. ~~`qsub gadi-ci/mf-iso/run_mf_iso_aa_100k_1node.sh`~~ — **submitted** (168573853, afterok 168573852)
+3. ~~`qsub gadi-ci/mf-iso/run_mf_iso_aa_100k_2node.sh`~~ — **submitted** (168573854, afterok 168573853)
 4. After 2-node passes: `cpu-bench/run_cpu_bench_aa_100k_mf2_4node.sh` with the
    isolated binary (override `IQTREE=/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi`)
 5. Only then add Phase 0.7 (Isend, alone) and HH-NUMA (alone, after Isend

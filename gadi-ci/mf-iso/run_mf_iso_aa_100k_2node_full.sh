@@ -1,37 +1,32 @@
 #!/bin/bash
-# run_mf_iso_aa_100k_2node.sh — IQ-TREE3 MF-iso ModelFinder benchmark, 2-node MPI.
+# run_mf_iso_aa_100k_2node_full.sh — IQ-TREE3 MF-iso full run (MF+SPR), 2-node MPI.
 #
 # AA, 100K sites (100 taxa), 2 MPI ranks × 103 OpenMP threads = 206T total.
 # 2 × Sapphire Rapids exclusive nodes (normalsr, 104 cores each).
 #
-# PURPOSE — STEP BY STEP SCALING (don't skip 2-node)
-#   This is the FIRST test that exercises the Phase 0.5 cross-rank
-#   ok_rates broadcast and Phase 0.6 getNextModel ref-family priority.
-#   At np=2, rank 0 owns LG (sharp BIC -> ok_rates={G4}) and rank 1
-#   owns an empirical-frequency family (flat BIC). Phase 0.5 broadcasts
-#   rank 0's {G4} set to rank 1, fixing the rank-1+ pruning gap.
+# PURPOSE — End-to-end parity validation: FCA ModelFinder (Phase 0.5+0.6) + SPR tree search.
+#   Uses the same mf-iso binary as the TESTONLY runs. ModelFinder is FCA-dispatched
+#   across 2 MPI ranks for ~2.7× speedup; SPR tree search runs within each rank's
+#   OMP pool after MF completes. Both ranks optimise independently; best result kept.
 #
-#   Acceptance gate (must pass before scaling to 4-node):
-#     - lnL = -7,541,976.860 ± 0.01
+#   Acceptance gate:
+#     - lnL = -7,541,976.860 ± 0.1  (SPR ref: 168425673 / 168573852)
 #     - best model = LG+G4
-#     - MF wall < 600 s (Fix H baseline 475 s; FCA Phase 0 regressed to 2,865 s)
-#     - both ranks emit MF-TIME lines through to filterRatesMPI fire
-#     - rank 1 evaluates < 50 models after broadcast (mostly +G4 variants)
+#     - MF wall < baseline MF wall (FCA speedup confirmed)
+#     - Phase 0.5 broadcast fires (filterRatesMPI diag line present)
 #
-# CRITICAL: per-rank stdout via `mpirun --output-filename`. Earlier debug
-# runs (e.g. 168475747) lost rank 1+ stdout because mpirun across multiple
-# nodes only forwards rank 0 to the redirected file. Per-file output is
+# CRITICAL: per-rank stdout via `mpirun --output-filename`. Per-file output is
 # what lets us actually SEE rank 1's eval loop.
 #
 # Binary:  /scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi
 # Build tag:    mf_iso_phase0.5_0.6_icx_avx512_mftime
 
-#PBS -N mf-iso-aa-100k-2n
+#PBS -N mf-iso-aa-100k-2n-full
 #PBS -P dx61
 #PBS -q normalsr
 #PBS -l ncpus=208
 #PBS -l mem=1020GB
-#PBS -l walltime=02:00:00
+#PBS -l walltime=01:30:00
 #PBS -l storage=scratch/dx61+scratch/um09
 #PBS -l wd
 #PBS -j oe
@@ -56,7 +51,7 @@ DATA_TYPE="AA"
 DATASET_SHORT="complex_aa_100k"
 
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"; PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
-LABEL="AA_100k_mfiso_np2_seed${SEED}"
+LABEL="AA_100k_mfiso_np2_full_seed${SEED}"
 RUN_ID="gadi_${LABEL}_${PBS_ID_SHORT}"
 WORK_DIR="${PROFILES_DIR}/${LABEL}_${PBS_ID_SHORT}"
 
@@ -136,7 +131,7 @@ RANK_LOGS_DIR="${WORK_DIR}/rank_logs"
 mkdir -p "${RANK_LOGS_DIR}"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  AA 100K MF-iso Benchmark — 2-node MPI, ModelFinder-only (-m TESTONLY)"
+echo "║  AA 100K MF-iso Full Run — 2-node MPI, MF+SPR (-m TEST)"
 echo "║  run_id:       ${RUN_ID}"
 echo "║  ranks × OMP: ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS}T)"
 echo "║  node A:       ${HOST_A}  (rank 0 — owns LG family)"
@@ -160,8 +155,8 @@ probe_env
 RANK_PROBE="${REPO_DIR}/gadi-ci/mf-iso/tools/rank_probe.sh"
 [[ -x "${RANK_PROBE}" ]] || { echo "ERROR: rank_probe.sh not found at ${RANK_PROBE}" >&2; exit 10; }
 
-# ── ModelFinder-only run with per-rank output capture ─────────────────
-echo "[2node] ModelFinder-only run, ${NRANKS} ranks × ${OMP_PER_RANK} OMP across 2 nodes"
+# ── Full IQ-TREE run (MF + SPR) with per-rank output capture ─────────────────
+echo "[2node] Full run (MF+SPR), ${NRANKS} ranks × ${OMP_PER_RANK} OMP across 2 nodes"
 echo "[2node] mpirun --output-filename ${RANK_LOGS_DIR}/  (one stdout/stderr per rank)"
 START_EPOCH=$(date +%s)
 
@@ -174,7 +169,7 @@ mpirun -np "${NRANKS}" \
     "${OMP_ENV[@]}" \
     "${RANK_PROBE}" \
         numactl --localalloc -- \
-            "${IQTREE}" -s "${ALIGNMENT}" -m TESTONLY -T "${OMP_PER_RANK}" -seed "${SEED}" \
+            "${IQTREE}" -s "${ALIGNMENT}" -m TEST -T "${OMP_PER_RANK}" -seed "${SEED}" \
                         --prefix "${WORK_DIR}/iqtree_run" \
     > "${WORK_DIR}/iqtree_run.log" 2> "${WORK_DIR}/iqtree_run.bindings.log"
 IQRC=$?
@@ -268,13 +263,15 @@ def sh(c, d=""):
     except Exception: return d
 
 log = os.path.join(work, "iqtree_run.log")
-rep_ll = None; iqwall = None; best_model = None
+rep_ll = None; iqwall = None; mf_wall = None; best_model = None
 if os.path.isfile(log):
     for line in open(log, errors="replace"):
         m = re.search(r"BEST SCORE FOUND\s*:\s*(-?[\d.]+)", line)
         if m: rep_ll = float(m.group(1))
         m = re.search(r"Total wall-clock time used:\s+([\d.]+)", line)
         if m: iqwall = float(m.group(1))
+        m = re.search(r"Wall-clock time for ModelFinder:\s+([\d.]+)", line)
+        if m: mf_wall = float(m.group(1))
         m = re.search(r"Best-fit model:\s+(\S+)", line)
         if m: best_model = m.group(1)
 
@@ -308,7 +305,8 @@ verify = []
 if rep_ll is not None:
     diff = abs(rep_ll - EXPECTED_LNL)
     verify.append({"file": os.path.basename(alignment), "status": "pass" if diff < 0.1 else "fail",
-                   "expected": EXPECTED_LNL, "reported": rep_ll, "diff": round(diff, 6)})
+                   "expected": EXPECTED_LNL, "reported": rep_ll, "diff": round(diff, 6),
+                   "note": "Full-run SPR lnL vs SPR baseline ref (168425673); tol=0.1"})
 
 record = {
     "run_id": rid, "label": label,
@@ -316,15 +314,16 @@ record = {
     "dataset": alignment, "dataset_short": "${DATASET_SHORT}",
     "data_type": "${DATA_TYPE}", "seq_len": 100000, "n_taxa": 100,
     "threads": threads, "seed": ${SEED},
-    "model_finder_only": True,
+    "model_finder_only": False,
     "timing": [{
-        "command": f"mpirun -np {nranks} -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi -s alignment_100000.phy -m TESTONLY -T {omp_per_rank} -seed ${SEED}",
+        "command": f"mpirun -np {nranks} -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi -s alignment_100000.phy -m TEST -T {omp_per_rank} -seed ${SEED}",
         "time_s": iqwall if iqwall is not None else wall,
     }],
     "verify": verify,
     "summary": {
         "pass": 1 if iqrc == 0 else 0, "fail": 0 if iqrc == 0 else 1,
         "total_time": iqwall if iqwall is not None else wall,
+        "mf_wall_s": mf_wall,
         "lnL": rep_ll,
         "best_model": best_model,
         "all_pass": iqrc == 0,
@@ -347,7 +346,7 @@ record = {
                 "ncpus": os.environ.get("PBS_NCPUS"), "project": "${PROJECT}"},
     },
     "profile": {"nranks": nranks, "omp_per_rank": omp_per_rank,
-                "placement": "mpi_2node_testonly_perrank_logs"},
+                "placement": "mpi_2node_full_perrank_logs"},
     "build_tag":     "mf_iso_phase0.5_0.6_icx_avx512_mftime",
     "branch":        "mf-iso-phase0.5-0.6",
     "non_canonical": True,

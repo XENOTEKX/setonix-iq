@@ -80,29 +80,47 @@ probe_hw_sw() {
         # IQ-TREE banner.
         "${iqtree_bin}" --version 2>&1 | head -3 | sed 's/^/PROBE: bin_version: /'
 
-        # FCA / Phase 0.5 / Phase 0.6 / MF-TIME symbol presence — confirms
-        # the right binary is being used.
-        for sym in \
-            'CandidateModelSet::filterRatesMPI' \
-            'CandidateModelSet::filterRates' \
-            'CandidateModelSet::getNextModel' \
-            'CandidateModelSet::evaluateAll' ; do
-            if nm -C "${iqtree_bin}" 2>/dev/null | grep -q "$sym"; then
-                echo "PROBE: bin_sym_present: ${sym}"
+        # FCA / Phase 0.5 / Phase 0.6 / MF-TIME symbol and string presence —
+        # confirms the right binary is being used.
+        #
+        # NOTE: 'nm' and standalone 'strings' use mmap() to read large ELF files.
+        # On Lustre compute nodes mmap() of a large /scratch file can silently
+        # return empty data even when sequential read() works correctly.  Piping
+        # through 'cat' forces a sequential read(); 'strings' reading from stdin
+        # (a pipe) cannot use mmap.  We pre-extract all printable strings into a
+        # RAM-backed temp file (/dev/shm) once and grep from there.
+        local _str_cache
+        _str_cache=$(mktemp /dev/shm/.iq3sym.XXXXXX 2>/dev/null) || \
+        _str_cache=$(mktemp)
+        cat "${iqtree_bin}" 2>/dev/null | strings > "${_str_cache}" 2>/dev/null
+
+        # Symbol check: search mangled-name substrings (unique within the ELF
+        # .strtab) and display the demangled label for readability.
+        # Mangling: filterRatesMPIEi, 11filterRatesEi, getNextModelEv, evaluateAll
+        while IFS='|' read -r lbl srch; do
+            if grep -q "${srch}" "${_str_cache}" 2>/dev/null; then
+                echo "PROBE: bin_sym_present: ${lbl}"
             else
-                echo "PROBE: bin_sym_MISSING: ${sym}"
+                echo "PROBE: bin_sym_MISSING: ${lbl}"
             fi
-        done
+        done <<'SYMS'
+CandidateModelSet::filterRatesMPI|filterRatesMPIEi
+CandidateModelSet::filterRates|11filterRatesEi
+CandidateModelSet::getNextModel|getNextModelEv
+CandidateModelSet::evaluateAll|evaluateAll
+SYMS
 
         # Critical string markers — these tell us whether MF-MPI-DIAG / MF-TIME
-        # logging is compiled in.
+        # logging is compiled in.  Same _str_cache reused (Lustre-safe).
         for s in 'MF-MPI-DIAG' 'MF-TIME: rank' 'filterRatesMPI fired'; do
-            if strings "${iqtree_bin}" 2>/dev/null | grep -q "$s"; then
+            if grep -q "${s}" "${_str_cache}" 2>/dev/null; then
                 echo "PROBE: bin_str_present: ${s}"
             else
                 echo "PROBE: bin_str_MISSING: ${s}"
             fi
         done
+
+        rm -f "${_str_cache}"
     else
         echo "PROBE: bin_missing or not executable: ${iqtree_bin}"
     fi
