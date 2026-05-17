@@ -12,6 +12,8 @@
 #endif
 #include <iqtree_config.h>
 #include <numeric>
+#include <iomanip>     // std::setprecision, std::fixed for MF-TIME markers
+#include <sys/time.h>  // gettimeofday() fallback when not MPI
 #include "tree/phylotree.h"
 #include "tree/iqtree.h"
 #include "tree/phylotreemixlen.h"
@@ -2935,6 +2937,119 @@ void CandidateModelSet::filterRates(int finished_model) {
             at(model).setFlag(MF_IGNORED);
 }
 
+#ifdef _IQTREE_MPI
+// ----------------------------------------------------------------------
+// FCA Phase 0.5 — cross-rank ok_rates broadcast.
+//
+// Why this exists: per-rank filterRates (Fix C) is fundamentally broken
+// when different ranks own different reference families with different
+// BIC selectivity. On AA 100K, rank 0 owns LG (sharp BIC, ok_rates={G4})
+// while ranks 1-3 own WAG/JTT/DCMUT (flat BIC, ok_rates={G4,R3,R4,I+G,...}).
+// Ranks 1-3 effectively don't prune -> 4-node MF wall regressed from
+// Fix H 2,335 s to FCA Phase 0 3,502 s (+50%).
+//
+// Algorithm (collective on all MPI ranks):
+//   1. Every rank locally computes its own ok_rates the same way
+//      filterRates() does. Only rank 0's set is canonical; ranks 1+
+//      produce permissive sets that we discard.
+//   2. Rank 0 serialises its ok_rates into a "rate1|rate2|..." string
+//      (max 2048 bytes -- far above the typical {"G4"} payload of 4 bytes)
+//      and MPI_Bcast's it from root=0.
+//   3. Every rank parses the broadcast string into global_ok_rates.
+//   4. Every rank marks MF_IGNORED on any local model that is not
+//      already DONE/IGNORED/CANNOT_BE_IGNORED and whose orig_rate_name
+//      is not in global_ok_rates.
+//
+// Single-fire guard via mpi_filterRatesMPI_fired (set true by caller).
+// Caller gates on mpi_filterRatesMPI_enabled (set by the MPI_Allreduce
+// in evaluateAll Step 8); if disabled, falls back to legacy filterRates.
+// ----------------------------------------------------------------------
+void CandidateModelSet::filterRatesMPI(int finished_model) {
+    if (Params::getInstance().score_diff_thres < 0)
+        return;
+
+    int my_rank = MPIHelper::getInstance().getProcessID();
+    int nranks  = MPIHelper::getInstance().getNumProcesses();
+
+    // -- Step 1: each rank computes its own ok_rates (same as filterRates()).
+    string ref_subst = at(0).subst_name;
+    for (int i = 0; i < (int)size(); i++) {
+        if (!at(i).hasFlag(MF_IGNORED)) {
+            ref_subst = at(i).subst_name;
+            break;
+        }
+    }
+    double best_score = DBL_MAX;
+    int m;
+    for (m = 0; m <= finished_model; m++)
+        if (at(m).subst_name == ref_subst) {
+            if (!at(m).hasFlag(MF_DONE + MF_IGNORED))
+                break; // ref family not complete on this rank -- skip local pruning
+            if (!at(m).hasFlag(MF_IGNORED))
+                best_score = min(best_score, at(m).getScore());
+        }
+
+    double ok_score = best_score + Params::getInstance().score_diff_thres;
+    set<string> local_ok_rates;
+    if (best_score != DBL_MAX) {
+        for (m = 0; m <= finished_model; m++)
+            if (!at(m).hasFlag(MF_IGNORED) && at(m).getScore() <= ok_score)
+                local_ok_rates.insert(at(m).orig_rate_name);
+    }
+
+    // -- Step 2: serialise rank 0's set into a fixed-size buffer.
+    const int BUF = 2048;
+    char buf[BUF];
+    memset(buf, 0, BUF);
+    if (my_rank == 0) {
+        string s;
+        for (const string &r : local_ok_rates) {
+            if (!s.empty()) s += "|";
+            s += r;
+        }
+        if ((int)s.size() >= BUF) s.resize(BUF - 1);
+        memcpy(buf, s.c_str(), s.size());
+    }
+
+    // -- Step 3: MPI_Bcast from root=0. Collective on MPI_COMM_WORLD.
+    MPI_Bcast(buf, BUF, MPI_CHAR, 0, MPI_COMM_WORLD);
+
+    // -- Step 4: parse on all ranks (including 0 to keep code uniform).
+    set<string> global_ok_rates;
+    {
+        string s(buf);
+        size_t pos = 0, next;
+        while (pos < s.size()) {
+            next = s.find('|', pos);
+            if (next == string::npos) next = s.size();
+            string r = s.substr(pos, next - pos);
+            if (!r.empty()) global_ok_rates.insert(r);
+            pos = next + 1;
+        }
+    }
+
+    // -- Step 5: apply to local model list.
+    int pruned_here = 0;
+    for (m = finished_model + 1; m < (int)size(); m++) {
+        if (at(m).hasFlag(MF_DONE + MF_IGNORED + MF_CANNOT_BE_IGNORED))
+            continue;
+        if (global_ok_rates.find(at(m).orig_rate_name) == global_ok_rates.end()) {
+            at(m).setFlag(MF_IGNORED);
+            pruned_here++;
+        }
+    }
+
+    cout << "MF-MPI-DIAG: rank " << my_rank << "/" << nranks
+         << " filterRatesMPI fired at model=" << finished_model
+         << " ref_subst=" << ref_subst
+         << " |bcast_ok_rates|=" << global_ok_rates.size()
+         << " local_pruned=" << pruned_here
+         << " best_score=" << best_score
+         << endl;
+    cout.flush();
+}
+#endif // _IQTREE_MPI
+
 void CandidateModelSet::filterSubst(int finished_model) {
     if (Params::getInstance().score_diff_thres < 0)
         return;
@@ -3383,27 +3498,59 @@ CandidateModel CandidateModelSet::test(Params &params, PhyloTree* in_tree, Model
 }
 
 int64_t CandidateModelSet::getNextModel() {
-    int64_t next_model;
+    int64_t next_model = -1;
 #pragma omp critical
     {
-    if (size() == 0)
-        next_model = -1;
-    else if (current_model == -1)
-        next_model = 0;
-    else {
-        for (next_model = current_model+1; next_model != current_model; next_model++) {
-            if (next_model == size())
-                next_model = 0;
-            if (!at(next_model).hasFlag(MF_IGNORED + MF_WAITING + MF_RUNNING)) {
-                break;
+    if (size() > 0) {
+#ifdef _IQTREE_MPI
+        // FCA Phase 0.6 — ref-family priority.
+        //
+        // While the rank's reference family is incomplete AND the broadcast
+        // hasn't fired yet, prefer ref-family models so the rank reaches
+        // the collective MPI_Bcast point as soon as possible. Without this,
+        // ranks 1+ visit non-ref Block-2 entries first (one per assigned
+        // subst_name group), delaying ref completion by ~200-300 s and
+        // causing rank 0 to idle at the barrier.
+        //
+        // See setonix-iq/research/updated-modelfinder-dispatch.md §20 for
+        // the Block-2/Block-3 interleaving analysis.
+        if (mpi_filterRatesMPI_enabled
+            && !mpi_filterRatesMPI_fired
+            && mpi_ref_subst_idx >= 0
+            && mpi_ref_remaining > 0) {
+            const string &ref_subst = at(mpi_ref_subst_idx).subst_name;
+            int64_t start = (current_model == -1) ? 0
+                                                  : (current_model + 1) % (int64_t)size();
+            for (int64_t i = 0; i < (int64_t)size(); i++) {
+                int64_t m = (start + i) % (int64_t)size();
+                if (at(m).subst_name == ref_subst
+                    && !at(m).hasFlag(MF_IGNORED + MF_WAITING + MF_RUNNING)) {
+                    next_model = m;
+                    break;
+                }
+            }
+        }
+#endif
+        if (next_model == -1) {
+            // Standard scan (also corrects a latent bug: the original code
+            // returned next_model = 0 unconditionally on first call, even
+            // if model 0 had MF_IGNORED set for the calling rank under
+            // FCA dispatch).
+            int64_t start = (current_model == -1) ? 0
+                                                  : (current_model + 1) % (int64_t)size();
+            for (int64_t i = 0; i < (int64_t)size(); i++) {
+                int64_t m = (start + i) % (int64_t)size();
+                if (!at(m).hasFlag(MF_IGNORED + MF_WAITING + MF_RUNNING)) {
+                    next_model = m;
+                    break;
+                }
             }
         }
     }
-    if (next_model != current_model) {
+    if (next_model != -1) {
         current_model = next_model;
         at(next_model).setFlag(MF_RUNNING);
-    } else
-        next_model = -1;
+    }
     }
     return next_model;
 }
@@ -3501,12 +3648,22 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     //   3. per-rank state machine (mpi_ref_subst_idx, mpi_ref_remaining):
     //      fires filterRates exactly once, when the rank's reference family
     //      is fully evaluated. Replaces the fragile "model >= rate_block"
-    //      trigger which had an edge case at np=4 (see §2.1, §7.4 of the
-    //      design doc; np=4 AA 100K regressed to 2,335 s under the old Fix C).
-    //   4. MF-MPI-DIAG: log lines per rank for offline analysis (cost predictor
-    //      validation, load-imbalance audit, filterRates trigger timing).
-    int mpi_ref_subst_idx = -1;     // index of first non-IGNORED model
-    int mpi_ref_remaining = 0;       // own models with subst_name == ref still pending
+    //      trigger which had an edge case at np=4.
+    //   4. Phase 0.5: cross-rank ok_rates broadcast via filterRatesMPI() so
+    //      ranks with flat-BIC ref families still benefit from rank 0's
+    //      sharp-BIC pruning (the Phase 0 regression root cause at np>=2).
+    //   5. Phase 0.6: getNextModel() ref-family priority so all ranks reach
+    //      the collective broadcast point close together (eliminates the
+    //      ~370 s rank-0 idle observed in Phase 0.5).
+    //   6. MF-MPI-DIAG: log lines per rank for offline analysis.
+    //
+    // Reset state members (members because getNextModel needs ref-family
+    // priority access; reset every call for MixtureFinder/PartitionFinder
+    // repeated-invocation safety).
+    mpi_ref_subst_idx          = -1;
+    mpi_ref_remaining          = 0;
+    mpi_filterRatesMPI_fired   = false;
+    mpi_filterRatesMPI_enabled = false;
 
     if (MPIHelper::getInstance().getNumProcesses() > 1) {
         int my_rank = MPIHelper::getInstance().getProcessID();
@@ -3631,10 +3788,25 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         cout.flush();
 
         // Step 7 — disable the legacy rate_block trigger. The state machine
-        // above will fire filterRates exactly once when ref_remaining hits 0.
-        // Non-MPI builds and np=1 MPI fall through to the original
-        // "model >= rate_block" check unchanged.
+        // above will fire filterRatesMPI (or legacy filterRates fallback)
+        // exactly once when ref_remaining hits 0. Non-MPI builds and np=1 MPI
+        // fall through to the original "model >= rate_block" check unchanged.
         rate_block = (int)num_models;
+
+        // Step 8 — Phase 0.5 gate: every rank must have a valid ref family
+        // AND auto_rate AND score_diff_thres >= 0 to participate in the
+        // collective MPI_Bcast inside filterRatesMPI. If any rank fails any
+        // condition, ALL ranks must skip the broadcast or MPI_Bcast deadlocks.
+        // Determine via MPI_Allreduce(MIN).
+        int my_ok = (mpi_ref_subst_idx >= 0 && auto_rate
+                     && Params::getInstance().score_diff_thres >= 0) ? 1 : 0;
+        int all_ok = 0;
+        MPI_Allreduce(&my_ok, &all_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+        mpi_filterRatesMPI_enabled = (all_ok == 1);
+        if (my_rank == 0)
+            cout << "MF-MPI-DIAG: filterRatesMPI_enabled=" << mpi_filterRatesMPI_enabled
+                 << " (my_ok=" << my_ok << " all_ok=" << all_ok << ")" << endl;
+        cout.flush();
     }
 #endif
 
@@ -3698,12 +3870,58 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         ModelCheckpoint out_model_info;
         at(model).set_name = at(model).aln->name;
         string tree_string;
-        
+
+        // MF-TIME marker — per-model wall start (seconds since epoch, ms precision).
+        // Emitted on EVERY rank, EVERY model. Combined with the end marker below,
+        // this lets us reconstruct each rank's eval-loop timeline offline and see
+        // exactly when each rank reached the filterRatesMPI broadcast.
+        double _mf_t_start = 0.0;
+#ifdef _IQTREE_MPI
+        _mf_t_start = MPI_Wtime();
+#else
+        {
+            struct timeval _tv; gettimeofday(&_tv, nullptr);
+            _mf_t_start = _tv.tv_sec + _tv.tv_usec * 1e-6;
+        }
+#endif
+
         // main call to estimate model parameters
         tree_string = at(model).evaluate(params, model_info, out_model_info,
                                          models_block, num_threads, brlen_type);
         at(model).computeICScores();
         at(model).setFlag(MF_DONE);
+
+        double _mf_t_end = 0.0;
+#ifdef _IQTREE_MPI
+        _mf_t_end = MPI_Wtime();
+#else
+        {
+            struct timeval _tv; gettimeofday(&_tv, nullptr);
+            _mf_t_end = _tv.tv_sec + _tv.tv_usec * 1e-6;
+        }
+#endif
+
+#ifdef _IQTREE_MPI
+        // MF-TIME line: one per model per rank. Production-safe (one line per
+        // model is far below stdout flush threshold). Parse via tools/parse_mf_time.py.
+        if (MPIHelper::getInstance().getNumProcesses() > 1) {
+            cout << "MF-TIME: rank " << MPIHelper::getInstance().getProcessID()
+                 << " model=" << model
+                 << " name=" << at(model).getName()
+                 << " subst=" << at(model).subst_name
+                 << " rate=" << at(model).orig_rate_name
+                 << " start=" << fixed << setprecision(3) << _mf_t_start
+                 << " end="   << fixed << setprecision(3) << _mf_t_end
+                 << " dt="    << fixed << setprecision(3) << (_mf_t_end - _mf_t_start)
+                 << " score=" << at(model).getScore()
+                 << " ref_remaining=" << mpi_ref_remaining
+                 << endl;
+            cout.flush();
+        }
+#endif
+        // Silence -Wunused-variable when both timing branches are dead in
+        // non-MPI builds (the gettimeofday path computes but doesn't use t_start/t_end).
+        (void)_mf_t_start; (void)_mf_t_end;
         
         int lower_model = getLowerKModel(model);
         // Phase 1 guard: skip pruning if the lower-k neighbour belongs to another
@@ -3716,6 +3934,22 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
             for (int higher_model = model; higher_model != -1;
                 higher_model = getHigherKModel(higher_model)) {
                 at(higher_model).setFlag(MF_IGNORED);
+#ifdef _IQTREE_MPI
+                // Counter-stall fix: intra-chain pruning silently discards
+                // higher-k ref-family models without going through the
+                // eval-and-decrement path, leaving mpi_ref_remaining
+                // stranded above 0. Decrement here for each pruned
+                // ref-family model except `model` itself (which is
+                // decremented in the omp critical section below).
+                // Atomic update is redundant at K_outer=1 (Fix H) but safe
+                // and forward-compatible with HH-NUMA Phase 2.
+                if (higher_model != (int)model
+                    && mpi_ref_subst_idx >= 0 && auto_rate
+                    && at(higher_model).subst_name == at(mpi_ref_subst_idx).subst_name) {
+#pragma omp atomic update
+                    mpi_ref_remaining--;
+                }
+#endif
             }
         }
 #ifdef _OPENMP
@@ -3752,23 +3986,38 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         }
 #ifdef _IQTREE_MPI
         // FCA state-machine trigger (replaces "model >= rate_block" for MPI
-        // np>1 builds). Fires filterRates exactly once, when this rank's
-        // reference family is fully evaluated. See setonix-iq/research/
-        // updated-modelfinder-dispatch.md §3.2 for design rationale.
+        // np>1 builds). Fires filterRatesMPI (Phase 0.5, MPI_Bcast) or legacy
+        // filterRates (fallback) exactly once when this rank's reference
+        // family is fully evaluated. See setonix-iq/research/
+        // updated-modelfinder-dispatch.md §§3.2, 19, 20 for rationale.
         bool ratefilter_fired_by_fca = false;
         if (mpi_ref_subst_idx >= 0 && auto_rate
             && at(model).subst_name == at(mpi_ref_subst_idx).subst_name) {
             mpi_ref_remaining--;
             ASSERT(mpi_ref_remaining >= 0);
-            if (mpi_ref_remaining == 0) {
-                filterRates(model);
+            if (mpi_ref_remaining <= 0 && !mpi_filterRatesMPI_fired) {
+                // Mark fired BEFORE the (possibly collective) call so that
+                // any re-entry through getNextModel's ref-family priority
+                // path sees the correct gate state.
+                mpi_filterRatesMPI_fired = true;
+                if (mpi_filterRatesMPI_enabled) {
+                    // Phase 0.5 — collective MPI_Bcast of rank 0's ok_rates.
+                    // Every rank must reach this call or the Bcast deadlocks;
+                    // the Step-8 Allreduce gate guarantees this precondition.
+                    filterRatesMPI(model);
+                } else {
+                    // Fallback: legacy per-rank filterRates (under-prunes
+                    // on ranks 1+ but is deadlock-safe).
+                    filterRates(model);
+                }
                 ratefilter_fired_by_fca = true;
                 if (verbose_mode >= VB_MED)
                     cout << "MF-MPI-DIAG: rank "
                          << MPIHelper::getInstance().getProcessID()
-                         << " filterRates fired at model=" << model
+                         << " fca-trigger fired at model=" << model
                          << " ref_subst=" << at(mpi_ref_subst_idx).subst_name
-                         << " best_score=" << best_score << endl;
+                         << " best_score=" << best_score
+                         << " mpi_bcast=" << mpi_filterRatesMPI_enabled << endl;
             }
         }
         if (!ratefilter_fired_by_fca && model >= rate_block)

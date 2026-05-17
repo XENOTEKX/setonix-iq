@@ -225,6 +225,13 @@ public:
         current_model = -1;
         syncChkPoint = nullptr;
         under_mix_finder = false;
+        // FCA Phase 0.5/0.6 state — promoted from evaluateAll() locals to
+        // members so getNextModel() can implement ref-family priority.
+        // Reset at the top of every evaluateAll() call.
+        mpi_ref_subst_idx = -1;
+        mpi_ref_remaining = 0;
+        mpi_filterRatesMPI_fired = false;
+        mpi_filterRatesMPI_enabled = false;
     }
     
     /** get ID of the best model */
@@ -244,6 +251,18 @@ public:
      Filter out all "non-promissing" rate models
      */
     void filterRates(int finished_model);
+
+#ifdef _IQTREE_MPI
+    /**
+     FCA Phase 0.5: cross-rank ok_rates broadcast.
+     Rank 0 computes ok_rates from its (sharp-BIC) reference family,
+     MPI_Bcast's the serialised set to all ranks, and every rank applies
+     the same pruning. Replaces per-rank filterRates() at the FCA trigger
+     point in evaluateAll(). See setonix-iq/research/
+     updated-modelfinder-dispatch.md §19 for full rationale.
+     */
+    void filterRatesMPI(int finished_model);
+#endif
 
     /**
      Filter out all "non-promissing" substitution models
@@ -338,9 +357,27 @@ public:
 
     /** whether it is under the process of mixture finder */
     bool under_mix_finder;
-    
+
+    // ---------------------------------------------------------------------
+    // FCA Phase 0.5/0.6 state — public so getNextModel() and evaluateAll()
+    // can share. Reset at the top of every evaluateAll() invocation for
+    // MixtureFinder/PartitionFinder repeated-call safety.
+    // ---------------------------------------------------------------------
+
+    /** index of this rank's first non-IGNORED model (defines ref family). -1 if FCA inactive. */
+    int mpi_ref_subst_idx;
+
+    /** count of this rank's own ref-family models still pending (not DONE, not IGNORED). */
+    int mpi_ref_remaining;
+
+    /** has filterRatesMPI fired on this rank already? (single-fire guard) */
+    bool mpi_filterRatesMPI_fired;
+
+    /** Phase 0.5 broadcast active? false means fall back to legacy per-rank filterRates. */
+    bool mpi_filterRatesMPI_enabled;
+
 private:
-    
+
     /** current model */
     int64_t current_model;
 };
