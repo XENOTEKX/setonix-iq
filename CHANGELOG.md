@@ -194,7 +194,7 @@ SPR phase (~764 s for AA 100K, ~227 s for DNA 100K) runs in OMP within each rank
 |-----|------|--------|-------|-------|------|
 | ~~168584736~~ | `mf-iso-aa-100k-2n-full` | **FCA mf-iso** (np=2×103T) | 2×normalsr | **DONE** exit=0, 00:09:31 | **PASS** lnL −7,541,976.853 ✓, LG+G4 ✓, MF 149.029 s, total 537.754 s; filterRatesMPI fired (model=3, pruned=81) ✓ |
 | ~~168584737~~ | `mf-iso-dna-100k-2n-full` | **FCA mf-iso** (np=2×103T) | 2×normalsr | **DONE** exit=0, 00:02:44 | **PASS** lnL −5,692,984.532 ✓, F81+F+G4 ✓, MF 26.252 s, total 113.754 s; filterRatesMPI fired (model=3, pruned=63) ✓ |
-| 168586094 | `mf-iso-aa-1m-8n-full` | **FCA mf-iso** (np=8×103T) | 8×normalsr | **Q** | AA 1M Full MF+SPR. Ref lnL −78,605,196.573 (168425491) ±1.0 |
+| ~~168586094~~ | `mf-iso-aa-1m-8n-full` | **FCA mf-iso** (np=8×103T) | 8×normalsr | **DONE** exit=0, 01:01:12 | **PASS** lnL −78,605,196.497 ✓ (diff 0.076 < 1.0), LG+G4 ✓, MF 1,443.892 s (**5.26×**), total 3,671.618 s (**6.20× e2e**); filterRatesMPI fired (model=7, pruned=15) ✓ |
 
 #### Acceptance criteria — Full runs
 
@@ -207,7 +207,7 @@ SPR phase (~764 s for AA 100K, ~227 s for DNA 100K) runs in OMP within each rank
 |-----|------|--------|------|-------|---------|------|
 | ~~168583449~~ | `mf-iso-aa-1m-2n` | **FCA mf-iso** (MPI, np=2×103T) | `normalsr` 2×SPR | **DONE** exit=0, 00:52:05 | **PASS** lnL −78,605,196.443 ✓ (diff 0.130 < 1.0), LG+G4 ✓, MF 3,059.648 s (2.48×), filterRatesMPI fired (model=3, pruned=81) ✓ |
 | ~~168583450~~ | `mf-iso-aa-1m-4n` | **FCA mf-iso** (MPI, np=4×103T) | `normalsr` 4×SPR | **DONE** exit=0, 00:34:02 | **PASS** lnL −78,605,196.445 ✓ (diff 0.128 < 1.0), LG+G4 ✓, MF 1,976.767 s (**3.84×**), filterRatesMPI fired (model=3, pruned=39) ✓ |
-| 168586094 | `mf-iso-aa-1m-8n-full` | **FCA mf-iso** (MPI, np=8×103T) | `normalsr` 8×SPR | **R** | 00:36 | **Full MF+SPR** (-m TEST). Ref lnL −78,605,196.573 (168425491) ±1.0 |
+| ~~168586094~~ | `mf-iso-aa-1m-8n-full` | **FCA mf-iso** (MPI, np=8×103T) | `normalsr` 8×SPR | **DONE** | 01:01:12 | **PASS** lnL −78,605,196.497 ✓ (diff 0.076 < 1.0), LG+G4 ✓, MF 1,443.892 s (**5.26×**), total 3,671.618 s; filterRatesMPI fired (model=7, pruned=15) ✓ |
 
 #### Acceptance criteria — AA 1M
 
@@ -216,7 +216,7 @@ SPR phase (~764 s for AA 100K, ~227 s for DNA 100K) runs in OMP within each rank
 - |lnL − ref| < 1.0
 - filterRatesMPI fires at np=2 and np=4
 - MF wall np=2 < 7,587 s; MF wall np=4 < MF wall np=2
-- **Full run (168586094):** lnL = −78,605,196.573 ±1.0 (LG+G4), filterRatesMPI fires, MF wall np=8 < MF wall np=4
+- **Full run (168586094):** ✅ PASS — lnL = −78,605,196.497 (diff 0.076 < 1.0 ✓), LG+G4 ✓, MF 1,443.892 s (**5.26×** vs baseline), total 3,671.618 s (**6.20×** e2e), filterRatesMPI fired (model=7, pruned=15) ✓
 
 ---
 
@@ -247,6 +247,7 @@ Full-run FCA rows (`-m TEST`) report the final ML-tree lnL after SPR optimisatio
 | **168425491** | **AA 1M** | **Baseline full (MF+SPR)** | **Baseline** | **1 normalsr** | **103T OMP** | **LG+G4** | **−78,605,196.573** | **157,213,128.6176** | **7,587.459** | **Done (authoritative baseline)** |
 | ~~168583449~~ | AA 1M | FCA np=2 TESTONLY | FCA mf-iso | 2 normalsr | 2×103T MPI | LG+G4 | −78,605,196.443 | 157,213,128.651 | 3,059.648 | **PASS ✓** |
 | ~~168583450~~ | AA 1M | FCA np=4 TESTONLY | FCA mf-iso | 4 normalsr | 4×103T MPI | LG+G4 | −78,605,196.445 | 157,213,128.651 | 1,976.767 | **PASS ✓** |
+| ~~168586094~~ | AA 1M | **FCA np=8 Full (MF+SPR)** | FCA mf-iso | 8 normalsr | 8×103T MPI | LG+G4 | −78,605,196.497 | — | 1,443.892 | **PASS ✓** total 3,671.618 s (**6.20× e2e**) |
 | ~~168573852~~ | AA 100K | Baseline TESTONLY | Baseline | 1 normalsr | 103T OMP | LG+G4 | −7,541,976.860 | 15,086,233.282 | 400.582 | Done (baseline) |
 | ~~168577707~~ | AA 100K | FCA np=1 TESTONLY | FCA mf-iso | 1 normalsr | 1×103T MPI | LG+G4 | −7,541,976.862 | 15,086,233.2835 | 257.355 | **PASS ✓** |
 | ~~168577708~~ | AA 100K | FCA np=2 TESTONLY | FCA mf-iso | 2 normalsr | 2×103T MPI | LG+G4 | −7,541,976.853 | 15,086,233.2646 | 150.567 | **PASS ✓** |
@@ -260,12 +261,12 @@ Full-run FCA rows (`-m TEST`) report the final ML-tree lnL after SPR optimisatio
 
 #### MF walltime speedup (FCA TESTONLY vs Baseline TESTONLY)
 
-| Dataset | Baseline | np=1 | np=2 | np=4 |
-|---------|----------|------|------|------|
-| AA 100K | 400.582 s | 257.355 s (1.6×) | 150.567 s (**2.7×**) | — |
-| DNA 100K | 31.802 s | 39.169 s (0.8×) | 27.065 s (1.2×) | — |
-| DNA 1M | 2,802 s (†3,501 s) | 5,149.692 s (0.68×†) | TBD | — |
-| AA 1M | 7,587 s | — | 3,059.648 s (**2.48×**) | 1,976.767 s (**3.84×**) |
+| Dataset | Baseline | np=1 | np=2 | np=4 | np=8 |
+|---------|----------|------|------|------|------|
+| AA 100K | 400.582 s | 257.355 s (1.6×) | 150.567 s (**2.7×**) | — | — |
+| DNA 100K | 31.802 s | 39.169 s (0.8×) | 27.065 s (1.2×) | — | — |
+| DNA 1M | 2,802 s (†3,501 s) | 5,149.692 s (0.68×†) | TBD | — | — |
+| AA 1M | 7,587 s | — | 3,059.648 s (**2.48×**) | 1,976.767 s (**3.84×**) | **1,443.892 s (5.26×)** |
 
 DNA 100K np=1 is slower than baseline: MPI startup + sequential outer loop overhead dominates a 31 s run.
 DNA 1M np=1 (5,149.692 s) is also slower than the SPR baseline (3,501 s): at np=1 the FCA binary has MPI overhead and different code paths with no parallelism benefit. This is **expected** — FCA gains manifest at np≥2. DNA 1M np=1 is however **1.99× faster than CLX** (10,230 s), confirming the Sapphire Rapids + AVX-512 gains.
@@ -279,6 +280,7 @@ AA 1M scaling: np=2 → np=4 achieves 1.55× further MF speedup (3,059.648 → 1
 |---------|---------------------|---------------------|---------|------------|----------|
 | DNA 100K | 289 s (168425674) | **113.754 s** (168584737) | **2.54×** | 61.7→26.3 s (2.35×) | ~87 s |
 | AA 100K | 1,170 s (168425673) | **537.754 s** (168584736) | **2.18×** | 400.6→149.0 s (2.69×) | ~389 s |
+| AA 1M | 22,776 s (168425491) | **3,671.618 s** (168586094, np=8) | **6.20×** | 7,587→1,443.9 s (5.26×) | ~2,228 s |
 
 ---
 

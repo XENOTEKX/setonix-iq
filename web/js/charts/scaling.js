@@ -46,9 +46,11 @@ export function render(canvas, runsIndex) {
     const family = buildFamily(r);
 
     if (r.non_canonical) {
-      // Non-canonical: group by (platform, dataset, nc_label) — one line per patch variant.
+      // Non-canonical: group by (platform, dataset, family, nc_label) — one line per patch
+      // variant, but with family included so e.g. mf-iso (full) vs (MF-only) remain separate
+      // even when they share the same nc_label.
       const refLabel = r.non_canonical_label || family || 'ref';
-      const key = `${platformLabel(plat)} · ${ds} · ${refLabel}`;
+      const key = `${platformLabel(plat)} · ${ds} · ${family} · ${refLabel}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds, family, points: [] });
       byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
     } else {
