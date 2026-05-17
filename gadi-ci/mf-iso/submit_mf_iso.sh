@@ -28,11 +28,19 @@
 #   ./submit_mf_iso.sh dna_1m_2node       # qsub DNA 1M MF-iso 2-node
 #   ./submit_mf_iso.sh dna_1m_all         # qsub baseline → 1node → 2node chained
 #
-# Usage (AA 1M — no baseline needed; ref = 168425491):
-#   ./submit_mf_iso.sh aa_1m_2node        # qsub AA 1M MF-iso 2-node
-#   ./submit_mf_iso.sh aa_1m_4node        # qsub AA 1M MF-iso 4-node
+# Usage (AA 1M MF-only / TESTONLY — no baseline needed; ref = 168425491):
+#   ./submit_mf_iso.sh aa_1m_2node        # qsub AA 1M MF-iso 2-node (MF-only)
+#   ./submit_mf_iso.sh aa_1m_4node        # qsub AA 1M MF-iso 4-node (MF-only)
 #   ./submit_mf_iso.sh aa_1m_all          # qsub 2node → 4node chained (afterok)
 #   ./submit_mf_iso.sh aa_1m_8node_full   # qsub AA 1M FCA full run (8-node MF+SPR)
+#
+# Usage (AA 1M full runs — MF+SPR, FCA mf-iso binary, scaling study):
+#   ./submit_mf_iso.sh aa_1m_1node_full   # qsub AA 1M FCA full run (1-node,  103T)
+#   ./submit_mf_iso.sh aa_1m_2node_full   # qsub AA 1M FCA full run (2-node,  206T)
+#   ./submit_mf_iso.sh aa_1m_4node_full   # qsub AA 1M FCA full run (4-node,  412T)
+#   ./submit_mf_iso.sh aa_1m_16node_full  # qsub AA 1M FCA full run (16-node, 1648T)
+#   ./submit_mf_iso.sh aa_1m_full_all     # qsub 1→2→4→16-node chained (afterok)
+#   # Note: 8-node full run already completed as job 168586094.
 #
 # Usage (Full runs — MF+SPR end-to-end parity, same FCA mf-iso binary):
 #   ./submit_mf_iso.sh aa_100k_full       # qsub AA 100K FCA full run (2-node)
@@ -209,6 +217,50 @@ case "${1:-}" in
         echo "  Baseline ref (168425491): lnL=-78605196.573  LG+G4  MF=7587.459s  tol=1.0"
         ;;
 
+    # ── AA 1M full runs: MF+SPR scaling study (FCA mf-iso binary) ────────────
+    aa_1m_1node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_aa_1m_1node_full.sh)"
+        echo "  AA 1M 1-node full run job: ${jid}"
+        echo "  Ref: lnL=-78,605,196.573  LG+G4  (168425491)  tol=1.0"
+        ;;
+    aa_1m_2node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_aa_1m_2node_full.sh)"
+        echo "  AA 1M 2-node full run job: ${jid}"
+        echo "  Ref: lnL=-78,605,196.573  LG+G4  (168425491)  tol=1.0"
+        ;;
+    aa_1m_4node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_aa_1m_4node_full.sh)"
+        echo "  AA 1M 4-node full run job: ${jid}"
+        echo "  Ref: lnL=-78,605,196.573  LG+G4  (168425491)  tol=1.0"
+        ;;
+    aa_1m_16node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_aa_1m_16node_full.sh)"
+        echo "  AA 1M 16-node full run job: ${jid}"
+        echo "  Ref: lnL=-78,605,196.573  LG+G4  (168425491)  tol=1.0"
+        echo "  np=8 full ref (168586094): lnL=-78,605,196.506, MF 1443.892 s"
+        ;;
+    aa_1m_full_all)
+        echo "[submit-mf-iso] qsub AA 1M full scaling: 1node → 2node → 4node → 16node (afterok chain)"
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        one_jid="$(qsub_stage run_mf_iso_aa_1m_1node_full.sh)"
+        echo "  AA 1M 1-node full run job:  ${one_jid}"
+        two_jid="$(qsub_stage run_mf_iso_aa_1m_2node_full.sh "${one_jid}")"
+        echo "  AA 1M 2-node full run job:  ${two_jid}  (depends on ${one_jid})"
+        four_jid="$(qsub_stage run_mf_iso_aa_1m_4node_full.sh "${two_jid}")"
+        echo "  AA 1M 4-node full run job:  ${four_jid}  (depends on ${two_jid})"
+        sixteen_jid="$(qsub_stage run_mf_iso_aa_1m_16node_full.sh "${four_jid}")"
+        echo "  AA 1M 16-node full run job: ${sixteen_jid}  (depends on ${four_jid})"
+        echo ""
+        echo "  Monitor with: qstat -fx ${one_jid} ${two_jid} ${four_jid} ${sixteen_jid}"
+        echo ""
+        echo "  Acceptance gate: lnL=-78,605,196.573 ±1.0  LG+G4  (SPR ref 168425491)"
+        echo "  Note: np=8 full run already completed as job 168586094."
+        ;;
+
     # ── Full runs: MF+SPR end-to-end parity (FCA mf-iso binary) ────────────
     aa_100k_full)
         [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
@@ -242,6 +294,7 @@ case "${1:-}" in
         echo "           |dna_100k_baseline|dna_100k_1node|dna_100k_2node|dna_100k_all" >&2
         echo "           |dna_1m_baseline|dna_1m_1node|dna_1m_2node|dna_1m_all" >&2
         echo "           |aa_1m_2node|aa_1m_4node|aa_1m_all|aa_1m_8node_full" >&2
+        echo "           |aa_1m_1node_full|aa_1m_2node_full|aa_1m_4node_full|aa_1m_16node_full|aa_1m_full_all" >&2
         echo "           |aa_100k_full|dna_100k_full|full_100k_all}" >&2
         exit 2
         ;;
