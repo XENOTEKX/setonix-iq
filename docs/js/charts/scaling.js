@@ -3,7 +3,7 @@
 // Canonical series are solid/dashed by platform; non-canonical patch/variant
 // series are shown as lighter named series (initially hidden).
 
-import { platformColour, buildFamily, dimLegendHidden } from '../utils.js?v=06ea76a79376';
+import { platformColour, buildFamily, dimLegendHidden } from '../utils.js?v=554e916c9008';
 
 // Colour overrides for known MF2/patch families so they stand out.
 const FAMILY_COLOURS = {
@@ -46,16 +46,18 @@ export function render(canvas, runsIndex) {
     const family = buildFamily(r);
 
     if (r.non_canonical) {
-      // Non-canonical: group by (platform, dataset, nc_label) — one line per patch variant.
+      // Non-canonical: group by (platform, dataset, family, nc_label) — one line per patch
+      // variant, but with family included so e.g. mf-iso (full) vs (MF-only) remain separate
+      // even when they share the same nc_label.
       const refLabel = r.non_canonical_label || family || 'ref';
-      const key = `${platformLabel(plat)} · ${ds} · ${refLabel}`;
+      const key = `${platformLabel(plat)} · ${ds} · ${family} · ${refLabel}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds, family, points: [] });
-      byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s, n: r.n_mpi_ranks || null, t: r.threads_per_node || null });
+      byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
     } else {
       // Canonical: group by (platform, dataset) — all canonical variants share one line.
       const key = `${platformLabel(plat)} · ${ds}`;
       if (!byKey.has(key)) byKey.set(key, { plat, ds, family, points: [] });
-      byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s, n: r.n_mpi_ranks || null, t: r.threads_per_node || null });
+      byKey.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
     }
   }
 
@@ -110,11 +112,7 @@ export function render(canvas, runsIndex) {
         legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
-            label: (ctx) => {
-              const r = ctx.raw;
-              const tLabel = (r.n && r.t) ? `${r.n} nodes \xd7 ${r.t}T` : `T=${ctx.parsed.x}`;
-              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}s @ ${tLabel}`;
-            },
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}s @ T=${ctx.parsed.x}`,
           },
         },
       },

@@ -68,7 +68,7 @@ for t in "${TESTS[@]}"; do
     start=$(date +%s.%N)
     eval "${cmd}" > "${prefix}.stdout" 2>&1 || true
     end=$(date +%s.%N)
-    elapsed=$(python3 -c "print(f'{${end}-${start}:.3f}')")
+    elapsed=$(/usr/bin/python3.11 -c "print(f'{${end}-${start}:.3f}')")
 
     reported=""
     if [[ -f "${prefix}.iqtree" ]]; then
@@ -82,17 +82,17 @@ for t in "${TESTS[@]}"; do
         [[ -n "${reported}" ]] && status="pass"
         diff="0"
     elif [[ -n "${reported}" ]]; then
-        diff=$(python3 -c "print(abs(${reported} - (${expected})))" 2>/dev/null || echo "999")
+        diff=$(/usr/bin/python3.11 -c "print(abs(${reported} - (${expected})))" 2>/dev/null || echo "999")
         # 1e-3 tolerance
-        ok=$(python3 -c "print(int(${diff} < 1e-3))" 2>/dev/null || echo 0)
+        ok=$(/usr/bin/python3.11 -c "print(int(${diff} < 1e-3))" 2>/dev/null || echo 0)
         [[ "${ok}" == "1" ]] && status="pass" || status="fail"
     fi
 
     if [[ "${status}" == "pass" ]]; then pass=$((pass+1)); else fail=$((fail+1)); fi
-    total_time=$(python3 -c "print(${total_time} + ${elapsed})")
+    total_time=$(/usr/bin/python3.11 -c "print(${total_time} + ${elapsed})")
 
     sep=","; [[ ${first} -eq 1 ]] && sep=""; first=0
-    timing_json="${timing_json}${sep}{\"command\":$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "${cmd}"),\"time_s\":${elapsed}}"
+    timing_json="${timing_json}${sep}{\"command\":$(/usr/bin/python3.11 -c "import json,sys; print(json.dumps(sys.argv[1]))" "${cmd}"),\"time_s\":${elapsed}}"
     verify_json="${verify_json}${sep}{\"file\":\"${file}\",\"status\":\"${status}\",\"expected\":$([[ \"${expected}\" == \"auto\" ]] && echo 0 || echo ${expected}),\"reported\":${reported:-0},\"diff\":${diff}}"
 done
 

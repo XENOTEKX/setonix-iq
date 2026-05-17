@@ -150,10 +150,6 @@ def normalize_run(run: dict) -> dict:
             run["platform"] = "setonix"
 
     hints = infer_from_commands(run)
-    # Propagate explicit top-level fields when command parsing yields nothing
-    # (cpu_bench runs use -nt instead of -T, and dataset is a full path).
-    if hints["threads"] is None and run.get("threads") is not None:
-        hints["threads"] = run["threads"]
     profile = run.get("profile") or {}
     if not profile.get("dataset") and hints["dataset"]:
         profile["dataset"] = hints["dataset"]
@@ -179,8 +175,8 @@ def summarize_run(run: dict) -> dict:
     # counts) — fall back to those before the curated lookup.
     ds_gt = run.get("dataset_info") or {}
     fallback = dataset_lookup(dataset) or {}
-    taxa = ds_gt.get("taxa") or ds_gt.get("fasta_taxa") or fallback.get("taxa") or run.get("n_taxa")
-    sites = ds_gt.get("sites") or ds_gt.get("fasta_sites") or fallback.get("sites") or run.get("seq_len")
+    taxa = ds_gt.get("taxa") or ds_gt.get("fasta_taxa") or fallback.get("taxa")
+    sites = ds_gt.get("sites") or ds_gt.get("fasta_sites") or fallback.get("sites")
     patterns = ds_gt.get("patterns") or ds_gt.get("fasta_patterns")
     if ds_gt.get("file_size_bytes"):
         size_mb = round(ds_gt["file_size_bytes"] / 1_000_000, 2)
@@ -188,16 +184,6 @@ def summarize_run(run: dict) -> dict:
     else:
         size_mb = fallback.get("size_mb")
         size_estimated = fallback.get("size_estimated", False)
-
-    # MPI / total-threads resolution.
-    # run.get("threads") stores *total* threads for cpu_bench runs (set by
-    # the batch submission script: np * T_per_rank). p.get("threads") is
-    # the per-rank count inferred from the "-T N" command argument.
-    # Prefer the explicit total; fall back to per-rank for old profile-style
-    # runs that never carried a top-level threads field.
-    _nranks    = env.get("mpi_nranks") or p.get("nranks") or None
-    _per_rank  = p.get("threads") or hints.get("threads")
-    _total     = run.get("threads") or p.get("threads") or hints.get("threads")
 
     return {
         "run_id": run.get("run_id"),
@@ -214,18 +200,16 @@ def summarize_run(run: dict) -> dict:
         "patterns": patterns,
         "informative_sites": ds_gt.get("informative_sites"),
         "constant_sites": ds_gt.get("constant_sites"),
-        "sequence_type": run.get("data_type") or ds_gt.get("sequence_type"),
+        "sequence_type": ds_gt.get("sequence_type"),
         "size_mb": size_mb,
         "size_estimated": size_estimated,
-        "model": mf.get("model_selected") or hints.get("model") or run.get("summary", {}).get("model_selected"),
+        "model": mf.get("model_selected") or hints.get("model"),
         "model_bic": mf.get("bic"),
         "model_aic": mf.get("aic"),
         "gamma_alpha": mf.get("gamma_alpha"),
         "tree_length": mf.get("tree_length"),
-        "log_likelihood": mf.get("log_likelihood") or run.get("summary", {}).get("lnL"),
-        "threads": _total,
-        "n_mpi_ranks": _nranks if _nranks and int(_nranks) > 1 else None,
-        "threads_per_node": _per_rank if _nranks and int(_nranks) > 1 else None,
+        "log_likelihood": mf.get("log_likelihood"),
+        "threads": run.get("threads") or p.get("threads") or hints.get("threads"),
         "hostname": env.get("hostname"),
         "cpu": env.get("cpu"),
         "date": env.get("date"),

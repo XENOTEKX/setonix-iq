@@ -3,23 +3,27 @@
 # AA, 100K sites (100 taxa), 4 MPI ranks × 103 OpenMP threads = 412T total
 # 4 × Sapphire Rapids exclusive nodes (normalsr-exec, 104 cores each)
 #
-# PURPOSE: Measure MF2 4-node ModelFinder speedup on AA 100K.
-# Predicted: MF ~100 s (4× vs single-node 399.456 s) + tree ~764 s = ~866 s total
-# Predicted speedup: 1,169.556 / ~866 ≈ 1.35×  (Amdahl ceiling: tree search on rank 0 only)
+# PURPOSE: Measure MF2 4-node ModelFinder + tree-search speedup on AA 100K.
+# Predicted (Phase 0.6 ref-family priority): MF ~300-400 s + tree ~198 s = ~500-600 s total
+# Predicted speedup: 1,169.556 / ~550 ≈ 2.1×  (tree search MPI-distributed across all 4 ranks)
+# Observed Phase 0.5 (168481332): MF 873 s (sync trap — 88% threads idle); Phase 0.6 fixes this.
+# Observed Phase 0.5 (168481332): MF 573 s + tree 198 s = 776 s total (1.51×) [pre-FCA baseline 168446153]
 #
-# Binary:  iqtree3-mpi  (MF2 LPT dispatch, R2+AVX-512, ICX)
-#   /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi
+# Binary:  iqtree3-mpi  (MF2 LPT dispatch + Phase 0.6 ref-family priority + Phase 0.5 ok_rates broadcast)
+#   /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi  (22:47 AEST 2026-05-16, 145,056,888 bytes)
 # Parity:  OMP_PER_RANK=103, numactl --localalloc, KMP_BLOCKTIME=200, seed=1
 #          — exactly matching run_cpu_bench_aa_100k_spr.sh (168425673)
 #
 # Node layout: 4 × Sapphire Rapids 8470Q (104 cores each):
+# All 4 ranks participate in BOTH ModelFinder AND tree search (MF2 fully distributed).
+# Tree search scales near-linearly: 717 s (np=1) → 383 s (np=2) → 198 s (np=4) [168446151-153].
 #   ┌─── node A ──────────┐  ┌─── node B ──────────┐
 #   │ rank 0  103 OMP     │  │ rank 1  103 OMP     │
-#   │ (tree + MF)         │  │ (MF only)           │
+#   │ (MF + tree search)  │  │ (MF + tree search)  │
 #   └─────────────────────┘  └─────────────────────┘
 #   ┌─── node C ──────────┐  ┌─── node D ──────────┐
 #   │ rank 2  103 OMP     │  │ rank 3  103 OMP     │
-#   │ (MF only)           │  │ (MF only)           │
+#   │ (MF + tree search)  │  │ (MF + tree search)  │
 #   └─────────────────────┘  └─────────────────────┘
 #
 # Build tag:    mf2_full_icx_avx512_r2_lpt
@@ -195,10 +199,10 @@ echo "╔═══════════════════════�
 echo "║  AA 100K MF2 Benchmark — MPI 4-node (SPR full-node)"
 echo "║  run_id:       ${RUN_ID}"
 echo "║  ranks × OMP: ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS}T, 4 nodes)"
-echo "║  node A:       ${HOST_A}  (rank 0 — tree + MF)"
-echo "║  node B:       ${HOST_B}  (rank 1 — MF only)"
-echo "║  node C:       ${HOST_C}  (rank 2 — MF only)"
-echo "║  node D:       ${HOST_D}  (rank 3 — MF only)"
+echo "║  node A:       ${HOST_A}  (rank 0 — MF + tree search)"
+echo "║  node B:       ${HOST_B}  (rank 1 — MF + tree search)"
+echo "║  node C:       ${HOST_C}  (rank 2 — MF + tree search)"
+echo "║  node D:       ${HOST_D}  (rank 3 — MF + tree search)"
 echo "║  binary:       $(basename "${IQTREE}")"
 echo "║  alignment:    $(basename "${ALIGNMENT}")"
 echo "║  work_dir:     ${WORK_DIR}"
@@ -348,9 +352,9 @@ record = {
     },
     "profile": {"nranks": nranks, "omp_per_rank": omp_per_rank,
                 "placement": "mpi_4node_fullnode", "perf_cmd": perf_cmd, "metrics": metrics},
-    "build_tag":           "mf2_full_icx_avx512_r2_fixh",
+    "build_tag":           "mf2_full_icx_avx512_r2_fca",
     "non_canonical":       True,
-    "non_canonical_label": "MF2 Full (Fix A\u2013H) \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512",
+    "non_canonical_label": "MF2 FCA (Family-Local, Cost-Aware, Always-Filter) \u00b7 ICX+MPI \u00b7 R2 \u00b7 AVX-512",
     "group":               "aa_100k_mf2_scaling",
 }
 out_path = os.path.join(runs, rid + ".json")

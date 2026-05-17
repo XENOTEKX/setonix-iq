@@ -23,8 +23,8 @@
   ],
   "env": {
     "hostname": "gadi-cpu-spr-0711.gadi.nci.org.au",
-    "date": "",
-    "cpu": "",
+    "date": "Sat May  9 20:35:37 2026",
+    "cpu": "AVX512, FMA3, 503 GB RAM",
     "cores": 208,
     "gcc": "",
     "icc": "",
@@ -129,9 +129,443 @@
     "vtune_uarch": null,
     "artefacts": {
       "work_dir": "/scratch/um09/as1708/iqtree3-3.1.2/gadi-ci/profiles/xlarge_mf_208t_icx_mpi2x104_2node_socket_avx512_r2_167973941"
+    },
+    "memory_timeseries": [
+      {
+        "t_s": 0.0,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1813,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 10.01,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1827,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 20.02,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1836,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 30.03,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1840,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 40.04,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1842,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 50.05,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1846,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 60.06,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1854,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 70.07,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1862,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 80.08,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1871,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 90.09,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1879,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 100.1,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1884,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 110.11,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1893,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 120.12,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1898,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 130.13,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 140.14,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 150.15,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 160.16,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 170.17,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 180.18,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 190.19,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 200.2,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 210.21,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1924,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 220.22,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1927,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 230.23,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1932,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 240.24,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1937,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 250.25,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1939,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 260.26,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1941,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 270.27,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1943,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 280.28,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1947,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 290.29,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1949,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 300.3,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1951,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 310.31,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1953,
+        "involuntary_cs": 0
+      },
+      {
+        "t_s": 320.32,
+        "rss_kb": 20160,
+        "peak_kb": 20160,
+        "vms_kb": 296760,
+        "threads_now": 4,
+        "voluntary_cs": 1956,
+        "involuntary_cs": 0
+      }
+    ],
+    "peak_rss_kb": 20160,
+    "io": {
+      "rchar": 1381192,
+      "wchar": 40716,
+      "syscr": 6899,
+      "syscw": 378,
+      "read_bytes": 48091136,
+      "write_bytes": 8744960,
+      "cancelled_write_bytes": 0
     }
   },
   "build_tag": "icx_mpi2x104_2node_socket_numa_ft_r2_avx512",
   "non_canonical": true,
-  "non_canonical_label": "AVX-512 + R2"
+  "non_canonical_label": "AVX-512 + R2",
+  "dataset_info": {
+    "file": "xlarge_mf.fa",
+    "file_size_bytes": 20002400,
+    "fasta_taxa": 200,
+    "fasta_sites": 100000,
+    "taxa": 200,
+    "sites": 100000,
+    "patterns": 98858,
+    "constant_sites": 468,
+    "invariant_sites": 468,
+    "informative_sites": 97924,
+    "sequence_type": "DNA"
+  },
+  "modelfinder": {
+    "best_model_bic": "GTR+R4",
+    "model_selected": "GTR+F+R4",
+    "log_likelihood": -10956936.6398,
+    "unconstrained_log_likelihood": -1147914.3716,
+    "tree_length": 41.667,
+    "bic": 21918605.092,
+    "aic": 21914695.2796,
+    "aicc": 21914698.6802,
+    "candidates": [
+      {
+        "model": "GTR+R4",
+        "log_likelihood": -10956932.37,
+        "aic": 21914680.74,
+        "aic_weight": 0.342,
+        "aicc": 21914684.091,
+        "aicc_weight": 0.342,
+        "bic": 21918562.014,
+        "bic_weight": 0.342
+      },
+      {
+        "model": "SYM+R4",
+        "log_likelihood": -10956932.41,
+        "aic": 21914680.82,
+        "aic_weight": 0.329,
+        "aicc": 21914684.171,
+        "aicc_weight": 0.329,
+        "bic": 21918562.094,
+        "bic_weight": 0.329
+      },
+      {
+        "model": "SYM+R4",
+        "log_likelihood": -10956932.41,
+        "aic": 21914680.82,
+        "aic_weight": 0.329,
+        "aicc": 21914684.171,
+        "aicc_weight": 0.329,
+        "bic": 21918562.094,
+        "bic_weight": 0.329
+      },
+      {
+        "model": "GTR+F+R4",
+        "log_likelihood": -10956936.85,
+        "aic": 21914695.7,
+        "aic_weight": 0.000193,
+        "aicc": 21914699.101,
+        "aicc_weight": 0.000188,
+        "bic": 21918605.512,
+        "bic_weight": 1.23e-10
+      },
+      {
+        "model": "TVM+R4",
+        "log_likelihood": -10958275.97,
+        "aic": 21917365.94,
+        "aic_weight": 0.0,
+        "aicc": 21917369.275,
+        "aicc_weight": 0.0,
+        "bic": 21921237.701,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TVMe+R4",
+        "log_likelihood": -10958276.01,
+        "aic": 21917366.02,
+        "aic_weight": 0.0,
+        "aicc": 21917369.355,
+        "aicc_weight": 0.0,
+        "bic": 21921237.781,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TVMe+R4",
+        "log_likelihood": -10958276.01,
+        "aic": 21917366.02,
+        "aic_weight": 0.0,
+        "aicc": 21917369.355,
+        "aicc_weight": 0.0,
+        "bic": 21921237.781,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TVM+F+R4",
+        "log_likelihood": -10958305.06,
+        "aic": 21917430.12,
+        "aic_weight": 0.0,
+        "aicc": 21917433.504,
+        "aicc_weight": 0.0,
+        "bic": 21921330.419,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TIM3+R4",
+        "log_likelihood": -10959738.0,
+        "aic": 21920288.0,
+        "aic_weight": 0.0,
+        "aicc": 21920291.318,
+        "aicc_weight": 0.0,
+        "bic": 21924150.248,
+        "bic_weight": 0.0
+      },
+      {
+        "model": "TIM3e+R4",
+        "log_likelihood": -10959738.0,
+        "aic": 21920288.0,
+        "aic_weight": 0.0,
+        "aicc": 21920291.318,
+        "aicc_weight": 0.0,
+        "bic": 21924150.248,
+        "bic_weight": 0.0
+      }
+    ]
+  }
 }

@@ -12,23 +12,23 @@
 #   MF2_DIR=/scratch/um09/as1708/iqtree3-mf2 \
 #   bash gadi-ci/run_cpu_bench_aa_100k_mf2_batch.sh
 #
-# Expected results (post-Fix A+B+C, SPR+AVX-512 binary, tree on rank 0 only):
+# Expected results (Phase 0.5 FCA ok_rates broadcast, tree search MPI-distributed):
 #   Baseline: SPR binary 168425673 = 1,169.556 s (std MF + SPR tree, 1 node 103T)
-#   Tree wall (rank 0, T=103, SPR+AVX-512): ~717 s (fixed regardless of np)
-#   MF wall improves with np via Fix A (LPT stripe) + Fix B (OMP-across-models)
-#              + Fix C (per-rank filterRates ref + rate_block recompute)
+#   Tree wall scales near-linearly with np (observed 168446151-153):
+#     np=1: ~717 s  np=2: ~383 s  np=4: ~198 s  (3.63× speedup for 4× ranks)
+#   MF wall with Phase 0.5 FCA broadcast (ok_rates from rank 0 → all ranks):
 #
-#   Run           | Nodes | MF wall  | Tree wall | Total wall | Speedup vs baseline
-#   ______________|_______|__________|___________|____________|____________________
-#   aa_100k_mf2   |     1 | ~399 s   | ~717 s    | ~1,116 s   | ~1.05× (SPR+AVX-512 tree)
-#   aa_100k_mf2   |     2 | ~145 s   | ~717 s    | ~862 s     | ~1.36×
-#   aa_100k_mf2   |     4 | ~100 s   | ~717 s    | ~817 s     | ~1.43×
+#   Run           | Nodes | MF wall (proj) | Tree wall (obs) | Total (proj) | Speedup
+#   ______________|_______|________________|_________________|______________|________
+#   aa_100k_mf2   |     1 | ~1,277 s       | ~717 s          | ~1,994 s     | ~0.59× (MPI overhead at np=1)
+#   aa_100k_mf2   |     2 | ~180-240 s     | ~383 s          | ~565-625 s   | ~1.9-2.1×
+#   aa_100k_mf2   |     4 | ~95-150 s      | ~198 s          | ~295-350 s   | ~3.3-4.0×
 #
-# Amdahl ceiling: tree search (~64% of np1 total) runs on rank 0 only.
-# Max achievable speedup ≈ 1/(0.64 + 0.36/N):
-#   N=1: 1.00×  N=2: 1.20×  N=4: 1.33×  N=8: 1.40×
-# Fix C narrows MF fraction further → actual speedup tracks Amdahl more closely.
-# Fix D (proc_bind=spread): neutral for T=103 on 104-core SPR — no MF change expected.
+# Tree search is MPI-distributed across ALL ranks (not rank 0 only).
+# No Amdahl ceiling from tree search — both MF and tree phases scale with np.
+# Observed pre-Phase-0.5 baseline (168446151-153): MF unscaled due to filterRates bug.
+#   np=1: 1,309+717=2,026s  np=2: 969+383=1,355s  np=4: 573+198=776s (1.51×)
+
 #
 # Group: aa_100k_mf2_scaling (build_tag: mf2_full_icx_avx512_r2_lpt)
 

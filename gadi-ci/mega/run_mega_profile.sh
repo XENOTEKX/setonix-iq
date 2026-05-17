@@ -66,7 +66,7 @@ echo ""
 echo "[$(date +%H:%M:%S)] Snapshotting environment..."
 
 ENV_JSON="${WORK_DIR}/env.json"
-python3 <<PYEOF > "${ENV_JSON}"
+/usr/bin/python3.11 <<PYEOF > "${ENV_JSON}"
 import json, os, subprocess, hashlib, pathlib
 
 def sh(cmd, default=""):
@@ -117,7 +117,7 @@ env = {
   "gcc":      sh("gcc --version | head -1"),
   "icc":      sh("icc --version 2>/dev/null | head -1"),
   "icx":      sh("icx --version 2>/dev/null | head -1"),
-  "python":   sh("python3 --version"),
+  "python":   sh("/usr/bin/python3.11 --version"),
   "vtune_version": sh("vtune --version 2>&1 | head -1"),
   "iqtree_binary":  "${BUILD_DIR}/iqtree3",
   "iqtree_version": sh("${BUILD_DIR}/iqtree3 --version 2>&1 | head -1"),
@@ -156,7 +156,7 @@ echo "  → ${ENV_JSON}"
 # ─────────────────────────────────────────────────────────────────────────────
 SAMPLER_PY="${WORK_DIR}/_sampler.py"
 cat > "${SAMPLER_PY}" <<'PYEOF'
-#!/usr/bin/env python3
+#!/usr/bin/python3.11
 """Poll /proc/$pid for rss/io/numa/per-thread stats. One JSON line per tick."""
 import json, os, subprocess, sys, time, pathlib
 
@@ -302,7 +302,7 @@ if [[ -z "${INNER_PID:-}" ]]; then
 fi
 echo "  → perf pid=${IQTREE_PID} inner iqtree pid=${INNER_PID}"
 
-python3 "${SAMPLER_PY}" "${INNER_PID}" "${SAMPLE_JSONL}" 10 &
+/usr/bin/python3.11 "${SAMPLER_PY}" "${INNER_PID}" "${SAMPLE_JSONL}" 10 &
 SAMPLER_PID=$!
 
 wait "${IQTREE_PID}" || IQTREE_RC=$?
@@ -348,7 +348,7 @@ if command -v vtune >/dev/null 2>&1 && [[ "${IQTREE_RC}" -eq 0 ]]; then
               -format csv -report-output "${WORK_DIR}/vtune_hotspots.csv" \
               -csv-delimiter=comma 2>/dev/null || true
         # CSV → JSON for harvester consumption
-        python3 <<'PYEOF' > "${VTUNE_JSON}" || true
+        /usr/bin/python3.11 <<'PYEOF' > "${VTUNE_JSON}" || true
 import csv, json, os, sys
 csv_path = os.environ.get("WORK_DIR", ".") + "/vtune_hotspots.csv"
 if not os.path.isfile(csv_path):
@@ -384,7 +384,7 @@ if [[ "${IQTREE_RC}" -eq 0 ]]; then
             2>/dev/null | head -120 > "${WORK_DIR}/hotspots.txt" || true
 
         set +o pipefail
-        perf script -i "${PERF_DATA}" 2>/dev/null | python3 - <<'PYEOF' > "${WORK_DIR}/perf_folded.txt" || true
+        perf script -i "${PERF_DATA}" 2>/dev/null | /usr/bin/python3.11 - <<'PYEOF' > "${WORK_DIR}/perf_folded.txt" || true
 import sys, collections
 stacks = collections.Counter()
 current = []
@@ -412,7 +412,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 echo "[$(date +%H:%M:%S)] Writing profile_meta.json..."
 export WORK_DIR
-python3 <<PYEOF > "${WORK_DIR}/profile_meta.json"
+/usr/bin/python3.11 <<PYEOF > "${WORK_DIR}/profile_meta.json"
 import json, os, re
 
 work = "${WORK_DIR}"

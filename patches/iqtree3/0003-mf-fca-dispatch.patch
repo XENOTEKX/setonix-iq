@@ -1,0 +1,299 @@
+From ffb79a14abef4a3206936a95c4d87a9673e1605a Mon Sep 17 00:00:00 2001
+From: Ayush Samuel <as1708@gadi-login-09.gadi.nci.org.au>
+Date: Sat, 16 May 2026 16:51:53 +1000
+Subject: [PATCH] gadi-spr: FCA dispatch (Family-Local + Cost-Aware +
+ Always-Filter) for ModelFinder MPI
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Replaces the round-robin LPT stripe + rate_block-trigger filterRates (Fix A/C)
+with a single state-machine that fires filterRates exactly once when the rank's
+reference family is complete. Cost predictor now captures nstates^2, npat,
+ML-frequency overhead, and log2(ntaxa) tree size — eliminating the +F
+concentration that caused the np=4 AA 100K regression (2,335 s).
+
+Algorithm (single-pass Phase 0, see setonix-iq/research/updated-modelfinder-dispatch.md):
+1. cost(m) = nstates^2 * npat * rate_mult * freq_mult * log2(ntaxa)
+2. group by subst_name; greedy LPT (argmin rank_load), NOT round-robin
+3. per-rank state machine: mpi_ref_subst_idx + mpi_ref_remaining counter
+4. MF-MPI-DIAG: log lines for offline cost-predictor validation
+
+Backwards-compatible: non-MPI builds and np=1 MPI keep the original
+"model >= rate_block" trigger path. Diagnostic logging is always on for
+MPI np>1, with verbose_mode>=VB_MED adding per-trigger detail.
+
+Expected effect (AA 100K, SPR 2x52T):
+  np=1: 1289 s -> ~400 s   (3.2x)
+  np=2:  475 s -> ~175 s   (2.7x)
+  np=4: 2335 s -> ~100 s   (23x, fixes regression)
+---
+ main/phylotesting.cpp | 206 ++++++++++++++++++++++++++++--------------
+ 1 file changed, 139 insertions(+), 67 deletions(-)
+
+diff --git a/main/phylotesting.cpp b/main/phylotesting.cpp
+index c7205ea5..964f8de2 100644
+--- a/main/phylotesting.cpp
++++ b/main/phylotesting.cpp
+@@ -3484,110 +3484,157 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
+     int64_t num_models = size();
+ 
+ #ifdef _IQTREE_MPI
+-    // Phase 1: stripe models across ranks so each rank evaluates only its share.
+-    // generate() has already populated this CandidateModelSet.
++    // -----------------------------------------------------------------------
++    // FCA dispatch — Family-Local + Cost-Aware + Always-Filter
++    // -----------------------------------------------------------------------
++    // Replaces the previous round-robin LPT + rate_block recompute (Fix A/C).
+     //
+-    // SUBST-FAMILY STRIPING — assigns all rate variants of each substitution
+-    // model (e.g. every LG+* rate variant: LG+G4, LG+I+G4, LG+R2 … LG+R10,
+-    // LG+F+G4, …) to the SAME rank.  This preserves filterRates() pruning:
+-    // when rank 0 evaluates LG+G4 and then LG+R2, it can compare against the
+-    // already-computed LG+G4 result and prune LG+R3, LG+R4, … as usual.
+-    //
+-    // Why the old per-model LPT position stripe was wrong:
+-    //   stable_sort puts all even-k +Rk models (GTR+I+R10, GTR+I+R8, …) at
+-    //   even positions → rank 0 gets them; GTR+I+R9, GTR+I+R7, … (odd-k) go
+-    //   to rank 1.  getLowerKModel(GTR+I+R10) returns GTR+I+R9 which is
+-    //   MF_IGNORED on rank 0 → filterRates guard fails → pruning never fires
+-    //   → every rank evaluates ALL assigned +Rk models without any pruning.
+-    //   At np=1 this caused ~2.5× more model evaluations than standard IQ-TREE
+-    //   (1,232 evaluated vs ~500 after pruning) and ~3.3× slower MF wall-time.
++    // See setonix-iq/research/updated-modelfinder-dispatch.md for the full
++    // design. Summary:
++    //   1. closed-form cost predictor: nstates^2 * npat * rate * freq * log2(N)
++    //      — captures DNA(4)/AA(20)/codon(61) state-count, alignment size,
++    //      rate-variant cost (+Rk, +I+G, +G, +I), ML-frequency overhead (+F),
++    //      and tree-size BFGS scaling.
++    //   2. group by subst_name; greedy LPT (argmin rank_load) — NOT round-robin
++    //      — assigns whole substitution families (all rate variants together)
++    //      so filterRates pruning is fully effective within each rank.
++    //   3. per-rank state machine (mpi_ref_subst_idx, mpi_ref_remaining):
++    //      fires filterRates exactly once, when the rank's reference family
++    //      is fully evaluated. Replaces the fragile "model >= rate_block"
++    //      trigger which had an edge case at np=4 (see §2.1, §7.4 of the
++    //      design doc; np=4 AA 100K regressed to 2,335 s under the old Fix C).
++    //   4. MF-MPI-DIAG: log lines per rank for offline analysis (cost predictor
++    //      validation, load-imbalance audit, filterRates trigger timing).
++    int mpi_ref_subst_idx = -1;     // index of first non-IGNORED model
++    int mpi_ref_remaining = 0;       // own models with subst_name == ref still pending
++
+     if (MPIHelper::getInstance().getNumProcesses() > 1) {
+         int my_rank = MPIHelper::getInstance().getProcessID();
+         int nranks  = MPIHelper::getInstance().getNumProcesses();
+-
+-        // Cost proxy: rate-category count from orig_rate_name.
+-        auto modelCost = [&](int idx) -> int {
++        Alignment *aln_disp = in_tree->aln;
++        int    nstates = aln_disp->num_states;
++        int    npat    = (int)aln_disp->getNPattern();
++        int    ntaxa   = (int)aln_disp->getNSeq();
++        double tree_mult = (ntaxa > 1) ? log2((double)ntaxa) : 1.0;
++        double per_pat   = (double)nstates * (double)nstates * (double)npat * tree_mult;
++
++        // Step 1 — closed-form cost predictor (FCA).
++        auto modelCostFCA = [&](int idx) -> double {
+             const string &r = at(idx).orig_rate_name;
++            const string &s = at(idx).subst_name;
++            double rate_mult = 0.0;
+             for (const char *tag : {"+R", "*R", "+H", "*H", "+I+R", "+I*R"}) {
+                 size_t p = r.find(tag);
+                 if (p != string::npos && p + strlen(tag) < r.size()
+                     && isdigit((unsigned char)r[p + strlen(tag)])) {
+                     int k = atoi(r.c_str() + p + strlen(tag));
+-                    if (k > 0) return k * 10;
++                    if (k > 0) { rate_mult = (double)k * 1.5; break; }
+                 }
+             }
+-            if (r.find("+I+G") != string::npos || r.find("+ASC+G") != string::npos) return 5;
+-            if (r.find("+G")   != string::npos) return 4;
+-            if (r.find("+I")   != string::npos) return 2;
+-            return 1;
++            if (rate_mult == 0.0) {
++                if (r.find("+I+G") != string::npos || r.find("+ASC+G") != string::npos)
++                    rate_mult = 5.0;
++                else if (r.find("+G") != string::npos) rate_mult = 4.0;
++                else if (r.find("+I") != string::npos) rate_mult = 2.0;
++                else rate_mult = 1.0;
++            }
++            // +F (ML frequencies) costs ~3x more BFGS iterations than empirical
++            // (+FC/+FQ/+FU) or fixed (+F{...}). Detect bare "+F" only — the
++            // suffix must be end-of-string or '+' (start of next tag).
++            double freq_mult = 1.0;
++            size_t fp = s.find("+F");
++            if (fp != string::npos) {
++                size_t after = fp + 2;
++                if (after >= s.size() || s[after] == '+')
++                    freq_mult = 3.0;
++            }
++            return per_pat * rate_mult * freq_mult;
+         };
+ 
+-        // Step A: collect unique subst_names in generate() order; accumulate
+-        //         total cost per substitution-model group.
+-        vector<string> group_order;
+-        map<string, int> group_cost;
++        // Step 2 — group models by subst_name in generate() order.
++        vector<string>      group_order;
++        map<string, double> group_cost;
++        map<string, int>    group_first_idx;
+         for (int i = 0; i < (int)num_models; i++) {
+             const string &sn = at(i).subst_name;
+-            if (group_cost.find(sn) == group_cost.end()) {
++            auto it = group_cost.find(sn);
++            if (it == group_cost.end()) {
+                 group_order.push_back(sn);
+-                group_cost[sn] = 0;
++                group_cost[sn] = 0.0;
++                group_first_idx[sn] = i;
+             }
+-            group_cost[sn] += modelCost(i);
++            group_cost[sn] += modelCostFCA(i);
+         }
+ 
+-        // Step B: LPT — sort groups by descending total cost; assign groups to
+-        //         ranks round-robin so heavy groups are spread across ranks.
++        // Step 3 — greedy LPT: sort groups by descending total cost (stable,
++        // with generate-order as tie-break). Assign each group to the least-
++        // loaded rank (argmin); ties broken by lowest rank id.
+         stable_sort(group_order.begin(), group_order.end(),
+                     [&](const string &a, const string &b){
+-                        return group_cost[a] > group_cost[b]; });
++                        if (group_cost[a] != group_cost[b])
++                            return group_cost[a] > group_cost[b];
++                        return group_first_idx[a] < group_first_idx[b];
++                    });
++        vector<double> rank_load(nranks, 0.0);
+         map<string, int> group_rank;
+-        for (int p = 0; p < (int)group_order.size(); p++)
+-            group_rank[group_order[p]] = p % nranks;
+-
+-        // Step C: mark cross-rank models MF_IGNORED; clear MF_WAITING on own
+-        //         models (generate() sets +Rk models WAITING until their
+-        //         +R(k-1) sibling is evaluated — but since all rate variants
+-        //         for each subst family go to the same rank, getNextModel()
+-        //         will naturally return models in generate() order, so the
+-        //         WAITING promotion happens correctly; clearing it proactively
+-        //         avoids any residual state from an unrelated previous pass).
+-        int my_count = 0;
++        for (const string &g : group_order) {
++            int best_rank = 0;
++            for (int r = 1; r < nranks; r++)
++                if (rank_load[r] < rank_load[best_rank]) best_rank = r;
++            group_rank[g] = best_rank;
++            rank_load[best_rank] += group_cost[g];
++        }
++
++        // Step 4 — mark cross-rank MF_IGNORED; clear MF_WAITING on own models.
++        int    my_count = 0;
++        double my_cost  = 0.0;
+         for (int i = 0; i < (int)num_models; i++) {
+             if (group_rank[at(i).subst_name] != my_rank) {
+                 at(i).setFlag(MF_IGNORED);
+             } else {
+                 at(i).resetFlag(MF_WAITING);
+                 my_count++;
++                my_cost += modelCostFCA(i);
+             }
+         }
+ 
+-        cout << "MF-MPI: rank " << my_rank << "/" << nranks
+-             << " assigned " << my_count << "/" << num_models
+-             << " models (subst-family LPT stripe, filterRates active)" << endl;
+-    }
+-
+-    // MF-MPI Fix C: recompute rate_block per-rank.
+-    // rate_block was computed above from the global model list as the last
+-    // index of the first substitution family (LG for AA, GTR for DNA).
+-    // For MPI ranks 1-3 all LG/GTR models are MF_IGNORED, so the global
+-    // rate_block is meaningless — filterRates() would fire against an entirely
+-    // IGNORED family and produce best_score = DBL_MAX (no pruning).
+-    // Fix: set rate_block to the last index of the first non-ignored family
+-    // assigned to this rank, so filterRates fires after the rank's reference
+-    // family is fully evaluated and can supply a valid BIC reference score.
+-    if (MPIHelper::getInstance().getNumProcesses() > 1 && auto_rate) {
+-        string ref_subst;
+-        for (int64_t i = 0; i < num_models; i++) {
++        // Step 5 — set up per-rank reference-family completion state machine.
++        for (int i = 0; i < (int)num_models; i++) {
+             if (!at(i).hasFlag(MF_IGNORED)) {
+-                ref_subst = at(i).subst_name;
++                mpi_ref_subst_idx = i;
+                 break;
+             }
+         }
+-        if (!ref_subst.empty()) {
+-            rate_block = 0;
+-            for (int64_t i = 0; i < num_models; i++)
+-                if (at(i).subst_name == ref_subst) rate_block = (int)i;
++        if (mpi_ref_subst_idx >= 0 && auto_rate) {
++            const string &ref = at(mpi_ref_subst_idx).subst_name;
++            for (int i = 0; i < (int)num_models; i++)
++                if (at(i).subst_name == ref && !at(i).hasFlag(MF_IGNORED))
++                    mpi_ref_remaining++;
+         }
++
++        // Step 6 — diagnostic log (one line per rank, for offline analysis).
++        int g_count = 0;
++        ostringstream group_summary;
++        for (const string &g : group_order)
++            if (group_rank[g] == my_rank) {
++                if (g_count++) group_summary << ",";
++                group_summary << g;
++            }
++        cout << "MF-MPI-DIAG: rank " << my_rank << "/" << nranks
++             << " owns " << g_count << " groups, " << my_count << "/"
++             << num_models << " models, projected_cost=" << my_cost
++             << " ref_subst="
++             << (mpi_ref_subst_idx >= 0 ? at(mpi_ref_subst_idx).subst_name : string("(none)"))
++             << " ref_remaining=" << mpi_ref_remaining
++             << " (FCA: subst-family greedy-LPT, ref-family state machine)"
++             << endl;
++        cout.flush();
++
++        // Step 7 — disable the legacy rate_block trigger. The state machine
++        // above will fire filterRates exactly once when ref_remaining hits 0.
++        // Non-MPI builds and np=1 MPI fall through to the original
++        // "model >= rate_block" check unchanged.
++        rate_block = (int)num_models;
+     }
+ #endif
+ 
+@@ -3703,8 +3750,33 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
+             cout << endl;
+ 
+         }
++#ifdef _IQTREE_MPI
++        // FCA state-machine trigger (replaces "model >= rate_block" for MPI
++        // np>1 builds). Fires filterRates exactly once, when this rank's
++        // reference family is fully evaluated. See setonix-iq/research/
++        // updated-modelfinder-dispatch.md §3.2 for design rationale.
++        bool ratefilter_fired_by_fca = false;
++        if (mpi_ref_subst_idx >= 0 && auto_rate
++            && at(model).subst_name == at(mpi_ref_subst_idx).subst_name) {
++            mpi_ref_remaining--;
++            ASSERT(mpi_ref_remaining >= 0);
++            if (mpi_ref_remaining == 0) {
++                filterRates(model);
++                ratefilter_fired_by_fca = true;
++                if (verbose_mode >= VB_MED)
++                    cout << "MF-MPI-DIAG: rank "
++                         << MPIHelper::getInstance().getProcessID()
++                         << " filterRates fired at model=" << model
++                         << " ref_subst=" << at(mpi_ref_subst_idx).subst_name
++                         << " best_score=" << best_score << endl;
++            }
++        }
++        if (!ratefilter_fired_by_fca && model >= rate_block)
++            filterRates(model); // auto filter rate models (legacy path)
++#else
+         if (model >= rate_block)
+             filterRates(model); // auto filter rate models
++#endif
+         if (model >= subst_block)
+             filterSubst(model); // auto filter substitution model
+ #ifdef _IQTREE_MPI
+-- 
+2.43.7
+
