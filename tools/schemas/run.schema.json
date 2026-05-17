@@ -13,7 +13,7 @@
     "description": { "type": "string" },
     "run_type": {
       "type": "string",
-      "enum": ["pipeline", "cpu_baseline", "gpu_baseline", "profile", "deep_profile", "other"]
+      "enum": ["pipeline", "cpu_baseline", "cpu_bench", "gpu_baseline", "profile", "deep_profile", "mf_iso", "mf_iso_mfonly", "mf_iso_baseline_repro", "other"]
     },
     "timing": {
       "type": "array",

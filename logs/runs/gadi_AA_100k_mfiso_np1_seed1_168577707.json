@@ -2,7 +2,7 @@
   "run_id": "gadi_AA_100k_mfiso_np1_seed1_168577707",
   "label": "AA_100k_mfiso_np1_seed1",
   "platform": "gadi",
-  "run_type": "mf_iso",
+  "run_type": "mf_iso_mfonly",
   "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
   "dataset_short": "complex_aa_100k",
   "data_type": "AA",
