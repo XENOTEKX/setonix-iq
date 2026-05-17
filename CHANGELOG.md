@@ -281,6 +281,32 @@ AA 1M scaling: np=2 → np=4 achieves 1.55× further MF speedup (3,059.648 → 1
 | DNA 100K | 289 s (168425674) | **113.754 s** (168584737) | **2.54×** | 61.7→26.3 s (2.35×) | ~87 s |
 | AA 100K | 1,170 s (168425673) | **537.754 s** (168584736) | **2.18×** | 400.6→149.0 s (2.69×) | ~389 s |
 | AA 1M | 22,776 s (168425491) | **3,671.618 s** (168586094, np=8) | **6.20×** | 7,587→1,443.9 s (5.26×) | ~2,228 s |
+| DNA 1M | 6,114 s (168425675) | TBD (168592214, np=8) | TBD | 3,501→TBD | TBD |
+
+---
+
+## 2026-05-18 (bn) — AA 1M full scaling study + DNA 1M 8-node full submitted
+
+### Submitted jobs
+
+AA 1M full scaling chain (`aa_1m_full_all`, chained afterok 1→2→4→16 node):
+
+| Job | Name | Script | ncpus | mem | walltime | Ranks×OMP | Acceptance lnL |
+|-----|------|--------|-------|-----|----------|-----------|----------------|
+| 168592210 | `mf-iso-aa-1m-1n-full` | `run_mf_iso_aa_1m_1node_full.sh` | 104 | 510 GB | 12h | 1×103T | −78,605,196.573 ±1.0 |
+| 168592211 | `mf-iso-aa-1m-2n-full` | `run_mf_iso_aa_1m_2node_full.sh` | 208 | 1020 GB | 8h | 2×103T | −78,605,196.573 ±1.0 |
+| 168592212 | `mf-iso-aa-1m-4n-full` | `run_mf_iso_aa_1m_4node_full.sh` | 416 | 2040 GB | 6h | 4×103T | −78,605,196.573 ±1.0 |
+| 168592213 | `mf-iso-aa-1m-16n-full` | `run_mf_iso_aa_1m_16node_full.sh` | 1664 | 8160 GB | 4h | 16×103T | −78,605,196.573 ±1.0 |
+
+DNA 1M 8-node full (`dna_1m_8node_full`):
+
+| Job | Name | Script | ncpus | mem | walltime | Ranks×OMP | Acceptance lnL |
+|-----|------|--------|-------|-----|----------|-----------|----------------|
+| 168592214 | `mf-iso-dna-1m-8n-full` | `run_mf_iso_dna_1m_8node_full.sh` | 832 | 4080 GB | 6h | 8×103T | −59,208,019.212 ±0.5 |
+
+All jobs use binary `iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` (branch `mf-iso-phase0.5-0.6`, `-m TEST`).
+
+Reference: AA 1M → 168425491 (LG+G4, lnL −78,605,196.573); DNA 1M → 168425675 (F81+F+G4, lnL −59,208,019.212).
 
 ---
 
