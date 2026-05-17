@@ -61,7 +61,8 @@
   },
   "build_tag": "standard_cpu_opt_merge_intel_vanila",
   "branch": "n/a (sa0557 standard build)",
-  "non_canonical": false,
+  "non_canonical": true,
+  "non_canonical_label": "Baseline R1+R2/AVX-512 (MF-only)",
   "group": "mf_iso_scaling",
   "note": "ESTABLISHES DNA_1M SPR REFERENCE \u2014 update EXPECTED_LNL in mf-iso scripts after this run."
 }
