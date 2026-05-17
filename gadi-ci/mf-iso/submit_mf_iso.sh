@@ -27,6 +27,7 @@
 #   ./submit_mf_iso.sh dna_1m_1node       # qsub DNA 1M MF-iso 1-node
 #   ./submit_mf_iso.sh dna_1m_2node       # qsub DNA 1M MF-iso 2-node
 #   ./submit_mf_iso.sh dna_1m_all         # qsub baseline → 1node → 2node chained
+#   ./submit_mf_iso.sh dna_1m_8node_full   # qsub DNA 1M FCA full run (8-node MF+SPR)
 #
 # Usage (AA 1M MF-only / TESTONLY — no baseline needed; ref = 168425491):
 #   ./submit_mf_iso.sh aa_1m_2node        # qsub AA 1M MF-iso 2-node (MF-only)
@@ -183,6 +184,14 @@ case "${1:-}" in
         echo "    SPR baseline ref will be written by run_baseline_dna_1m_spr.sh."
         ;;
 
+    # ── DNA 1M full run: MF+SPR end-to-end (FCA, 8 nodes) ───────────
+    dna_1m_8node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_dna_1m_8node_full.sh)"
+        echo "  DNA 1M 8-node full run job: ${jid}"
+        echo "  Ref: lnL=-59,208,019.212  F81+F+G4  (168425675)  tol=0.5"
+        ;;
+
     # ── AA 1M individual stages ──────────────────────────────────
     aa_1m_2node)
         [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
@@ -292,7 +301,7 @@ case "${1:-}" in
     *)
         echo "usage: $0 {build|baseline|1node|2node|all" >&2
         echo "           |dna_100k_baseline|dna_100k_1node|dna_100k_2node|dna_100k_all" >&2
-        echo "           |dna_1m_baseline|dna_1m_1node|dna_1m_2node|dna_1m_all" >&2
+        echo "           |dna_1m_baseline|dna_1m_1node|dna_1m_2node|dna_1m_all|dna_1m_8node_full" >&2
         echo "           |aa_1m_2node|aa_1m_4node|aa_1m_all|aa_1m_8node_full" >&2
         echo "           |aa_1m_1node_full|aa_1m_2node_full|aa_1m_4node_full|aa_1m_16node_full|aa_1m_full_all" >&2
         echo "           |aa_100k_full|dna_100k_full|full_100k_all}" >&2
