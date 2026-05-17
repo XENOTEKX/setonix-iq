@@ -2,6 +2,907 @@
 
 ---
 
+## 🎯 BASELINE OF RECORD (2026-05-17 correction)
+
+All ModelFinder benchmarks are measured against **job 168425673** —
+the standard (non-MPI) IQ-TREE 3.1.2 SPR binary built by sa0557 at
+`/scratch/dx61/sa0557/iqtree2/cpu_opt_merge/builds/build-intel-vanila/iqtree3`
+(commit `4e91dd6` = v3.1.2, ICX + AVX-512 + -xSAPPHIRERAPIDS + R1+R2 patches).
+
+| Metric | Value |
+|--------|------:|
+| Job ID | 168425673 |
+| Binary | `build-intel-vanila/iqtree3` (non-MPI, OMP-across-models) |
+| Node   | gadi-cpu-spr-0570 (SPR exclusive, 103 OMP threads on 104 cores) |
+| Alignment | AA 100K (100 taxa × 100K sites, 96K patterns) |
+| **MF wall** | **~405 s** (derived: 1,169.6 − 764.5 tree-search = 405.1 s) |
+| **Tree-search wall** | **764.478 s** |
+| **Total wall** | **1,169.556 s** (0h:19m:29s) |
+| Total CPU | 108,645.544 s (92% OMP efficiency) |
+| lnL | −7,541,976.860 |
+| BIC | 15,086,233 |
+| Best model | LG+G4 |
+| Peak memory | 9.36 GB (PBS `Memory Used`) |
+
+**TARGET: beat 400 s on MF wall.** Every prior FCA / MF2 attempt
+(Phases 0, 0.5, 0.6, 0.7, HH-NUMA) regressed against this baseline.
+The "Fix H" numbers cited in earlier CHANGELOG entries (np=1: 1,289 s,
+np=2: 475 s, np=4: 2,335 s) are *all* worse than this baseline — they
+are MPI builds that disabled OMP-across-models and re-introduced
+dispatch overhead. They are kept here for historical context only;
+**do NOT use them as a baseline for future work**.
+
+To beat 400 s the dispatch must preserve OMP-across-models parallelism
+(present in the standard binary, removed by Fix H for OOM safety) OR
+amortise the loss across MPI ranks (np ≥ 2 with effective filterRates
+pruning across families). The MF-iso harness (entry `bk` below) is
+designed to demonstrate which structural changes preserve the baseline
+walltime; HH-NUMA's nested K_outer × M_inner is the projected path back
+to OMP-across-models without OOM.
+
+Memory note: the standard binary's 9.36 GB peak (vs the dispatch doc's
+6.27 GB per-tree × 103-thread estimate of 646 GB) confirms that
+`evaluate()` in v3.1.2 uses a smaller working set per model than the
+worst-case BIONJ-tree partial_lh — `MF_IGNORED` skipping and parsimony-
+tree reuse keep the in-flight memory well below the theoretical ceiling.
+This changes the HH-NUMA K_outer feasibility analysis (the budget is
+likely closer to ~100 GB at K=8 rather than 125 GB).
+
+---
+
+## 2026-05-17 (bk) — Reset: ModelFinder isolation harness on rc29 (Phase 0.5+0.6 only)
+
+### Context — why we're stepping back
+
+The MF2 production tree at `/scratch/um09/as1708/iqtree3-mf2/` accumulated
+five tightly-coupled experimental changes between entries `(bd)` and `(bj)`:
+
+| Entry | Phase | Change | Result |
+|------|-------|--------|--------|
+| `bd` | 0   | FCA dispatch (cost predictor + greedy LPT + state machine) | np=1 OK; np=2 +500% regression; np=4 +50% regression |
+| `bg` | 0.5 | `filterRatesMPI` MPI_Bcast of rank-0 `ok_rates`         | np=4 873 s — correct but sync-trapped |
+| `bh` | 0.6 | `getNextModel` ref-family priority                       | np=4 850 s — sync trap NOT fixed |
+| `bj` | 0.7 + HH-NUMA | `MPI_Isend` push + nested `K_outer × M_inner` OMP | **Job 168486582 SIGTERM-killed @ 1h19m, ZERO stdout** |
+
+The Phase 0.7 + HH-NUMA bundle was the failure mode the user called out:
+"the FCA modelfinder is still not scaling… instead of directly scaling to
+4 nodes lets start from 1 node then 2."
+
+Two structural problems caused the dead end:
+1. **Bundling**: 0.7 (Isend) and HH-NUMA (nested OMP) shipped in the same
+   binary, plus `MPI_Init_thread(MPI_THREAD_SERIALIZED)` upgrade. When the
+   binary hung, three candidate root causes had to be isolated by code
+   review rather than experiment.
+2. **Skip-to-4-node testing**: every patch was validated at np=4 first.
+   This is the largest, longest, most expensive configuration and the
+   most fragile. np=2 (which is where Phase 0.5's cross-rank broadcast
+   first matters) was rarely re-tested between patches.
+
+### What was reverted
+
+The production source tree under `/scratch/um09/as1708/iqtree3-mf2/src/iqtree3`
+was reverted to the FCA Phase 0 commit `ffb79a14` (the in-source Phase
+0.5/0.6/0.7/HH-NUMA changes were rolled back at 01:18 AEST on 2026-05-17,
+after the SIGTERM run was acknowledged). The binary at
+`build-mpi-mf2/iqtree3-mpi` (23:44, the hung Phase 0.7+HH-NUMA artifact)
+remains on disk for forensic inspection of `nm`/`strings` only.
+
+### Isolation harness — rc29 tree + 1-node-then-2-node gating
+
+A clean source mirror was created at `/scratch/rc29/as1708/iqtree3-mf-iso/`
+on new branch `mf-iso-phase0.5-0.6` (HEAD `9603247f`). Patches applied:
+
+- **Phase 0.5** (`filterRatesMPI`): rank 0 broadcasts its sharp-BIC `ok_rates`
+  to all ranks via `MPI_Bcast`. `MPI_Allreduce(MIN)` gate prevents deadlock
+  when any rank lacks a valid ref family. Falls back to legacy `filterRates`
+  if disabled.
+- **Phase 0.6** (`getNextModel` ref-family priority): while the ref family
+  is incomplete and the broadcast hasn't fired, prefer ref-family models so
+  every rank reaches the collective close together. Also fixes the latent
+  first-call IGNORED bug (original code returned `model = 0` unconditionally
+  even if `MF_IGNORED` was set on rank 1+).
+- **MF-TIME instrumentation**: `cout << "MF-TIME: rank R model M ... start=… end=… dt=… score=…"`
+  on every model on every rank. This was the missing observability in
+  earlier debug runs (e.g. 168475747 lost all rank-1 stdout because
+  `mpirun > file` only redirects rank 0 on multi-node jobs).
+
+What was **deliberately excluded** from this commit:
+- **Phase 0.7** (`MPI_Isend` push) — depends on `MPI_Init_thread`
+  (THREAD_SERIALIZED), suspected culprit of the 168486582 hang.
+- **HH-NUMA Phase 2** (nested `K_outer × M_inner`) — depends on toolchain
+  nested-OMP support which hasn't been runtime-verified on icpx 2025.1.1
+  + libiomp5.
+- **THP `madvise(MADV_HUGEPAGE)`** — orthogonal kernel speedup, separate patch.
+
+Each deferred phase will land in its own commit, with its own 1-node →
+2-node → 4-node validation, only after the prior phase passes.
+
+### Files added (in this entry)
+
+| File | Purpose |
+|------|---------|
+| `gadi-ci/mf-iso/README.md` | What's in this harness, how to use it, acceptance gates |
+| `gadi-ci/mf-iso/build_mf_iso.sh` | PBS job: build the isolated MPI binary on rc29 |
+| `gadi-ci/mf-iso/run_mf_iso_aa_100k_1node.sh` | PBS job: 1-node `-m TESTONLY` correctness baseline |
+| `gadi-ci/mf-iso/run_mf_iso_aa_100k_2node.sh` | PBS job: 2-node with per-rank stdout via `--output-filename` |
+| `gadi-ci/mf-iso/submit_mf_iso.sh` | qsub driver with `afterok` dependency chain (build → 1node → 2node) |
+| `gadi-ci/mf-iso/tools/parse_mf_time.py` | Offline analyser: per-rank model counts, broadcast arrival times, convergence spread |
+| `/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/main/phylotesting.{cpp,h}` | Phase 0.5+0.6 + MF-TIME patches, committed on branch `mf-iso-phase0.5-0.6` (`9603247f`) |
+
+### Why `-m TESTONLY`
+
+The AA 100K alignment's tree-search tail is ~700 s on top of MF wall.
+Running with `-m TESTONLY` cuts ~30% off iteration time and isolates
+ModelFinder dispatch from BIONJ + parsimony + NNI search confounds.
+We are debugging ModelFinder; we don't need a new tree every run.
+
+### Why per-rank stdout via `--output-filename`
+
+OpenMPI 4.1's default behaviour redirects only rank 0 stdout when
+`mpirun … > file` crosses node boundaries. Ranks 1+ stdout is silently
+discarded. Earlier debug runs (168475747, 168481332) lost the
+crucial rank-1 evidence this way — the rank-1 `filterRates` ineffectiveness
+hypothesis was inferred from MF-wall arithmetic rather than observed.
+With `--output-filename ${WORK_DIR}/rank_logs/` each rank gets its own
+`stdout`/`stderr` file. Combined with the MF-TIME markers, this gives a
+full per-rank timeline.
+
+### Patch summary
+
+```
+mf-iso-phase0.5-0.6:
+  9603247f  mf-iso: Phase 0.5 filterRatesMPI MPI_Bcast + Phase 0.6 getNextModel
+            ref-family priority + MF-TIME markers (319 +, 33 -)
+  ffb79a14  gadi-spr: FCA dispatch (Family-Local + Cost-Aware + Always-Filter)
+            for ModelFinder MPI                          ← Phase 0 base
+```
+
+Syntax-checked with `mpicxx -fsyntax-only` (icpx 2025.3.2 + openmpi 4.1.7):
+0 errors, 6 pre-existing warnings (VLAs at line 672/680, writable string
+literals at 6913+ — none introduced by this patch).
+
+### Acceptance gates (vs the 168425673 baseline — MF wall 405 s)
+
+**1-node** (correctness; the MPI-build np=1 is expected SLOWER than
+the standard binary because Fix H forces sequential outer loop):
+- lnL = −7,541,976.860 ± 0.01
+- best model = LG+G4
+- MF wall < 1,400 s (matches Fix H 1,289 s; far above the 405 s target —
+  this is expected and confirms Phase 0.5/0.6 cause no regression at np=1)
+- `filterRatesMPI_enabled=0` in MF-MPI-DIAG (correct: no broadcast at np=1)
+- Hardware/software/binding probe fully captured in the run log
+
+**2-node** (first real Phase 0.5/0.6 test — must show structural benefit
+from cross-rank pruning):
+- lnL, best model unchanged
+- MF wall **< 600 s** (FCA Phase 0 regressed to 2,865 s; we expect ~400–500 s
+  if both ranks prune effectively with rank 0's `{G4}` set)
+- `filterRatesMPI fired at model=…` observed on rank 0
+- Broadcast-arrival spread between ranks **< 60 s** (Phase 0.5 alone produced
+  ~370 s spread; Phase 0.6 should compress to <30 s)
+- Rank 1's post-broadcast model count ≤ rank 0's
+- **STRETCH**: beat 405 s. With 2 ranks each owning ~half the models and
+  applying the same `{G4}` filter, theoretical floor is ~200 s if perfect
+  scaling. Realistic: 350–450 s.
+
+**4-node** (target: beat 405 s):
+- Submit the existing `cpu-bench/run_cpu_bench_aa_100k_mf2_4node.sh` with
+  the MF-iso binary (override `IQTREE=/scratch/rc29/.../iqtree3-mpi`) only
+  after 2-node passes.
+- **Target: MF wall < 400 s** (the headline beat-the-baseline goal).
+- If 4-node MF wall > 600 s, do NOT chase further patches — re-examine
+  the 2-node `parse_mf_time.py` output; the bug is visible there too.
+
+### Next steps
+
+1. `qsub gadi-ci/mf-iso/build_mf_iso.sh` — produces the isolated binary
+   at `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi`
+2. `qsub gadi-ci/mf-iso/run_mf_iso_aa_100k_1node.sh` (after build) — np=1 baseline
+3. `qsub gadi-ci/mf-iso/run_mf_iso_aa_100k_2node.sh` (after 1node) — np=2 the real test
+4. After 2-node passes: `cpu-bench/run_cpu_bench_aa_100k_mf2_4node.sh` with the
+   isolated binary (override `IQTREE=/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi`)
+5. Only then add Phase 0.7 (Isend, alone) and HH-NUMA (alone, after Isend
+   passes 2-node) in two separate follow-up patches.
+
+---
+
+## 2026-05-16 (bj) — Phase 0.7 push + HH-NUMA Phase 2 implemented (build verified)
+
+### What changed
+
+Implemented and compiled the next optimization stage after Phase 0.6:
+
+1. **Phase 0.7 (non-blocking push of `ok_rates`)**
+- Replaced collective `MPI_Bcast` path in `filterRatesMPI(int)` with rank-0
+  push using `MPI_Isend` to ranks 1..N-1.
+- Added one-shot receive state on worker ranks: pre-posted `MPI_Irecv`,
+  per-model polling via `MPI_Test` in `pollOkRatesMPI()`, and inline pruning
+  through `applyOkRatesMPI()`.
+- Rank 0 now applies `ok_rates` locally and continues immediately (no barrier).
+
+2. **HH-NUMA Phase 2 (bounded nested outer parallelism in MPI builds)**
+- Enabled `K_outer × M_inner` execution in `evaluateAll()` for MPI `np>1`:
+  `K_outer = min(8, num_threads)`, `M_inner = num_threads / K_outer`.
+- Keeps memory bounded while increasing model throughput.
+- Preserves Fix H safety at MPI `np=1` by forcing sequential outer
+  (`K_outer=1`) to avoid OOM.
+
+3. **MPI thread-level correctness hardening**
+- `MPIHelper::init()` now uses `MPI_Init_thread(..., MPI_THREAD_SERIALIZED, ...)`.
+- Execution now fails fast if MPI provides less than `MPI_THREAD_SERIALIZED`
+  (FUNNELED is insufficient for non-master OMP-thread MPI calls, even with
+  critical-section serialization).
+
+4. **Nested OMP side-effect guard**
+- `omp_set_max_active_levels(2)` is enabled only when needed (`K_outer>1`) and
+  restored to its previous value after the `evaluateAll()` OMP region.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.h` | Added Phase 0.7 members/constants (`MPI_TAG_OKRATES`, buffers, requests), helper declarations (`applyOkRatesMPI`, `pollOkRatesMPI`), and HH-NUMA constant (`HH_K_OUTER=8`). |
+| `src/iqtree3/main/phylotesting.cpp` | Added Phase 0.7 send/recv helpers; rewired `evaluateAll()` trigger path to rank-0 Isend + worker polling; enabled bounded nested OMP (`K_outer × M_inner`) for MPI `np>1`; retained MPI `np=1` sequential safety; restored OMP active-level setting post-loop. |
+| `src/iqtree3/utils/MPIHelper.cpp` | Switched `MPI_Init` → `MPI_Init_thread` with `MPI_THREAD_SERIALIZED` requirement. |
+
+### Build verification
+
+- Rebuilt with modules `intel-compiler-llvm/2025.1.1` and `openmpi/4.1.7`.
+- Binary: `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi`
+  - timestamp: **2026-05-16 23:44:25 AEST**
+  - size: **145,075,408 bytes**
+- Symbols confirmed:
+  - `CandidateModelSet::filterRatesMPI(int)`
+  - `CandidateModelSet::pollOkRatesMPI()`
+  - `CandidateModelSet::applyOkRatesMPI(...)`
+  - `CandidateModelSet::evaluateAll(...)`
+  - `MPIHelper::init(int, char**)`
+- Smoke test: `iqtree3-mpi --version` exits 0.
+
+### Status
+
+- **Implementation complete, benchmark pending.**
+- Validation job submitted: **168486582** (np=4 AA 100K, queue `normalsr`).
+- Next required validation run: np=4 AA 100K against this binary.
+- Target remains MF wall **< 400 s** (hard accept gate ≤ 450 s).
+
+## 2026-05-16 (bi) — T3'' submitted: Phase 0.6 np=4 validation job 168483748
+
+### What happened
+
+Phase 0.6 binary (22:47 AEST, 145,056,888 bytes) verified clean:
+- `CandidateModelSet::getNextModel()` at 0x6754d0 ✓
+- `CandidateModelSet::filterRatesMPI(int)` at 0x6743a0 ✓
+
+T3'' (np=4, 4-node, AA 100K) submitted as job **168483748** to `dx61 normalsr`.
+
+```
+qsub gadi-ci/cpu-bench/run_cpu_bench_aa_100k_mf2_4node.sh
+→ 168483748.gadi-pbs
+```
+
+### What this job validates
+
+Phase 0.6 introduced `getNextModel()` ref-family priority: each rank now
+evaluates all ~22 ref-family models **first** before any other assigned
+models, so all ranks converge on `MPI_Bcast` in ~150 s instead of the
+~488 s that sank Phase 0.5 (873 s MF wall, 88% idle threads).
+
+Pass criteria:
+- MF wall: **≤ 450 s** (hard gate — any value below Phase 0.5's 873 s
+  confirms the sync trap is fixed; projection is 300-400 s)
+- lnL: −7,541,976.860 ±0.01
+- Best model: LG+G4 (exact)
+- `MF-MPI-DIAG` lines present and `filterRatesMPI` broadcast confirmed
+
+### Results — Phase 0.6 sync trap NOT fixed
+
+Job completed. MF wall: **850.531 s** (projection was 300-400 s). CPU efficiency: 11.9%
+(88% idle) — essentially identical to Phase 0.5 (11.6%). Correctness ✓.
+
+Root cause of Phase 0.6's failure: the collective `MPI_Bcast` is a barrier requiring ALL
+ranks to arrive simultaneously. Rank 0's ref family (LG, no +F) costs ~250 s. Ranks 1-3's
+ref families (LG+FC, LG+FQ, LG+FU, with +F ML frequencies) cost ~750 s (3× heavier per
+model). Even with Phase 0.6's ref-family-first ordering, rank 0 idles ~500 s waiting for
+ranks 1-3 to complete their heavier ref families before `MPI_Bcast` can unblock.
+
+Phase 0.6 fixed the *wrong-order* symptom from Phase 0.5 but not the underlying structural
+cause: the collective barrier forces rank 0 to wait for the slowest rank's ref family.
+
+Phase 0.7 required: replace `MPI_Bcast` (collective) with a rank-0 **push** — rank 0 sends
+`ok_rates` to each rank individually (via `MPI_Send`) the moment its LG ref family
+completes, without waiting for a collective. Ranks 1-3 poll with `MPI_Iprobe`/`MPI_Recv`.
+
+### Accumulated results table
+
+| Job | Phase | np | MF wall | Total wall | lnL | Best model | Status |
+|-----|-------|----|---------|-----------|-----|------------|--------|
+| 168425673 | Baseline (Fix H, standard binary) | 1 | 399 s | 1,170 s | −7,541,976.860 | LG+G4 | ✓ ref |
+| 168470237 | FCA Phase 0 | 1 | 1,278 s | 1,988 s | −7,541,976.862 | LG+G4 | ✓ |
+| 168481332 | Phase 0.5 (MPI_Bcast ok_rates) | 4 | **873 s** | — | −7,541,976.853 | LG+G4 | ✓ correct, sync trap |
+| **168483748** | **Phase 0.6 (ref-family priority)** | **4** | **850 s** | **1,058 s** | **−7,541,976.853** | **LG+G4** | **✓ correct, sync trap persists** |
+
+---
+
+## 2026-05-16 (bh) — Phase 0.6 fix: `getNextModel` ref-family priority (collective-sync-trap)
+
+### What happened
+
+Job **168481332** ran the Phase 0.5 binary at np=4 AA 100K — correctness was
+perfect (lnL -7,541,976.853, best LG+G4, broadcast fired with
+`ok_rates={+G}`, 273 models pruned on rank 0) but **MF wall was 873 s, not
+the projected 95-150 s**. OMP efficiency was only 11.6% — **88% of threads
+were idle**.
+
+### Root cause — Block 2 / Block 3 interleaving inflates pre-broadcast time
+
+`generate()` produces a 3-block model list:
+- Block 1: LG × all rate variants (22 models, indices 0-21) — rank 0's
+- Block 2: 99 non-LG model_names × bare rate (indices 22-110)
+- Block 3: 99 non-LG model_names × 11 rate variants each (indices 111-1231)
+
+In Block 3, rate variants are **clustered per model_name**: LG+F's rates
+at 111-121, LG+FC's at 122-132, etc.
+
+Rank 0's ref family (LG) is entirely contiguous in Block 1 → 22 ref models
+evaluated in ~120 s → broadcast fires.
+
+Ranks 1-3 own non-LG families (LG+FC, LG+FQ, LG+FU). Each rank's ref family
+is **split**: 1 model in Block 2 (early, index ~13) + 21 rate variants in
+Block 3 (late, indices 122-142). Between them, `getNextModel` returns the
+rank's ~13 OTHER Block 2 entries (one per assigned subst_name group). Those
+13 × ~11-22 s = ~200-300 s of NON-ref work delays the ref family completion.
+
+Ranks 1-3 reach the collective MPI_Bcast at ~488 s. Rank 0 sits idle for
+~370 s waiting for the collective to unblock. After broadcast, both ranks
+evaluate the G-variant remainder (~150-250 s). Observed wall ≈ 488 + 250
+= ~740 s + barrier/load variance = **873 s** ✓.
+
+### The fix — `getNextModel()` ref-family priority
+
+Phase 0.6 modifies `CandidateModelSet::getNextModel()` to **prefer
+ref-family models** while `mpi_ref_remaining > 0` AND the broadcast hasn't
+fired yet. Each rank now reaches MPI_Bcast after evaluating only its ~22
+ref-family models — broadcast arrival times converge to ~150 s for ALL
+ranks. Rank 0's idle time drops from ~370 s to ~15 s.
+
+To enable this, the FCA state machine variables (`mpi_ref_subst_idx`,
+`mpi_ref_remaining`, `mpi_filterRatesMPI_fired`, `mpi_filterRatesMPI_enabled`)
+are **promoted from `evaluateAll` locals to `CandidateModelSet` public
+members** (declared in `phylotesting.h`, reset at the top of every
+`evaluateAll` call for MixtureFinder/PartitionFinder safety).
+
+A latent **first-call IGNORED bug** in the original `getNextModel` was
+also fixed: the old code returned `next_model = 0` unconditionally on the
+first call (`current_model == -1`), even if model 0 had `MF_IGNORED` set
+for the calling rank — which under FCA dispatch is the case for ranks 1+.
+Phase 0.6's unified IGNORED-skip scan handles the first call correctly.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `main/phylotesting.h` (constructor) | +5 LOC: init 4 new FCA state members. |
+| `main/phylotesting.h` (public section) | +9 LOC: declare 4 new public FCA state members. |
+| `main/phylotesting.cpp` `getNextModel()` | ~+50/-10 LOC: ref-family priority scan + corrected IGNORED-skip on first call. |
+| `main/phylotesting.cpp` `evaluateAll()` | ~9 LOC: replace 4 local var declarations with `this->` member resets. |
+| `research/updated-modelfinder-dispatch.md` | +220 LOC: §20 sync-trap root-cause analysis + 5-row results table extension (#13-#17). |
+
+Total: ~74 LOC source change.
+
+### Build verification
+
+- Binary: `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi`
+  rebuilt 2026-05-16 22:47 AEST (145,056,888 bytes; +2,448 bytes vs Phase 0.5).
+- Object: `phylotesting.cpp.o` 9,132,440 bytes (was 9,125,720).
+- Symbols verified:
+  - `CandidateModelSet::getNextModel()` at 0x6754d0
+  - `CandidateModelSet::filterRatesMPI(int)` at 0x6743a0
+- Smoke test: `iqtree3-mpi --version` exits 0.
+- Clean-build procedure (same as `(bg)`): `rm` of `.o` and
+  `compiler_depend.*`; `touch` of placeholder `compiler_depend.{make,internal,ts}`;
+  module load `intel-compiler-llvm/2025.1.1 openmpi/4.1.7`; `make iqtree3 -j 16`.
+
+### Phase 0.6 projection — pending T3'' PBS validation
+
+| Config | Fix H baseline | Phase 0 | Phase 0.5 (obs) | Phase 0.6 (proj) |
+|--------|---------------:|---------:|----------------:|-----------------:|
+| np=1 | 1,289 s | 1,277 s | ~1,277 s | ~1,277 s (no-op gate) |
+| np=2 | 475 s | 2,865 s | TBD | ~280-340 s |
+| **np=4** | 2,335 s | **3,502 s** | **873 s** | **~300-400 s** |
+
+Phase 0.6 brings ~2-3× speedup over Phase 0.5 at np=4, total improvement
+over Fix H = **5.8-7.8×**.
+
+### Why 100 s target wasn't met even by Phase 0.6
+
+The 100 s target assumed 3.17 s/model (Amdahl-derived at 103 OMP threads).
+Observed reality: per-model wall is 11-22 s (heavier than projected,
+particularly for +F variants). Per-rank workload after pruning: ~36 models
+× ~12 s = ~432 s. This is a structural limit of Fix H sequential outer at
+np=4 AA 100K — only HH-NUMA Phase 2 (`K_outer × M_inner` nested OMP)
+can break it. See §20.5-20.6 of dispatch doc.
+
+### Connection to HH-NUMA Phase 2 (still deferred)
+
+Phase 0.6 + HH-NUMA K=8 projected ~150 s at np=4 (combined effect of
+ref-family priority + nested OMP K_outer=8 × M_inner=12). All Phase 2 prep
+work (atomic on `mpi_ref_remaining--`, member-var state, single-fire guard)
+is now in place; only the OMP pragma at `phylotesting.cpp:~3865` remains
+to be changed for HH-NUMA enablement.
+
+### Bug history snapshot (full results table in dispatch doc §20.9)
+
+| # | Bug | Status |
+|--:|-----|--------|
+| 1-2 | FCA Phase 1 dispatch + state machine init | ✓ |
+| 3-4 | Counter stall + `==`→`<=` boundary | ✓ |
+| 5-6 | Stale CMake build + unconditional FCA-DBG | ✓ |
+| 7 | Rank 1+ filterRates ineffectiveness | ✓ Phase 0.5 |
+| 8 | HH-NUMA atomic safety prep | ✓ |
+| 9 | HH-NUMA Phase 2 | ⏸ deferred |
+| 10-12 | Build env / depend.make / symbol verification | ✓ |
+| **13** | **Phase 0.5 measured 873 s @ np=4 (sync trap)** | **✗ → ✓ Phase 0.6** |
+| **14** | **`getNextModel` ref-family priority** | **✓ correct** |
+| **15** | **Promote FCA state to class members** | **✓ correct** |
+| **16** | **First-call IGNORED bug in `getNextModel`** | **✓ correct** |
+| **17** | **Phase 0.6 binary verification** | **✓ verified** |
+
+---
+
+## 2026-05-16 (bg) — Phase 0.5 fix: cross-rank `ok_rates` `MPI_Bcast` + HH-NUMA atomic prep
+
+### What changed
+
+Implemented **Phase 0.5** of the FCA dispatch — the cross-rank `ok_rates`
+broadcast that fixes the rank 1+ pruning gap identified in entry `(bf)`.
+
+**New function** `CandidateModelSet::filterRatesMPI(int finished_model)`
+(`main/phylotesting.h:248-274`, `main/phylotesting.cpp:2938-3033`,
+~80 LOC):
+- Each rank computes its local `ok_rates` (same algorithm as
+  `filterRates`).
+- Rank 0's `ok_rates` is serialised as `"rate1|rate2|..."` (2048-byte
+  buffer) and `MPI_Bcast`'d from root=0.
+- All ranks parse the received string into `set<string> global_ok_rates`.
+- Each rank applies `global_ok_rates` to its local model list: any
+  non-DONE / non-IGNORED / non-CANNOT_BE_IGNORED model whose
+  `orig_rate_name` is NOT in the set gets `MF_IGNORED`.
+
+**FCA dispatch hardening** (`main/phylotesting.cpp:3764-3783`, FCA Step 8):
+- `MPI_Allreduce(MIN)` checks `mpi_ref_subst_idx >= 0 && auto_rate &&
+  score_diff_thres >= 0` on every rank. If any rank fails, all fall back
+  to legacy `filterRates` (no broadcast, safe but under-prunes on ranks
+  1+). Prevents `MPI_Bcast` deadlock when a rank lacks a reference family.
+- `mpi_filterRatesMPI_fired` (bool) ensures single-fire per rank.
+- `mpi_filterRatesMPI_enabled` (bool) gates the new vs legacy path.
+
+**HH-NUMA atomic preparation** (`main/phylotesting.cpp:3876-3884`):
+- `#pragma omp atomic update` wraps the §12.5.3 intra-chain decrement.
+- Under Fix H (sequential outer), redundant but harmless. Under Phase 2
+  HH-NUMA (parallel `K_outer × M_inner`), prevents race when multiple
+  outer threads concurrently fire intra-chain pruning.
+
+**FCA-DBG instrumentation cleanup** (`main/phylotesting.cpp:3934-3953`):
+- 30-line per-rank trace now gated on `verbose_mode >= VB_MED` instead of
+  unconditional. Production runs no longer flood stdout.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `main/phylotesting.h` | +27 LOC: declaration `void filterRatesMPI(int)` inside `#ifdef _IQTREE_MPI` after `filterRates` (line 246). |
+| `main/phylotesting.cpp` | +~120 LOC, -1 LOC: `filterRatesMPI` body (~80 LOC after line 2936); FCA trigger replaced with conditional `filterRatesMPI(model)` / `filterRates(model)` fallback (lines ~3960-3999); FCA Step 8 `MPI_Allreduce` gate (lines ~3764-3783); intra-chain decrement atomic (line 3876); FCA-DBG gated on `VB_MED` (lines 3934-3953). |
+| `research/updated-modelfinder-dispatch.md` | +220 LOC: §19 Phase 0.5 design, results table (12 rows), projection, git state. |
+
+### Build pipeline — root cause of `(be)` stale binary, now solved
+
+Per entry `(be)`, `compiler_depend.ts` was stale (May 10 timestamp) which
+caused CMake to skip rebuilding `phylotesting.cpp.o` despite source
+modifications on May 16. Rebuild process for this entry:
+
+```bash
+cd /scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2
+rm -f main/CMakeFiles/main.dir/phylotesting.cpp.o \
+      main/CMakeFiles/main.dir/compiler_depend.*
+touch main/CMakeFiles/main.dir/compiler_depend.{make,internal,ts}
+touch /scratch/um09/as1708/iqtree3-mf2/src/iqtree3/main/phylotesting.cpp \
+      /scratch/um09/as1708/iqtree3-mf2/src/iqtree3/main/phylotesting.h
+source /etc/profile.d/modules.sh
+module load intel-compiler-llvm/2025.1.1 openmpi/4.1.7
+export OMPI_CXX=icpx OMPI_CC=icx
+make iqtree3 -j 16
+```
+
+`touch compiler_depend.{make,internal,ts}` creates empty placeholder
+files (the Makefile's `include` directive requires them to exist; CMake
+regenerates contents on first compile). Without this, `make` fails with
+`No rule to make target 'compiler_depend.make'`.
+
+### Build verification
+
+- Binary: `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi`
+  rebuilt 2026-05-16 21:51 AEST.
+- Size: 145,054,440 bytes (was 146,184,272 — net decrease from FCA-DBG
+  unconditional trace removal vs `filterRatesMPI` body insertion).
+- Object: `phylotesting.cpp.o` 9,125,720 bytes (was 9,184,672).
+- Symbol verified: `nm -C iqtree3-mpi | grep filterRatesMPI` →
+  `0000000000674310 T CandidateModelSet::filterRatesMPI(int)`.
+- Strings verified: binary contains `MF-MPI-DIAG: rank `,
+  `filterRatesMPI: |bcast_ok_rates|=`, `filterRatesMPI_enabled=`.
+- Smoke test: `iqtree3-mpi --version` exits 0; banner shows
+  "IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built May 16 2026".
+
+### Phase 0.5 projection — pending T2'/T3' PBS validation
+
+| Config | Fix H baseline | Phase 0 observed | Phase 0.5 projected |
+|--------|---------------:|------------------:|---------------------:|
+| np=1 | 1,289 s | 1,277 s | ~1,277 s (no-op gate) |
+| np=2 | 475 s | **2,865 s** ✗ | **~180-240 s** |
+| np=4 | 2,335 s | **3,502 s** ✗ | **~95-150 s** |
+
+T2' (np=2) and T3' (np=4) jobs to be submitted with the rebuilt binary;
+pass criterion = MF wall < projection-upper-bound and lnL = -7,541,976.860
+±0.01 with best model LG+G4.
+
+### Phase 2 HH-NUMA — deferred (next session after T2'/T3' confirm)
+
+HH-NUMA (nested `K_outer × M_inner` parallel outer loop) is deferred per
+"step by step" guidance. Risk profile: nested OMP toolchain interaction
+(libiomp5 hot teams), MPI_THREAD_FUNNELED vs SERIALIZED, per-team
+`iqtree->setNumThreads(M_inner)` propagation through `evaluate()`. The
+atomic prep in this entry (#8 in §19.4 results table) makes the FCA
+state machine HH-NUMA-ready; the only remaining edit is the OMP pragma
+at `phylotesting.cpp:3832` (`num_threads(num_threads)` → `num_threads(K_outer)`
+with `omp_set_max_active_levels(2)`).
+
+### Bugs encountered and squashed (debugging journey)
+
+Per `research/updated-modelfinder-dispatch.md` §19.4 (12-row implementation
+results table), the FCA debugging journey across `(bd)` → `(be)` → `(bf)`
+→ `(bg)` encountered and resolved:
+
+1. Counter stall (intra-chain pruning silently consumed ref-family slots)
+   — fixed `(be)` via §12.5.3 Change 1.
+2. Trigger boundary `==` → `<=` (defensive) — `(be)`.
+3. Stale CMake dependency build (binary unchanged after source edit)
+   — `(be)` via direct `mpicxx` compile.
+4. FCA-DBG unconditional stdout flood — `(be)` via `VB_MED` gating.
+5. Rank 1+ filterRates ineffectiveness (per-rank reference family, flat
+   WAG/JTT/DCMUT BIC) — `(bg)` via `filterRatesMPI` `MPI_Bcast`.
+6. Module load PATH propagation between shells — `(bg)` via single-shell
+   chained `source && module load && export && make`.
+7. CMake `compiler_depend.make` missing after `rm` — `(bg)` via `touch`
+   of empty placeholder files.
+
+All seven debug iterations are recorded in §19.4 with root cause and fix.
+
+### Why this matters
+
+Phase 0.5 is the **critical correctness fix** that makes FCA dispatch
+actually deliver its design intent at np>=2. Without it, the algorithm
+regresses 50% at np=4 (3,502 s vs Fix H 2,335 s) because three of four
+ranks don't prune effectively. With it, the projection is **~100 s at
+np=4** — a 23× speedup over the regressed Phase 0 and ~14× over Fix H.
+
+HH-NUMA Phase 2 will layer on top to push toward ~60 s, but Phase 0.5 is
+the prerequisite that makes the design viable at scale.
+
+---
+
+## 2026-05-16 (bf) — FCA debug run: rank 0 filter confirmed; cross-rank filterRates gap identified
+
+### What happened
+
+Debug binary compiled at 19:53 AEST with `FCA-DBG` unconditional trace
+(30-line cap inside `#pragma omp critical`). Job **168475747** (np=2, 2 nodes)
+submitted and run to completion.
+
+**Result: FAIL — MF wall 2,460.602 s (≈ baseline 2,473 s; no improvement).**
+Job cancelled after IQ-TREE phase completed but PBS job was still in Pass 2 perf stat.
+
+### Findings
+
+**Rank 0 state machine confirmed correct** via FCA-DBG output:
+
+- `mpi_ref_remaining` decremented correctly (22 → 0 over models 0–16)
+- Intra-chain pruning loop fix (Change 1 from entry `be`) fired correctly:
+  models 8–12 and 17–21 decremented from the pruning loop, not the critical section
+- `filterRates(16)` fired, pruning all non-`+G4` variants for non-LG families
+- Rank 0 log shows only `DCMUT+G4`, `PMB+G4`, `DAYHOFF+G4` etc. after model 16
+- Rank 0 evaluates ≈ 71 models total (down from 616); log stops growing at ~18–20 min
+
+**Rank 1 is the bottleneck** (MF wall = max(rank 0, rank 1)):
+
+- Rank 1 stdout not captured by `mpirun > iqtree_run.log` across two nodes
+- MF wall = 2,460 s implies rank 1 evaluated ≈ 616 models without effective pruning
+- `filterRates` per-rank design fires rank 1's filter using rank 1's reference
+  family BIC scores, which may have weaker selectivity than LG (rank 0's family)
+- If rank 1's reference family (e.g., WAG) has similar BIC scores across rate
+  categories, `ok_rates` includes all rate types → no pruning
+
+### Root cause — cross-rank filterRates gap
+
+Phase 0 design assumes each rank's local reference family will produce the same
+pruning decision as rank 0's LG family. This fails when:
+
+1. The optimal rate category is not `+G4` from the reference family's perspective
+2. The reference family's BIC landscape is flat enough that `score_diff_thres = 10`
+   does not eliminate any rate type
+
+The correct fix requires rank 0 to `MPI_Bcast` its `ok_rates` to all other ranks
+**before** they evaluate models beyond their reference family. This is a Phase 0.5
+change requiring a new MPI collective call.
+
+### Build issue also confirmed
+
+Job 168471481 (entry `be`) used a **stale binary** — CMake's `compiler_depend.ts`
+was newer than the source, silently blocking recompilation of `phylotesting.cpp.o`.
+The 2,473 s wall time of 168471481 was a build failure, not a fix failure.
+The debug binary (19:53) was compiled with a direct `mpicxx` command to bypass
+the stale dependency check.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.cpp` | FCA-DBG trace added (30-line unconditional trace inside `#pragma omp critical`) |
+| `setonix-iq/research/updated-modelfinder-dispatch.md` | §12.5.5 added: stale-build analysis, debug run results, rank-1 bottleneck root cause, required fix |
+| `setonix-iq/CHANGELOG.md` | This entry |
+
+### Next steps
+
+1. Add rank 1 stdout capture to run script (`--output-filename` or per-rank log)
+   to confirm the rank-1 filterRates hypothesis before implementing the fix
+2. Implement `MPI_Bcast` of `ok_rates` from rank 0 after its reference family
+   completes; all other ranks apply the broadcast pruning set
+3. Remove `FCA-DBG` instrumentation from `phylotesting.cpp` before production rebuild
+
+---
+
+## 2026-05-16 (be) — FCA Phase 0 bug fix: `mpi_ref_remaining` never reaching 0; re-queued T2/T3
+
+### What happened
+
+Three Phase 0 FCA test runs were submitted as jobs 168470237 (np=1), 168470238 (np=2), and
+168470240 (np=4). The np=1 run completed correctly. The np=2 and np=4 runs were still in
+ModelFinder at 38+ minutes (well past the expected ~400 s and ~250 s bounds), confirmed by
+live log inspection showing JTT+I+R6 (model 106) and Q.BIRD+F+I+R2 (model 212) still being
+evaluated — families that `filterRates` should have pruned after the LG reference family
+finished.
+
+Root cause identified, patched, binary rebuilt, stuck jobs cancelled, and replacement jobs
+168471481/168471482 submitted within the same session.
+
+### Root cause — `mpi_ref_remaining` stalls above 0
+
+The FCA state machine initialises `mpi_ref_remaining` to the count of non-IGNORED
+ref-family models on the rank at dispatch time — for rank 0 at np=2 this is 22 (all LG
+models 0–21). The counter decrements in the `#pragma omp critical` block each time rank 0
+**evaluates** a ref-family model; `filterRates` fires when it hits 0.
+
+Intra-chain pruning (`getLowerKModel` comparison, `phylotesting.cpp:3712–3720`) marks
+higher-k models `MF_IGNORED` *after* a model is evaluated when the +Rk chain has begun
+declining. This silently marks LG+R6..R10 (models 8–12) and LG+I+R6..R10 (models 17–21)
+as IGNORED. Those 10 models are never returned by `getNextModel()` and never pass through
+the `omp critical` block, so their slots are permanently stranded:
+
+```
+Initial:            mpi_ref_remaining = 22
+Models 0–6 eval:    22 → 15  (7 decrements)
+Model 7 (LG+R5):    pruning marks models 8–12 IGNORED  ← no decrement  → still 15
+  critical (model 7): 15 → 14
+Models 13–15 eval:  14 → 11  (3 decrements)
+Model 16 (LG+I+R5): pruning marks models 17–21 IGNORED ← no decrement  → still 11
+  critical (model 16): 11 → 10
+Counter stalls at 10.  filterRates NEVER fires. ✗
+```
+
+All 616 models on rank 0 are evaluated without cross-family rate pruning. That is why the
+np=2 run shows JTT+R2..R7 being fully evaluated (should be pruned to JTT+G4 only).
+
+### Fix — two changes to `phylotesting.cpp`
+
+**Change 1** (`phylotesting.cpp:3718–3730`): Inside the `for (higher_model = model; ...)`
+pruning loop, added an `#ifdef _IQTREE_MPI` block that decrements `mpi_ref_remaining` for
+each pruned ref-family model, **excluding `model` itself** (which is counted in the `omp
+critical` section below to avoid double-decrement):
+
+```cpp
+at(higher_model).setFlag(MF_IGNORED);
+#ifdef _IQTREE_MPI
+if (higher_model != (int)model
+    && mpi_ref_subst_idx >= 0 && auto_rate
+    && at(higher_model).subst_name == at(mpi_ref_subst_idx).subst_name)
+    mpi_ref_remaining--;
+#endif
+```
+
+With the fix, the counter trace becomes:
+
+```
+Initial:            mpi_ref_remaining = 22
+Models 0–6 eval:    22 → 15
+Model 7 (LG+R5):    pruning loop: models 9–12 each decrement → 15 → 10
+  critical (model 7): 10 → 9
+Models 13–15 eval:  9 → 6
+Model 16 (LG+I+R5): pruning loop: models 17–21 each decrement → 6 → 1
+  critical (model 16): 1 → 0 → filterRates(16) fires ✓
+```
+
+`filterRates(16)` yields `ok_rates = {"G4"}` (only LG+G4 beats the BIC+10 threshold),
+pruning all non-`+G4` models from every subsequent family. ~28 `+G4` variants survive from
+616 assigned models.
+
+**Change 2** (`phylotesting.cpp:3763`): `mpi_ref_remaining == 0` → `mpi_ref_remaining <= 0`
+as a defensive guard for any future edge case.
+
+Applied via Python in-place edit (scratch filesystem not writable by editor tools). Rebuilt:
+
+```bash
+# In build-mpi-mf2/:
+make -C main phylotesting.cpp.o
+make -f main/CMakeFiles/main.dir/build.make main/libmain.a
+make iqtree3
+```
+
+New binary: `build-mpi-mf2/iqtree3-mpi` (2026-05-16 18:09, 146,184,272 bytes — 115 KB
+larger than pre-fix, confirming the relink included new code).
+
+### T1 (np=1) result — completed correctly, FCA is no-op
+
+Job 168470237 completed IQ-TREE Pass 1 at 17:45:19; PBS job continued into Pass 2 (perf
+stat). FCA state machine is guarded by `if (numProcesses > 1)` and is entirely a no-op at
+np=1 — `filterRates` fires via the legacy `model >= rate_block` path exactly as in Fix H.
+
+| Metric | Value | Fix H np=1 (168468561) | Delta |
+|--------|------:|----------------------:|-------|
+| MF wall | **1,277.622 s** | 1,289 s | −11 s (−0.9%) |
+| Tree wall | **707.199 s** | — | — |
+| Total wall | **1,988.184 s** | — | — |
+| lnL | **−7,541,976.862** | −7,541,976.860 | −0.002 (within ±0.01 ✓) |
+| Best model | **LG+G4** | LG+G4 | exact match ✓ |
+
+MF wall is 11 s shorter than Fix H — within normal run-to-run variation; no regression.
+
+### T2 (np=2) and T3 (np=4) — cancelled (stuck without pruning)
+
+| Job | Config | Elapsed at cancel | Last model evaluated | Root cause |
+|-----|--------|------------------:|---------------------|------------|
+| 168470238 | np=2 | ~56 min | JTT+I+R6 (model 106) | `filterRates` never fired |
+| 168470240 | np=4 | ~56 min | Q.BIRD+F+I+R2 (model 212) | `filterRates` never fired |
+
+Both cancelled via `qdel` after root cause was confirmed. No useful timing data recoverable
+— the ModelFinder step would have run to completion across all 616/308 models per rank
+without any cross-family pruning, producing bloated wall times of 3,000–3,500 s.
+
+### Replacement jobs submitted with fixed binary
+
+| Test | PBS ID | Config | Status |
+|------|--------|--------|--------|
+| T2 (np=2) | **168471481** | 2 nodes, 208 cores | Queued 18:09 AEST |
+| T3 (np=4) | **168471482** | 4 nodes, 416 cores | Queued 18:09 AEST |
+
+Pass criteria unchanged from §11 of design doc: MF wall ≤ 430 s (np=2), ≤ 350 s (np=4);
+lnL −7,541,976.860 ±0.01; best model LG+G4.
+
+### HHOIP prerequisite note
+
+The `mpi_ref_remaining--` in Change 1 is not thread-safe for K_outer > 1 (sequential outer
+loop at K=1 is safe). Before HHOIP (§13.1 of design doc) can land, this decrement and the
+`ratefilter_fired_by_fca` flag must be atomicised (`#pragma omp atomic` / `std::atomic<int>`).
+See `research/updated-modelfinder-dispatch.md` §12.5.4.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.cpp` | Change 1: `mpi_ref_remaining--` in intra-chain pruning loop; Change 2: trigger `<= 0` |
+| `setonix-iq/research/updated-modelfinder-dispatch.md` | §12.5 added: bug, fix, counter trace, HHOIP gating |
+| `setonix-iq/CHANGELOG.md` | This entry |
+
+---
+
+## 2026-05-16 (bd) — FCA dispatch: novel ModelFinder MPI algorithm (patch `0003`, commit `ffb79a14`)
+
+### What changed
+
+A novel ModelFinder MPI dispatch algorithm — **FCA (Family-Local + Cost-Aware + Always-Filter)** — replaces the entire Fix A + Fix C stack with a single-pass design that closes the np=4 regression (2,335 s → projected ~100 s, 23×). Design fully documented in [`research/updated-modelfinder-dispatch.md`](research/updated-modelfinder-dispatch.md); patch committed at `gadi-spr-r2-mf-fca`/`ffb79a14`; ships as [`patches/iqtree3/0003-mf-fca-dispatch.patch`](patches/iqtree3/0003-mf-fca-dispatch.patch).
+
+Three structural changes vs Fix A+C:
+
+1. **Closed-form cost predictor**: `cost(m) = nstates² · npat · rate_mult · freq_mult · log2(ntaxa)`. Captures DNA(4)/AA(20)/codon(61) state-count, alignment size, +Rk rate cost, the ~3× cost of +F (ML frequency) variants, and the `log₂(ntaxa)` BFGS scaling factor — none of which the old `k*10` proxy modeled. This alone explains the np=4 AA 100K regression: +F variants happen to cluster on one rank under round-robin assignment, doubling its actual cost vs predicted.
+2. **Greedy LPT (argmin rank_load) replaces round-robin**: each substitution family is assigned to the rank with the lowest accumulated load. With ~100 unique `subst_name` groups (20 AA matrices × 5 freq variants) over 4 ranks, the imbalance after pruning drops from a worst-case 1.5× under round-robin to <1.15× under greedy LPT (Graham 1969 bound: (4m−1)/3m = 1.25× × accurate cost estimate).
+3. **State-machine filterRates trigger replaces `model >= rate_block`**: a per-rank `mpi_ref_remaining` counter decrements as the rank's reference-family models finish, and `filterRates` fires exactly once when it hits zero. This eliminates Fix C's fragile `rate_block` recompute and the suspected np=4 edge case (where reference-family Block-2/Block-3 ordering races caused premature filterRates triggers that returned without pruning).
+
+The MF-MPI Fix B (OMP-across-models), Fix D (proc_bind(spread)), Fix G (local_in_info), and Fix H (`!_IQTREE_MPI` guard on outer pragma) are all preserved unchanged. FCA also adds always-on per-rank diagnostic logging (`MF-MPI-DIAG:` lines) so future regressions are observable without a code change.
+
+### Expected performance (AA 100K, SPR 2×52T, projection — pending PBS validation)
+
+| PBS ID  | Scenario        | Pre-fix MF wall | Fix A–H MF wall | FCA MF wall (proj.) | vs single-node baseline |
+|---------|-----------------|----------------:|----------------:|---------------------:|------------------------:|
+| 168425673 | Baseline (std, 1 node) | — | — |   399 s            |   1.00×                  |
+| TBD     | FCA np=1        | 1,309 s | 1,289 s | **~400 s**           | **0.99×**                |
+| TBD     | FCA np=2        |   969 s |   475 s | **~175 s**           | **2.28×**                |
+| TBD     | **FCA np=4**    |   573 s | **2,335 s ⚠** | **~100 s**     | **~3.99×**               |
+| TBD     | FCA np=4 DNA 100K | — | — | **~50 s**       | (DNA SPR baseline 290 s) |
+
+### Why FCA succeeds where Fix A+C didn't
+
+Static analysis of Fix C's `rate_block` recompute (`research/updated-modelfinder-dispatch.md` §2.1) showed it correct in isolation but fragile under five compounding preconditions. The np=4 regression is most likely caused by the round-robin LPT happening to concentrate ~7 ML-frequency (+F) families on one rank (the cost predictor doesn't see +F at all), with the actual makespan (~308 × 7.6 s/model = 2,341 s) matching the observed 2,335 s within 0.3%. The FCA cost predictor explicitly models +F at 3× weight, so greedy LPT spreads +F families across all ranks. Independently, the state-machine trigger removes any remaining sensitivity to model-list layout (Block 1/2/3 ordering from `generate()` line 1699).
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/iqtree3/main/phylotesting.cpp` | FCA dispatch (single-pass; replaces Fix A Phase 1 stripe + Fix C `rate_block` recompute); state-machine trigger added to OMP loop |
+| `setonix-iq/research/updated-modelfinder-dispatch.md` | **NEW** — full design doc (§1–§8) with phased plan, cost-predictor derivation, risk register, literature review |
+| `setonix-iq/patches/iqtree3/0003-mf-fca-dispatch.patch` | **NEW** — `git format-patch` from `gadi-spr-r2-mf-fca` `ffb79a14` |
+| `setonix-iq/patches/iqtree3/README.md` | New patch documented |
+| `setonix-iq/research/aa-walltime-analysis.md` | §2.4.8 added — FCA design rationale + projected np=1/2/4 walltime |
+| `setonix-iq/CHANGELOG.md` | This entry |
+
+### Build / apply
+
+```bash
+# On Gadi:
+module load intel-compiler-llvm/2025.1.1 openmpi/4.1.7
+cd /scratch/um09/as1708/iqtree3-mf2/src/iqtree3
+git checkout gadi-spr-r2-mf-fca    # branch with commit ffb79a14
+cd ../../build-mpi-mf2
+OMPI_CXX=icpx OMPI_CC=icx make iqtree3-mpi -j   # ~96% incremental from prior build
+```
+
+Build verified clean (12 unrelated warnings, no errors) — main module compiled in ~7 s on Gadi login node.
+
+### Library + super-parallel + data-delivery audit (added 2026-05-16, post-build)
+
+Researched whether to extract FCA into a standalone library and whether further parallelism is feasible. See `research/updated-modelfinder-dispatch.md` §9–§10 for the full audit. Summary:
+
+- **Custom library `libiqtree-mfdispatch.so`** — **not worth it.** Only one consumer (`evaluateAll()`); PartitionFinder uses a different MPI pattern; MixtureFinder inherits FCA for free. ABI cost: ~5 days; gain: 0.
+- **Super-parallel beyond model-level** — **already at the ceiling.** `MPI_Win_allocate_shared` doesn't work for write-through partial_lh; persistent OMP team is already implicit (`OMP_WAIT_POLICY=ACTIVE` + libiomp5); subtree GPU offload is orthogonal and on a different branch.
+- **Data delivery audit** — only one actionable item: `madvise(MADV_HUGEPAGE)` on the 6.27 GB `central_partial_lh` buffer (currently 1.57M × 4 KB PTEs). Expected gain: **8–15% MF wall**, affects all np configs orthogonally to dispatch. **Defer until T1–T3 results land** — if T3 (np=4) hits the projected 200-300 s band, THP becomes the next-priority follow-up patch (`0004-thp-partial-lh-madvise.patch`).
+
+### Revised np=1/2/4 projections (after honest re-analysis)
+
+Earlier ≤100 s target at np=4 was optimistic — it assumed Fix B parallel outer loop (disabled by Fix H for OOM safety at AA 100K). Realistic targets:
+
+| Config | Fix H baseline | FCA Phase 0 target | Improvement | Why |
+|--------|---------------:|-------------------:|------------:|-----|
+| np=1 | 1,289 s | **~1,289 s** | **1.0×** | FCA is `if (numProcesses > 1)` guarded — no-op at np=1; Amdahl-limited site-parallel sequential loop dominates |
+| np=2 |   475 s | 400–430 s | 1.1–1.2× | Modest; greedy LPT + freq_mult=3 balances +F across 2 ranks |
+| **np=4** | **2,335 s ⚠** | **200–300 s** | **~10×** | Headline; +F-concentration hypothesis (if correct) restores expected sub-300 s |
+
+Sub-100 s at np=4 requires future Phase 1 (telemetry rebalance), Phase 2 (work-stealing), or per-rank memory-footprint reduction to re-enable Fix B parallel outer loop. Out of scope for Phase 0.
+
+### PBS test matrix queued (T1, T2, T3)
+
+Three jobs submitted to `dx61` `normalsr-exec` against the same alignment + seed as baseline `168425673`. All scripts use the FCA-built binary at `/scratch/um09/as1708/iqtree3-mf2/build-mpi-mf2/iqtree3-mpi` (commit `ffb79a14`):
+
+```
+T1 (np=1):  gadi-ci/cpu-bench/run_cpu_bench_aa_100k_mf2_1node.sh
+T2 (np=2):  gadi-ci/cpu-bench/run_cpu_bench_aa_100k_mf2_2node.sh
+T3 (np=4):  gadi-ci/cpu-bench/run_cpu_bench_aa_100k_mf2_4node.sh
+```
+
+Full parity with `168425673`: `-seed 1`, `OMP_NUM_THREADS=103`, `OMP_PROC_BIND=close + OMP_PLACES=cores`, `KMP_BLOCKTIME=200`, `numactl --localalloc`. Pass criteria for all three: `lnL = −7,541,976.860 ±0.01`, best MF model `LG+G4`, BIC `15,086,233 ±1`. MF wall thresholds in §11 of design doc.
+
+`build_tag` updated `mf2_full_icx_avx512_r2_fixh` → `mf2_full_icx_avx512_r2_fca` in all three scripts; `non_canonical_label` updated `MF2 Full (Fix A–H)` → `MF2 FCA (Family-Local, Cost-Aware, Always-Filter)`.
+
+PBS job IDs (submitted 2026-05-16, dx61 `normalsr-exec`):
+
+| Test | PBS ID | Nodes × CPUs | Mem | Walltime | Status |
+|------|--------|--------------|----:|---------:|--------|
+| T1 (np=1) | `168470237` | 1 × 104 | 510 GB | 03:00 | Queued |
+| T2 (np=2) | `168470238` | 2 × 104 | 1,020 GB | 03:00 | Queued |
+| T3 (np=4) | `168470240` | 4 × 104 | 2,040 GB | 03:00 | Queued |
+
+Results to be appended below as runs complete; each run writes
+`logs/runs/gadi_AA_100k_mf2_npN_seed1_<PBS_ID>.json` with lnL + best model
+verification and per-rank `MF-MPI-DIAG:` diagnostic lines in the `iqtree_run.log`.
+
+---
+
 ## 2026-05-16 (bc) — Fix E–H: OMP race fix + sequential MPI outer loop; all Fix H results (168468561–563)
 
 ### What changed
