@@ -31,6 +31,22 @@ function isPilot(name) {
   return typeof name === 'string' && /(_gadi_pilot|_setonix_pilot)\.fa$/.test(name);
 }
 
+// Format raw seconds as a human-readable duration string.
+// < 60s   → "Xs"  (redundant to show, used as pass-through)
+// < 3600s → "Xm Ys"
+// < 86400s→ "Xh Ym"
+// ≥ 86400s→ "Xd Yh Zm"
+function fmtDuration(s) {
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.round(s % 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${sec}s`;
+}
+
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
   if (existing) existing.destroy();
@@ -112,7 +128,12 @@ export function render(canvas, runsIndex) {
         legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}s @ T=${ctx.parsed.x}`,
+            label: (ctx) => {
+              const s = ctx.parsed.y;
+              const human = fmtDuration(s);
+              const timeStr = s < 60 ? `${s.toFixed(1)}s` : `${s.toFixed(1)}s (${human})`;
+              return `${ctx.dataset.label}: ${timeStr} @ T=${ctx.parsed.x}`;
+            },
           },
         },
       },
