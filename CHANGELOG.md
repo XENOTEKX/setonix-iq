@@ -50,6 +50,36 @@ likely closer to ~100 GB at K=8 rather than 125 GB).
 
 ---
 
+## 📊 Full Runs Comparison (MF+SPR, all PASS ✓)
+
+Summary of all completed full MF+SPR runs for both the standard baseline and the FCA MF-iso Phase 0.5+0.6 harness.
+All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for every dataset.
+
+**FCA binary:** `iqtree3-mpi` · branch `mf-iso-phase0.5-0.6` · ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5 · seed=1 · `-m TEST -T 103`  
+**Baseline binary:** `build-intel-vanila/iqtree3` · non-MPI OMP-across-models · ICX + AVX-512 + R1+R2 · v3.1.2 (`4e91dd6`) · sa0557
+
+> **IPC note:** `perf stat` was not collected for FCA full runs (no `perf_stat.txt` in profiles).
+> The only available IPC figure is for the baseline AA 100K run: **1.88 insn/cycle**
+> (from `AA_100k_spr_seed1_168425673/perf_stat.txt`). Add `perf stat` wrapper to FCA run scripts to collect IPC for future runs.
+
+| Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup |
+|-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|
+| 168425674 | Baseline | DNA 100K | 1 | 1×103T | F81+F+G4 | −5,692,984.539 | 11,388,283.176 | 61.740 | 226.447 | 289.121 | — |
+| 168584737 | FCA np=2 | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | 86.613 | 113.754 | **2.54×** |
+| 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — |
+| 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** |
+| 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — |
+| 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** |
+| 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — |
+| 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** |
+
+> **Timing notes:** MF and SPR wall times from IQ-TREE stdout (`Wall-clock time for ModelFinder` /
+> `Wall-clock time used for tree search`). Total wall from PBS job wall-clock (includes startup + IO overhead;
+> typically 1–80 s greater than MF+SPR sum). BIC and lnL from `.iqtree` report files on scratch.
+> Speedup = baseline total ÷ FCA total.
+
+---
+
 ## 2026-05-18 (bm) — DNA validation: Phase 0.5+0.6 extended to DNA 100K and DNA 1M
 
 ### Context
