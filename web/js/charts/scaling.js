@@ -7,12 +7,14 @@ import { platformColour, buildFamily, dimLegendHidden } from '../utils.js';
 
 // Colour overrides for known MF2/patch families so they stand out.
 const FAMILY_COLOURS = {
-  'MF2 Full':        { h: 162, s: 75, l: 52 },  // teal-green
-  'MF2 MF-only':     { h: 145, s: 55, l: 45 },  // muted green
-  'MF2 Dispatch':    { h: 180, s: 70, l: 40 },  // cyan
-  'R2 · NUMA patch': { h: 270, s: 65, l: 58 },  // purple
-  'R2 · MPI':        { h: 290, s: 60, l: 55 },  // violet
-  'AVX-512 + R2':    { h: 195, s: 80, l: 50 },  // azure
+  'MF2 Full':             { h: 162, s: 75, l: 52 },  // teal-green
+  'MF2 MF-only':          { h: 145, s: 55, l: 45 },  // muted green
+  'MF2 Dispatch':         { h: 180, s: 70, l: 40 },  // cyan
+  'R2 · NUMA patch':      { h: 270, s: 65, l: 58 },  // purple
+  'R2 · MPI':             { h: 290, s: 60, l: 55 },  // violet
+  'AVX-512 + R2':         { h: 195, s: 80, l: 50 },  // azure
+  'FCA mf-iso (full)':    { h:  38, s: 90, l: 55 },  // amber/gold
+  'FCA mf-iso (MF-only)': { h:  20, s: 75, l: 62 },  // coral-orange
 };
 
 function familyColour(family, alpha = 1) {
@@ -45,6 +47,16 @@ function fmtDuration(s) {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${sec}s`;
+}
+
+// Per-family line/point style for non-canonical series.
+const NC_STYLES = {
+  'MF2 Full':             { borderDash: [],     pointRadius: 5, pointStyle: 'rectRot',  borderWidth: 2   },
+  'FCA mf-iso (full)':    { borderDash: [],     pointRadius: 5, pointStyle: 'star',     borderWidth: 2   },
+  'FCA mf-iso (MF-only)': { borderDash: [5, 3], pointRadius: 4, pointStyle: 'triangle', borderWidth: 1.5 },
+};
+function ncStyle(family) {
+  return NC_STYLES[family] || { borderDash: [3, 5], pointRadius: 3, pointStyle: 'crossRot', borderWidth: 1.5 };
 }
 
 export function render(canvas, runsIndex) {
@@ -108,11 +120,8 @@ export function render(canvas, runsIndex) {
       data: points,
       borderColor: fColour ? fColour.replace('1)', '0.85)') : platformColour(plat, ds, 0.45),
       backgroundColor: fColour ? fColour.replace('1)', '0.15)') : platformColour(plat, ds, 0.1),
-      borderDash: family === 'MF2 Full' ? [] : [3, 5],
+      ...ncStyle(family),
       tension: 0.2,
-      pointRadius: family === 'MF2 Full' ? 5 : 3,
-      pointStyle: family === 'MF2 Full' ? 'rectRot' : 'crossRot',
-      borderWidth: family === 'MF2 Full' ? 2 : 1.5,
       hidden: true,
     });
   }
