@@ -192,8 +192,8 @@
               "peak_kb": { "type": "number", "minimum": 0 },
               "vms_kb":  { "type": "number", "minimum": 0 },
               "threads_now": { "type": "number", "minimum": 0 },
-              "voluntary_cs":   { "type": "number", "minimum": 0 },
-              "involuntary_cs": { "type": "number", "minimum": 0 }
+              "voluntary_cs":   { "type": ["number", "null"], "minimum": 0 },
+              "involuntary_cs": { "type": ["number", "null"], "minimum": 0 }
             }
           }
         },
