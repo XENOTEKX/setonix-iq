@@ -134,12 +134,12 @@ export function platformColour(platform, datasetKey, alpha = 1) {
  *   "ICX baseline (ref)" sr_icx
  *   "R2 · NUMA patch"    icx_omp_pin_numa_ft_r2 / *_v312
  *   "R2 · MPI"           icx_mpi* without avx512
- *   "R2 (cpu_opt_merge)" cpu_opt_merge_* (R2 branch, AVX+FMA kernel — no AVX-512 dispatch)
  *   "AVX-512 + R2"       *avx512*
  *   "MF2 Full"           mf2_full*
  *   "MF2 MF-only"        mf2_mfonly*
  *   "MF2 Dispatch"       mf2_dispatch*  /  nc_label containing "MF-only MF2 audit"
  *   "AOCC / Setonix"     clang_*, smtoff_pin, baseline_smton
+ *   "FCA mf-iso"         mf_iso* (Phase 0.5+0.6 filterRatesMPI + getNextModel ref-priority)
  *   "Other"              everything else
  */
 export function buildFamily(r) {
@@ -152,7 +152,7 @@ export function buildFamily(r) {
   if (tag.startsWith('mf2_full')) return 'MF2 Full';
   if (tag.startsWith('mf2_mfonly')) return 'MF2 MF-only';
   if (tag.startsWith('mf2_dispatch')) return 'MF2 Dispatch';
-  if (tag.startsWith('cpu_opt_merge')) return 'R2 (cpu_opt_merge)';
+  if (tag.startsWith('mf_iso')) return 'FCA mf-iso';
   if (tag.includes('avx512') || tag.includes('avx_512') || tag.includes('r2_anchor')) return 'AVX-512 + R2';
   if (tag.startsWith('icx_omp_pin_numa_ft_r2')) return 'R2 · NUMA patch';
   if (tag.startsWith('icx_mpi')) return 'R2 · MPI';
@@ -166,11 +166,11 @@ export const BUILD_FAMILIES = [
   'ICX baseline (ref)',
   'R2 · NUMA patch',
   'R2 · MPI',
-  'R2 (cpu_opt_merge)',
   'AVX-512 + R2',
   'MF2 Full',
   'MF2 MF-only',
   'MF2 Dispatch',
+  'FCA mf-iso',
   'AOCC / Setonix',
   'Other',
 ];
