@@ -153,7 +153,12 @@ export function buildFamily(r) {
   if (tag.startsWith('mf2_full')) return 'MF2 Full';
   if (tag.startsWith('mf2_mfonly')) return 'MF2 MF-only';
   if (tag.startsWith('mf2_dispatch')) return 'MF2 Dispatch';
-  if (tag.startsWith('mf_iso')) return (r?.run_type === 'mf_iso') ? 'FCA mf-iso (full)' : 'FCA mf-iso (MF-only)';
+  if (tag.startsWith('mf_iso')) {
+    // model_finder_only is the authoritative field; run_type 'mf_iso_mfonly' is the
+    // legacy discriminator used by older scripts.  Either flag makes it MF-only.
+    const isMFOnly = r?.model_finder_only === true || r?.run_type === 'mf_iso_mfonly';
+    return isMFOnly ? 'FCA mf-iso (MF-only)' : 'FCA mf-iso (full)';
+  }
   if (tag.includes('avx512') || tag.includes('avx_512') || tag.includes('r2_anchor')) return 'AVX-512 + R2';
   if (tag.startsWith('icx_omp_pin_numa_ft_r2')) return 'R2 · NUMA patch';
   if (tag.startsWith('icx_mpi')) return 'R2 · MPI';

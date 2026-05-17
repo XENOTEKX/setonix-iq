@@ -62,7 +62,7 @@
   "build_tag": "mf_iso_phase0.5_0.6_icx_avx512_mftime",
   "branch": "mf-iso-phase0.5-0.6",
   "non_canonical": true,
-  "non_canonical_label": "MF-iso Phase 0.5+0.6 \u00b7 ICX+MPI \u00b7 AVX-512",
+  "non_canonical_label": "MF-iso Phase 0.5+0.6 (filterRatesMPI Bcast + getNextModel ref-priority + MF-TIME) \u00b7 ICX+MPI \u00b7 AVX-512",
   "group": "mf_iso_scaling",
   "ref": "FCA"
 }
