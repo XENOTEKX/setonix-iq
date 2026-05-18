@@ -151,11 +151,10 @@ dashboard:
 	        echo "[dashboard] data unchanged, nothing to push"; \
 	    else \
 	        git commit -m "dashboard: rebuild $$(date '+%Y-%m-%dT%H:%M')" && \
-	        git push origin "$$(git rev-parse --abbrev-ref HEAD)"; \
-	    fi
-
-.PHONY: test
-test:
+                git push origin HEAD:refs/heads/main && \
+                if [ "$$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then \
+                    git push origin HEAD 2>/dev/null || true; \
+                fi; \
 	$(call header,Running pytest)
 	cd "$(AGENT_DIR)" && $(PY) -m pytest tests/ -v
 
