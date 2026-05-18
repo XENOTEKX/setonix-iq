@@ -148,10 +148,13 @@ probe_env
 
 RANK_PROBE="${REPO_DIR}/gadi-ci/mf-iso/tools/rank_probe.sh"
 [[ -x "${RANK_PROBE}" ]] || { echo "ERROR: rank_probe.sh not found at ${RANK_PROBE}" >&2; exit 10; }
+RANK_PERF="${REPO_DIR}/gadi-ci/mf-iso/tools/rank_perf.sh"
+[[ -x "${RANK_PERF}" ]] || { echo "ERROR: rank_perf.sh not found at ${RANK_PERF}" >&2; exit 10; }
 
 # ── Full IQ-TREE run (MF + SPR) with per-rank output capture ──────────
 echo "[2node] Full run (MF+SPR), ${NRANKS} ranks × ${OMP_PER_RANK} OMP across 2 nodes"
 echo "[2node] mpirun --output-filename ${RANK_LOGS_DIR}/"
+export PERF_STAT_DIR="${WORK_DIR}"
 START_EPOCH=$(date +%s)
 
 mpirun -np "${NRANKS}" \
@@ -162,7 +165,8 @@ mpirun -np "${NRANKS}" \
     --output-filename "${RANK_LOGS_DIR}/" \
     "${OMP_ENV[@]}" \
     "${RANK_PROBE}" \
-        numactl --localalloc -- \
+        "${RANK_PERF}" \
+            numactl --localalloc -- \
             "${IQTREE}" -s "${ALIGNMENT}" -m TEST -T "${OMP_PER_RANK}" -seed "${SEED}" \
                         --prefix "${WORK_DIR}/iqtree_run" \
     > "${WORK_DIR}/iqtree_run.log" 2> "${WORK_DIR}/iqtree_run.bindings.log"
@@ -173,6 +177,16 @@ WALL=$(( END_EPOCH - START_EPOCH ))
 cat "${WORK_DIR}/iqtree_run.log" || true
 echo ""
 echo "[2node] done: rc=${IQRC} wall=${WALL}s"
+
+# ── Per-rank perf stat summary ─────────────────────────────────────────
+echo ""
+echo "[2node] Per-rank perf stat (IPC + LLC cache):"
+for pf in "${WORK_DIR}"/perf_stat_rank_*.txt; do
+    [[ -f "$pf" ]] || continue
+    rank=$(echo "$pf" | sed -E 's|.*perf_stat_rank_([0-9]+)\.txt|\1|')
+    echo "  === rank ${rank} ==="
+    grep -E 'cycles|instructions|cache-miss|LLC|insn per cycle' "$pf" 2>/dev/null | sed 's/^/    /' || true
+done
 
 # ── Per-rank MF-TIME and MF-MPI-DIAG aggregation ──────────────────────
 echo ""
