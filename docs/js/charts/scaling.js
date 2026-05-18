@@ -69,11 +69,11 @@ function renderExternalLegend(canvas, chart) {
   canvas.style.minHeight = '0';
   const legendDiv = document.createElement('div');
   legendDiv.className = 'scaling-legend';
-  legendDiv.style.cssText = 'max-height:110px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:2px 10px;padding:6px 4px 2px;border-top:1px solid rgba(139,151,173,0.12);flex-shrink:0;';
+  legendDiv.style.cssText = 'height:26px;overflow-x:auto;overflow-y:hidden;display:flex;flex-wrap:nowrap;align-items:center;gap:0 14px;padding:0 4px;border-top:1px solid rgba(139,151,173,0.12);flex-shrink:0;scrollbar-width:thin;scrollbar-color:rgba(79,143,255,0.3) transparent;';
   chart.data.datasets.forEach((ds, i) => {
     const isHidden = !chart.isDatasetVisible(i);
     const item = document.createElement('span');
-    item.style.cssText = `display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:#8b97ad;padding:1px 3px;border-radius:3px;flex-shrink:0;opacity:${isHidden ? '0.35' : '1'};`;
+    item.style.cssText = `display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:#8b97ad;padding:1px 4px;border-radius:3px;flex-shrink:0;white-space:nowrap;opacity:${isHidden ? '0.35' : '1'};`;
     const swatch = document.createElement('span');
     const bc = typeof ds.borderColor === 'string' ? ds.borderColor : '#8b97ad';
     swatch.style.cssText = `display:inline-block;width:22px;height:2px;background:${bc};border-radius:1px;flex-shrink:0;`;

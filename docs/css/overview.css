@@ -934,6 +934,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  overflow: hidden;
 }
 .cm-filter-label {
   font-size: 0.68rem;
@@ -951,6 +952,7 @@
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   padding-bottom: 3px;
+  flex: 1;
   min-width: 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(79, 143, 255, 0.3) transparent;
