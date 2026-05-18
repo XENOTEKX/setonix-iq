@@ -298,13 +298,42 @@ case "${1:-}" in
         echo "    DNA 100K: lnL=-5,692,984.539 ±0.1  F81+F+G4 SPR ref 168425674"
         ;;
 
+    # ── T3 / T4: AA 100K and DNA 100K 4-node full runs (§5.1 test matrix) ────
+    aa_100k_4node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_aa_100k_4node_full.sh)"
+        echo "  AA 100K 4-node full run job: ${jid}"
+        echo "  Ref: lnL=-7,541,976.860 ±0.1  LG+G4  (168425673)  T3 §5.1"
+        ;;
+    dna_100k_4node_full)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_dna_100k_4node_full.sh)"
+        echo "  DNA 100K 4-node full run job: ${jid}"
+        echo "  Ref: lnL=-5,692,984.539 ±0.1  F81+F+G4  (168425674)  T4 §5.1"
+        ;;
+    full_100k_4node_all)
+        echo "[submit-mf-iso] qsub T3+T4: AA 100K 4-node full + DNA 100K 4-node full (independent, run in parallel)"
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        aa_jid="$(qsub_stage run_mf_iso_aa_100k_4node_full.sh)"
+        echo "  T3 AA  100K 4-node full run job: ${aa_jid}"
+        dna_jid="$(qsub_stage run_mf_iso_dna_100k_4node_full.sh)"
+        echo "  T4 DNA 100K 4-node full run job: ${dna_jid}"
+        echo ""
+        echo "  Monitor with: qstat -fx ${aa_jid} ${dna_jid}"
+        echo ""
+        echo "  Acceptance:"
+        echo "    T3 AA  100K np=4: lnL=-7,541,976.860 ±0.1  LG+G4    SPR ref 168425673"
+        echo "    T4 DNA 100K np=4: lnL=-5,692,984.539 ±0.1  F81+F+G4 SPR ref 168425674"
+        ;;
+
     *)
         echo "usage: $0 {build|baseline|1node|2node|all" >&2
         echo "           |dna_100k_baseline|dna_100k_1node|dna_100k_2node|dna_100k_all" >&2
         echo "           |dna_1m_baseline|dna_1m_1node|dna_1m_2node|dna_1m_all|dna_1m_8node_full" >&2
         echo "           |aa_1m_2node|aa_1m_4node|aa_1m_all|aa_1m_8node_full" >&2
         echo "           |aa_1m_1node_full|aa_1m_2node_full|aa_1m_4node_full|aa_1m_16node_full|aa_1m_full_all" >&2
-        echo "           |aa_100k_full|dna_100k_full|full_100k_all}" >&2
+        echo "           |aa_100k_full|dna_100k_full|full_100k_all" >&2
+        echo "           |aa_100k_4node_full|dna_100k_4node_full|full_100k_4node_all}" >&2
         exit 2
         ;;
 esac
