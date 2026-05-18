@@ -1,0 +1,84 @@
+{
+  "run_id": "gadi_DNA_100k_mfiso_np4_full_seed1_168682179",
+  "label": "DNA_100k_mfiso_np4_full_seed1",
+  "platform": "gadi",
+  "run_type": "mf_iso",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_dna_100k",
+  "data_type": "DNA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "threads": 412,
+  "seed": 1,
+  "model_finder_only": false,
+  "timing": [
+    {
+      "command": "mpirun -np 4 -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi -s alignment_100000.phy -m TEST -T 103 -seed 1",
+      "time_s": 64.705
+    }
+  ],
+  "verify": [
+    {
+      "file": "alignment_100000.phy",
+      "status": "pass",
+      "expected": -5692984.539,
+      "reported": -5692984.535,
+      "diff": 0.004,
+      "note": "Full-run SPR lnL vs SPR baseline ref (168425674); tol=0.1"
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 64.705,
+    "mf_wall_s": 18.332,
+    "lnL": -5692984.535,
+    "best_model": "F81+F+G4",
+    "all_pass": true
+  },
+  "mf_time_summary": {
+    "rank_0": {
+      "n_models": 13,
+      "total_eval_s": 13.054,
+      "mean_s": 1.004,
+      "max_s": 1.982
+    }
+  },
+  "phase0_5_broadcast": {
+    "fired": true,
+    "ok_rates_size": 1
+  },
+  "env": {
+    "hostname": "gadi-cpu-spr-0614.gadi.nci.org.au",
+    "date": "2026-05-18T19:29:31+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi",
+    "iqtree_version": "IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built May 17 2026",
+    "mpi_nranks": 4,
+    "pbs": {
+      "job_id": "168682179.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "416",
+      "project": "dx61"
+    }
+  },
+  "profile": {
+    "nranks": 4,
+    "omp_per_rank": 103,
+    "placement": "mpi_4node_full_perrank_logs"
+  },
+  "build_tag": "mf_iso_phase0.5_0.6_icx_avx512_mftime",
+  "branch": "mf-iso-phase0.5-0.6",
+  "non_canonical": true,
+  "non_canonical_label": "MF-iso Phase 0.5+0.6 (filterRatesMPI Bcast + getNextModel ref-priority + MF-TIME) \u00b7 ICX+MPI \u00b7 AVX-512",
+  "group": "mf_iso_scaling"
+}
