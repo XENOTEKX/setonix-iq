@@ -2164,3 +2164,292 @@ Run np=4 AA 100K with this binary and require:
 *Status: Phase 0.7 push + HH-NUMA Phase 2 are now implemented and compiled on
 `gadi-spr-r2-mf-fca`; validation run is pending against the rebuilt 23:44 AEST
 binary.*
+
+> **Update (2026-05-18)**: Phase 0.7 + HH-NUMA from §21 was reverted after job
+> 168486582 SIGTERM-killed at 1h19m with zero stdout. The production path is
+> now **Phase 0 + Phase 0.5 + Phase 0.6 + MF-TIME** only (commit `9603247f`
+> on `test_MF2`), validated at np=2 / np=4 / np=8 with 2.18×–6.20× total-run
+> speedups. See §22 (architecture), §23 (operator guide), §24 (validated
+> results). Phase 0.7 / HH-NUMA remain deferred until two-node revalidation
+> in isolation.
+
+---
+
+## 22. Architecture — how Phase 0 + 0.5 + 0.6 + MF-TIME fit together
+
+Every model evaluation in ModelFinder goes through a tight state machine.
+The FCA stack changes three things: **how models are assigned** (Phase 0),
+**how families are pruned across ranks** (Phase 0.5), and **what order each
+rank picks its next model** (Phase 0.6). MF-TIME just adds per-model
+timing markers so we can audit the result.
+
+### 22.1 ModelFinder dispatch — np=2 timeline
+
+```
+                        ┌──────────────────────────────────────────────┐
+                        │             evaluateAll(...)                 │
+                        │  (entered once per ModelFinder phase)        │
+                        └──────────────────────┬───────────────────────┘
+                                               │
+                  ┌────────────────────────────┴────────────────────────────┐
+                  │                                                         │
+            ╔═════▼═════╗                                            ╔═════▼═════╗
+            ║  RANK 0   ║                                            ║  RANK 1   ║
+            ║ LG family ║                                            ║ WAG family║
+            ║ sharp BIC ║                                            ║ flat BIC  ║
+            ╚═════╤═════╝                                            ╚═════╤═════╝
+                  │                                                         │
+   Phase 0  ──────┤  cost predictor + greedy LPT                            │
+   (FCA)         │  → owns ~1/N of model list                              │
+                  │    (subst-family stripe + cost-sort)                    │
+                  │                                                         │
+   Phase 0.6 ─────┤  getNextModel() — prefer ref-family                     │
+   priority      │  while filterRatesMPI hasn't fired                      │
+                  │                                                         │
+                  ▼                                                         ▼
+            ┌──────────┐                                              ┌──────────┐
+            │ evaluate │   ◄── MF-TIME: rank R model=N start=... ──►  │ evaluate │
+            │ model k  │                                              │ model k' │
+            └────┬─────┘                                              └────┬─────┘
+                 │   …                                                     │   …
+                 │   (rank 0 finishes ref family first because of Phase 0.6)
+                 │                                                         │
+   Phase 0.5 ─── │  rank 0: filterRatesMPI(k)                              │
+   (Bcast)      │     - compute ok_rates from local ref family            │
+                │     - serialize to "G4|R5|..." in 2048-byte buffer      │
+                │                                                         │
+                └────── MPI_Bcast(buffer, root=0) ──────────────────────►│
+                        ALL ranks parse → global_ok_rates                  │
+                        ALL ranks apply: mark MF_IGNORED on any model     │
+                          whose orig_rate_name ∉ global_ok_rates           │
+                        Diagnostic: MF-MPI-DIAG: filterRatesMPI fired      │
+                                                                           │
+                  │                                                         │
+                  ▼                                                         ▼
+            ┌──────────┐                                              ┌──────────┐
+            │ resume   │   (pruned set is much smaller)               │ resume   │
+            │ scan     │   (rank 1 now also sees its WAG+IGNORED      │ scan     │
+            │          │    models marked, saving ~half the work)     │          │
+            └────┬─────┘                                              └────┬─────┘
+                 │                                                         │
+                 │   (eventually MF_DONE on all surviving models)          │
+                 │                                                         │
+                  ──────► MPI_Allgather → rank 0 picks global best ◄──────
+```
+
+### 22.2 What each phase contributes
+
+| Phase | Where | What it changes | Why it matters |
+|-------|-------|-----------------|----------------|
+| **Phase 0 (FCA)** | `evaluateAll()` + `CandidateModelSet::generate()` | Cost-aware stripe assignment: each rank owns a balanced fraction of the model list, with `nstates² × npat × rate_mult × freq_mult × log₂(ntaxa)` as the predictor. | Replaces round-robin (heavy variance) with predictable per-rank workload. |
+| **Phase 0.5 (filterRatesMPI)** | `filterRatesMPI()` new function called at FCA trigger point | Rank 0 broadcasts its `ok_rates` set across `MPI_Bcast`. All ranks apply the same rate filter. | Fixes rank-1+ pruning gap: ranks owning WAG/JTT/DCMUT see flat BIC across rate variants and can't prune locally; rank 0 (LG) sees sharp BIC and CAN. Sharing rank 0's decision unlocks ~50% pruning on every rank. |
+| **Phase 0.6 (getNextModel priority)** | `getNextModel()` scan order | While `filterRatesMPI` is pending and ref family incomplete, prefer ref-family models when picking the next model. | Without this, rank 0 reaches the broadcast at ~120 s but ranks 1+ at ~488 s (Block-2/Block-3 interleaving). Phase 0.6 compresses spread to < 60 s so the collective doesn't stall ranks. Also fixes a latent first-call bug where `current_model == -1` returned 0 even when model 0 was `MF_IGNORED`. |
+| **MF-TIME instrumentation** | `cout << "MF-TIME: rank R model=… dt=…"` after every `evaluate()` | One line per model per rank with start/end timestamps, model name, subst family, rate, score, and `ref_remaining` counter. | Enables offline analysis (`tools/parse_mf_time.py`): per-rank model count, broadcast arrival time, convergence spread, stragglers. Without it, multi-node debugging is blind — `mpirun > file` only captures rank 0. |
+
+### 22.3 MPI deadlock gate
+
+The `filterRatesMPI` collective is a synchronous `MPI_Bcast`. If any rank
+skips the broadcast (e.g. because its ref family is empty), the others hang
+forever. The gate at the top of the FCA dispatch block:
+
+```cpp
+int my_ok = (mpi_ref_subst_idx >= 0 && auto_rate
+             && Params::getInstance().score_diff_thres >= 0) ? 1 : 0;
+int all_ok = 0;
+MPI_Allreduce(&my_ok, &all_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+mpi_filterRatesMPI_enabled = (all_ok == 1);
+```
+
+ensures ALL ranks agree to participate. If even one rank's ref-family slot is
+empty, every rank falls back to legacy per-rank `filterRates()` instead.
+**This is why the np=1 MPI build runs Phase 0 alone** — no collective fires,
+behaviour matches Fix H semantics, no regression.
+
+---
+
+## 23. Operator guide — how to run MPI ModelFinder FCA
+
+### 23.1 Required modules (Gadi normalsr)
+
+```bash
+module load openmpi/4.1.7
+module load intel-compiler-llvm    # icpx 2025.3.2 → libiomp5
+# Build-time only:
+module load cmake/3.31.6 binutils/2.44 eigen/3.3.7 boost/1.84.0
+```
+
+### 23.2 Build (one-time, ~11 min on a 104-core SPR node)
+
+```bash
+qsub setonix-iq/gadi-ci/mf-iso/build_mf_iso.sh
+# Output: /scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi
+# CMake flags: -DCMAKE_BUILD_TYPE=RelWithDebInfo -DIQTREE_FLAGS=mpi
+#              -march=sapphirerapids -mtune=sapphirerapids -O3 -g -fopenmp
+# Verifies post-link: libiomp5 + libmpi linked, libgomp absent,
+#                     filterRatesMPI(int) symbol present (both demangled + mangled),
+#                     MF-TIME/MF-MPI-DIAG strings compiled in.
+```
+
+### 23.3 Run flag reference
+
+#### IQ-TREE flags (passed to `iqtree3-mpi`)
+
+| Flag | Value | Purpose |
+|------|------:|---------|
+| `-s` | `<alignment.phy>` | Input alignment (PHYLIP, FASTA, or NEXUS) |
+| `-m TESTONLY` | — | **ModelFinder only** — stop before tree search. Use for dispatch debugging (~30% faster iteration on AA 100K). |
+| `-m TEST` | — | ModelFinder + SPR tree search (full run). |
+| `-T` | `103` | OMP threads per MPI rank. **Always 103 on SPR** (one core reserved for kernel). |
+| `-seed` | `1` | RNG seed — fix for reproducible BIONJ/parsimony seeds. |
+| `--prefix` | `<work_dir>/iqtree_run` | Output prefix for `.iqtree`, `.treefile`, `.log`, `.mldist`. |
+
+#### `mpirun` flags
+
+| Flag | Value | Purpose |
+|------|------:|---------|
+| `-np` | `<NRANKS>` | One rank per node (8 cores under-subscribed by design — OMP fills the rest). |
+| `--bind-to none` | — | **CRITICAL.** Disables MPI's per-process pinning so OMP_PLACES/OMP_PROC_BIND can take over inside each rank. |
+| `--report-bindings` | — | Emits `[host:pid]` binding lines on stderr (captured to `iqtree_run.bindings.log`). |
+| `--output-filename` | `<dir>/` | **CRITICAL for ≥2 nodes.** Without this, only rank 0 stdout is forwarded; ranks 1+ MF-TIME lines are LOST. Produces `<dir>/<job-id>/rank.N/stdout` per rank. |
+| `--hostfile` | `hostfile.txt` | One host per slot, derived from `$PBS_NODEFILE`. |
+| `-rf` | `rankfile.txt` | Explicit rank→host/slot mapping. One rank per node, slot=0–103. |
+| `-x` | `VAR=value` | Forward env var to ranks. Used for all OMP/KMP variables (one `-x` per var). |
+
+#### OMP / runtime environment (per-rank)
+
+| Variable | Value | Purpose |
+|----------|------:|---------|
+| `OMP_NUM_THREADS` | `103` | Match `-T 103`. |
+| `OMP_DYNAMIC` | `false` | Disable thread-count autotuning. |
+| `OMP_PROC_BIND` | `close` | Threads stay near the master (better L2/L3 locality). |
+| `OMP_PLACES` | `cores` | Pin to physical cores, not HW threads. |
+| `OMP_WAIT_POLICY` | `PASSIVE` | Sleeping waiters — frees cores during MPI collectives. |
+| `GOMP_SPINCOUNT` | `10000` | GCC OpenMP fallback (ignored by libiomp5). |
+| `KMP_BLOCKTIME` | `200` | Intel OpenMP sleep delay (ms) after team work; tuned for SPR. |
+| `TMPDIR` | `${ISO_DIR}/tmp` | Local scratch for OpenMPI session files. |
+
+#### numactl wrapper
+
+```bash
+numactl --localalloc -- "${IQTREE}" ...
+```
+
+Forces NUMA-local allocation. Without this, `partial_lh` pages get spread
+across the 8 NUMA nodes of an SPR socket and OMP threads pay remote-memory
+penalties.
+
+### 23.4 End-to-end command (2-node, full run)
+
+```bash
+mpirun -np 2 \
+    --hostfile hostfile.txt \
+    -rf rankfile.txt \
+    --bind-to none \
+    --report-bindings \
+    --output-filename rank_logs/ \
+    -x OMP_NUM_THREADS=103 \
+    -x OMP_DYNAMIC=false \
+    -x OMP_PROC_BIND=close \
+    -x OMP_PLACES=cores \
+    -x OMP_WAIT_POLICY=PASSIVE \
+    -x GOMP_SPINCOUNT=10000 \
+    -x KMP_BLOCKTIME=200 \
+    numactl --localalloc -- \
+        /scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi \
+        -s alignment.phy -m TEST -T 103 -seed 1 \
+        --prefix work_dir/iqtree_run \
+    > iqtree_run.log 2> iqtree_run.bindings.log
+```
+
+### 23.5 What to check after a run
+
+| Artefact | Where | What it tells you |
+|----------|------|-------------------|
+| `iqtree_run.log` | stdout (rank 0 only on >1 node) | Best-fit model, lnL, BIC, total wall, tree wall |
+| `rank_logs/<jobid>/rank.N/stdout` | per-rank | MF-TIME lines for rank N — full timing per model |
+| `mf_time.log` | aggregated | All MF-TIME lines from all ranks (offline analysis) |
+| `mf_diag.log` | aggregated | MF-MPI-DIAG lines: `filterRatesMPI fired`, `bcast_ok_rates`, dispatch summary |
+| `rank_models.csv` | derived | CSV (rank, model_idx, name, subst, rate, dt, ref_remaining) |
+| `rank_bindings.log` | from `--report-bindings` | One line per rank showing which core/NUMA each landed on |
+
+Run `setonix-iq/gadi-ci/mf-iso/tools/parse_mf_time.py <profile_dir>` for:
+- Per-rank model count
+- Broadcast arrival time (relative to t0)
+- Convergence spread between ranks (target: < 60 s)
+- Stragglers (models with `dt > p99`)
+
+### 23.6 Acceptance gates (per node count)
+
+| Stage | MF wall target | Correctness | Phase 0.5 collective |
+|-------|---------------:|-------------|----------------------|
+| **1-node** | matches Fix H baseline (~1,289 s on AA 100K) | `lnL = baseline ± 0.5`, best model matches | `filterRatesMPI_enabled = 0` (correct: no collective at np=1) |
+| **2-node** | **< 600 s** on AA 100K (~149 s achieved at 168584736) | same | `filterRatesMPI fired` on rank 0, spread < 60 s |
+| **4-node** | < 400 s target | same | broadcast fires; per-rank model count balanced |
+| **8-node** | < 250 s target | same | per-rank counts balanced (~30 models/rank on AA 100K, ~100 on AA 1M) |
+
+---
+
+## 24. Validated results — 2026-05-18
+
+All runs below used the **same binary**: md5 `a78ffa2942d6b073490d503416ae554c`,
+146,238,464 bytes, built from commit [`9603247f`](#) (`test_MF2`, fast-forwarded
+2026-05-18). ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5. Seed 1 throughout.
+
+### 24.1 Full MF+SPR runs (correctness + speedup)
+
+| Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup | Run record |
+|-----|------|---------|-------|-----------|------------|-----|-----|------------:|-------------:|---------------:|--------:|-----------|
+| 168425674 | Baseline | DNA 100K | 1 | 1×103T | F81+F+G4 | −5,692,984.539 | 11,388,283.176 | 61.74 | 226.45 | 289.12 | — | [json](../logs/runs/gadi_DNA_100k_baseline_seed1_168425674.json) |
+| 168584737 | FCA np=2 | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.25 | 86.61 | 113.75 | **2.54×** | [json](../logs/runs/gadi_DNA_100k_mfiso_np2_full_seed1_168584737.json) |
+| 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.46 | 764.48 | 1,169.56 | — | [json](../logs/runs/gadi_AA_100k_spr_seed1_168425673.json) |
+| 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.03 | 383.88 | 537.75 | **2.18×** | [json](../logs/runs/gadi_AA_100k_mfiso_np2_full_seed1_168584736.json) |
+| 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.46 | 15,098.61 | 22,776.23 | — | [json](../logs/runs/gadi_AA_1m_spr_seed1_168425491.json) |
+| 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.89 | 2,147.50 | 3,671.62 | **6.20×** | [json](../logs/runs/gadi_AA_1m_mfiso_np8_full_seed1_168586094.json) |
+| 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.83 | 2,596.99 | 6,114.45 | — | [json](../logs/runs/gadi_DNA_1m_spr_seed1_168425675.json) |
+| 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.69 | 349.90 | 1,640.85 | **3.73×** | [json](../logs/runs/gadi_DNA_1m_mfiso_np8_full_seed1_168592214.json) |
+
+### 24.2 Correctness — every result passes `|ΔlnL| < 0.5` vs baseline
+
+| Dataset | Baseline lnL | FCA lnL | ΔlnL | Best model match | BIC delta |
+|---------|-------------:|--------:|-----:|:----------------:|----------:|
+| DNA 100K | −5,692,984.539 | −5,692,984.532 | **0.007** | ✓ F81+F+G4 | 0.014 |
+| AA 100K  | −7,541,976.860 | −7,541,976.853 | **0.007** | ✓ LG+G4    | 0.015 |
+| AA 1M    | −78,605,196.573 | −78,605,196.497 | **0.076** | ✓ LG+G4    | 0.152 |
+| DNA 1M   | −59,208,019.212 | −59,208,019.103 | **0.109** | ✓ F81+F+G4 | 0.219 |
+
+All four results are bit-for-bit close to baseline within numerical tolerance.
+The FCA dispatch changes WHICH RANK evaluates which model — not the model
+itself — so the math is identical and the small ΔlnL reflects floating-point
+ordering only.
+
+### 24.3 Branch / build provenance
+
+| Property | Value |
+|----------|-------|
+| Binary md5 | `a78ffa2942d6b073490d503416ae554c` |
+| Binary size | 146,238,464 bytes |
+| Binary path (rc29) | `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` |
+| Binary path (dx61) | `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` (mirror, identical md5) |
+| Source commit | `9603247f` (mf-iso: Phase 0.5 + Phase 0.6 + MF-TIME) |
+| Parent commit | `ffb79a14` (Phase 0 FCA dispatch) |
+| Branch | `test_MF2` (fast-forwarded 2026-05-18 from `mf-iso-phase0.5-0.6`) |
+| Build host | `gadi-cpu-spr-0284` (job 168572136) |
+| Build date | 2026-05-17 22:46 AEST |
+| Compiler | icpx 2025.3.2 (intel-compiler-llvm) |
+| MPI | OpenMPI 4.1.7 (PBS-MOFED) |
+| OpenMP runtime | libiomp5 (Intel) |
+| Arch flags | `-O3 -march=sapphirerapids -mtune=sapphirerapids -fopenmp -g` |
+| Build tag | `mf_iso_phase0.5_0.6_icx_avx512_mftime` |
+
+### 24.4 What's NOT in `test_MF2`
+
+These were explicitly EXCLUDED from `9603247f` because they hung
+job 168486582 with SIGTERM at 1h19m and no stdout:
+
+- **Phase 0.7** (`MPI_Isend` push instead of `MPI_Bcast`)
+- **HH-NUMA Phase 2** (nested `K_outer × M_inner` OMP)
+- **`MPI_Init_thread(MPI_THREAD_SERIALIZED)`** upgrade
+
+These remain documented in §21 but are not on `test_MF2`. They will land
+in separate commits, each with its own 2-node validation, **only after**
+the current `test_MF2` is the published baseline.

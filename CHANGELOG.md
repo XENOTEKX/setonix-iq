@@ -55,8 +55,11 @@ likely closer to ~100 GB at K=8 rather than 125 GB).
 Summary of all completed full MF+SPR runs for both the standard baseline and the FCA MF-iso Phase 0.5+0.6 harness.
 All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for every dataset.
 
-**FCA binary:** `iqtree3-mpi` · branch `mf-iso-phase0.5-0.6` · ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5 · seed=1 · `-m TEST -T 103`  
+**FCA binary:** `iqtree3-mpi` · md5 `a78ffa2942d6b073490d503416ae554c` · commit `9603247f` on `test_MF2` (fast-forwarded 2026-05-18) · ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5 · seed=1 · `-m TEST -T 103`  
 **Baseline binary:** `build-intel-vanila/iqtree3` · non-MPI OMP-across-models · ICX + AVX-512 + R1+R2 · v3.1.2 (`4e91dd6`) · sa0557
+
+> **How to run the FCA binary** — see [`research/updated-modelfinder-dispatch.md`](research/updated-modelfinder-dispatch.md):
+> §22 (architecture diagram), §23 (operator guide + flag reference), §24 (validated results table with provenance).
 
 > **IPC note:** `perf stat` was not collected for FCA full runs (no `perf_stat.txt` in profiles).
 > The only available IPC figure is for the baseline AA 100K run: **1.88 insn/cycle**
@@ -77,6 +80,75 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > `Wall-clock time used for tree search`). Total wall from PBS job wall-clock (includes startup + IO overhead;
 > typically 1–80 s greater than MF+SPR sum). BIC and lnL from `.iqtree` report files on scratch.
 > Speedup = baseline total ÷ FCA total.
+
+---
+
+## 2026-05-18 (bn) — Branch promotion: `test_MF2` now carries Phase 0.5+0.6+MF-TIME
+
+### What changed (Git state)
+
+| Tree | Branch | Before | After |
+|------|--------|--------|-------|
+| rc29 (`/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3`) | `test_MF2` | `ffb79a14` (Phase 0 FCA) | `9603247f` (Phase 0 + 0.5 + 0.6 + MF-TIME) ✓ |
+| um09 (`/scratch/um09/as1708/iqtree3-mf2/src/iqtree3`)   | `test_MF2` | `ffb79a14` (Phase 0 FCA) | `9603247f` (Phase 0 + 0.5 + 0.6 + MF-TIME) ✓ |
+| XENOTEKX/setonix-iq (GitHub) | `test_MF2` | (not present) | **pending push** — see push command below |
+
+Both local trees are byte-identical on `test_MF2`. The fast-forward was clean
+(`mf-iso-phase0.5-0.6` was exactly 1 commit ahead of `test_MF2`, all on top
+of `ffb79a14`). The `mf-iso-phase0.5-0.6` branch is kept as a historical
+label but is no longer the canonical reference.
+
+### Why now
+
+All four validated full MF+SPR runs (DNA 100K, AA 100K, AA 1M, DNA 1M)
+ran against binary `a78ffa2942d6b073490d503416ae554c` — built from commit
+`9603247f`. That binary is in production use across two scratch allocations
+(rc29 and dx61, identical md5). The previous `test_MF2` HEAD (`ffb79a14`)
+did NOT include the Phase 0.5/0.6 work that made those speedups possible.
+Promoting `test_MF2` aligns the branch label with the binary's actual
+content.
+
+### Push to remote (manual, requires user credentials)
+
+The local fast-forward is done. To publish `test_MF2` to the shared remote
+(github.com/XENOTEKX/setonix-iq), the user must run:
+
+```bash
+cd /scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3
+git push setonix-iq test_MF2
+# OR equivalently from the um09 tree (identical commit)
+cd /scratch/um09/as1708/iqtree3-mf2/src/iqtree3
+git push setonix-iq test_MF2
+```
+
+This creates a new `test_MF2` branch on the remote (no overwrite — remote
+doesn't have one yet). Verifies with:
+
+```bash
+git ls-remote --heads setonix-iq test_MF2
+# Expected: 9603247fc85fb7acdfb470b27c44f5bfa59e43ba refs/heads/test_MF2
+```
+
+### Documentation cross-links
+
+The dispatch doc gained three new operator-facing sections capturing the
+state of the FCA stack as it's actually used in production:
+
+- **§22 Architecture** — ASCII timeline diagram of Phase 0 + 0.5 + 0.6 + MF-TIME
+  interacting at np=2, plus the MPI deadlock gate (MPI_Allreduce MIN over
+  per-rank readiness).
+- **§23 Operator guide** — module loads, build command, flag reference for
+  IQ-TREE / mpirun / OMP env vars, the end-to-end command, what artefacts to
+  check after each run, and per-node-count acceptance gates.
+- **§24 Validated results** — the full 8-row table (4 baseline + 4 FCA)
+  with provenance (binary md5, source commit, build host, compiler), correctness
+  proof (`|ΔlnL| < 0.5`), and links to each `logs/runs/*.json`.
+
+What's explicitly NOT on `test_MF2`: Phase 0.7 (`MPI_Isend`), HH-NUMA Phase 2
+(nested K_outer × M_inner), and the `MPI_Init_thread(MPI_THREAD_SERIALIZED)`
+upgrade. These hung job 168486582 with SIGTERM and remain deferred to
+separate commits — each will land with its own 2-node validation, only
+after `test_MF2` is the published baseline.
 
 ---
 
