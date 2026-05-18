@@ -39,7 +39,8 @@
 #   ./submit_mf_iso.sh aa_1m_1node_full   # qsub AA 1M FCA full run (1-node,  103T)
 #   ./submit_mf_iso.sh aa_1m_2node_full   # qsub AA 1M FCA full run (2-node,  206T)
 #   ./submit_mf_iso.sh aa_1m_4node_full   # qsub AA 1M FCA full run (4-node,  412T)
-#   ./submit_mf_iso.sh aa_1m_16node_full  # qsub AA 1M FCA full run (16-node, 1648T)
+#   ./submit_mf_iso.sh aa_1m_16node_full      # qsub AA 1M FCA full run (16-node, 1648T)
+#   ./submit_mf_iso.sh aa_1m_16node_full_thp  # qsub AA 1M THP binary re-run (16-node, 1648T)
 #   ./submit_mf_iso.sh aa_1m_full_all     # qsub 1→2→4→16-node chained (afterok)
 #   # Note: 8-node full run already completed as job 168586094.
 #
@@ -252,6 +253,13 @@ case "${1:-}" in
         echo "  Ref: lnL=-78,605,196.573  LG+G4  (168425491)  tol=1.0"
         echo "  np=8 full ref (168586094): lnL=-78,605,196.506, MF 1443.892 s"
         ;;
+    aa_1m_16node_full_thp)
+        [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
+        jid="$(qsub_stage run_mf_iso_aa_1m_16node_full_thp.sh)"
+        echo "  AA 1M 16-node full THP run job: ${jid}"
+        echo "  Ref: lnL=-78,605,196.573  LG+G4  (168425491)  tol=1.0"
+        echo "  pre-THP np=16 ref (168635616): MF 1122.363 s  (beat this to confirm THP gain)"
+        ;;
     aa_1m_full_all)
         echo "[submit-mf-iso] qsub AA 1M full scaling: 1node → 2node → 4node → 16node (afterok chain)"
         [[ -x "${BIN}" ]] || { echo "ERROR: ${BIN} missing — './submit_mf_iso.sh build' first." >&2; exit 2; }
@@ -331,7 +339,7 @@ case "${1:-}" in
         echo "           |dna_100k_baseline|dna_100k_1node|dna_100k_2node|dna_100k_all" >&2
         echo "           |dna_1m_baseline|dna_1m_1node|dna_1m_2node|dna_1m_all|dna_1m_8node_full" >&2
         echo "           |aa_1m_2node|aa_1m_4node|aa_1m_all|aa_1m_8node_full" >&2
-        echo "           |aa_1m_1node_full|aa_1m_2node_full|aa_1m_4node_full|aa_1m_16node_full|aa_1m_full_all" >&2
+        echo "           |aa_1m_1node_full|aa_1m_2node_full|aa_1m_4node_full|aa_1m_16node_full|aa_1m_16node_full_thp|aa_1m_full_all" >&2
         echo "           |aa_100k_full|dna_100k_full|full_100k_all" >&2
         echo "           |aa_100k_4node_full|dna_100k_4node_full|full_100k_4node_all}" >&2
         exit 2
