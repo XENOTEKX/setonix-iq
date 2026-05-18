@@ -239,7 +239,7 @@ for r in 0 1 2 3; do
     echo "    rank ${r}: ${n} models evaluated"
 done
 echo "[4node] Per-rank family ownership (from MF-MPI-DIAG dispatch line):"
-grep -E "MF-MPI-DIAG: rank [0-9]+/[0-9]+ owns " "${WORK_DIR}/mf_diag.log" 2>/dev/null | sed 's/^/    /'
+grep -E "MF-MPI-DIAG: rank [0-9]+/[0-9]+ owns " "${WORK_DIR}/mf_diag.log" 2>/dev/null | sed 's/^/    /' || true
 
 # ── Run record ────────────────────────────────────────────────────────
 /usr/bin/python3.11 - <<PYEOF
