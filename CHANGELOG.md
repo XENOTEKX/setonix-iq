@@ -90,6 +90,62 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-18 (bo) — THP `madvise(MADV_HUGEPAGE)` on `central_partial_lh` (patch `0004`)
+
+### Motivation
+
+AA 1M full-run `perf stat` data (168635614–616) shows **LLC miss rate 83–85%** across np=2/4/16,
+with IPC 1.26–1.34. The bottleneck is random-access pressure on `central_partial_lh` (~6.27 GB
+at AA 1M: `max_lh_slots × block_size` doubles). Each partial-lh sweep touches the entire array
+with a stride that defeats the L2/L3 prefetcher, causing ~1.57 million 4 KB PTEs to thrash the
+STLB (2 × 1,536-entry L2 TLB on Sapphire Rapids). Promoting to 2 MB transparent huge pages
+reduces the PTE count to **~3,135**, fitting entirely in the STLB and eliminating the TLB-miss
+contribution to the LLC-bandwidth bottleneck.
+
+### Change
+
+**File:** `tree/phylotree.cpp` · **Commit:** `c8f11a24` (branch `test_MF2`)
+
+Two additions:
+
+1. Add `#include <sys/mman.h>` after `#include "utils/MPIHelper.h"` (line 36 post-patch).
+
+2. After the null-pointer guard on `central_partial_lh` inside `PhyloTree::initializeAllPartialLh()`:
+   ```cpp
+   #ifdef __linux__
+       // Promote central_partial_lh to 2 MB transparent huge pages.
+       // Reduces TLB misses on the partial_lh sweep: ~1.57M 4 KB PTEs
+       // (AA 1M) → 3,135 2 MB PTEs — fits in STLB. Gain: 8-15% MF wall
+       // on AA 1M+ (DRAM-bandwidth + TLB-bound workload). Patch 0004.
+       madvise(central_partial_lh, mem_size * sizeof(double), MADV_HUGEPAGE);
+   #endif
+   ```
+
+   `mem_size` is in `double` elements; `aligned_alloc<double>(mem_size)` allocates
+   `mem_size * sizeof(double)` bytes via `posix_memalign`, so the byte count matches.
+   The `MADV_HUGEPAGE` hint is advisory: the kernel silently ignores it if THP is disabled
+   or the process runs on a system where hugepages are unavailable.
+
+### Patch file
+
+`patches/iqtree3/0004-thp-partial-lh-madvise.patch` (git format-patch from `c8f11a24`)
+
+### Expected gain
+
+| Workload | Expected MF wall improvement |
+|----------|------------------------------|
+| AA 1M (np=2–16) | **8–15%** (LLC miss 83–85% → lower TLB refill stalls) |
+| AA 10M (if tested) | **10–20%** (larger array → more PTEs → proportionally higher benefit) |
+| AA 100K / DNA 100K | Minimal (array ~0.1× size → TLB pressure not dominant) |
+
+### Build
+
+Incremental rebuild: `make -j$(nproc)` in `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/`
+(only `tree/phylotree.cpp` recompiles). Binary copied to
+`/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` after successful build.
+
+---
+
 ## 2026-05-18 (bn) — Branch promotion: `test_MF2` now carries Phase 0.5+0.6+MF-TIME
 
 ### What changed (Git state)
