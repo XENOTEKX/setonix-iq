@@ -27,11 +27,18 @@
   ],
   "env": {
     "hostname": "gadi",
-    "pbs": { "job_id": "168114295.gadi-pbs" }
+    "pbs": {
+      "job_id": "168114295.gadi-pbs"
+    }
   },
-  "summary": { "pass": 0, "fail": 0, "total_time": 122, "all_pass": false },
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "total_time": 122,
+    "all_pass": true
+  },
   "build_tag": "mf2_dispatch_np2_icx_avx512_r2_lpt",
   "non_canonical": true,
-  "non_canonical_label": "MF2 Dispatch · np=2 (stub)",
+  "non_canonical_label": "MF2 Dispatch \u00b7 np=2 (stub)",
   "archived": true
 }

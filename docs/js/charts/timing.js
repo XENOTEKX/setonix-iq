@@ -1,6 +1,6 @@
 // web/js/charts/timing.js — per-command timing bars
 
-import { escHtml, fmtTime } from '../utils.js?v=dd1c431ade92';
+import { escHtml, fmtTime } from '../utils.js?v=5152bf7f3592';
 
 let chart;
 
