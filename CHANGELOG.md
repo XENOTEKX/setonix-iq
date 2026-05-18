@@ -63,7 +63,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **IPC note:** `perf stat` was not collected for FCA full runs prior to 2026-05-18 (no `perf_stat.txt` in profiles).
 > The only available IPC figure from the baseline is **1.88 insn/cycle** (from `AA_100k_spr_seed1_168425673/perf_stat.txt`).
-> `rank_perf.sh` wrapper added to all AA 1M full scaling scripts (168635614–168635616) — per-rank `perf_stat_rank_N.txt` will be available when those jobs complete.
+> `rank_perf.sh` wrapper added to AA 1M full scaling scripts (168635614–168635616); per-rank `perf_stat_rank_N.txt` collected in each job's WORK_DIR — all three jobs now complete.
 
 | Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup |
 |-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|
@@ -73,7 +73,9 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** |
 | 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — |
 | 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** |
+| 168635615 | FCA np=4 | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** |
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** |
+| 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** |
 
@@ -455,15 +457,49 @@ SPR scales across all 8 nodes: 8-node SPR (~366 s) vs estimated single-node SPR 
 | SPR speedup | **1.92×** (15,099 s → 7,869 s) |
 | Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR (new) |
 
-#### AA 1M full scaling chain — current status (2026-05-18)
+#### 168635615 — AA 1M 4-node full (**PASS ✓**, exit 0, PBS wall 01:39:17)
 
-| Job | Name | Nodes | State | Note |
-|-----|------|-------|-------|------|
-| ~~168592210~~ | `mf-iso-aa-1m-1n-full` | 1 | **DONE** exit=0 | PASS lnL diff=0.017; run used as 1-node reference |
-| ~~168592211–168592213~~ | 2/4/16-node | — | **CANCELLED** | Resubmitted with perf stat (chain broken by 168592210 false-failure) |
-| ~~168635614~~ | `mf-iso-aa-1m-2n-full` | 2 | **DONE** exit=0 | **PASS** lnL −78,605,196.443 ✓, LG+G4 ✓, MF 3,076.873 s (**2.47×**), total 10,945.801 s (**2.08×**) |
-| 168635615 | `mf-iso-aa-1m-4n-full` | 4 | **RUNNING** ~00:03 | afterok 168635614 |
-| 168635616 | `mf-iso-aa-1m-16n-full` | 16 | **HOLD** | afterok 168635615 |
+| Field | Value |
+|-------|-------|
+| Total wall | **5,956.618 s** (1h:39m:17s) |
+| MF wall | 1,974.476 s |
+| SPR wall | 3,982.142 s |
+| lnL | −78,605,196.445 |
+| Δ vs ref (168425491) | **0.128** (tol 1.0 — **PASS**) |
+| Model | LG+G4 |
+| filterRatesMPI | fired ✓ · ok_rates_size=1 |
+| rank_0 MF evals | 17 models · total_eval_s=1,557.494 · mean=91.6 s · max=321.22 s |
+| End-to-end speedup | **3.82×** (22,776 s → 5,957 s) |
+| MF speedup | **3.84×** (7,587 s → 1,974 s) |
+| SPR speedup | **3.79×** (15,099 s → 3,982 s) |
+| Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR |
+
+#### 168635616 — AA 1M 16-node full (**PASS ✓**, exit 0, PBS wall 00:40:10)
+
+| Field | Value |
+|-------|-------|
+| Total wall | **2,410.226 s** (0h:40m:10s) |
+| MF wall | 1,122.363 s |
+| SPR wall | 1,287.863 s |
+| lnL | −78,605,196.497 |
+| Δ vs ref (168425491) | **0.076** (tol 1.0 — **PASS**) |
+| Model | LG+G4 |
+| filterRatesMPI | fired ✓ · ok_rates_size=1 |
+| rank_0 MF evals | 6 models · total_eval_s=671.396 · mean=111.9 s · max=332.846 s |
+| End-to-end speedup | **9.45×** (22,776 s → 2,410 s) |
+| MF speedup | **6.76×** (7,587 s → 1,122 s) |
+| SPR speedup | **11.72×** (15,099 s → 1,288 s) |
+| Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR |
+
+#### AA 1M full scaling chain — COMPLETE (2026-05-18)
+
+| Job | Name | Nodes | State | MF wall | Total wall | e2e speedup | MF speedup | Note |
+|-----|------|-------|-------|---------|-----------|-------------|------------|------|
+| ~~168592210~~ | `mf-iso-aa-1m-1n-full` | 1 | **DONE** exit=0 | — | — | — | — | 1-node reference; chain cancelled (no perf stat) |
+| ~~168592211–168592213~~ | 2/4/16-node | — | **CANCELLED** | — | — | — | — | Resubmitted as 168635614–616 with perf stat |
+| ~~168635614~~ | `mf-iso-aa-1m-2n-full` | 2 | **DONE** exit=0 ✓ | 3,076.873 s | 10,945.801 s | **2.08×** | **2.47×** | lnL diff=0.130 PASS, LG+G4, filterRatesMPI ✓ |
+| ~~168635615~~ | `mf-iso-aa-1m-4n-full` | 4 | **DONE** exit=0 ✓ | 1,974.476 s | 5,956.618 s | **3.82×** | **3.84×** | lnL diff=0.128 PASS, LG+G4, filterRatesMPI ✓ |
+| ~~168635616~~ | `mf-iso-aa-1m-16n-full` | 16 | **DONE** exit=0 ✓ | 1,122.363 s | 2,410.226 s | **9.45×** | **6.76×** | lnL diff=0.076 PASS, LG+G4, filterRatesMPI ✓ |
 
 ---
 
