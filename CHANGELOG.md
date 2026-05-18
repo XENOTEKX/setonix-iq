@@ -67,24 +67,26 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > Measured FCA AA 1M IPC (user-space, all ranks): **np=2: 1.26 · np=4: 1.27 · np=16: 1.34** (vs baseline 1.88 at AA 100K — expected lower: AA 1M is more memory-bound).
 > LLC miss rate (`cache-misses:u / cache-references:u`, both map to LLC on Intel SPR): **np=2: 83.7% · np=4: 84.0% · np=16: 85.3%**. `LLC-loads:u` counter returned 0 (not accessible in normalsr — `cache-references/misses:u` used instead, which are the LLC-level hardware counters on SPR).
 
-| Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup |
-|-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|
-| 168425674 | Baseline | DNA 100K | 1 | 1×103T | F81+F+G4 | −5,692,984.539 | 11,388,283.176 | 61.740 | 226.447 | 289.121 | — |
-| 168584737 | FCA np=2 | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | 86.613 | 113.754 | **2.54×** |
-| 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — |
-| 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** |
-| 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — |
-| 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** |
-| 168635615 | FCA np=4 | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** |
-| 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** |
-| 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** |
-| 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — |
-| 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** |
+| Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup | IPC (mean) | LLC miss % |
+|-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|------------|------------|
+| 168425674 | Baseline | DNA 100K | 1 | 1×103T | F81+F+G4 | −5,692,984.539 | 11,388,283.176 | 61.740 | 226.447 | 289.121 | — | **1.302** | **66.24%** |
+| 168584737 | FCA np=2 | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | 86.613 | 113.754 | **2.54×** | — | — |
+| 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — | **1.878** | **56.02%** |
+| 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** | — | — |
+| 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — | — | — |
+| 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** | **1.260** | **83.69%** |
+| 168635615 | FCA np=4 | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** | **1.273** | **84.01%** |
+| 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
+| 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
+| 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
+| 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
 
 > **Timing notes:** MF and SPR wall times from IQ-TREE stdout (`Wall-clock time for ModelFinder` /
 > `Wall-clock time used for tree search`). Total wall from PBS job wall-clock (includes startup + IO overhead;
 > typically 1–80 s greater than MF+SPR sum). BIC and lnL from `.iqtree` report files on scratch.
 > Speedup = baseline total ÷ FCA total.
+> IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
+> `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
 ---
 
