@@ -63,7 +63,9 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **IPC note:** `perf stat` was not collected for FCA full runs prior to 2026-05-18 (no `perf_stat.txt` in profiles).
 > The only available IPC figure from the baseline is **1.88 insn/cycle** (from `AA_100k_spr_seed1_168425673/perf_stat.txt`).
-> `rank_perf.sh` wrapper added to AA 1M full scaling scripts (168635614–168635616); per-rank `perf_stat_rank_N.txt` collected in each job's WORK_DIR — all three jobs now complete.
+> `rank_perf.sh` wrapper added to AA 1M full scaling scripts (168635614–168635616); per-rank `perf_stat_rank_N.txt` collected in each job's WORK_DIR — all three jobs complete.
+> Measured FCA AA 1M IPC (user-space, all ranks): **np=2: 1.26 · np=4: 1.27 · np=16: 1.34** (vs baseline 1.88 at AA 100K — expected lower: AA 1M is more memory-bound).
+> LLC miss rate (`cache-misses:u / cache-references:u`, both map to LLC on Intel SPR): **np=2: 83.7% · np=4: 84.0% · np=16: 85.3%**. `LLC-loads:u` counter returned 0 (not accessible in normalsr — `cache-references/misses:u` used instead, which are the LLC-level hardware counters on SPR).
 
 | Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup |
 |-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|
@@ -455,7 +457,9 @@ SPR scales across all 8 nodes: 8-node SPR (~366 s) vs estimated single-node SPR 
 | End-to-end speedup | **2.08×** (22,776 s → 10,946 s) |
 | MF speedup | **2.47×** (7,587 s → 3,077 s) |
 | SPR speedup | **1.92×** (15,099 s → 7,869 s) |
-| Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR (new) |
+| IPC (mean, user-space) | **1.260** · rank 0: 1.269 · rank 1: 1.251 |
+| LLC miss rate (mean) | **83.69%** · rank 0: 83.61% · rank 1: 83.77% |
+| Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR |
 
 #### 168635615 — AA 1M 4-node full (**PASS ✓**, exit 0, PBS wall 01:39:17)
 
@@ -472,6 +476,8 @@ SPR scales across all 8 nodes: 8-node SPR (~366 s) vs estimated single-node SPR 
 | End-to-end speedup | **3.82×** (22,776 s → 5,957 s) |
 | MF speedup | **3.84×** (7,587 s → 1,974 s) |
 | SPR speedup | **3.79×** (15,099 s → 3,982 s) |
+| IPC (mean, user-space) | **1.273** · min 1.262 · max 1.279 (4 ranks) |
+| LLC miss rate (mean) | **84.01%** · min 83.78% · max 84.45% |
 | Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR |
 
 #### 168635616 — AA 1M 16-node full (**PASS ✓**, exit 0, PBS wall 00:40:10)
@@ -489,6 +495,8 @@ SPR scales across all 8 nodes: 8-node SPR (~366 s) vs estimated single-node SPR 
 | End-to-end speedup | **9.45×** (22,776 s → 2,410 s) |
 | MF speedup | **6.76×** (7,587 s → 1,122 s) |
 | SPR speedup | **11.72×** (15,099 s → 1,288 s) |
+| IPC (mean, user-space) | **1.337** · min 1.321 · max 1.353 (16 ranks) |
+| LLC miss rate (mean) | **85.27%** · min 84.46% · max 85.80% |
 | Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR |
 
 #### AA 1M full scaling chain — COMPLETE (2026-05-18)
