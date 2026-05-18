@@ -33,6 +33,7 @@
 #include "phylosupertreeplen.h"
 #include "upperbounds.h"
 #include "utils/MPIHelper.h"
+#include <sys/mman.h>   // madvise / MADV_HUGEPAGE (THP for central_partial_lh)
 #include "utils/hammingdistance.h"
 #include "model/modelmixture.h"
 #include "phylonodemixlen.h"
@@ -1119,6 +1120,13 @@ void PhyloTree::initializeAllPartialLh(int &index, int &indexlh, PhyloNode *node
             }
             if (!central_partial_lh)
                 outError("Not enough memory for partial likelihood vectors");
+#ifdef __linux__
+            // Promote central_partial_lh to 2 MB transparent huge pages.
+            // Reduces TLB misses on the partial_lh sweep: ~1.57M 4 KB PTEs
+            // (AA 1M) → 3,135 2 MB PTEs — fits in STLB. Gain: 8-15% MF wall
+            // on AA 1M+ (DRAM-bandwidth + TLB-bound workload). Patch 0004.
+            madvise(central_partial_lh, mem_size * sizeof(double), MADV_HUGEPAGE);
+#endif
         }
 
         // now always assign tip_partial_lh
