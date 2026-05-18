@@ -644,25 +644,45 @@ candidates audited:
 
 ### 10.1 Transparent Huge Pages — `madvise(MADV_HUGEPAGE)` on `partial_lh`
 
-**Currently NOT in place.** The 6.27 GB `central_partial_lh` block is allocated
-via `posix_memalign` → glibc `mmap` → kernel returns 4 KB pages. That is
+> **✅ IMPLEMENTED — 2026-05-18 (CHANGELOG entry `bo`)**
+> Patch: `patches/iqtree3/0004-thp-partial-lh-madvise.patch`
+> Source commit: `c8f11a24` on branch `test_MF2`
+> Binary md5: `a103bc6c97860145033206c47b184367`
+
+**Background.** The 6.27 GB `central_partial_lh` block is allocated via
+`posix_memalign` → glibc `mmap` → kernel returns 4 KB pages. That is
 6.27 GB / 4 KB = **1,569,000 PTEs** per process. Even with the SPR TLB (1536
 entries L1 + 1024 STLB), the partial_lh sweep regularly misses TLB.
+AA 1M full-run `perf stat` data (168635614–616) confirmed **LLC miss rate
+83–85%** with IPC 1.26–1.34 — consistent with TLB thrash driving LLC-bandwidth
+pressure. On Gadi RHEL 8 (Linux 4.18) the default `transparent_hugepage=madvise`
+mode requires an **explicit** `madvise(addr, len, MADV_HUGEPAGE)` call to promote.
 
-On Gadi RHEL 8 (Linux 4.18) the default `transparent_hugepage=madvise` mode
-requires an **explicit** `madvise(addr, len, MADV_HUGEPAGE)` call to promote.
-Generic scientific computing benchmarks show 15–35% throughput gain on
-TLB-bound, sequential-large-array workloads. The IQ-TREE site-parallel kernel
-is exactly that pattern: linear sweep over `partial_lh[ptn]` per pattern.
+**Change applied to `tree/phylotree.cpp`:**
 
-**Worth ~1 day work.** Single edit to `tree/phylotree.cpp` `aligned_alloc` /
-`posix_memalign` of `central_partial_lh`. Expected gain: **8–15% MF wall** —
-above the 5% threshold to justify implementation.
+1. Added `#include <sys/mman.h>` (guarded `#ifdef __linux__`) after the
+   `#include "utils/MPIHelper.h"` line.
 
-**Defer until after T1–T3 measurements.** If T3 (np=4) lands in the projected
-200–300 s band, THP becomes the next-priority follow-up patch (proposed
-`0004-thp-partial-lh-madvise.patch`). If T3 lands above 400 s, the FCA
-diagnostic logging will guide the next root-cause investigation first.
+2. Inside `PhyloTree::initializeAllPartialLh()`, after the null-pointer guard on
+   `central_partial_lh`:
+   ```cpp
+   #ifdef __linux__
+       // Promote central_partial_lh to 2 MB transparent huge pages.
+       // Reduces TLB misses on the partial_lh sweep: ~1.57M 4 KB PTEs
+       // (AA 1M) → 3,135 2 MB PTEs — fits in STLB. Gain: 8-15% MF wall
+       // on AA 1M+ (DRAM-bandwidth + TLB-bound workload). Patch 0004.
+       madvise(central_partial_lh, mem_size * sizeof(double), MADV_HUGEPAGE);
+   #endif
+   ```
+   `mem_size` is in `double` elements; `aligned_alloc<double>(mem_size)` allocates
+   `mem_size * sizeof(double)` bytes via `posix_memalign`. The `MADV_HUGEPAGE` hint
+   is advisory — the kernel ignores it silently if THP is disabled.
+
+**Expected gain:** **8–15% MF wall** at AA 1M (np=2–16); **10–20%** at AA 10M.
+Minimal impact at AA/DNA 100K (array ~40× smaller; TLB pressure not dominant).
+
+**Build:** Incremental `make -j$(nproc)` in the rc29 build dir. Binary
+copied to `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi`.
 
 ### 10.2 KMP_AFFINITY granularity
 
@@ -695,10 +715,10 @@ be zero. **Marginal; do AFTER THP** if results are still wanting.
 
 | Item | Effort | Expected gain | Decision |
 |------|-------:|--------------:|----------|
-| THP `madvise(MADV_HUGEPAGE)` on partial_lh | 1 day | **8-15%** | **Plan as patch `0004`, defer until T1–T3 results** |
+| THP `madvise(MADV_HUGEPAGE)` on partial_lh | 1 day | **8-15%** | **✅ DONE — patch `0004`, commit `c8f11a24`, CHANGELOG `(bo)`** |
 | `KMP_AFFINITY=fine,scatter` | <1 hr | -5 to -10% (regression) | **Reject** |
 | MPI eager-limit tuning | <1 hr | <0.1% | **Reject** |
-| `__builtin_prefetch` in kernel | 1-2 days | 0-7% | **Backlog; only after THP** |
+| `__builtin_prefetch` in kernel | 1-2 days | 0-7% | **Backlog; only after THP results confirm gain** |
 
 Net: Phase 0 (FCA) + future Phase 0.5 (THP) is the highest-ROI two-step
 sequence. THP affects all phases (np=1, np=2, np=4 alike) because it accelerates

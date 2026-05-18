@@ -1,0 +1,180 @@
+/* ------------- Chart wrapper ------------- */
+.chart-wrapper {
+  position: relative;
+  height: 260px;
+  width: 100%;
+  min-width: 0;
+  padding: 14px 18px;
+}
+.chart-wrapper canvas { max-width: 100%; }
+
+/* ------------- Hotspot row ------------- */
+.hotspot-list { padding: 4px 0 8px; }
+.hotspot-row {
+  display: grid;
+  grid-template-columns: 64px 140px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px;
+  border-bottom: 1px solid rgba(30, 42, 62, 0.4);
+}
+.hotspot-row:last-child { border-bottom: none; }
+.hotspot-pct {
+  font-size: 0.92rem;
+  font-weight: 700;
+  text-align: right;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.hotspot-bar-wrap {
+  background: var(--surface);
+  border-radius: 4px;
+  overflow: hidden;
+  height: 7px;
+}
+.hotspot-bar {
+  height: 7px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width 0.5s;
+}
+.hotspot-func {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hotspot-module {
+  font-size: 0.68rem;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .hotspot-row {
+    grid-template-columns: 56px 1fr;
+    grid-template-areas:
+      "pct func"
+      "bar bar"
+      "mod mod";
+    gap: 6px 10px;
+    padding: 10px 14px;
+  }
+  .hotspot-pct { grid-area: pct; }
+  .hotspot-func { grid-area: func; white-space: normal; word-break: break-word; }
+  .hotspot-bar-wrap { grid-area: bar; }
+  .hotspot-module { grid-area: mod; max-width: none; font-size: 0.66rem; }
+}
+
+/* ------------- Flamegraph ------------- */
+.flame-banner {
+  background: rgba(30, 41, 59, 0.6);
+  border-left: 3px solid var(--yellow);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 10px 14px;
+  margin: 14px 18px 10px;
+  font-size: 0.75rem;
+  color: var(--text2);
+  line-height: 1.5;
+}
+.flamegraph-container {
+  overflow-x: auto;
+  padding: 4px 0 14px;
+  margin: 0 18px;
+}
+.flame-row {
+  display: flex;
+  width: 100%;
+}
+.flame-frame {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 16px;
+  height: 16px;
+  color: #000;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter 0.1s, outline 0.1s;
+  position: relative;
+}
+.flame-frame:hover {
+  filter: brightness(1.3);
+  outline: 1px solid rgba(255, 255, 255, 0.4);
+  z-index: 1;
+}
+
+/* ------------- Callstack ------------- */
+.callstack-row {
+  display: grid;
+  grid-template-columns: 80px 120px 1fr;
+  align-items: start;
+  gap: 14px;
+  padding: 10px 18px;
+  border-bottom: 1px solid rgba(30, 42, 62, 0.4);
+  font-size: 0.72rem;
+}
+.callstack-row:hover { background: rgba(30, 41, 59, 0.4); }
+.callstack-count {
+  font-weight: 700;
+  color: var(--accent2);
+  text-align: right;
+  font-family: var(--font-mono);
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.callstack-bar-wrap {
+  position: relative;
+  height: 13px;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 3px;
+}
+.callstack-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width 0.3s;
+  min-width: 2px;
+}
+.callstack-frames {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text2);
+  line-height: 1.55;
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.callstack-frames .cs-sep {
+  color: var(--text3);
+  margin: 0 3px;
+}
+.callstack-frames .cs-leaf {
+  color: var(--yellow);
+  font-weight: 700;
+}
+.callstack-frames .cs-phylo { color: var(--orange); }
+.callstack-frames .cs-lh { color: var(--red); }
+.callstack-frames .cs-omp { color: var(--accent); }
+.callstack-frames .cs-unk { color: var(--text3); font-style: italic; }
+
+@media (max-width: 720px) {
+  .callstack-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 10px 14px;
+  }
+  .callstack-count { text-align: left; }
+  .callstack-bar-wrap { height: 6px; }
+}

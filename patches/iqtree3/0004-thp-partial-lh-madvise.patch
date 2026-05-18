@@ -1,0 +1,52 @@
+From c8f11a24fa0034f4c07cd2c852ff9a4a9a9896cb Mon Sep 17 00:00:00 2001
+From: Ayush Samuel <as1708@gadi-login-07.gadi.nci.org.au>
+Date: Mon, 18 May 2026 19:36:20 +1000
+Subject: [PATCH] perf: THP madvise(MADV_HUGEPAGE) on central_partial_lh to
+ reduce TLB pressure
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add madvise(MADV_HUGEPAGE) hint on the central_partial_lh allocation in
+PhyloTree::initializeAllPartialLh().  On AA 1M inputs the array is ~6.27 GB
+(1.57M × 4 KB PTEs); 2 MB superpages reduce the PTE count to ~3,135, fitting
+in the STLB and eliminating the dominant TLB-miss overhead observed at 83-85%
+LLC-miss rate across np=2/4/16 runs.
+
+Expected improvement: 8-15% MF wall-time at AA 1M; 10-20% at AA 10M.
+Guard: #ifdef __linux__ — hint is silently ignored if kernel THP is disabled.
+
+Patch: setonix-iq/patches/iqtree3/0004-thp-partial-lh-madvise.patch
+---
+ tree/phylotree.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/tree/phylotree.cpp b/tree/phylotree.cpp
+index b708dbd1..55c518a3 100644
+--- a/tree/phylotree.cpp
++++ b/tree/phylotree.cpp
+@@ -33,6 +33,7 @@
+ #include "phylosupertreeplen.h"
+ #include "upperbounds.h"
+ #include "utils/MPIHelper.h"
++#include <sys/mman.h>   // madvise / MADV_HUGEPAGE (THP for central_partial_lh)
+ #include "utils/hammingdistance.h"
+ #include "model/modelmixture.h"
+ #include "phylonodemixlen.h"
+@@ -1119,6 +1120,13 @@ void PhyloTree::initializeAllPartialLh(int &index, int &indexlh, PhyloNode *node
+             }
+             if (!central_partial_lh)
+                 outError("Not enough memory for partial likelihood vectors");
++#ifdef __linux__
++            // Promote central_partial_lh to 2 MB transparent huge pages.
++            // Reduces TLB misses on the partial_lh sweep: ~1.57M 4 KB PTEs
++            // (AA 1M) → 3,135 2 MB PTEs — fits in STLB. Gain: 8-15% MF wall
++            // on AA 1M+ (DRAM-bandwidth + TLB-bound workload). Patch 0004.
++            madvise(central_partial_lh, mem_size * sizeof(double), MADV_HUGEPAGE);
++#endif
+         }
+ 
+         // now always assign tip_partial_lh
+-- 
+2.43.7
+
