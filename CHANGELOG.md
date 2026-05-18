@@ -90,6 +90,64 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-18 (bp) — Submit THP validation run: AA 1M np=16 full (job 168684212)
+
+### What
+
+Submitted job **168684212** on Gadi (`normalsr`, 16 nodes × 103 threads, 4 h walltime)
+using the THP binary (`a103bc6c`, commit `c8f11a24`, patch `0004`) to validate the
+`madvise(MADV_HUGEPAGE)` gain on the AA 1M full-run (MF+SPR) benchmark.
+
+Script: `gadi-ci/mf-iso/run_mf_iso_aa_1m_16node_full_thp.sh`  
+Label:  `AA_1m_mfiso_np16_full_thp_seed1`
+
+### Acceptance gate
+
+| Check | Criterion |
+|-------|-----------|
+| lnL | −78,605,196.573 ± 1.0 |
+| Best model | LG+G4 |
+| filterRatesMPI fires | yes |
+| **MF wall** | **< 1,122.363 s** (pre-THP np=16 ref, job 168635616) |
+
+### THP scope: MF and SPR both benefit
+
+The `madvise(MADV_HUGEPAGE)` call is inside the `if (!central_partial_lh)` guard in
+`PhyloTree::initializeAllPartialLh()` — it fires once at first allocation. The kernel's
+`MADV_HUGEPAGE` hint persists on the VMA for the lifetime of the allocation. Because
+`central_partial_lh` is the single shared buffer used for every partial-likelihood
+computation in the run — both ModelFinder model sweeps and SPR tree-search moves —
+**the THP promotion covers both phases**.
+
+At np=16 the SPR wall (1,287.863 s) is actually *longer* than MF (1,122.363 s): np=16
+parallelises MF across ranks (each rank evaluates 1/16 of models) but SPR runs
+independently per rank (no cross-rank reduction until the best tree is selected). Both
+phases sweep `central_partial_lh` with the same LLC-bound access pattern, so the
+expected THP gain applies equally:
+
+| Phase | Pre-THP (168635616) | Expected gain | Target |
+|-------|--------------------:|:-------------:|:------:|
+| MF wall | 1,122.363 s | 8–15% | ~950–1,030 s |
+| SPR wall | 1,287.863 s | 8–15% | ~1,094–1,185 s |
+| **Total wall** | **2,410.226 s** | **8–15%** | **~2,048–2,218 s** |
+
+### Smaller datasets: no negative effect
+
+`madvise(MADV_HUGEPAGE)` is advisory — the kernel silently falls back to 4 KB pages if
+THP is disabled or the allocation is below the promotion threshold. For datasets where
+`central_partial_lh` fits in LLC (AA 100K and smaller: allocation ≲ 63 MB vs 105 MB
+SPR L3), there is no TLB pressure anyway and the hint is a no-op. The only cost is one
+syscall at allocation time (~1 µs); memory waste from 2 MB boundary rounding is ≲ 2 MB
+per rank — negligible at any dataset size.
+
+### Perf profiling
+
+Full `rank_perf` profiling requested (all 16 ranks). Pre-THP np=16 baseline (168635616):
+IPC 1.337, LLC miss 85.27%. Expected post-THP: IPC ↑ (fewer TLB-refill stalls) and
+LLC miss % ↓ (page walks no longer inflate LLC reference counts).
+
+---
+
 ## 2026-05-18 (bo) — THP `madvise(MADV_HUGEPAGE)` on `central_partial_lh` (patch `0004`)
 
 ### Motivation
