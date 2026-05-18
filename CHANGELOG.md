@@ -61,9 +61,9 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **How to run the FCA binary** — see [`research/updated-modelfinder-dispatch.md`](research/updated-modelfinder-dispatch.md):
 > §22 (architecture diagram), §23 (operator guide + flag reference), §24 (validated results table with provenance).
 
-> **IPC note:** `perf stat` was not collected for FCA full runs (no `perf_stat.txt` in profiles).
-> The only available IPC figure is for the baseline AA 100K run: **1.88 insn/cycle**
-> (from `AA_100k_spr_seed1_168425673/perf_stat.txt`). Add `perf stat` wrapper to FCA run scripts to collect IPC for future runs.
+> **IPC note:** `perf stat` was not collected for FCA full runs prior to 2026-05-18 (no `perf_stat.txt` in profiles).
+> The only available IPC figure from the baseline is **1.88 insn/cycle** (from `AA_100k_spr_seed1_168425673/perf_stat.txt`).
+> `rank_perf.sh` wrapper added to all AA 1M full scaling scripts (168635614–168635616) — per-rank `perf_stat_rank_N.txt` will be available when those jobs complete.
 
 | Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup |
 |-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|
@@ -72,6 +72,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — |
 | 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** |
 | 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — |
+| 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** |
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** |
@@ -91,7 +92,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 |------|--------|--------|-------|
 | rc29 (`/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3`) | `test_MF2` | `ffb79a14` (Phase 0 FCA) | `9603247f` (Phase 0 + 0.5 + 0.6 + MF-TIME) ✓ |
 | um09 (`/scratch/um09/as1708/iqtree3-mf2/src/iqtree3`)   | `test_MF2` | `ffb79a14` (Phase 0 FCA) | `9603247f` (Phase 0 + 0.5 + 0.6 + MF-TIME) ✓ |
-| XENOTEKX/setonix-iq (GitHub) | `test_MF2` | (not present) | **pending push** — see push command below |
+| XENOTEKX/setonix-iq (GitHub) | `test_MF2` | (not present) | ✓ `* [new branch] test_MF2 -> test_MF2` at `9603247fc85fb7acdfb470b27c44f5bfa59e43ba` |
 
 Both local trees are byte-identical on `test_MF2`. The fast-forward was clean
 (`mf-iso-phase0.5-0.6` was exactly 1 commit ahead of `test_MF2`, all on top
@@ -108,26 +109,30 @@ did NOT include the Phase 0.5/0.6 work that made those speedups possible.
 Promoting `test_MF2` aligns the branch label with the binary's actual
 content.
 
-### Push to remote (manual, requires user credentials)
+### Pushes completed
 
-The local fast-forward is done. To publish `test_MF2` to the shared remote
-(github.com/XENOTEKX/setonix-iq), the user must run:
+Both remotes updated on 2026-05-18:
 
-```bash
+**IQ-TREE3 source — `test_MF2` → XENOTEKX/setonix-iq**
+
+```
 cd /scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3
 git push setonix-iq test_MF2
-# OR equivalently from the um09 tree (identical commit)
-cd /scratch/um09/as1708/iqtree3-mf2/src/iqtree3
-git push setonix-iq test_MF2
+# * [new branch]        test_MF2 -> test_MF2
 ```
 
-This creates a new `test_MF2` branch on the remote (no overwrite — remote
-doesn't have one yet). Verifies with:
+New branch created on remote; HEAD at `9603247fc85fb7acdfb470b27c44f5bfa59e43ba`.
 
-```bash
-git ls-remote --heads setonix-iq test_MF2
-# Expected: 9603247fc85fb7acdfb470b27c44f5bfa59e43ba refs/heads/test_MF2
+**Scripts/docs — `modelfinder2` → XENOTEKX/setonix-iq**
+
 ```
+cd /home/272/as1708/setonix-iq
+git push origin modelfinder2
+# ff71b13d..61de3b66  modelfinder2 -> modelfinder2
+```
+
+Commit `61de3b66` carries the §22/§23/§24 additions to `updated-modelfinder-dispatch.md`
+and the updated `gadi-ci/mf-iso/build_mf_iso.sh` (Lustre nm fix).
 
 ### Documentation cross-links
 
@@ -431,7 +436,34 @@ Reference: AA 1M → 168425491 (LG+G4, lnL −78,605,196.573); DNA 1M → 168425
 Note: MF runs entirely on rank 0 (FCA phase 0.5+0.6 — MF dispatch is not yet active).
 SPR scales across all 8 nodes: 8-node SPR (~366 s) vs estimated single-node SPR (~2,614 s) = **7.1× SPR speedup**.
 
-AA 1M scaling chain (168592210–168592213): 168592210 running as of 2026-05-18 (4h40m elapsed), 168592211–168592213 on hold.
+#### 168635614 — AA 1M 2-node full (**PASS ✓**, exit 0, PBS wall 03:02:26)
+
+> Chain 168592210–168592213 was cancelled and resubmitted as **168635614–168635616** with per-rank `perf stat` profiling (`rank_perf.sh` wrapper, commit `ff71b13d`).
+
+| Field | Value |
+|-------|-------|
+| Total wall | **10,945.801 s** (3h:02m:26s) |
+| MF wall | 3,076.873 s |
+| SPR wall | 7,868.928 s |
+| lnL | −78,605,196.443 |
+| Δ vs ref (168425491) | **0.130** (tol 1.0 — **PASS**) |
+| Model | LG+G4 |
+| filterRatesMPI | fired ✓ · ok_rates_size=1 |
+| rank_0 MF evals | 31 models · total_eval_s=2,507.907 · mean=80.9 s · max=318.495 s |
+| End-to-end speedup | **2.08×** (22,776 s → 10,946 s) |
+| MF speedup | **2.47×** (7,587 s → 3,077 s) |
+| SPR speedup | **1.92×** (15,099 s → 7,869 s) |
+| Perf stat | per-rank `perf_stat_rank_N.txt` in WORK_DIR (new) |
+
+#### AA 1M full scaling chain — current status (2026-05-18)
+
+| Job | Name | Nodes | State | Note |
+|-----|------|-------|-------|------|
+| ~~168592210~~ | `mf-iso-aa-1m-1n-full` | 1 | **DONE** exit=0 | PASS lnL diff=0.017; run used as 1-node reference |
+| ~~168592211–168592213~~ | 2/4/16-node | — | **CANCELLED** | Resubmitted with perf stat (chain broken by 168592210 false-failure) |
+| ~~168635614~~ | `mf-iso-aa-1m-2n-full` | 2 | **DONE** exit=0 | **PASS** lnL −78,605,196.443 ✓, LG+G4 ✓, MF 3,076.873 s (**2.47×**), total 10,945.801 s (**2.08×**) |
+| 168635615 | `mf-iso-aa-1m-4n-full` | 4 | **RUNNING** ~00:03 | afterok 168635614 |
+| 168635616 | `mf-iso-aa-1m-16n-full` | 16 | **HOLD** | afterok 168635615 |
 
 ---
 
