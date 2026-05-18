@@ -921,10 +921,10 @@
 /* ── Expanded-chart filter bar ─────────────────────────────── */
 .chart-modal-filters {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 20px;
-  margin-bottom: 12px;
-  padding: 8px 14px;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding: 7px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -933,7 +933,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 .cm-filter-label {
   font-size: 0.68rem;
@@ -942,8 +942,22 @@
   white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  flex-shrink: 0;
 }
-.cm-filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.cm-filter-chips {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 3px;
+  min-width: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(79, 143, 255, 0.3) transparent;
+}
+.cm-filter-chips::-webkit-scrollbar { height: 3px; }
+.cm-filter-chips::-webkit-scrollbar-track { background: transparent; }
+.cm-filter-chips::-webkit-scrollbar-thumb { background: rgba(79, 143, 255, 0.3); border-radius: 2px; }
 .cm-chip {
   padding: 3px 10px;
   border-radius: 20px;
