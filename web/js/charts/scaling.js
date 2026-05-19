@@ -3,7 +3,7 @@
 // Canonical series are solid/dashed by platform; non-canonical patch/variant
 // series are shown as lighter named series (initially hidden).
 
-import { platformColour, buildFamily, dimLegendHidden } from '../utils.js';
+import { platformColour, buildFamily } from '../utils.js';
 
 // Colour overrides for known MF2/patch families so they stand out.
 const FAMILY_COLOURS = {
@@ -57,6 +57,42 @@ const NC_STYLES = {
 };
 function ncStyle(family) {
   return NC_STYLES[family] || { borderDash: [3, 5], pointRadius: 3, pointStyle: 'crossRot', borderWidth: 1.5 };
+}
+
+function renderExternalLegend(canvas, chart) {
+  const wrapper = canvas.parentElement;
+  if (!wrapper) return;
+  wrapper.querySelector('.scaling-legend')?.remove();
+  wrapper.style.display = 'flex';
+  wrapper.style.flexDirection = 'column';
+  canvas.style.flex = '1';
+  canvas.style.minHeight = '0';
+  const legendDiv = document.createElement('div');
+  legendDiv.className = 'scaling-legend';
+  legendDiv.style.cssText = 'height:26px;overflow-x:auto;overflow-y:hidden;display:flex;flex-wrap:nowrap;align-items:center;gap:0 14px;padding:0 4px;border-top:1px solid rgba(139,151,173,0.12);flex-shrink:0;scrollbar-width:thin;scrollbar-color:rgba(79,143,255,0.3) transparent;';
+  chart.data.datasets.forEach((ds, i) => {
+    const isHidden = !chart.isDatasetVisible(i);
+    const item = document.createElement('span');
+    item.style.cssText = `display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:#8b97ad;padding:1px 4px;border-radius:3px;flex-shrink:0;white-space:nowrap;opacity:${isHidden ? '0.35' : '1'};`;
+    const swatch = document.createElement('span');
+    const bc = typeof ds.borderColor === 'string' ? ds.borderColor : '#8b97ad';
+    swatch.style.cssText = `display:inline-block;width:22px;height:2px;background:${bc};border-radius:1px;flex-shrink:0;`;
+    const label = document.createElement('span');
+    label.textContent = ds.label;
+    label.style.cssText = 'max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    if (isHidden) label.style.textDecoration = 'line-through';
+    item.appendChild(swatch);
+    item.appendChild(label);
+    item.addEventListener('click', () => {
+      const nowVisible = !chart.isDatasetVisible(i);
+      chart.setDatasetVisibility(i, nowVisible);
+      item.style.opacity = nowVisible ? '1' : '0.35';
+      label.style.textDecoration = nowVisible ? '' : 'line-through';
+      chart.update();
+    });
+    legendDiv.appendChild(item);
+  });
+  wrapper.appendChild(legendDiv);
 }
 
 export function render(canvas, runsIndex) {
@@ -126,7 +162,7 @@ export function render(canvas, runsIndex) {
     });
   }
 
-  new Chart(canvas, {
+  const instance = new Chart(canvas, {
     type: 'line',
     data: { datasets },
     options: {
@@ -134,7 +170,7 @@ export function render(canvas, runsIndex) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 }, generateLabels: dimLegendHidden } },
+        legend: { display: false },
         tooltip: {
           callbacks: {
             label: (ctx) => {
@@ -162,4 +198,5 @@ export function render(canvas, runsIndex) {
       },
     },
   });
+  renderExternalLegend(canvas, instance);
 }
