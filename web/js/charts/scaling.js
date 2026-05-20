@@ -121,7 +121,7 @@ export function render(canvas, runsIndex) {
       backgroundColor: fColour ? fColour.replace('1)', '0.15)') : platformColour(plat, ds, 0.1),
       ...ncStyle(family),
       tension: 0.2,
-      hidden: true,
+      hidden: !(family === 'FCA mf-iso (full)' || family === 'FCA mf-iso (MF-only)'),
     });
   }
 
