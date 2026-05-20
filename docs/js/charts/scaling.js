@@ -4,6 +4,7 @@
 // series are shown as lighter named series (initially hidden).
 
 import { platformColour, buildFamily, dimLegendHidden } from '../utils.js?v=6ac3502e27c4';
+// dimLegendHidden: shows ALL series in the legend — canonical bright, hidden NC dimmed.
 
 // Colour overrides for known MF2/patch families so they stand out.
 const FAMILY_COLOURS = {
@@ -74,11 +75,9 @@ export function render(canvas, runsIndex) {
     const family = buildFamily(r);
 
     if (r.non_canonical) {
-      // Non-canonical: group by (platform, dataset, family, nc_label) — one line per patch
-      // variant, but with family included so e.g. mf-iso (full) vs (MF-only) remain separate
-      // even when they share the same nc_label.
-      const refLabel = r.non_canonical_label || family || 'ref';
-      const key = `${platformLabel(plat)} · ${ds} · ${family} · ${refLabel}`;
+      // Non-canonical: group by (platform, dataset, family) — one compact line per family
+      // so labels stay short: "Gadi · complex_aa_1m · FCA mf-iso (full)".
+      const key = `${platformLabel(plat)} · ${ds} · ${family}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds, family, points: [] });
       byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.wall_s });
     } else {
@@ -105,7 +104,6 @@ export function render(canvas, runsIndex) {
       tension: 0.2,
       pointRadius: 4,
       pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
-      _canonical: true,
     });
   }
 
@@ -123,7 +121,7 @@ export function render(canvas, runsIndex) {
       backgroundColor: fColour ? fColour.replace('1)', '0.15)') : platformColour(plat, ds, 0.1),
       ...ncStyle(family),
       tension: 0.2,
-      hidden: !(family === 'FCA mf-iso (full)' || family === 'FCA mf-iso (MF-only)'),
+      hidden: true,
     });
   }
 
@@ -135,20 +133,7 @@ export function render(canvas, runsIndex) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: {
-        legend: {
-          position: 'bottom',
-          labels: {
-            color: '#8b97ad',
-            font: { size: 10 },
-            boxWidth: 20,
-            // Show only canonical series — keeps legend to ~8–14 items
-            // regardless of how many non-canonical patch runs exist.
-            generateLabels: (chart) =>
-              dimLegendHidden(chart).filter(
-                item => chart.data.datasets[item.datasetIndex]?._canonical === true
-              ),
-          },
-        },
+        legend: { position: 'bottom', labels: { color: '#8b97ad', font: { size: 10 }, generateLabels: dimLegendHidden } },
         tooltip: {
           callbacks: {
             label: (ctx) => {

@@ -41,8 +41,8 @@ export function render(canvas, runsIndex) {
     const plat = platformOf(r);
     if (r.non_canonical) {
       const family = buildFamily(r);
-      const refLabel = r.non_canonical_label || family || 'ref';
-      const key = `${platformLabel(plat)} · ${r.dataset_short} · ${refLabel}`;
+      // Group by family only — keeps labels short: "Gadi · complex_aa_1m · FCA mf-iso (full)"
+      const key = `${platformLabel(plat)} · ${r.dataset_short} · ${family}`;
       if (!byKeyNC.has(key)) byKeyNC.set(key, { plat, ds: r.dataset_short, family, points: [] });
       byKeyNC.get(key).points.push({ x: Number(r.threads), y: r.efficiency });
     } else {
