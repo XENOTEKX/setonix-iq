@@ -74,11 +74,13 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — | **1.878** | **56.02%** |
 | 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** | — | — |
 | 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — | — | — |
+| 168913089 | FCA np=1 | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.590 | — | 5,119.929 | 15,060.551 | 20,180.480 | **1.13×** | — | — |
 | 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** | **1.260** | **83.69%** |
 | 168635615 | FCA np=4 | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** | **1.273** | **84.01%** |
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
+| 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
 
 > **Timing notes:** MF and SPR wall times from IQ-TREE stdout (`Wall-clock time for ModelFinder` /
@@ -90,7 +92,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
-## 2026-05-19 (br) — Submit np=1 full FCA runs: AA 1M + DNA 1M (jobs 168913089, 168913091)
+## 2026-05-20 (br) — np=1 full FCA runs COMPLETE: AA 1M + DNA 1M (jobs 168913089, 168913091)
 
 ### What
 
@@ -126,15 +128,39 @@ never fires). These runs establish:
 | 168913091 | Best model | F81+F+G4 |
 
 filterRatesMPI is **not** expected to fire at np=1 (single rank — no cross-rank broadcast needed).
+**Confirmed:** `phase0_5_broadcast.fired = false` in both result JSONs.
 
-### Expected timing (np=1, MPI overhead only — no cross-rank benefit)
+### Results (completed 2026-05-20, all PASS ✓)
 
-| Dataset | Baseline total | Expected FCA np=1 | Note |
-|---------|---------------|-------------------|------|
-| AA 1M | 22,776 s (168425491) | ≈ 22,000–25,000 s | MPI overhead ~0 at np=1 |
-| DNA 1M | 6,114 s (168425675) | ≈ 6,000–7,000 s | DNA 1M TESTONLY MF-only: 5,152 s (168580376) |
+| Job | Dataset | MF wall (s) | SPR wall (s) | Total wall (s) | vs Baseline | lnL | ΔlnL | Best model |
+|-----|---------|-------------|-------------|----------------|-------------|-----|------|------------|
+| 168913089 | AA 1M | **5,119.929** | 15,060.551 | **20,180.480** | **1.13× faster** (22,776→20,181 s) | −78,605,196.590 | 0.017 | LG+G4 ✓ |
+| 168913091 | DNA 1M | **5,121.153** | 2,528.861 | **7,650.014** | **0.80×** (6,114→7,650 s, +25%) | −59,208,019.158 | 0.054 | F81+F+G4 ✓ |
 
-PBS walltime: 12 h for both (conservative).
+### Key observations
+
+**AA 1M (168913089) — FCA np=1 is 1.13× *faster* than non-MPI baseline:**
+MF wall dropped from 7,587 s (baseline 168425491) to 5,120 s — 1.48× improvement even
+at np=1. This is attributed to the libiomp5 runtime (vs baseline's libgomp), numactl
+`--localalloc` NUMA binding, and ICX 2025.3.2 intra-model OMP efficiency. SPR wall
+(15,061 s) is consistent with baseline SPR (15,099 s).
+
+**DNA 1M (168913091) — FCA np=1 is 1.25× slower than non-MPI baseline:**
+MF wall at np=1 FCA: 5,121 s vs baseline (168425675): 3,501 s (+46%). The non-MPI
+baseline uses OMP-across-models (parallel outer loop), which benefits DNA more because
+its model set is smaller and each model is cheaper — more models can run concurrently.
+The FCA sequential outer loop (Fix H) removes this gain. SPR wall (2,529 s) is
+consistent with baseline SPR (2,597 s).
+
+**Convergence at np=1:** DNA MF wall (5,121 s) ≈ AA MF wall (5,120 s) at np=1 FCA
+(sequential outer, 103T inner). This confirms that at np=1, both datasets saturate the
+single-rank OMP pool at ~5,120 s — OMP-across-models was the primary differentiator
+between the two baseline MF walls (3,501 vs 7,587 s).
+
+**Implication for scaling speedups:** The np=1 FCA MF anchor (5,121 s for DNA, 5,120 s
+for AA) is the correct denominator for FCA scaling. Against this anchor, np=8 DNA 1M
+MF speedup is 5,121/1,275 = **4.02×** (previously reported as 3.73× vs non-MPI
+baseline — the FCA-internal speedup is higher).
 
 ---
 

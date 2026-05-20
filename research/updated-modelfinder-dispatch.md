@@ -2409,7 +2409,7 @@ Run `setonix-iq/gadi-ci/mf-iso/tools/parse_mf_time.py <profile_dir>` for:
 
 ---
 
-## 24. Validated results — 2026-05-18
+## 24. Validated results — 2026-05-20 (updated)
 
 All runs below used the **same binary**: md5 `a78ffa2942d6b073490d503416ae554c`,
 146,238,464 bytes, built from commit [`9603247f`](#) (`test_MF2`, fast-forwarded
@@ -2424,8 +2424,10 @@ All runs below used the **same binary**: md5 `a78ffa2942d6b073490d503416ae554c`,
 | 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.46 | 764.48 | 1,169.56 | — | [json](../logs/runs/gadi_AA_100k_spr_seed1_168425673.json) |
 | 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.03 | 383.88 | 537.75 | **2.18×** | [json](../logs/runs/gadi_AA_100k_mfiso_np2_full_seed1_168584736.json) |
 | 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.46 | 15,098.61 | 22,776.23 | — | [json](../logs/runs/gadi_AA_1m_spr_seed1_168425491.json) |
+| 168913089 | FCA np=1 | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.590 | — | 5,119.93 | 15,060.55 | 20,180.48 | **1.13×** | [json](../logs/runs/gadi_AA_1m_mfiso_np1_full_seed1_168913089.json) |
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.89 | 2,147.50 | 3,671.62 | **6.20×** | [json](../logs/runs/gadi_AA_1m_mfiso_np8_full_seed1_168586094.json) |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.83 | 2,596.99 | 6,114.45 | — | [json](../logs/runs/gadi_DNA_1m_spr_seed1_168425675.json) |
+| 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.15 | 2,528.86 | 7,650.01 | **0.80×** | [json](../logs/runs/gadi_DNA_1m_mfiso_np1_full_seed1_168913091.json) |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.69 | 349.90 | 1,640.85 | **3.73×** | [json](../logs/runs/gadi_DNA_1m_mfiso_np8_full_seed1_168592214.json) |
 
 ### 24.2 Correctness — every result passes `|ΔlnL| < 0.5` vs baseline
@@ -2434,8 +2436,10 @@ All runs below used the **same binary**: md5 `a78ffa2942d6b073490d503416ae554c`,
 |---------|-------------:|--------:|-----:|:----------------:|----------:|
 | DNA 100K | −5,692,984.539 | −5,692,984.532 | **0.007** | ✓ F81+F+G4 | 0.014 |
 | AA 100K  | −7,541,976.860 | −7,541,976.853 | **0.007** | ✓ LG+G4    | 0.015 |
-| AA 1M    | −78,605,196.573 | −78,605,196.497 | **0.076** | ✓ LG+G4    | 0.152 |
-| DNA 1M   | −59,208,019.212 | −59,208,019.103 | **0.109** | ✓ F81+F+G4 | 0.219 |
+| AA 1M (np=1)  | −78,605,196.573 | −78,605,196.590 | **0.017** | ✓ LG+G4    | — |
+| AA 1M (np=8)  | −78,605,196.573 | −78,605,196.497 | **0.076** | ✓ LG+G4    | 0.152 |
+| DNA 1M (np=1) | −59,208,019.212 | −59,208,019.158 | **0.054** | ✓ F81+F+G4 | — |
+| DNA 1M (np=8) | −59,208,019.212 | −59,208,019.103 | **0.109** | ✓ F81+F+G4 | 0.219 |
 
 All four results are bit-for-bit close to baseline within numerical tolerance.
 The FCA dispatch changes WHICH RANK evaluates which model — not the model

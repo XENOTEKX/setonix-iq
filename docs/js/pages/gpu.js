@@ -1,8 +1,8 @@
 // web/js/pages/gpu.js — GPU telemetry aggregated across deep profiles (NVIDIA V100 on Gadi gpuvolta / AMD MI250X on Setonix)
 
-import { store } from '../state.js?v=6ac3502e27c4';
-import { loadProfile } from '../data.js?v=6ac3502e27c4';
-import { escHtml } from '../utils.js?v=6ac3502e27c4';
+import { store } from '../state.js?v=a08ea1c062f2';
+import { loadProfile } from '../data.js?v=a08ea1c062f2';
+import { escHtml } from '../utils.js?v=a08ea1c062f2';
 
 export async function mount(root) {
   root.innerHTML = `
