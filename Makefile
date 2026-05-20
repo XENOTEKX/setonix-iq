@@ -155,6 +155,7 @@ dashboard:
                 if [ "$$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then \
                     git push origin HEAD 2>/dev/null || true; \
                 fi; \
+	    fi
 	$(call header,Running pytest)
 	cd "$(AGENT_DIR)" && $(PY) -m pytest tests/ -v
 
