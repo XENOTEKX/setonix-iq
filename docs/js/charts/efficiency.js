@@ -84,6 +84,9 @@ export function render(canvas, runsIndex) {
       pointRadius: family === 'MF2 Full' ? 5 : 3,
       borderWidth: family === 'MF2 Full' ? 2 : 1.5,
       hidden: !(family === 'FCA mf-iso (full)' || family === 'FCA mf-iso (MF-only)'),
+    });
+  }
+  // Ideal efficiency = 1.0 reference
   const maxT = Math.max(...runsIndex.map(r => r.threads || 0), 1);
   datasets.push({
     label: 'Ideal',
