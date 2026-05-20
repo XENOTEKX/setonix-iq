@@ -90,6 +90,54 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-19 (br) — Submit np=1 full FCA runs: AA 1M + DNA 1M (jobs 168913089, 168913091)
+
+### What
+
+Submitted two 1-node full FCA runs (MF+SPR, `-m TEST`) on Gadi (`normalsr`, 1×103T each, seed=1):
+
+| Job | Dataset | Script |
+|-----|---------|--------|
+| **168913089** | AA 1M (100 taxa × 1M sites) | `gadi-ci/mf-iso/run_mf_iso_aa_1m_1node_full.sh` |
+| **168913091** | DNA 1M (100 taxa × 1M sites) | `gadi-ci/mf-iso/run_mf_iso_dna_1m_1node_full.sh` *(new)* |
+
+Also created `gadi-ci/mf-iso/run_mf_iso_dna_1m_1node_full.sh` — analogous to the AA
+1M 1-node full script with DNA-specific alignment path, `EXPECTED_LNL = -59208019.212`
+(SPR ref 168425675, tol=1.0), PBS name `mf-iso-dna-1m-1n-full`, walltime=12:00:00.
+
+### Purpose
+
+At np=1 the FCA binary provides no filterRatesMPI speedup (single rank — dispatch
+never fires). These runs establish:
+
+1. **np=1 anchor** for the MF wall-time scaling chart (denominator for np=2, 4, 8, 16 speedups).
+2. **End-to-end correctness** of the FCA binary at np=1 vs the non-MPI SPR baseline — confirms no
+   regression from MPI linkage, numactl binding, or ICX compiler differences at full-run scale.
+3. **Direct comparison parity** — identical walltime conditions (1×normalsr, 103T, seed=1, `-m TEST`)
+   to the existing baselines 168425491 (AA 1M) and 168425675 (DNA 1M).
+
+### Acceptance gates
+
+| Job | Check | Criterion |
+|-----|-------|-----------|
+| 168913089 | lnL | −78,605,196.573 ± 1.0 (ref 168425491) |
+| 168913089 | Best model | LG+G4 |
+| 168913091 | lnL | −59,208,019.212 ± 1.0 (ref 168425675) |
+| 168913091 | Best model | F81+F+G4 |
+
+filterRatesMPI is **not** expected to fire at np=1 (single rank — no cross-rank broadcast needed).
+
+### Expected timing (np=1, MPI overhead only — no cross-rank benefit)
+
+| Dataset | Baseline total | Expected FCA np=1 | Note |
+|---------|---------------|-------------------|------|
+| AA 1M | 22,776 s (168425491) | ≈ 22,000–25,000 s | MPI overhead ~0 at np=1 |
+| DNA 1M | 6,114 s (168425675) | ≈ 6,000–7,000 s | DNA 1M TESTONLY MF-only: 5,152 s (168580376) |
+
+PBS walltime: 12 h for both (conservative).
+
+---
+
 ## 2026-05-18 (bp) — Submit THP validation run: AA 1M np=16 full (job 168684212)
 
 ### What
