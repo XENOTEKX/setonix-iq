@@ -79,6 +79,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168635615 | FCA np=4 | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** | **1.273** | **84.01%** |
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
+| 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -219,6 +220,29 @@ per rank — negligible at any dataset size.
 Full `rank_perf` profiling requested (all 16 ranks). Pre-THP np=16 baseline (168635616):
 IPC 1.337, LLC miss 85.27%. Expected post-THP: IPC ↑ (fewer TLB-refill stalls) and
 LLC miss % ↓ (page walks no longer inflate LLC reference counts).
+
+### Results (job complete)
+
+| Metric | Baseline 168635616 | THP 168684212 | Δ |
+|--------|-------------------:|---------------:|:--:|
+| MF wall (s) | 1,122.363 | **1,138.050** | **+15.7 s (+1.40%)** ❌ |
+| SPR wall (s) | 1,287.863 | **1,252.808** | **−35.1 s (−2.72%)** ✓ |
+| Total wall (s) | 2,410.226 | **2,390.858** | **−19.4 s (−0.80%)** ✓ |
+| IPC (agg, user) | 1.337 | 1.344 | +0.007 (+0.49%) |
+| LLC miss % (cache-miss/ref) | 85.29% | 85.32% | +0.02 pp (no change) |
+| L3 miss % (LLC-load-miss/LLC-load) | 86.60% | 86.83% | +0.23 pp (no improvement) |
+| L1-dcache miss % | 0.875% | 1.038% | +0.16 pp (slight increase) |
+| Best model | LG+G4 | LG+G4 | ✓ |
+| lnL | −78,605,196.497 | −78,605,196.497 | ✓ |
+
+**Verdict — THP was ineffective for MF; marginal SPR gain; no cache improvement.**
+
+- MF phase **missed the acceptance gate by 15.7 s** (+1.40%). The MADV_HUGEPAGE hint did not reduce MF-phase LLC pressure.
+- SPR phase was 35 s faster (−2.72%), giving a net −19.4 s total. The SPR gain makes sense: SPR repeatedly accesses the same `central_partial_lh` buffer across hundreds of iterations, allowing the OS more time to promote 4K → 2M pages. MF sweeps each model once with fresh memory, so THP never gets the chance to promote before access.
+- IPC rose by +0.49% and LLC miss rates are **statistically unchanged** (Δ < 0.03 pp on cache-miss/ref). THP did not structurally alter the memory access pattern.
+- L1-dcache miss rate **increased slightly** (+0.16 pp), likely because 2 MB page mappings change TLB coverage and L1 hardware prefetch stride detection.
+
+**Conclusion:** The `MADV_HUGEPAGE` approach on `central_partial_lh` is not a viable MF-phase speedup strategy. The MF sweep accesses memory linearly once per model — the OS promotion latency (~100 ms) is too slow to benefit a ~110 s per-model evaluation. Consider dropping patch `0004` or restricting the hint to tree-search-only contexts.
 
 ---
 
