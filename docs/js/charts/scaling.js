@@ -2,14 +2,8 @@
 // one series per (dataset, platform, build_variant) combo.
 // Canonical series are solid/dashed by platform; non-canonical patch/variant
 // series are shown as lighter named series (initially hidden).
-//
-// Legend strategy: the built-in Chart.js legend is disabled because it renders
-// inside the canvas container and collapses chart area when many series exist.
-// Instead, renderExternalLegend() appends a flex legend AFTER the wrapper div,
-// showing only initially-visible datasets (canonical + FCA mf-iso).  Hidden
-// non-canonical series are excluded to keep the legend compact.
 
-import { platformColour, buildFamily } from '../utils.js?v=6ac3502e27c4';
+import { platformColour, buildFamily, dimLegendHidden } from '../utils.js?v=6ac3502e27c4';
 
 // Colour overrides for known MF2/patch families so they stand out.
 const FAMILY_COLOURS = {
@@ -65,55 +59,6 @@ function ncStyle(family) {
   return NC_STYLES[family] || { borderDash: [3, 5], pointRadius: 3, pointStyle: 'crossRot', borderWidth: 1.5 };
 }
 
-// Render a compact legend AFTER the chart wrapper so it doesn't consume canvas
-// area.  Only datasets that are initially visible (hidden !== true) are shown —
-// this keeps the overview legend to ~8–16 items rather than 30+.
-function renderExternalLegend(canvas, chart) {
-  const wrapper = canvas.parentElement;
-  if (!wrapper) return;
-
-  // Remove any previously rendered legend (re-renders on data update).
-  const host = wrapper.parentElement || wrapper;
-  host.querySelector('.scaling-legend')?.remove();
-
-  const legendDiv = document.createElement('div');
-  legendDiv.className = 'scaling-legend';
-  legendDiv.style.cssText = [
-    'display:flex',
-    'flex-wrap:wrap',
-    'gap:4px 14px',
-    'padding:6px 14px 8px',
-    'border-top:1px solid rgba(139,151,173,0.12)',
-  ].join(';');
-
-  chart.data.datasets.forEach((ds, i) => {
-    // Skip datasets that are hidden by default — keeps legend compact.
-    if (ds.hidden === true) return;
-
-    const item = document.createElement('span');
-    item.style.cssText = 'display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:11px;color:#8b97ad;';
-
-    const swatch = document.createElement('span');
-    swatch.style.cssText = `display:inline-block;width:22px;height:3px;border-radius:2px;background:${ds.borderColor};flex-shrink:0;`;
-
-    const label = document.createElement('span');
-    label.textContent = ds.label;
-
-    item.append(swatch, label);
-    item.addEventListener('click', () => {
-      chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));
-      chart.update('none');
-      // Dim label when hidden.
-      const hidden = !chart.isDatasetVisible(i);
-      item.style.opacity = hidden ? '0.35' : '1';
-      item.style.textDecoration = hidden ? 'line-through' : '';
-    });
-    legendDiv.append(item);
-  });
-
-  wrapper.insertAdjacentElement('afterend', legendDiv);
-}
-
 export function render(canvas, runsIndex) {
   const existing = window.Chart?.getChart?.(canvas);
   if (existing) existing.destroy();
@@ -160,6 +105,7 @@ export function render(canvas, runsIndex) {
       tension: 0.2,
       pointRadius: 4,
       pointStyle: plat === 'gadi' ? 'triangle' : 'circle',
+      _canonical: true,
     });
   }
 
@@ -181,7 +127,7 @@ export function render(canvas, runsIndex) {
     });
   }
 
-  const chart = new Chart(canvas, {
+  new Chart(canvas, {
     type: 'line',
     data: { datasets },
     options: {
@@ -189,7 +135,20 @@ export function render(canvas, runsIndex) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: {
-        legend: { display: false },
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: '#8b97ad',
+            font: { size: 10 },
+            boxWidth: 20,
+            // Show only canonical series — keeps legend to ~8–14 items
+            // regardless of how many non-canonical patch runs exist.
+            generateLabels: (chart) =>
+              dimLegendHidden(chart).filter(
+                item => chart.data.datasets[item.datasetIndex]?._canonical === true
+              ),
+          },
+        },
         tooltip: {
           callbacks: {
             label: (ctx) => {
@@ -217,5 +176,4 @@ export function render(canvas, runsIndex) {
       },
     },
   });
-  renderExternalLegend(canvas, chart);
 }
