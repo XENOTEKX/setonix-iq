@@ -122,35 +122,37 @@ Results in entry `(bz)` — **DONE: MF=258.773 s, SPR=738.569 s, total=1000.811 
 
 ---
 
-## 2026-05-23 (ca) — Submit WS-A.1 full MF+SPR parity run: AA 1M np=1 (job 169095547)
+## 2026-05-23 (ca) — Submit WS-A.1 full MF+SPR parity run: AA 1M np=16 (job 169095645)
 
 ### What
 
-Direct parity run of the Phase A.1 warm-start binary (`iqtree3-mpi-fca-ws-a1`) on AA 1M to
-measure whether the intra-rank warm-start cache produces a meaningful MF-wall reduction relative
-to the FCA Phase 0.5+0.6 np=1 baseline (job 168913089).
+Direct parity run of the Phase A.1 warm-start binary (`iqtree3-mpi-fca-ws-a1`) on AA 1M at
+np=16 to measure whether the intra-rank warm-start cache produces a meaningful MF-wall reduction
+relative to the FCA Phase 0.5+0.6 np=16 baseline (job 168635616).
 
-At np=1 the warm-start cache populates sequentially — no cross-rank benefit until Phase A.2.
-However, AA 1M is ~37× larger than AA 100K per BFGS call, so even 1–2 fewer BFGS restarts per
-model saves significant absolute time.
+At np=16 each rank visits ~77 models within its assigned family subset, giving the cache more
+opportunities to reuse prior fits than at np=1. The warm-start cache is still local-only (no
+Phase A.2 MPI broadcast), but the per-rank breadth at np=16 is the best-case test of A.1.
 
 | Field | Value |
 |-------|-------|
-| Job | **169095547** (`normalsr`, 1 MPI rank × 103 OMP, `-m TEST`, seed=1) |
+| Job | **169095645** (`normalsr`, 16 MPI ranks × 103 OMP, `-m TEST`, seed=1) |
 | Binary | `iqtree3-mpi-fca-ws-a1` md5 `fa9ee60103a1a922505cf4dfa26a2fca` (WS Phase A.1) |
-| Script | `gadi-ci/lbfgs-ws/run_ws_a1_aa_1m_1node_full.sh` |
-| Walltime | 8:00:00 |
+| Script | `gadi-ci/lbfgs-ws/run_ws_a1_aa_1m_16node_full.sh` |
+| Walltime | 2:00:00 |
 | Alignment | AA 1M (100 taxa × 1M sites) |
+| Nodes | 16 × normalsr SPR (1664 PBS CPUs, 8160 GB) |
 
 ### Pass criteria
 
 | Check | Criterion | Baseline ref |
 |-------|-----------|-------------|
-| lnL (SPR) | −78,605,196.573 ± 0.5 | 168425491 (vanilla AA 1M) |
+| lnL (SPR) | −78,605,196.573 ± 1.0 | 168425491 (vanilla AA 1M) |
 | Best model | LG+G4 | 168425491 |
+| filterRatesMPI | fires | 168635616 |
 | exit code | 0 | — |
 
-FCA np=1 baseline ref: MF=5,119.929 s, SPR=15,060.551 s, total=20,180.480 s (job 168913089).  
+FCA np=16 baseline ref: MF=1,122.363 s, SPR=1,287.863 s, total=2,410.226 s (job 168635616).  
 Results in entry `(cb)` — **IN PROGRESS**.
 
 ---

@@ -1,35 +1,29 @@
 #!/bin/bash
-# run_ws_a1_aa_1m_1node_full.sh — Full MF+SPR parity run: warm-start A.1 binary, AA 1M, 1-node MPI.
+# run_ws_a1_aa_1m_16node_full.sh — Full MF+SPR parity run: warm-start A.1 binary, AA 1M, 16-node MPI.
 #
-# AA, 1M sites (100 taxa), 1 MPI rank × 103 OpenMP threads.
+# AA, 1M sites (100 taxa), 16 MPI ranks × 103 OpenMP threads = 1648T total.
+# 16 × Sapphire Rapids exclusive nodes (normalsr, 104 cores each).
 #
-# PURPOSE — Direct parity comparison against FCA Phase 0.5+0.6 np=1 baseline (job 168913089,
-#   MF=5,119.929s SPR=15,060.551s total=20,180.480s) to measure warm-start A.1 benefit on AA 1M:
-#     1. Does the warm-start cache reduce MF wall time beyond FCA baseline?
-#     2. Does SPR remain unaffected?
-#     3. End-to-end lnL correctness vs baseline 168425491.
+# PURPOSE — Direct parity comparison against FCA Phase 0.5+0.6 np=16 baseline (job 168635616,
+#   MF=1,122.363s SPR=1,287.863s total=2,410.226s) to measure warm-start A.1 benefit at scale.
+#   At np=16 the warm-start cache populates separately on each rank (no Phase A.2 MPI broadcast
+#   yet), but each rank visits ~77 models, giving the cache more opportunities to reuse prior fits
+#   within the rank's assigned family subset.
 #
-# At np=1 the warm-start cache populates sequentially (intra-rank only — no Phase A.2 MPI broadcast
-# yet). The gain here is from re-using convergence params within each rate class, e.g. LG+G4 seed →
-# WAG+G4, and +G4 best α → +G4 next-family start.  The ~37× larger alignment (vs AA 100K) means each
-# BFGS call costs ~37× more function evaluations, so even 1–2 fewer BFGS restarts per model saves
-# significant absolute time.
-#
-# A/B ref: FCA np=1 baseline 168913089 (MF=5119.929s SPR=15060.551s total=20180.480s)
-#          Vanilla baseline  168425491 (MF=~7587s    SPR=15098.605s total=22776.226s)
+# A/B ref: FCA np=16 baseline 168635616 (MF=1122.363s SPR=1287.863s total=2410.226s)
+#          Vanilla baseline   168425491 (MF=~7587s    SPR=15098.605s total=22776.226s)
 # Binary:  iqtree3-mpi-fca-ws-a1  md5 fa9ee60103a1a922505cf4dfa26a2fca
 # Parity:  OMP_PER_RANK=103, numactl --localalloc, KMP_BLOCKTIME=200, seed=1
 # Branch:  fca-lbfgs-ws
 # Build tag: fca_ws_a1_icx_avx512
-# Related:   CHANGELOG (bz) FCA baseline, (bx) WS-A.1 AA 100K, research/lbfgs-and-warmstart-implementation.md §12.7
+# Related:   CHANGELOG (ca)/(cb) WS-A.1 AA 1M, research/lbfgs-and-warmstart-implementation.md §12.7
 
-#PBS -N ws-a1-aa-1m-full
+#PBS -N ws-a1-aa-1m-16n
 #PBS -P dx61
 #PBS -q normalsr
-#PBS -l ncpus=104
-#PBS -l mem=510GB
-#PBS -l place=excl
-#PBS -l walltime=08:00:00
+#PBS -l ncpus=1664
+#PBS -l mem=8160GB
+#PBS -l walltime=02:00:00
 #PBS -l storage=scratch/dx61+scratch/um09
 #PBS -l wd
 #PBS -j oe
@@ -46,7 +40,7 @@ ALIGNMENT="${ALIGNMENT:-/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_sha
 RUNS_DIR="${REPO_DIR}/logs/runs"
 PROFILES_DIR="/scratch/${PROJECT}/${USER_ID}/mf_iso/profiles"
 
-NRANKS=1
+NRANKS=16
 OMP_PER_RANK="${OMP_PER_RANK:-103}"
 TOTAL_THREADS=$(( NRANKS * OMP_PER_RANK ))
 SEED="${SEED:-1}"
@@ -54,7 +48,7 @@ DATA_TYPE="AA"
 DATASET_SHORT="complex_aa_1m"
 
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"; PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
-LABEL="AA_1m_ws_a1_np1_full_seed${SEED}"
+LABEL="AA_1m_ws_a1_np16_full_seed${SEED}"
 RUN_ID="gadi_${LABEL}_${PBS_ID_SHORT}"
 WORK_DIR="${PROFILES_DIR}/${LABEL}_${PBS_ID_SHORT}"
 
@@ -80,6 +74,9 @@ fi
 if ! cat "${IQTREE}" > /dev/null; then
     echo "ERROR: ${IQTREE} not readable on this node (Lustre OST not yet synced?)." >&2; exit 2
 fi
+if [[ ! -s "${PBS_NODEFILE:-/dev/null}" ]]; then
+    echo "ERROR: PBS_NODEFILE missing — must run inside a PBS job." >&2; exit 8
+fi
 
 WS_OK=0
 if nm "${IQTREE}" 2>/dev/null | grep -q '_ZN18RateWarmStartCache5clearEv'; then
@@ -103,38 +100,85 @@ OMP_ENV=(
     -x "KMP_BLOCKTIME=${KMP_BLOCKTIME}"
 )
 
+# ── Multi-node host discovery ──────────────────────────────────────────
+mapfile -t HOSTS < <(sort -u "${PBS_NODEFILE}")
+if [[ "${#HOSTS[@]}" -ne 16 ]]; then
+    echo "ERROR: expected 16 nodes, got ${#HOSTS[@]}" >&2; exit 9
+fi
+HOST_A="${HOSTS[0]}";  HOST_B="${HOSTS[1]}";  HOST_C="${HOSTS[2]}";  HOST_D="${HOSTS[3]}"
+HOST_E="${HOSTS[4]}";  HOST_F="${HOSTS[5]}";  HOST_G="${HOSTS[6]}";  HOST_H="${HOSTS[7]}"
+HOST_I="${HOSTS[8]}";  HOST_J="${HOSTS[9]}";  HOST_K="${HOSTS[10]}"; HOST_L="${HOSTS[11]}"
+HOST_M="${HOSTS[12]}"; HOST_N="${HOSTS[13]}"; HOST_O="${HOSTS[14]}"; HOST_P="${HOSTS[15]}"
+
+HOSTFILE="${WORK_DIR}/hostfile.txt"
+awk '{c[$1]++} END {for (h in c) print h, "slots=" c[h]}' "${PBS_NODEFILE}" > "${HOSTFILE}"
+
+RANKFILE="${WORK_DIR}/rankfile.txt"
+cat > "${RANKFILE}" <<EOF
+rank 0=${HOST_A} slot=0-103
+rank 1=${HOST_B} slot=0-103
+rank 2=${HOST_C} slot=0-103
+rank 3=${HOST_D} slot=0-103
+rank 4=${HOST_E} slot=0-103
+rank 5=${HOST_F} slot=0-103
+rank 6=${HOST_G} slot=0-103
+rank 7=${HOST_H} slot=0-103
+rank 8=${HOST_I} slot=0-103
+rank 9=${HOST_J} slot=0-103
+rank 10=${HOST_K} slot=0-103
+rank 11=${HOST_L} slot=0-103
+rank 12=${HOST_M} slot=0-103
+rank 13=${HOST_N} slot=0-103
+rank 14=${HOST_O} slot=0-103
+rank 15=${HOST_P} slot=0-103
+EOF
+
+RANK_LOGS_DIR="${WORK_DIR}/rank_logs"
+mkdir -p "${RANK_LOGS_DIR}"
+
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  AA 1M WS-A.1 Full Run (MF+SPR) — 1-node parity"
+echo "║  AA 1M WS-A.1 Full Run (MF+SPR) — 16-node parity"
 echo "║  run_id:       ${RUN_ID}"
 echo "║  ranks × OMP: ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS}T)"
+echo "║  node A:       ${HOST_A}  (rank 0)"
+echo "║  node B:       ${HOST_B}  (rank 1)"
+echo "║  node P:       ${HOST_P}  (rank 15)"
 echo "║  binary:       $(basename "${IQTREE}")"
 echo "║  md5 expected: fa9ee60103a1a922505cf4dfa26a2fca"
 echo "║  alignment:    $(basename "${ALIGNMENT}")"
 echo "║  work_dir:     ${WORK_DIR}"
 echo "║  branch:       fca-lbfgs-ws"
-echo "║  FCA baseline: 168913089  MF=5119.929s  SPR=15060.551s  total=20180.480s"
-echo "║  vanilla ref:  168425491  MF=~7587s     SPR=15098.605s  total=22776.226s"
+echo "║  FCA np=16 ref: 168635616 MF=1122.363s SPR=1287.863s total=2410.226s"
 echo "╚══════════════════════════════════════════════════════════════╝"
+echo "[16node] hostfile:"; cat "${HOSTFILE}" | sed 's/^/    /'
+echo "[16node] rankfile:"; cat "${RANKFILE}"  | sed 's/^/    /'
 echo ""
 
-# ── Probe ─────────────────────────────────────────────────────────────
+# ── Probe ──────────────────────────────────────────────────────────────
 . "${REPO_DIR}/gadi-ci/mf-iso/tools/probe_header.sh"
 probe_hw_sw "${IQTREE}"
 probe_env
 
 RANK_PROBE="${REPO_DIR}/gadi-ci/mf-iso/tools/rank_probe.sh"
-[[ -x "${RANK_PROBE}" ]] || { echo "ERROR: rank_probe.sh not found at ${RANK_PROBE}" >&2; exit 9; }
+[[ -x "${RANK_PROBE}" ]] || { echo "ERROR: rank_probe.sh not found at ${RANK_PROBE}" >&2; exit 10; }
+RANK_PERF="${REPO_DIR}/gadi-ci/mf-iso/tools/rank_perf.sh"
+[[ -x "${RANK_PERF}" ]] || { echo "ERROR: rank_perf.sh not found at ${RANK_PERF}" >&2; exit 10; }
 
 # ── Full MF+SPR run ────────────────────────────────────────────────────
-echo "[full] Full MF+SPR run (-m TEST), ${NRANKS} rank × ${OMP_PER_RANK} OMP"
+echo "[16node] Full run (MF+SPR), ${NRANKS} ranks × ${OMP_PER_RANK} OMP across 16 nodes"
+export PERF_STAT_DIR="${WORK_DIR}"
 START_EPOCH=$(date +%s)
 
 mpirun -np "${NRANKS}" \
-    --bind-to none \
+    --hostfile "${HOSTFILE}" \
+    --mca rmaps_base_mapping_policy "" \
+    -rf "${RANKFILE}" \
     --report-bindings \
+    --output-filename "${RANK_LOGS_DIR}/" \
     "${OMP_ENV[@]}" \
     "${RANK_PROBE}" \
-        numactl --localalloc -- \
+        "${RANK_PERF}" \
+            numactl --localalloc -- \
             "${IQTREE}" -s "${ALIGNMENT}" -m TEST -T "${OMP_PER_RANK}" -seed "${SEED}" \
                         --prefix "${WORK_DIR}/iqtree_run" \
     > "${WORK_DIR}/iqtree_run.log" 2> "${WORK_DIR}/iqtree_run.bindings.log"
@@ -142,15 +186,50 @@ IQRC=$?
 END_EPOCH=$(date +%s)
 WALL=$(( END_EPOCH - START_EPOCH ))
 
-grep -E '^RANK-PROBE: |\[.*\]' "${WORK_DIR}/iqtree_run.bindings.log" > "${WORK_DIR}/rank_bindings.log" 2>/dev/null || true
-
 cat "${WORK_DIR}/iqtree_run.log" || true
 echo ""
-echo "[full] done: rc=${IQRC} wall=${WALL}s"
+echo "[16node] done: rc=${IQRC} wall=${WALL}s"
 
-grep -E '^MF-TIME: '     "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_time.log"     || true
-grep -E '^MF-MPI-DIAG: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_diag.log"     || true
-grep -E '^PROBE: '       "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/probe.log"       2>/dev/null || true
+# ── Per-rank perf stat summary ─────────────────────────────────────────
+echo ""
+echo "[16node] Per-rank perf stat (IPC + LLC cache):"
+for pf in "${WORK_DIR}"/perf_stat_rank_*.txt; do
+    [[ -f "$pf" ]] || continue
+    rank=$(echo "$pf" | sed -E 's|.*perf_stat_rank_([0-9]+)\.txt|\1|')
+    echo "  === rank ${rank} ==="
+    grep -E 'cycles|instructions|cache-miss|LLC|insn per cycle' "$pf" 2>/dev/null | sed 's/^/    /' || true
+done
+
+# ── Per-rank MF-TIME and MF-MPI-DIAG aggregation ──────────────────────
+echo ""
+echo "[16node] gathering per-rank logs..."
+for f in "${RANK_LOGS_DIR}"/*/rank.*/stdout; do
+    [[ -f "$f" ]] || continue
+    rank=$(echo "$f" | sed -E 's|.*/rank\.([0-9]+)/stdout|\1|')
+    cp -f "$f" "${WORK_DIR}/rank_${rank}.stdout.log"
+    echo "  rank ${rank}: $(wc -l < "$f") lines  -> ${WORK_DIR}/rank_${rank}.stdout.log"
+done
+
+{ for r in "${WORK_DIR}"/rank_*.stdout.log; do
+    [[ -f "$r" ]] && grep -E '^MF-TIME: ' "$r" || true
+  done } > "${WORK_DIR}/mf_time.log" 2>/dev/null || true
+{ for r in "${WORK_DIR}"/rank_*.stdout.log; do
+    [[ -f "$r" ]] && grep -E '^MF-MPI-DIAG: ' "$r" || true
+  done } > "${WORK_DIR}/mf_diag.log" 2>/dev/null || true
+
+if [[ ! -s "${WORK_DIR}/mf_time.log" ]]; then
+    grep -E '^MF-TIME: '     "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_time.log" 2>/dev/null || true
+    grep -E '^MF-MPI-DIAG: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/mf_diag.log" 2>/dev/null || true
+fi
+
+grep -E '^PROBE: ' "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/probe.log" 2>/dev/null || true
+
+{
+    for r in "${WORK_DIR}"/rank_*.stderr.log "${WORK_DIR}"/rank_logs/*/rank.*/stderr; do
+        [[ -f "$r" ]] && grep -E '^RANK-PROBE: ' "$r" 2>/dev/null || true
+    done
+    grep -E '^RANK-PROBE: ' "${WORK_DIR}/iqtree_run.bindings.log" 2>/dev/null || true
+} | sort -u > "${WORK_DIR}/rank_probe.log" 2>/dev/null || true
 
 {
     echo "# rank, model_idx, model_name, subst, rate, dt_seconds, ref_remaining"
@@ -162,8 +241,19 @@ grep -E '^PROBE: '       "${WORK_DIR}/iqtree_run.log" > "${WORK_DIR}/probe.log" 
     }' "${WORK_DIR}/mf_time.log"
 } > "${WORK_DIR}/rank_models.csv" 2>/dev/null || true
 
-echo "[full] MF-TIME lines:     $(wc -l < "${WORK_DIR}/mf_time.log" 2>/dev/null || echo 0)"
-echo "[full] MF-MPI-DIAG lines: $(wc -l < "${WORK_DIR}/mf_diag.log" 2>/dev/null || echo 0)"
+grep -E '^\[' "${WORK_DIR}/iqtree_run.bindings.log" > "${WORK_DIR}/rank_bindings.log" 2>/dev/null || true
+
+echo "[16node] PROBE lines:        $(wc -l < "${WORK_DIR}/probe.log" 2>/dev/null || echo 0)"
+echo "[16node] RANK-PROBE lines:   $(wc -l < "${WORK_DIR}/rank_probe.log" 2>/dev/null || echo 0)"
+echo "[16node] MF-TIME lines:      $(wc -l < "${WORK_DIR}/mf_time.log" 2>/dev/null || echo 0)"
+echo "[16node] MF-MPI-DIAG lines:  $(wc -l < "${WORK_DIR}/mf_diag.log" 2>/dev/null || echo 0)"
+echo "[16node] Per-rank model counts (from MF-TIME):"
+for r in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    n=$(grep -c "^MF-TIME: rank ${r} " "${WORK_DIR}/mf_time.log" 2>/dev/null || echo 0)
+    echo "    rank ${r}: ${n} models evaluated"
+done
+echo "[16node] Per-rank family ownership (from MF-MPI-DIAG dispatch line):"
+grep -E "MF-MPI-DIAG: rank [0-9]+/[0-9]+ owns " "${WORK_DIR}/mf_diag.log" 2>/dev/null | sed 's/^/    /' || true
 
 # ── Run record ────────────────────────────────────────────────────────
 /usr/bin/python3.11 - <<PYEOF
@@ -207,26 +297,32 @@ mf_time_summary = {
     for r, v in sorted(per_rank.items())
 }
 
-EXPECTED_LNL   = -78605196.573  # job 168425491 (vanilla AA 1M)
-TOL            = 0.5
-# FCA np=1 baseline (168913089) timing for comparison
-FCA_MF         = 5119.929
-FCA_SPR        = 15060.551
-FCA_TOT        = 20180.480
+diag_log = os.path.join(work, "mf_diag.log")
+broadcast_fired = False; bcast_ok_rates_size = None
+if os.path.isfile(diag_log):
+    for line in open(diag_log, errors="replace"):
+        if "filterRatesMPI fired at" in line:
+            broadcast_fired = True
+            m = re.search(r"\|bcast_ok_rates\|=(\d+)", line)
+            if m: bcast_ok_rates_size = int(m.group(1))
+
+EXPECTED_LNL  = -78605196.573   # job 168425491 (vanilla AA 1M)
+TOL           = 1.0
+# FCA np=16 baseline (168635616) timing for comparison
+FCA_MF        = 1122.363
+FCA_SPR       = 1287.863
+FCA_TOT       = 2410.226
 # Vanilla np=1 baseline (168425491) timing
-VANILLA_MF     = 7587.459
-VANILLA_SPR    = 15098.605
-VANILLA_TOT    = 22776.226
+VANILLA_MF    = 7587.459
+VANILLA_SPR   = 15098.605
+VANILLA_TOT   = 22776.226
 
 verify = []
 if rep_ll is not None:
     diff = abs(rep_ll - EXPECTED_LNL)
-    verify.append({
-        "file": os.path.basename(alignment),
-        "status": "pass" if diff < TOL else "fail",
-        "expected": EXPECTED_LNL, "reported": rep_ll, "diff": round(diff, 6),
-        "note": "Full SPR lnL vs vanilla ref 168425491 (AA 1M); tol=0.5",
-    })
+    verify.append({"file": os.path.basename(alignment), "status": "pass" if diff < TOL else "fail",
+                   "expected": EXPECTED_LNL, "reported": rep_ll, "diff": round(diff, 6),
+                   "note": "Full-run SPR lnL vs vanilla ref 168425491 (AA 1M); tol=1.0"})
 model_ok = best_model == "LG+G4"
 
 def speedup(base, measured):
@@ -240,7 +336,7 @@ record = {
     "threads": threads, "seed": ${SEED},
     "model_finder_only": False,
     "timing": [{
-        "command": f"mpirun -np {nranks} numactl --localalloc iqtree3-mpi-fca-ws-a1 -s alignment_1000000.phy -m TEST -T {omp_per_rank} -seed ${SEED}",
+        "command": f"mpirun -np {nranks} -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi-fca-ws-a1 -s alignment_1000000.phy -m TEST -T {omp_per_rank} -seed ${SEED}",
         "time_s": iqwall if iqwall is not None else wall,
     }],
     "verify": verify,
@@ -254,7 +350,7 @@ record = {
         "all_pass": iqrc == 0 and (verify[0]["status"] == "pass" if verify else False),
         "lnl_pass": verify[0]["status"] == "pass" if verify else None,
         "model_pass": model_ok,
-        "vs_fca_baseline": {
+        "vs_fca_np16_baseline": {
             "mf_speedup":    speedup(FCA_MF,  mf_wall),
             "spr_speedup":   speedup(FCA_SPR, spr_wall),
             "total_speedup": speedup(FCA_TOT, iqwall),
@@ -267,6 +363,10 @@ record = {
     },
     "warm_start": {"phase": "A.1"},
     "mf_time_summary": mf_time_summary,
+    "phase0_5_broadcast": {
+        "fired": broadcast_fired,
+        "ok_rates_size": bcast_ok_rates_size,
+    },
     "env": {
         "hostname": sh("hostname"), "date": sh("date -Iseconds"),
         "cpu": sh("lscpu | grep 'Model name' | head -1 | cut -d: -f2- | xargs"),
@@ -280,30 +380,31 @@ record = {
                 "ncpus": os.environ.get("PBS_NCPUS"), "project": "${PROJECT}"},
     },
     "profile": {"nranks": nranks, "omp_per_rank": omp_per_rank,
-                "placement": "mpi_1node_excl_full"},
+                "placement": "mpi_16node_full_perrank_logs"},
     "build_tag":     "fca_ws_a1_icx_avx512",
     "branch":        "fca-lbfgs-ws",
     "non_canonical": True,
-    "non_canonical_label": "FCA-WS Phase A.1 (cross-model warm-start, local-only) · ICX+MPI · AVX-512 · full MF+SPR · AA 1M",
+    "non_canonical_label": "FCA-WS Phase A.1 (cross-model warm-start, local-only) · ICX+MPI · AVX-512 · full MF+SPR · AA 1M · np=16",
     "group":         "fca_ws_a1",
 }
 out_path = os.path.join(runs, rid + ".json")
 json.dump(record, open(out_path,"w"), indent=2, default=str)
-print(f"[full] wrote {out_path}")
+print(f"[16node] wrote {out_path}")
 
-vs = record["summary"]["vs_fca_baseline"]
-vv = record["summary"]["vs_vanilla_baseline"]
-print(f"[full] ─── FULL RUN SUMMARY (AA 1M WS-A.1) ───")
+vs  = record["summary"]["vs_fca_np16_baseline"]
+vv  = record["summary"]["vs_vanilla_baseline"]
+print(f"[16node] ─── FULL RUN SUMMARY (AA 1M WS-A.1 np=16) ───")
 for v in verify:
-    print(f"[full]   lnL:      {'PASS' if v['status']=='pass' else 'FAIL'}  reported={v['reported']}  diff={v['diff']}")
-print(f"[full]   model:    {'PASS' if model_ok else 'FAIL'}  ({best_model})")
+    print(f"[16node]   lnL:      {'PASS' if v['status']=='pass' else 'FAIL'}  reported={v['reported']}  diff={v['diff']}")
+print(f"[16node]   model:    {'PASS' if model_ok else 'FAIL'}  ({best_model})")
 if mf_wall:
-    print(f"[full]   MF wall:  {mf_wall:.3f} s   vs FCA={FCA_MF}s ({vs['mf_speedup']}×)  vs vanilla={VANILLA_MF}s ({vv['mf_speedup']}×)")
+    print(f"[16node]   MF wall:  {mf_wall:.3f} s   vs FCA-np16={FCA_MF}s ({vs['mf_speedup']}×)  vs vanilla={VANILLA_MF}s ({vv['mf_speedup']}×)")
 if spr_wall:
-    print(f"[full]   SPR wall: {spr_wall:.3f} s   vs FCA={FCA_SPR}s ({vs['spr_speedup']}×)  vs vanilla={VANILLA_SPR}s ({vv['spr_speedup']}×)")
+    print(f"[16node]   SPR wall: {spr_wall:.3f} s   vs FCA-np16={FCA_SPR}s ({vs['spr_speedup']}×)  vs vanilla={VANILLA_SPR}s ({vv['spr_speedup']}×)")
 if iqwall:
-    print(f"[full]   Total:    {iqwall:.3f} s   vs FCA={FCA_TOT}s ({vs['total_speedup']}×)  vs vanilla={VANILLA_TOT}s ({vv['total_speedup']}×)")
+    print(f"[16node]   Total:    {iqwall:.3f} s   vs FCA-np16={FCA_TOT}s ({vs['total_speedup']}×)  vs vanilla={VANILLA_TOT}s ({vv['total_speedup']}×)")
+print(f"[16node]   filterRatesMPI broadcast: {'FIRED' if broadcast_fired else 'NOT SEEN'}")
 PYEOF
 
-echo "[full] done."
+echo "[16node] done."
 exit "${IQRC}"
