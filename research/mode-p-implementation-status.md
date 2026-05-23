@@ -12,6 +12,7 @@ Companion to `research/mode-p-design.md` (the design contract). This document is
 |---|---|---|---|
 | P.1 Scaffolding (Params + CLI + PhyloTree members + MPI helpers) | **✅ DONE** | Build succeeds with `--mode-p` accepted but inert | this session |
 | P.2 Pattern partition wiring (`initializePtnPartition` in `evaluate()`) | **✅ DONE** | Per-rank `[Mode P]` cerr line shows partition range | this session |
+| **P.ISO Mode P kernel sandbox** | **⏳ REQUIRED BEFORE P.3 — HIGHEST PRIORITY** | Isolated kernel source/build/run tree proves lnL/BIC parity against b4/FCA before production kernel edits | follow-up |
 | P.3 Kernel: restrict pattern loop bounds + Allreduce in `computeLikelihoodBranchSIMD` | ⏳ SPECIFIED | lnL matches FCA on AA 100K np=2 with `--mode-p-all` | follow-up |
 | P.4 Kernel: same for `computeLikelihoodDervSIMD` (derivative kernel) | ⏳ SPECIFIED | NNI lnL traces match FCA | follow-up |
 | P.5 Kernel: `computeLikelihoodFromBufferSIMD`, Mixlen variants | ⏳ SPECIFIED | All optimisation paths consistent | follow-up |
@@ -311,6 +312,7 @@ qsub ~/setonix-iq/gadi-ci/lbfgs-ws/run_mode_p_perf_aa_1m_16node.sh
 
 ## Status of remaining work
 
+- **P.ISO is now the first required action**: create a Mode P kernel ISO sandbox, mirroring the FCA `mf.iso` workflow, before applying any P.3+ SIMD kernel patches to the main source tree.
 - **P.3 ready to apply**: exact patches below are well-defined and self-contained. One careful Edit/Build/Test cycle.
 - **P.4 ready to apply**: mirror of P.3 with 3-output helper; mixture-branch-length path needs separate Allreduce buffer.
 - **P.5 systematic**: 6 kernel variants (not 10 — see revised list below) × same pattern. Tedious but mechanical.
@@ -329,11 +331,185 @@ After each phase completes, update the **Phase status** table at the top. When a
 
 ---
 
-# Consolidated P.3 → P.7 Implementation Plan  
+# Consolidated P.ISO → P.7 Implementation Plan
 **Deep-research edition — 2026-05-24**
 
 This section supersedes the individual phase specs above with exact patches, new
 findings from source analysis, identified risks, and revised ordering.
+
+**Important revision:** before P.3 touches the SIMD likelihood kernel, build an
+isolated Mode P kernel sandbox (`P.ISO`). This follows the successful FCA `mf.iso`
+pattern from `updated-modelfinder-dispatch.md` §23: separate source clone, separate
+build dir, separate run dirs/logs, exact parity gates, and tooling that future agents
+can run without touching the production b4/ATMD tree. Mode P changes the numerical
+heart of IQ-TREE; lnL and BIC parity must be proven in the ISO first.
+
+---
+
+## P.ISO — Mode P kernel sandbox (highest priority)
+
+### Why this is mandatory
+
+The P.3–P.5 work modifies `phylokernelnew.h`, not just dispatcher plumbing. A bad
+patch can silently corrupt likelihood sums, derivative values, BIC, or model
+ranking. The FCA work avoided this risk by creating an isolated `mf.iso` build and
+running controlled parity jobs before promoting changes. Mode P needs the same
+discipline, with a narrower focus: isolate the kernel, the Mode P helpers, and the
+call chain that drives the kernel during ModelFinder.
+
+**Promotion rule:** no P.3/P.4/P.5 patch should be applied to the main b4 source tree
+until the ISO passes the single-model lnL/BIC gates below.
+
+### ISO filesystem layout
+
+Use a new tree so builds, logs, and generated `.iqtree` files cannot collide with b4
+or b3c runs.
+
+```text
+/scratch/rc29/as1708/iqtree3-mode-p-iso/
+    src/iqtree3-mode-p-iso/        # clone/copy of current b4 source state
+    build-mode-p-iso-base/         # unpatched b4+P.1/P.2 baseline build
+    build-mode-p-iso-p3/           # P.3-only build
+    build-mode-p-iso-p4/           # P.3+P.4 build
+    build-mode-p-iso-p5/           # P.3+P.4+P.5 build
+    runs/
+        aa100k_np1_base/
+        aa100k_np2_p3/
+        aa100k_np2_p4_trace/
+        aa1m_np16_p7/
+    logs/
+        build/
+        parity/
+```
+
+Keep the harness scripts under the repo so they are versioned:
+
+```text
+gadi-ci/mode-p-iso/
+    bootstrap_mode_p_iso.sh
+    build_mode_p_iso_base.sh
+    build_mode_p_iso_p3.sh
+    build_mode_p_iso_p4.sh
+    build_mode_p_iso_p5.sh
+    run_iso_lg_g4_aa100k_np1_base.sh
+    run_iso_lg_g4_aa100k_np2_p3.sh
+    run_iso_lg_g4_aa100k_np2_p4_trace.sh
+    run_iso_mf_aa100k_np4_auto.sh
+    run_iso_mf_aa1m_np16_p7.sh
+tools/mode_p_iso/
+    compare_mode_p_parity.py
+    parse_mode_p_partitions.py
+```
+
+### Source snapshot and provenance
+
+Bootstrap the ISO from the current b4 source state, including B.5 formula fix and
+P.1/P.2 Mode P scaffolding, but before P.3 kernel edits:
+
+| Item | Value |
+|---|---|
+| Source root | `/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/` |
+| Starting source commit | `5604606d` plus uncommitted b4/P.1/P.2 edits |
+| Required source features | B.5 per-tree formula, `if(atmd_K_outer > 1)` guard, `--mode-p*` CLI, `initializePtnPartition()` wiring |
+| ISO source | `/scratch/rc29/as1708/iqtree3-mode-p-iso/src/iqtree3-mode-p-iso/` |
+| Baseline binary | `build-mode-p-iso-base/iqtree3-mpi-mode-p-iso-base` |
+| Patched binaries | `iqtree3-mpi-mode-p-iso-p3`, `iqtree3-mpi-mode-p-iso-p4`, `iqtree3-mpi-mode-p-iso-p5` |
+
+Record `git diff --stat`, `git diff -- main/phylotesting.cpp tree/phylotree.* tree/phylokernelnew.h utils/tools.*`, compiler version, binary md5, and build host in each ISO build log.
+
+### Scoped files and dependencies
+
+The ISO must include the full call path, not a synthetic stand-alone kernel driver.
+The kernel depends on too much IQ-TREE state to be meaningfully unit-tested outside
+`CandidateModel::evaluate()`.
+
+| Scope | File(s) | Required functions / state |
+|---|---|---|
+| Dispatch entry | `main/phylotesting.cpp`, `main/phylotesting.h` | `CandidateModel::evaluate()`, `CandidateModelSet::evaluateAll()`, `getNextModel()`, `filterRatesMPI()`, `MF_IGNORED`, `MF_WAITING`, `MF_RUNNING`, `MF_DONE`, future `MF_MODE_P` |
+| Mode P helpers | `tree/phylotree.h`, `tree/phylotree.cpp` | `ptn_start`, `ptn_end`, `isModePActive()`, `initializePtnPartition()`, `modePAllreduceLh()`, `modePAllreduceLhDfDdf()` |
+| Primary kernel | `tree/phylokernelnew.h` | `computeBounds()`, `computeLikelihoodBranchSIMD()`, `computeLikelihoodBranchGenericSIMD()`, `computeLikelihoodDervSIMD()`, `computeLikelihoodDervGenericSIMD()`, `computeLikelihoodFromBufferSIMD()`, `computeLikelihoodFromBufferGenericSIMD()`, `computeLikelihoodDervMixlenSIMD()`, `computeLikelihoodDervMixlenGenericSIMD()` |
+| Kernel data | `tree/phylotree.cpp`, `tree/phylotree.h` | `initializeAllPartialLh()`, `central_partial_lh`, `partial_lh`, `_pattern_lh`, `_pattern_lh_cat`, `_pattern_scaling`, `theta_all`, `theta_computed`, `buffer_partial_lh`, `buffer_scale_all`, `ptn_freq`, `ptn_invar` |
+| Model/rate state | `model/*.cpp`, `model/*.h` | `ModelFactory::optimizeParameters()`, `optimizeParametersOnly()`, rate classes (`RateGamma`, `RateInvar`, `RateFree`, `RateGammaInvar`), `model_factory->unobserved_ptns`, `ASC_type` |
+| Branch optimisation | `tree/phylotree.cpp` | `optimizeAllBranches()`, `optimizeOneBranch()`, `computeLikelihood()`, `computeLikelihoodDerv()`, `computeLikelihoodFromBuffer()` |
+| Runtime params | `utils/tools.h`, `utils/tools.cpp` | `Params::mode_p_enabled`, `mode_p_min_cost_mult`, future `mode_p_active_in_mf`, `atmd_K_outer`, `atmd_inner_threads`, CLI parser |
+| MPI/threading | `utils/MPIHelper.*`, `main/main.cpp` | `MPI_Init_thread`, `MPI_THREAD_FUNNELED`/future thread level, `MPI_Allreduce`, `MPI_Barrier`, `omp_set_max_active_levels()` |
+
+### Kernel call graph to preserve in ISO
+
+```text
+CandidateModelSet::evaluateAll()
+    -> CandidateModel::evaluate()
+             -> iqtree->initializeModel()
+             -> iqtree->initializePtnPartition()         # P.2, emits [Mode P] partition
+             -> ModelFactory::optimizeParameters()
+                        -> PhyloTree::optimizeAllBranches()
+                                 -> optimizeOneBranch()
+                                            -> computeLikelihoodBranchSIMD / GenericSIMD
+                                            -> computeLikelihoodDervSIMD / GenericSIMD
+                                 -> computeLikelihoodFromBufferSIMD / GenericSIMD
+                        -> optimizeParametersOnly()
+                                 -> rate/model optimisers calling the same kernel family
+```
+
+The ISO must exercise this real path with normal IQ-TREE input files, not a reduced
+mock, because correctness depends on checkpoint restore, rate-class choice,
+`unobserved_ptns`, ASC guards, theta caching, and MPI collective ordering.
+
+### Log and output isolation rules
+
+Reuse the lessons from b3c/B.4-2 and FCA `mf.iso`:
+
+- Never use the same filename for `--prefix` and shell redirection. Use
+    `--prefix ${WORK_DIR}/iqtree_inner` and redirect stdout/stderr to
+    `${WORK_DIR}/iqtree_stdout.log`.
+- Always pass `--output-filename ${WORK_DIR}/rank_logs/` for multi-node runs so rank
+    1+ `[Mode P]`, `MF-TIME`, and trace lines are not lost.
+- Capture rank bindings separately (`iqtree_bindings.log`) and keep
+    `OMP_NUM_THREADS=103`, `OMP_PROC_BIND=close`, `OMP_PLACES=cores`,
+    `OMP_DYNAMIC=false`, `OMP_WAIT_POLICY=PASSIVE`, `KMP_BLOCKTIME=200`.
+- Parser must accept IQ-TREE's real lnL format: `BEST SCORE FOUND : ...`. Do not
+    repeat the b3c JSON gate bug that only matched `Log-likelihood of the tree:`.
+- Store the `.iqtree`, `.log`, `.treefile`, rank stdout, `mf_time.log`,
+    `mf_diag.log`, build log, binary md5, and source diff for every ISO run.
+
+### ISO parity gates
+
+The ISO starts with correctness gates before any full MF performance run.
+
+| Gate | Build | Run | Pass criteria |
+|---|---|---|---|
+| ISO-0 | base (P.1/P.2 only) | AA 100K np=1 `LG+G4 --mode-p-all` | No `[Mode P]` line, lnL matches b4/FCA, BIC matches, best model exact |
+| ISO-1 | base (P.1/P.2 only) | AA 100K np=2 `LG+G4 --mode-p-all` | `[Mode P]` partition lines emitted, lnL/BIC unchanged because kernel is inert |
+| ISO-2 | P.3 only | AA 100K np=2 `LG+G4 --mode-p-all` | lnL `-7,541,976.853 ± 1e-6`; BIC delta `≤1e-4`; model exact |
+| ISO-3 | P.3+P.4 | AA 100K np=2 `LG+G4 --mode-p-all -v` | Branch-length/NR trace matches base within `1e-6`; final lnL/BIC parity |
+| ISO-4 | P.3+P.4+P.5 | AA 100K np=4 `-m TEST --mode-p-all` | Best model LG+G4, lnL `-7,541,976.853 ± 0.5`, BIC delta `≤1.0`, no MPI deadlock |
+| ISO-5 | P.3+P.4+P.5+P.6 | AA 100K np=4 `-m TEST --mode-p` | Auto dispatcher routes only heavy models; lnL/BIC parity; rank logs show collective Mode P order |
+| ISO-6 | P.7 candidate | AA 1M np=16 `-m TEST --mode-p` | lnL `-78,605,196.497 ± 0.5`, best model LG+G4, MF wall target `≤600s` |
+
+### Baseline run records for ISO comparison
+
+| Reference | Job | Dataset | Nodes | Key values | Use in ISO |
+|---|---:|---|---:|---|---|
+| FCA AA 100K np=2 | 168584736 | AA 100K | 2 | lnL `-7,541,976.853`, BIC `15,086,233.265`, MF `149.029s` | Primary np=2 parity reference |
+| FCA AA 100K np=1 | 169095077 | AA 100K | 1 | lnL `-7,541,976.861`, MF `258.773s`, SPR `738.569s` | Single-rank base sanity |
+| ATMD b3c AA 100K | 169111545 | AA 100K | 1 | K_outer=8, lnL `-7,541,976.853`, MF `423.233s` | Confirms ATMD+kernel correctness before Mode P |
+| FCA AA 1M np=16 | 168635616 | AA 1M | 16 | lnL `-78,605,196.497`, MF `1,122.363s`, SPR `1,287.863s` | P.7 performance and parity reference |
+| ATMD b3c AA 1M | 169112256 | AA 1M | 16 | K_outer=1, lnL `-78,605,196.497`, MF `2,113.706s`, SPR `1,958.174s` | Regression/control case; confirms correctness despite bad wall time |
+
+### ISO parser requirements
+
+`tools/mode_p_iso/compare_mode_p_parity.py` should parse and compare:
+
+- `BEST SCORE FOUND : <lnL>` from `.iqtree` or stdout.
+- `Best-fit model according to BIC:` and/or model summary lines.
+- BIC value from `.iqtree` report.
+- `Wall-clock time for ModelFinder`, `Wall-clock time used for tree search`.
+- `[Mode P] rank R model=X ptn=[start, end) of N` partition coverage.
+- `MF-TIME` per-model lines and rank-local stdout from `--output-filename`.
+- Exit status and PBS walltime.
+
+The parser should fail closed: missing lnL, missing BIC, missing rank logs on np>1,
+or overlapping/incomplete partitions are hard failures.
 
 ---
 
@@ -1090,9 +1266,13 @@ first.
 
 ### Build recipe
 
-Build script: `gadi-ci/lbfgs-ws/build_atmd_mode_p.sh` (new, to create).
-Source: copy of b4 source tree + P.3–P.6 patches applied.
-Binary: `iqtree3-mpi-atmd-mode-p`.
+ISO build scripts: `gadi-ci/mode-p-iso/build_mode_p_iso_*.sh` (new, to create).
+Source: isolated copy of the b4 source tree + incremental P.3–P.6 patches.
+ISO binaries: `iqtree3-mpi-mode-p-iso-base`, `iqtree3-mpi-mode-p-iso-p3`,
+`iqtree3-mpi-mode-p-iso-p4`, `iqtree3-mpi-mode-p-iso-p5`.
+
+Production build script after ISO promotion: `gadi-ci/lbfgs-ws/build_atmd_mode_p.sh`
+(new, to create). Binary: `iqtree3-mpi-atmd-mode-p`.
 
 CMake flags: same as b4 (`-DIQTREE_ATMD=ON -DIQTREE_MPI=ON -march=sapphirerapids`).
 
@@ -1160,6 +1340,24 @@ If `MF wall < 600s` → Mode P is viable. Close Phase P.7, roll to §15.10.
 
 ## Build scripts needed (new, to create)
 
+### ISO sandbox scripts — highest priority
+
+| Script | Purpose |
+|---|---|
+| `gadi-ci/mode-p-iso/bootstrap_mode_p_iso.sh` | Create `/scratch/rc29/as1708/iqtree3-mode-p-iso/`, copy current b4 source state, record source diff/provenance |
+| `gadi-ci/mode-p-iso/build_mode_p_iso_base.sh` | Build inert P.1/P.2 baseline binary for ISO-0/ISO-1 |
+| `gadi-ci/mode-p-iso/build_mode_p_iso_p3.sh` | Build P.3-only kernel binary |
+| `gadi-ci/mode-p-iso/build_mode_p_iso_p4.sh` | Build P.3+P.4 derivative binary |
+| `gadi-ci/mode-p-iso/build_mode_p_iso_p5.sh` | Build P.3+P.4+P.5 kernel-family binary |
+| `gadi-ci/mode-p-iso/run_iso_lg_g4_aa100k_np1_base.sh` | ISO-0 base single-rank sanity |
+| `gadi-ci/mode-p-iso/run_iso_lg_g4_aa100k_np2_p3.sh` | ISO-2 P.3 lnL/BIC parity gate |
+| `gadi-ci/mode-p-iso/run_iso_lg_g4_aa100k_np2_p4_trace.sh` | ISO-3 derivative/NR trace gate |
+| `gadi-ci/mode-p-iso/run_iso_mf_aa100k_np4_auto.sh` | ISO-5 mixed dispatcher correctness gate |
+| `gadi-ci/mode-p-iso/run_iso_mf_aa1m_np16_p7.sh` | ISO-6 AA 1M performance gate |
+| `tools/mode_p_iso/compare_mode_p_parity.py` | Parse `.iqtree`, stdout, rank logs, lnL/BIC/model/timing/partition coverage; fail closed on missing evidence |
+
+### Production scripts — after ISO promotion
+
 | Script | Purpose |
 |---|---|
 | `gadi-ci/lbfgs-ws/build_atmd_mode_p.sh` | Build the Mode P binary (b4 + P.3–P.6 patches) |
@@ -1172,21 +1370,25 @@ If `MF wall < 600s` → Mode P is viable. Close Phase P.7, roll to §15.10.
 ## Implementation sequencing (revised)
 
 ```
-Step 1:  Apply initializePtnPartition() alignment fix (30 min)
-Step 2:  Apply isModePActive() F-4 + F-5 guards + mode_p_active_in_mf Params field (45 min)
-Step 3:  Apply P.3 patches to BranchSIMD (1 hr)
-Step 4:  Build + Gate 1 (structural) (30 min build + 5 min test)
-Step 5:  Gate 2 correctness np=2 AA 100K (30 min PBS turnaround)
+Step 1:  Create Mode P kernel ISO sandbox (P.ISO) from current b4 source state (1 hr)
+Step 2:  Add ISO build/run/parity scripts and parser (2 hr)
+Step 3:  Build ISO base + run ISO-0/ISO-1 inert scaffolding gates (30 min build + 30 min PBS)
+Step 4:  Apply initializePtnPartition() alignment fix inside ISO (30 min)
+Step 5:  Apply isModePActive() F-4 + F-5 guards + mode_p_active_in_mf Params field inside ISO (45 min)
+Step 6:  Apply P.3 patches to BranchSIMD inside ISO (1 hr)
+Step 7:  Build ISO P.3 + Gate ISO-2 correctness np=2 AA 100K (30 min build + 30 min PBS)
          → If PASS: proceed. If FAIL: debug limits-shift.
-Step 6:  Apply P.4 (normal joint path + mixture path) (1 hr)
-Step 7:  Apply P.5a (FromBuffer) (45 min)
-Step 8:  Apply P.5b (DervMixlen) (45 min)
-Step 9:  Build + Gate 3 derivative parity (30 min + 10 min test)
-Step 10: Apply P.6 dispatcher (MF_MODE_P flag + collective Phase B loop) (2 hr)
-Step 11: Build + Gate 4 full MF AA 100K np=4 (30 min + 1 hr PBS)
-Step 12: Tune threshold if needed (30 min)
-Step 13: Gate 5 AA 1M np=16 (30 min + 3 hr PBS)
-Step 14: Document results, update §15.10
+Step 8:  Apply P.4 (normal joint path + mixture path) inside ISO (1 hr)
+Step 9:  Apply P.5a (FromBuffer) inside ISO (45 min)
+Step 10: Apply P.5b (DervMixlen) inside ISO (45 min)
+Step 11: Build ISO P.5 + Gate ISO-3 derivative parity (30 min + 10 min local/short PBS)
+Step 12: Apply P.6 dispatcher in ISO (MF_MODE_P flag + collective Phase B loop) (2 hr)
+Step 13: Build ISO + Gate ISO-5 full MF AA 100K np=4 (30 min + 1 hr PBS)
+Step 14: Gate ISO-6 AA 1M np=16 performance/correctness (30 min + 3 hr PBS)
+Step 15: Promote exact ISO patch set into main b4/Mode P source tree (1 hr)
+Step 16: Build production `iqtree3-mpi-atmd-mode-p` + rerun Gate 4/Gate 5 (30 min + PBS)
+Step 17: Tune threshold if needed (30 min)
+Step 18: Document results, update §15.10 and CHANGELOG
 ```
 
-Total estimate: ~10 hours engineering + ~5 hours PBS turnaround = **~2 working days**.
+Total estimate: ~14 hours engineering + ~6–8 hours PBS turnaround = **~3 working days**.

@@ -596,12 +596,123 @@ mpirun -np 4 .../iqtree3-mpi-atmd-b4 -s AA_100K.phy -m LG+G --mode-p-all
 
 ### Next session
 
-Apply P.3 patches (the spec is exact, copy-paste-ready). Build. Run the
-correctness gate at AA 100K np=2 with `--mode-p-all`. If lnL matches FCA np=2 to
-1e-6, proceed to P.4. If not, the failure modes are localised to two known issues
-(_pattern_lh population, VCSIZE tail) listed above.
+Create the Mode P kernel ISO sandbox first (entry `(cn)`). Do **not** apply P.3
+directly to the main b4 source tree. The next safe workflow is: bootstrap the ISO,
+build the inert P.1/P.2 baseline, run lnL/BIC parity gates, then apply P.3 inside
+the ISO and promote only after parity is proven.
 
-Mode P implementation timeline: P.1+P.2 done today, P.3-P.7 ≈ 4 days focused work.
+Mode P implementation timeline: P.1+P.2 done today, P.ISO + P.3-P.7 ≈ 3 focused
+working days including PBS turnaround.
+
+---
+
+## 2026-05-24 (cn) — Mode P kernel ISO sandbox added as highest-priority prerequisite
+
+Updated `research/mode-p-implementation-status.md` to put a dedicated Mode P kernel
+ISO sandbox **before** P.3. This mirrors the FCA `mf.iso` approach documented in
+`research/updated-modelfinder-dispatch.md` §23: isolated source clone, isolated build
+dirs, isolated run/log dirs, exact parity gates, and parser tooling before changes
+are promoted back to the main source tree.
+
+### Why the priority changed
+
+P.3-P.5 modify `tree/phylokernelnew.h`, the SIMD likelihood kernel. That is a much
+higher-risk surface than FCA dispatcher plumbing because a small loop-bound,
+Allreduce, or derivative-placement error can silently change log-likelihood, BIC,
+or model ranking. The implementation plan now treats lnL/BIC parity as a promotion
+gate, not an after-the-fact check.
+
+### ISO scope added to the implementation tracker
+
+New required sandbox layout:
+
+```text
+/scratch/rc29/as1708/iqtree3-mode-p-iso/
+  src/iqtree3-mode-p-iso/
+  build-mode-p-iso-base/
+  build-mode-p-iso-p3/
+  build-mode-p-iso-p4/
+  build-mode-p-iso-p5/
+  runs/
+  logs/
+```
+
+New versioned harness locations to create:
+
+```text
+gadi-ci/mode-p-iso/
+  bootstrap_mode_p_iso.sh
+  build_mode_p_iso_base.sh
+  build_mode_p_iso_p3.sh
+  build_mode_p_iso_p4.sh
+  build_mode_p_iso_p5.sh
+  run_iso_lg_g4_aa100k_np1_base.sh
+  run_iso_lg_g4_aa100k_np2_p3.sh
+  run_iso_lg_g4_aa100k_np2_p4_trace.sh
+  run_iso_mf_aa100k_np4_auto.sh
+  run_iso_mf_aa1m_np16_p7.sh
+tools/mode_p_iso/
+  compare_mode_p_parity.py
+  parse_mode_p_partitions.py
+```
+
+### Files and functions now explicitly in scope
+
+The ISO must use the real IQ-TREE call path, not a synthetic unit-test driver:
+
+- `main/phylotesting.cpp/.h`: `CandidateModel::evaluate()`,
+  `CandidateModelSet::evaluateAll()`, `getNextModel()`, `filterRatesMPI()`,
+  `MF_*` flags, future `MF_MODE_P`.
+- `tree/phylotree.cpp/.h`: `ptn_start`, `ptn_end`, `isModePActive()`,
+  `initializePtnPartition()`, `modePAllreduceLh()`,
+  `modePAllreduceLhDfDdf()`, `initializeAllPartialLh()`, branch optimisation
+  wrappers.
+- `tree/phylokernelnew.h`: `computeBounds()`, `computeLikelihoodBranchSIMD()`,
+  `computeLikelihoodDervSIMD()`, `computeLikelihoodFromBufferSIMD()`,
+  `computeLikelihoodDervMixlenSIMD()`, and GenericSIMD variants.
+- `model/*`: `ModelFactory::optimizeParameters()`, `optimizeParametersOnly()`,
+  rate/model classes, `unobserved_ptns`, ASC state.
+- `utils/tools.*`, `utils/MPIHelper.*`, `main/main.cpp`: Mode P CLI/Params,
+  MPI thread level, Allreduce/Barrier helpers, OpenMP active-level handling.
+
+### Parity gates now required before promotion
+
+| Gate | Run | Pass criteria |
+|---|---|---|
+| ISO-0 | AA 100K np=1 `LG+G4 --mode-p-all` on base P.1/P.2 | No `[Mode P]` line; lnL/BIC/model match b4/FCA |
+| ISO-1 | AA 100K np=2 `LG+G4 --mode-p-all` on base P.1/P.2 | Partition lines emitted; lnL/BIC unchanged because kernel is inert |
+| ISO-2 | AA 100K np=2 `LG+G4 --mode-p-all` on P.3 | lnL `-7,541,976.853 ± 1e-6`; BIC delta `≤1e-4` |
+| ISO-3 | AA 100K np=2 `LG+G4 --mode-p-all -v` on P.3+P.4 | NR/branch trace and final lnL/BIC parity |
+| ISO-5 | AA 100K np=4 `-m TEST --mode-p` on P.3-P.6 | LG+G4, lnL parity, no collective-order deadlock |
+| ISO-6 | AA 1M np=16 `-m TEST --mode-p` | lnL `-78,605,196.497 ± 0.5`, LG+G4, MF wall `≤600s` |
+
+### Run records to use as comparison anchors
+
+| Reference | Job | Key values |
+|---|---:|---|
+| FCA AA 100K np=2 | 168584736 | lnL `-7,541,976.853`, BIC `15,086,233.265`, MF `149.029s` |
+| FCA AA 100K np=1 | 169095077 | lnL `-7,541,976.861`, MF `258.773s`, SPR `738.569s` |
+| ATMD b3c AA 100K | 169111545 | K_outer=8, lnL `-7,541,976.853`, MF `423.233s` |
+| FCA AA 1M np=16 | 168635616 | lnL `-78,605,196.497`, MF `1,122.363s`, SPR `1,287.863s` |
+| ATMD b3c AA 1M | 169112256 | K_outer=1, lnL `-78,605,196.497`, MF `2,113.706s`, SPR `1,958.174s` |
+
+### Logging rules carried forward
+
+- Keep `--prefix iqtree_inner` separate from shell redirects (`iqtree_stdout.log`) to
+  avoid the b3/b3b dual-write overwrite bug.
+- Always use `--output-filename rank_logs/` for multi-node runs so rank-local
+  `[Mode P]`, `MF-TIME`, and trace lines are preserved.
+- The parity parser must recognise IQ-TREE's actual lnL line,
+  `BEST SCORE FOUND : ...`; the old b3c JSON gate bug matched only
+  `Log-likelihood of the tree:` and falsely reported correctness failure.
+
+### Revised next implementation sequence
+
+1. Bootstrap `/scratch/rc29/as1708/iqtree3-mode-p-iso/` from the current b4 source state.
+2. Build/run ISO-0 and ISO-1 on inert P.1/P.2.
+3. Apply `initializePtnPartition()` alignment and `isModePActive()` guards inside ISO.
+4. Apply P.3 inside ISO and pass ISO-2 lnL/BIC parity.
+5. Continue P.4/P.5/P.6 inside ISO, then promote the exact patch set to the main tree.
 
 ---
 
