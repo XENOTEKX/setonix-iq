@@ -1920,10 +1920,23 @@ void fixPartitions(PhyloSuperTree* super_tree) {
 string CandidateModel::evaluate(Params &params,
     ModelCheckpoint &in_model_info, ModelCheckpoint &out_model_info,
     ModelsBlock *models_block,
-    int &num_threads, int brlen_type)
+    int &num_threads, int brlen_type,
+    RateWarmStartCache *warm_start_cache)
 {
     //string model_name = name;
     Alignment *in_aln = aln;
+
+    // Phase A.1 warm-start: snapshot the shared cache into a thread-local
+    // copy under an OMP critical section, matching the Fix-G discipline used
+    // for in_model_info above. Reads against local_warm_start are then
+    // race-free for the rest of evaluate().
+    RateWarmStartCache local_warm_start;
+    if (warm_start_cache != nullptr) {
+#ifdef _OPENMP
+#pragma omp critical (warm_start_lock)
+#endif
+        { local_warm_start = *warm_start_cache; }
+    }
     IQTree *iqtree = nullptr;
     if (in_aln->isSuperAlignment()) {
         SuperAlignment *saln = (SuperAlignment*)in_aln;
@@ -1977,8 +1990,55 @@ string CandidateModel::evaluate(Params &params,
     }
 
     iqtree->getModelFactory()->restoreCheckpoint();
-    
+
     bool rate_restored = iqtree->getRate()->hasCheckpoint();
+
+    // Phase A.1 warm-start injection. Only fires when the per-model checkpoint
+    // does NOT already carry rate params (i.e. fresh fit). When rate_restored
+    // is true, the prior per-model values are known-good for THIS model and we
+    // must not perturb them. We honour the existing dispatch order: try the
+    // most-specific dynamic type first (RateGammaInvar before RateGamma, etc.)
+    // so cached params land on the right setters.
+    // See research/lbfgs-and-warmstart-implementation.md §5.4.
+    if (!rate_restored && warm_start_cache != nullptr && local_warm_start.any()) {
+        RateHeterogeneity *rate = iqtree->getRate();
+        if (rate != nullptr) {
+            if (RateGammaInvar *rgi = dynamic_cast<RateGammaInvar*>(rate)) {
+                if (local_warm_start.rgi_gamma_shape > 0)
+                    rgi->setGammaShape(local_warm_start.rgi_gamma_shape);
+                if (local_warm_start.rgi_p_invar > 0)
+                    rgi->setPInvar(local_warm_start.rgi_p_invar);
+            } else if (RateFreeInvar *rfi = dynamic_cast<RateFreeInvar*>(rate)) {
+                int k = rfi->getNRate();
+                if (k >= 0 && k < RateWarmStartCache::MAX_K
+                    && (int)local_warm_start.rfi_prop[k].size() == k
+                    && (int)local_warm_start.rfi_rates[k].size() == k) {
+                    for (int i = 0; i < k; i++) {
+                        rfi->setProp(i, local_warm_start.rfi_prop[k][i]);
+                        rfi->setRate(i, local_warm_start.rfi_rates[k][i]);
+                    }
+                    if (local_warm_start.rfi_p_invar[k] > 0)
+                        rfi->setPInvar(local_warm_start.rfi_p_invar[k]);
+                }
+            } else if (RateFree *rf = dynamic_cast<RateFree*>(rate)) {
+                int k = rf->getNRate();
+                if (k >= 0 && k < RateWarmStartCache::MAX_K
+                    && (int)local_warm_start.rf_prop[k].size() == k
+                    && (int)local_warm_start.rf_rates[k].size() == k) {
+                    for (int i = 0; i < k; i++) {
+                        rf->setProp(i, local_warm_start.rf_prop[k][i]);
+                        rf->setRate(i, local_warm_start.rf_rates[k][i]);
+                    }
+                }
+            } else if (RateGamma *rg = dynamic_cast<RateGamma*>(rate)) {
+                if (local_warm_start.rg_gamma_shape > 0)
+                    rg->setGammaShape(local_warm_start.rg_gamma_shape);
+            } else if (RateInvar *ri = dynamic_cast<RateInvar*>(rate)) {
+                if (local_warm_start.ri_p_invar > 0)
+                    ri->setPInvar(local_warm_start.ri_p_invar);
+            }
+        }
+    }
 
     // now switch to the output checkpoint
     iqtree->getModelFactory()->setCheckpoint(&out_model_info);
@@ -2164,6 +2224,82 @@ string CandidateModel::evaluate(Params &params,
 #ifdef _OPENMP
     }
 #endif
+
+    // Phase A.1 warm-start population. Capture converged rate params from the
+    // live RateHeterogeneity object before iqtree is destroyed, then update
+    // the shared cache under an OMP critical section (first-fit wins, no
+    // overwrite of already-cached values). Doing the capture here (rather
+    // than reading out_model_info post-evaluate) avoids any dependence on the
+    // checkpoint key format (CKP_SEP='!', see checkpoint.h) and works
+    // uniformly across all RateHeterogeneity subclasses.
+    // See research/lbfgs-and-warmstart-implementation.md §5.3.
+    if (warm_start_cache != nullptr && iqtree != nullptr && iqtree->getRate() != nullptr) {
+        RateHeterogeneity *rate = iqtree->getRate();
+
+        // Capture into stack locals first; lock only for the update.
+        double cap_rg_alpha = -1.0, cap_ri_pinv = -1.0;
+        double cap_rgi_alpha = -1.0, cap_rgi_pinv = -1.0;
+        int    cap_rf_k = -1, cap_rfi_k = -1;
+        double cap_rfi_pinv = -1.0;
+        std::vector<double> cap_rf_prop, cap_rf_rates;
+        std::vector<double> cap_rfi_prop, cap_rfi_rates;
+
+        if (RateGammaInvar *rgi = dynamic_cast<RateGammaInvar*>(rate)) {
+            cap_rgi_alpha = rgi->getGammaShape();
+            cap_rgi_pinv  = rgi->getPInvar();
+        } else if (RateFreeInvar *rfi = dynamic_cast<RateFreeInvar*>(rate)) {
+            cap_rfi_k = rfi->getNRate();
+            if (cap_rfi_k > 0 && cap_rfi_k < RateWarmStartCache::MAX_K) {
+                cap_rfi_prop.resize(cap_rfi_k);
+                cap_rfi_rates.resize(cap_rfi_k);
+                for (int i = 0; i < cap_rfi_k; i++) {
+                    cap_rfi_prop[i]  = rfi->getProp(i);
+                    cap_rfi_rates[i] = rfi->getRate(i);
+                }
+                cap_rfi_pinv = rfi->getPInvar();
+            }
+        } else if (RateFree *rf = dynamic_cast<RateFree*>(rate)) {
+            cap_rf_k = rf->getNRate();
+            if (cap_rf_k > 0 && cap_rf_k < RateWarmStartCache::MAX_K) {
+                cap_rf_prop.resize(cap_rf_k);
+                cap_rf_rates.resize(cap_rf_k);
+                for (int i = 0; i < cap_rf_k; i++) {
+                    cap_rf_prop[i]  = rf->getProp(i);
+                    cap_rf_rates[i] = rf->getRate(i);
+                }
+            }
+        } else if (RateGamma *rg = dynamic_cast<RateGamma*>(rate)) {
+            cap_rg_alpha = rg->getGammaShape();
+        } else if (RateInvar *ri = dynamic_cast<RateInvar*>(rate)) {
+            cap_ri_pinv = ri->getPInvar();
+        }
+
+#ifdef _OPENMP
+#pragma omp critical (warm_start_lock)
+#endif
+        {
+            // First-fit wins. Negative sentinel means "not yet cached".
+            if (cap_rg_alpha  > 0 && warm_start_cache->rg_gamma_shape   < 0)
+                warm_start_cache->rg_gamma_shape   = cap_rg_alpha;
+            if (cap_ri_pinv   > 0 && warm_start_cache->ri_p_invar       < 0)
+                warm_start_cache->ri_p_invar       = cap_ri_pinv;
+            if (cap_rgi_alpha > 0 && warm_start_cache->rgi_gamma_shape  < 0)
+                warm_start_cache->rgi_gamma_shape  = cap_rgi_alpha;
+            if (cap_rgi_pinv  > 0 && warm_start_cache->rgi_p_invar      < 0)
+                warm_start_cache->rgi_p_invar      = cap_rgi_pinv;
+            if (cap_rf_k > 0 && warm_start_cache->rf_prop[cap_rf_k].empty()) {
+                warm_start_cache->rf_prop [cap_rf_k] = cap_rf_prop;
+                warm_start_cache->rf_rates[cap_rf_k] = cap_rf_rates;
+            }
+            if (cap_rfi_k > 0 && warm_start_cache->rfi_prop[cap_rfi_k].empty()) {
+                warm_start_cache->rfi_prop [cap_rfi_k] = cap_rfi_prop;
+                warm_start_cache->rfi_rates[cap_rfi_k] = cap_rfi_rates;
+                if (cap_rfi_pinv > 0)
+                    warm_start_cache->rfi_p_invar[cap_rfi_k] = cap_rfi_pinv;
+            }
+        }
+    }
+
     delete iqtree;
     return tree_string;
 }
@@ -3664,6 +3800,8 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     mpi_ref_remaining          = 0;
     mpi_filterRatesMPI_fired   = false;
     mpi_filterRatesMPI_enabled = false;
+    mpi_warm_start.clear();  // Phase A.1 — reset cross-model rate-param cache
+                             // per evaluateAll() call (Partition / Mixture safety).
 
     if (MPIHelper::getInstance().getNumProcesses() > 1) {
         int my_rank = MPIHelper::getInstance().getProcessID();
@@ -3885,9 +4023,13 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         }
 #endif
 
-        // main call to estimate model parameters
+        // main call to estimate model parameters.
+        // Phase A.1: pass &mpi_warm_start so converged rate params can be
+        // captured for use by subsequent same-rate-class models. Cache is
+        // accessed under #pragma omp critical(warm_start_lock) inside evaluate().
         tree_string = at(model).evaluate(params, model_info, out_model_info,
-                                         models_block, num_threads, brlen_type);
+                                         models_block, num_threads, brlen_type,
+                                         &mpi_warm_start);
         at(model).computeICScores();
         at(model).setFlag(MF_DONE);
 
