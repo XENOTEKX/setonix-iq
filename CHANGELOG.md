@@ -93,6 +93,35 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-23 (by) — Submit FCA np=1 full MF+SPR baseline run: AA 100K (job 169095077)
+
+### What
+
+Submit the first FCA Phase 0.5+0.6 full MF+SPR run at np=1 on AA 100K.
+No warm-start, no Phase A.2 MPI broadcast. Pure FCA baseline — provides the
+actual (non-estimated) FCA np=1 full run figures for the three-way comparison
+table in entry `(bx)`.
+
+| Field | Value |
+|-------|-------|
+| Job | **169095077** (`normalsr`, 1 MPI rank × 103 OMP, `-m TEST`, seed=1) |
+| Binary | `iqtree3-mpi-fca-lbfgs-ws` md5 `a103bc6c97860145033206c47b184367` (FCA Phase 0.5+0.6 + THP) |
+| Script | `gadi-ci/lbfgs-ws/run_fca_aa_100k_1node_full.sh` |
+| Walltime | 2:00:00 |
+
+### Pass criteria
+
+| Check | Criterion | Baseline ref |
+|-------|-----------|-------------|
+| lnL (SPR) | −7,541,976.860 ± 0.5 | 168425673 |
+| Best model | LG+G4 | 168425673 |
+| exit code | 0 | — |
+
+Expected: MF ≈ 257 s (matching FCA TESTONLY 168577707), SPR ≈ 764 s (FCA dispatch is a no-op at np=1).  
+Results will be in entry `(bz)`.
+
+---
+
 ## 2026-05-23 (bx) — Full MF+SPR PASS ✓ — warm-start A.1 full run results: AA 100K np=1 (job 169094692)
 
 ### Results (all PASS ✓)
