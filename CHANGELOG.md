@@ -83,7 +83,8 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
-| 169096105 | WS-A.2 np=4 W2 | AA 100K | 1 | 4×26T | — | — | — | — | — | — | — (pending W2 gate) | — | — |
+| 169096105 | WS-A.2 np=4 W2 (1-node) | AA 100K | 1 | 4×26T | — | — | — | — | — | — | — (pending) | — | — |
+| 169096530 | WS-A.2 np=4 W2p (4-node) | AA 100K | 4 | 4×103T | — | — | — | — | — | — | — (pending W2p gate) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -94,7 +95,8 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > Speedup = baseline total ÷ run total (vanilla baseline for each dataset).
 > WS-A.1 rows use the same vanilla baseline as FCA rows for their dataset.
 > **pending** = job 169095645 **DONE** MF=1,146.174 s, SPR=1,212.944 s, total=2,440.301 s, lnL=−78,605,196.497, LG+G4; see entry `(cb)`. Δvs FCA np=16 (168635616): MF +23.8 s (+2.1%, within noise — A.1 adds cache overhead, no cross-rank gain).
-> **pending W2 gate** = job 169096105 running; W2 correctness gate for Phase A.2 (ws_bcast_fields > 0, lnL ±0.5, best model = LG+G4); uses 1-node 4×26T config (equivalent compute to W1, not 4-node 4×103T). Performance gate (MF ≤ 100 s) applies to a future 4-node run; this run confirms broadcast fires and correctness holds. Results in entry `(cc)`.
+> **169096105** = W2 1-node correctness gate: `ws_bcast_fields=4` **CONFIRMED** (broadcast fired with 4 LG-family rate fields); `local_pruned=39`; lnL and best model pending final output. Config: 4×26T on 1 node — intra-node shared-memory MPI, not the production-parity config. Performance gate (MF ≤ 100 s) requires 4-node config. See entry `(cc)`.
+> **169096530** = W2-parity gate (submitted): 4 nodes × 103T each = production-parity config, cross-node MPI_Bcast. This is the gate the §5.7 performance spec (MF ≤ 100 s vs FCA np=2 149 s) was designed for. See entry `(cd)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
@@ -135,6 +137,58 @@ in `filterRatesMPI`. Rank 0 packs its warm-start cache into the packet; all rank
 - Must use `intel-compiler-llvm/2025.3.2` (not 2023.2.0) — booster lib linked against 2025.3.2 libiomp5 (`__kmpc_dispatch_deinit`)
 - Must use `binutils/2.44` — cmake 3.31.6 emits `--dependency-file` linker arg requiring ld ≥ 2.35
 - Must set `OMPI_CXX=icpx make -j 8 iqtree3` — otherwise system g++ 8.5.0 breaks with `-qopenmp`
+
+### W2 1-node early result (partial — job still running at time of (cc) update)
+
+`ws_bcast_fields=4` seen in log at ~18 min walltime — Phase A.2 broadcast confirmed to fire with real data.
+`local_pruned=39` — rate filter acting correctly after broadcast.
+Full lnL/model/timing pending PBS output file.
+
+**Design limitation of this run**: 4 ranks × 26T on the same node uses intra-node shared-memory MPI.
+Not the production-parity config. A proper parity run (169096530, entry `(cd)`) was submitted separately.
+
+---
+
+## 2026-05-23 (cd) — W2 PARITY gate submitted (job 169096530): Phase A.2, AA 100K, 4-node 4×103T
+
+### What
+
+Submitted the production-parity W2 gate after the 1-node W2 (169096105) was identified as
+using under-provisioned resources (4×26T on 1 node — intra-node shared-memory MPI, not the
+intended §5.7 production config). The parity run matches the actual production deployment:
+one MPI rank per node, full memory bandwidth, cross-node `MPI_Bcast` over Infiniband.
+
+| Field | Value |
+|-------|-------|
+| Job | **169096530** (`normalsr`, 4 MPI ranks × 103 OMP = 412T, 4 nodes, `-m TESTONLY`, seed=1) |
+| Binary | `iqtree3-mpi-fca-ws-a2` md5 `1547a906f1f75422514b0a0cdf2bc89e` (same binary as W2 1-node) |
+| Source commit | `5604606d` (fca-lbfgs-ws-iqtree3, +101 lines `WarmStartPacket` MPI_Bcast) |
+| Alignment | AA 100K (100 taxa × 100K sites) |
+| Resources | 4 nodes × 104 cpus = 416 cpus, 2040 GB, walltime 01:00:00, excl |
+| Script | `gadi-ci/lbfgs-ws/run_ws_a2_aa_100k_4node_w2p.sh` |
+
+### Gate criteria (W2-parity — production config)
+
+- **lnL** within ±0.5 of −7,541,976.860 (ref 168425673)
+- **Best model** = LG+G4
+- **MF wall ≤ 100 s** — FCA np=2 AA 100K (168584736): 149.029 s; np=4 estimate ~75–90 s without WS
+- **ws_bcast_fields > 0** — must fire over cross-node Infiniband MPI
+- Exit code = 0
+
+### Why 1-node W2 was not sufficient
+
+| Dimension | 1-node W2 (169096105) | 4-node W2-parity (169096530) |
+|-----------|----------------------|------------------------------|
+| Ranks × OMP | 4 × 26T | 4 × 103T |
+| Total threads | 104T | 412T |
+| Nodes | 1 (shared) | 4 (excl, 1 per rank) |
+| MPI transport | shared memory | Infiniband (cross-node) |
+| Mem per rank | 50 GB (shared node) | 510 GB (dedicated node) |
+| Memory bandwidth | shared 4-way | dedicated per rank |
+| Performance gate | NOT testable at 26T | ≤ 100 s MF at 103T |
+| ws_bcast tested | intra-node only | cross-node (production path) |
+
+Results in entry `(ce)` once job completes.
 
 ---
 
