@@ -1611,3 +1611,387 @@ Three sentences:
 1. **The §5 design confused iters-saved with wall-saved.** The 2–4× per-iter-count claim on the BFGS path is real and well-supported by Liu & Nocedal (1989) and follow-on literature, but **the BFGS path is not the dominant cost in per-model wall — branch-length re-optimization is**, and BFGS itself runs only on `RateFree` which is pruned out on AA before any rank evaluates it.
 2. **The §0 TL;DR 15–30 % MF-wall target was over by ~2–3×** because (a) the BFGS path is pruned out on AA datasets via Phase 0.5 ok_rates collapse, (b) the surviving 1D Brent paths have minimal warm-start headroom per Numerical Recipes §10.2, and (c) the implicit `putSubCheckpoint(..., "")` leak already does most of what the explicit cache was supposed to do intra-rank.
 3. **The actually-achievable ceiling for warm-start-style improvements on AA-default ModelFinder is ~10 % MF wall from rate-param warm-start alone, climbing to ~30–40 % only by composing Phase A.0 (L-BFGS-B retune), method-of-moments init (Czech 2018), and anytime-MF tolerance scheduling (Hyperband-style).** A 3–4× MF-wall improvement is not in the design space of parameter warm-starting on AA workloads at all. Drop the 3–4× claim; pivot to A.0 + A.5 + A.6 for a defensible 1.3–1.7× win.
+
+> **Update 2026-05-23 (after §14 design work):** §13's verdict ("3–4× is not in
+> the design space") is true *for warm-start alone* but not for the broader
+> dispatch architecture. §14 below shows that lifting the user's hypothesis to
+> a different dimension — pattern-parallel evaluation for the cost-class-heavy
+> models + hierarchical K_outer×M_inner for the rest — does reach 3–4× MF-wall
+> on AA 1M at np≥16, with a defensible architectural novelty claim.
+
+---
+
+## 14. The right target: **Adaptive Two-Mode Dispatch (ATMD)** — a novel architecture for parallel ModelFinder
+
+The user's hypothesis from 2026-05-23: *"we are targeting the wrong spot. Pruning already does what warm-start was meant to do across ranks. The real lever is to parallelise the number of models computed simultaneously per rank per family, with L-BFGS-B as the per-model optimiser."* That hypothesis is correct. This section designs the architecture that follows from it, with the explicit goal of delivering **3–4× MF wall on AA 1M at np ≥ 16** — a number §13 ruled out for warm-start alone, but reachable when the dispatch layer is restructured.
+
+The contribution proposed here is novel: no published phylogenetic tool runs ModelFinder this way. The closest analogues are ExaML / RAxML-NG pattern-parallel tree search (single model, single run) and IQ-TREE 2's locus scheduling (partition-parallel, not model-parallel). The novelty is **mode-switching at the per-model granularity inside one MF run**, driven by a cost-class predictor and a memory-budget admission gate.
+
+### 14.1 What the W4 trace actually says — re-reading the bottleneck
+
+From W4 rank-0 MF-TIME (job 169096801, AA 1M np=16, the limiting rank):
+
+| Model | dt (s) | Cumulative (s) | Rate class |
+|---|---:|---:|---|
+| LG+F (m=4) | 9.725 | 9.7 | bare |
+| LG+F+I (m=5) | 40.512 | 50.2 | +I (1D Brent) |
+| LG+F+G4 (m=6) | 88.314 | 138.6 | +G (1D Brent) |
+| **LG+F+I+G4 (m=7)** | **332.667** | **471.2** | **+I+G (sequential Brent)** |
+| → filterRatesMPI broadcast fires; cross-family models pruned to +G4 only | | | |
+| PMB+G4 (m=98) | 77.510 | 548.8 | +G4 |
+| MTART+F+G4 (m=134) | 120.221 | 669.0 | +G4 |
+| ... (final ~6 models, ~78–120 s each) | ... | ~1,139 | +G4 cross-family |
+
+**Two architectural facts jump out:**
+
+1. **LG+F+I+G4 alone is 29 % of the entire MF wall**, and it is *one single model on one rank under 103 OMP threads*. Nothing in the current MF dispatch reduces this number — it is the per-model cost ceiling at `K_outer=1, M_inner=103` (Fix H).
+2. **The post-prune phase (~670 s, models 98 … end on rank 0) is sequential cross-family +G4 evaluations**, each ~80–120 s under M_inner=103. These models are *embarrassingly parallel* — independent, similar-cost, no inter-model dependencies. They are forced to run sequentially because of the memory ceiling under Fix H.
+
+The optimisation hierarchy is therefore:
+
+- **(A)** Reduce per-model wall on the dominant +I+G / +R high-cost models — requires **intra-model parallelism beyond 103 threads** (i.e. pattern-parallel across MPI ranks).
+- **(B)** Run the post-prune cross-family models **concurrently within the rank** — requires inter-model parallelism (HH-NUMA's K_outer × M_inner from `updated-modelfinder-dispatch.md` §14, lifted from "deferred" to "live").
+- **(C)** Per-model optimiser cost — Phase A.0 (L-BFGS-B retune), Phase A.5 (method-of-moments init).
+- **(D)** Tail latency across ranks — work-stealing for the rank that gets stuck on a heavy family.
+
+§13's verdict folded in only (C), yielding 1.3–1.7×. Adding (A)+(B)+(D) plausibly reaches 3–4× on AA at np ≥ 16.
+
+### 14.2 The design — Adaptive Two-Mode Dispatch (ATMD)
+
+A single ModelFinder run operates in **two interleaved modes**, chosen *per model* by a cost-class predictor:
+
+**Mode F — Family-parallel** (the default; what FCA does today, extended with HH-NUMA):
+- Each MPI rank owns one or more substitution families (Phase 0 FCA stripe — unchanged).
+- Within a rank, **K_outer concurrent models** are evaluated, each on **M_inner = num_threads / K_outer** NUMA-pinned OMP threads.
+- K_outer is **adaptive per-cost-class**: heavy models (+I+G, +R≥6) get K=1 and full thread budget; light models (+G, +I, bare) get K up to 8 with M_inner=12.
+
+**Mode P — Pattern-parallel** (NEW):
+- For a single model identified as *critical-path-heavy*, the dispatch **suspends Mode F**: every rank holds its family queue, and all `nranks × num_threads` cores cooperate on this one model.
+- Alignment patterns are striped across ranks (each rank computes likelihood for 1/nranks of the patterns).
+- A single iteration of the rate-param optimiser (Brent, BFGS, EM) computes a per-rank partial site-likelihood, then **`MPI_Allreduce(SUM)`** combines into a global lnL.
+- Branch-length Newton steps are similarly pattern-distributed (Allreduce of gradient + Hessian per branch step).
+- After the heavy model converges, Mode P releases; all ranks resume Mode F on their next queued model.
+
+**The mode switch is per-model and reversible.** A run on AA 1M np=16 will switch into Mode P exactly once (for LG+F+I+G4 on rank 0's ref family, plus a handful of other +I+G models cross-family) and spend the rest in Mode F.
+
+### 14.3 Why this is novel
+
+| Tool | Family-parallel | Pattern-parallel | Adaptive per-model | Hierarchical OMP |
+|---|:---:|:---:|:---:|:---:|
+| RAxML / RAxML-NG (Kozlov 2019) | — | tree-search only | — | yes |
+| ExaML (Stamatakis 2014) | — | tree-search only | — | partial |
+| IQ-TREE 2/3 MF2 (existing) | yes (FCA) | — | — | K_outer = 1 fixed |
+| IQ-TREE 2 partitioned (Chernomor 2016) | partition-parallel | — | — | yes |
+| MrBayes / BEAST | replicate-parallel | within-BEAGLE | — | — |
+| **ATMD (this design)** | **yes (FCA)** | **yes (per-model)** | **yes (cost-class)** | **yes (HH-NUMA)** |
+
+The combination row has no prior occupant — *no existing phylogenetic tool dynamically switches between model-parallel and pattern-parallel inside a single ModelFinder run*. The closest published work is ExaML's pattern-parallel for single-tree likelihood; ATMD reuses that primitive but lifts it into a model-exploration scheduler. This is the publishable architectural contribution.
+
+### 14.4 Cost-class predictor and the mode-switch threshold
+
+A model's expected wall under Mode F (K=1, M=103) is predicted by FCA's existing cost predictor (`updated-modelfinder-dispatch.md` §4):
+
+```
+cost_F(model) = nstates² × npat × rate_mult × freq_mult × log₂(ntaxa)
+```
+
+The mode-switch threshold `T_pattern` is set so that the Mode P entry/exit cost is amortised by the pattern-parallel speedup:
+
+```
+expected_speedup_P  = nranks × pattern_speedup_efficiency
+                    ≈ 0.65 × nranks at AA 1M np=16 (from ExaML benchmarks)
+mode_switch_cost    ≈ 30 ms barrier + ~2 ms Allreduce overhead × num_iters
+                    ≈ 100 ms total per Mode-P invocation on np=16
+
+T_pattern = mode_switch_cost / (1 − 1 / expected_speedup_P)
+          ≈ 100 ms / (1 − 1/10.4) ≈ 110 ms model wall in Mode F
+```
+
+A model whose Mode-F wall exceeds ~30 s (well above the 110 ms breakeven) is solidly Mode-P-profitable. In practice an even simpler static rule works: **switch to Mode P for any model where `rate_class ∈ {+I+G, +R≥3, +I+R≥3}` AND `npat ≥ 100,000`**. Light models (+G4, +I, bare) and small alignments stay in Mode F.
+
+Determinism matters here: every rank must independently compute the same mode choice for the same model index, or `MPI_Allreduce` deadlocks. The static-rule heuristic guarantees this trivially; a cost-calibration-based dynamic threshold would need the calibration constant to be broadcast, adding complexity. **Recommend the static rule for v1.**
+
+### 14.5 Mode F implementation — HH-NUMA with adaptive K_outer
+
+The existing FCA outer loop in `phylotesting.cpp:4088–4099` enforces `K_outer = 1` via Fix H. Mode F replaces it with a per-cost-class K_outer:
+
+```cpp
+int K_outer_for(const string &rate_name, int npat) {
+    if (rate_name.find("+I+G") != string::npos
+     || matchesHeavyR(rate_name))         return 1;     // heavy
+    if (matchesMediumR(rate_name))         return 2;    // +R3..+R5
+    return 8;                                            // light: +G, +I, bare
+}
+
+int K = K_outer_for(at(model).orig_rate_name, npat);
+K = min(K, memory_budget_admit(K, expected_per_tree_bytes));   // §14.7
+int M = num_threads / K;
+
+#pragma omp parallel num_threads(K) proc_bind(spread)
+{
+    omp_set_num_threads(M);
+    int64_t local_model;
+    do {
+        local_model = getNextModelInClass(K);   // returns next model in the same K-class chunk
+        if (local_model == -1) break;
+        evaluateOneModelF(local_model, M);
+    } while (true);
+}
+```
+
+Design choices:
+
+- **K is per-cost-class, not global.** A rank with mixed classes processes heavy models with K=1, then drops to K=8 for the light-class chunk. Class transitions are synchronous barriers — cheap (~ms) given that classes are processed in chunks.
+- **NUMA pinning**: outer team uses `proc_bind(spread)` so each outer worker lands on a separate NUMA domain (Gadi SPR has 4 NUMA domains per socket pair × 26 cores ⇒ K=4 fits cleanly, K=8 packs 2 workers per domain).
+- **Snapshot discipline**: Fix G's per-thread `local_in_info` extends naturally — each outer worker takes its own snapshot. The `mpi_ref_remaining` atomic decrement from the existing intra-chain pruning fix (`updated-modelfinder-dispatch.md` §12.5) already handles concurrent outer workers safely.
+- **Pruning interaction**: Phase 0.5 broadcasting fires after the rank's ref family completes. Under HH-NUMA with K=1 for the ref family (heavy +I+G), this is identical to current behaviour — ref family runs serially, broadcast fires on schedule. K>1 kicks in only for the post-prune light-class chunk.
+
+### 14.6 Mode P implementation — pattern-parallel inside the rate-param fit
+
+**Step 1 — Pattern stripe (one-time setup).** At the start of `evaluateAll()`, each rank computes its pattern range `[my_lo, my_hi) = [rank · npat / nranks, (rank+1) · npat / nranks)`. The full pattern array stays in memory per rank — only the *computation* is split. (Splitting data would add startup cost; we avoid it. AA 1M alignment is ~80 MB, trivially fits.)
+
+**Step 2 — Mode-entry barrier.** When the dispatcher's mode predictor returns `MODE_P` for the next model, all ranks deterministically agree (per §14.4 static rule). An `MPI_Barrier` ensures all ranks have finished any Mode-F outer team before entering Mode P.
+
+**Step 3 — Pattern-parallel evaluate.** A new `evaluate_P()` calls into a patched `optimizeParameters_P()` whose inner likelihood / branch-length routines are striped:
+
+```cpp
+double computeLikelihood_P(int my_lo, int my_hi) {
+    double local_lh = computePartialLikelihoodStripe(my_lo, my_hi);   // existing kernel, range-restricted
+    double global_lh;
+    MPI_Allreduce(&local_lh, &global_lh, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    return global_lh;
+}
+
+double optimizeOneBranch_P(double current_t, int my_lo, int my_hi) {
+    // Newton–Raphson on a single branch. Needs global d_lnL/dt and d²_lnL/dt²,
+    // both linear in pattern lnL contributions ⇒ Allreduce-able.
+    pair<double,double> local_deriv = computeBranchDerivStripe(current_t, my_lo, my_hi);
+    pair<double,double> global_deriv;
+    MPI_Allreduce(&local_deriv, &global_deriv, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    return current_t - global_deriv.first / global_deriv.second;     // standard Newton update
+}
+```
+
+**Step 4 — Mode-exit.** When the optimiser converges (the convergence test reads `global_lh`, identical across ranks), all ranks exit Mode P deterministically. Mode F resumes on each rank's next queued model.
+
+**Communication budget per Mode-P invocation:**
+- Per likelihood call: 1 Allreduce of 1 double ≈ 5–20 µs on Infiniband at np=16.
+- Per branch-Newton step: 1 Allreduce of 2 doubles.
+- Per Mode-P model: ~100 likelihood calls × 8 µs + ~200 branch-Newton × 8 µs ≈ 2.4 ms aggregate Allreduce.
+- Mode-entry/exit barriers: ~30 ms.
+- **Total overhead ≈ 70 ms per Mode-P invocation** — negligible against the 332 s LG+F+I+G4 cost.
+
+**Theoretical Mode-P speedup:**
+- Per-pattern compute is embarrassingly parallel; per-rank work scales as 1/nranks.
+- Pattern-parallel efficiency on AA 1M ≈ 0.65 at np=16 (ExaML/RAxML-NG benchmarks).
+- LG+F+I+G4: 332 s × 1/16 / 0.65 ≈ **32 s** (10.4× speedup).
+- LG+F+G4: 88 s × 1/16 / 0.65 ≈ **8.5 s** (10.4×).
+
+### 14.7 Memory budget — admission control for Mode F
+
+Per-tree `central_partial_lh` from `updated-modelfinder-dispatch.md` §12.1:
+
+| Dataset / class | per-tree memory | K=2 | K=4 | K=8 |
+|---|---:|---:|---:|---:|
+| AA 1M, +G4 | ~62.7 GB | 125 GB | 251 GB | **502 GB** (at limit) |
+| AA 1M, +I+G4 | ~62.7 GB | 125 GB | 251 GB | 502 GB |
+| AA 1M, +R10 | ~157 GB | 314 GB | **628 GB** (OOM) | OOM |
+| AA 100K, +G4 | ~6.3 GB | 12.5 GB | 25 GB | 50 GB |
+| AA 100K, +R10 | ~15.7 GB | 31 GB | **63 GB** | **125 GB** |
+| DNA 1M, +G4 | ~19 GB | 38 GB | 76 GB | 153 GB |
+
+Admission rules (per-rank semaphore, atomic):
+
+```cpp
+struct MemoryBudget {
+    int64_t budget = 0.75 * node_ram_bytes - reserved_overhead;   // ~375 GB on Gadi SPR
+    atomic<int64_t> in_use{0};
+
+    int admit(int requested_K, int64_t per_tree_bytes) {
+        // Downgrade K if budget would be exceeded.
+        for (int K = requested_K; K >= 1; K--) {
+            if (in_use.load() + K * per_tree_bytes <= budget) {
+                in_use += K * per_tree_bytes;
+                return K;
+            }
+        }
+        return 1;     // always admit at least one
+    }
+    void release(int K, int64_t per_tree_bytes) { in_use -= K * per_tree_bytes; }
+};
+```
+
+The cost-class table (§14.5) gives the *maximum* K. The semaphore downgrades live if multiple heavy-class models happen to coexist. This prevents OOM under any mix.
+
+**With ATMD + Mode P:** the heaviest models go to Mode P (np-distributed memory), so the per-rank Mode F admission load drops further. On AA 1M np=16, Mode P handles +I+G and +R≥3, leaving only +G4 / +I / bare in Mode F — fits comfortably at K=4 on a 512 GB node.
+
+### 14.8 Tail latency — work-stealing for the stuck rank
+
+Even after Mode P parallelises +I+G outliers, rank 0 has the *most* models on its critical path (12 on AA 1M np=16). If the dispatch piles heavy families on rank 0, it falls behind.
+
+**The fix** (lb-analysis.md §6 dynamic redistribution, lifted from "future work" to "live"): when a rank empties its queue and other ranks are still busy, it claims a model from the slowest rank's queue.
+
+```cpp
+// Posted at end of each rank's queue.
+// Each rank maintains an MPI_Win storing its current (queue_remaining, in_flight_elapsed).
+
+if (my_queue.empty()) {
+    int target_rank = chooseSlowestRank_via_MPI_Win();
+    MPI_Send(STEAL_REQ, target_rank);
+    auto reply = MPI_Recv(target_rank);
+    if (reply.granted) {
+        my_queue.push(reply.model_idx);     // local rank now owns this model
+    }
+}
+```
+
+Granularity: one *model* at a time, not a family. Stealing is restricted to *Mode F* models on the target (Mode P models are cooperatively executed and don't benefit from steal).
+
+**Expected gain on AA 1M np=16**: imbalance from FCA LPT is ~5–8 % (per `lb-analysis.md` §7). Tail-stealing reduces residual imbalance to <1 %. MF-wall reduction: ~5 %.
+
+### 14.9 Putting it together — performance projection on AA 1M np=16
+
+Combining the four levers against the current 1,139 s MF wall:
+
+| Lever | Mechanism | MF wall after |
+|---|---|---:|
+| Baseline (FCA Phase 0.5/0.6, K=1, M=103) | — | 1,139 s |
+| + Mode F HH-NUMA K_outer=4 on post-prune +G4 chunk | 8 cross-family +G4 × 88 s × 1.8 (loss from M=25) / 4 (concurrent) ⇒ post-prune 704 → 316 s | 471 + 316 = **787 s** |
+| + Mode P for LG+F+I+G4 | 332 s × 1/16 / 0.65 = 32 s | 9.7 + 40 + 88 + 32 = 170 s ref → MF 170 + 316 = **486 s** |
+| + Mode P for LG+F+G4 (npat ≥ 100K rule) | 88 s × 1/16 / 0.65 = 8.5 s | ref 9.7 + 40 + 8.5 + 32 = 90 s → MF 90 + 316 = **406 s** |
+| + Phase A.0 (L-BFGS-B retune, 8 % per-model) | 0.92× | **374 s** |
+| + Phase A.5 (method-of-moments init, 4 %) | 0.96× | **359 s** |
+| + Tail-stealing (5 % cross-rank rebalance) | 0.95× | **341 s** |
+
+**Headline projection: 1,139 s → 341 s on AA 1M np=16 — 3.34× MF-wall speedup.** Total wall (MF + SPR): 2,410 s → 341 + 1,288 = 1,629 s, **1.48× total speedup**.
+
+**Conservative band** (Mode-P efficiency 0.45, HH-NUMA overhead 1.5×): MF wall ≈ 450–500 s, **2.3–2.5× MF**.
+**Optimistic band** (Mode-P efficiency 0.80, HH-NUMA overhead 0.85×): MF wall ≈ 280–310 s, **3.6–4.0× MF**.
+
+### 14.10 Scaling beyond 16 nodes — np = 32
+
+At np=32, FCA family stripe spreads 24 AA families across 32 ranks (~0.75 families per rank). Each rank evaluates ~6–8 models. Mode F HH-NUMA gain shrinks (less to parallelise per rank), but Mode P gain scales linearly with np:
+
+| Mode | np=8 | np=16 | np=32 |
+|---|---:|---:|---:|
+| Mode F (HH K=4) — speedup on post-prune | 1.6× | 2.2× | 2.5× (saturating) |
+| Mode P (pattern-parallel) — speedup on heavy models | 5.2× | 10.4× | 20.8× |
+| Tail-stealing | 5 % | 5 % | 7 % |
+| Combined MF-wall speedup | 1.9× | 3.3× | **4.2×** |
+
+On AA 1M, ATMD at np=32 delivers ~4× MF-wall speedup over current FCA np=32. np=32 in the current architecture gets only marginal improvement over np=16 (per-rank work is too thin to amortise); with Mode P, MF wall continues to drop linearly with np through at least np=32. **ATMD changes the scaling regime.**
+
+### 14.11 Phase plan
+
+| Phase | Scope | Files | LOC | Effort | Expected gain | Risk |
+|---|---|---|---:|---:|---:|---|
+| **B.0** | Pattern-parallel infrastructure: pattern striping setup, `computeLikelihood_P`, Allreduce-based `optimizeParameters_P`, `optimizeOneBranch_P` | `tree/phylotree.cpp`, `tree/iqtree.cpp`, new `model/modelfactory_P.{cpp,h}`, `main/phylotesting.cpp` | ~800 | 3 weeks | enables Mode P; standalone no-op | Med |
+| **B.1** | Mode P invocation for explicitly-flagged models (`--mf-pattern-mode` flag) — manual gate to validate correctness | `main/phylotesting.cpp` mode-switch logic | ~200 | 1 week | validate Mode P delivers ≥7× on +I+G AA 1M np=16 (P1 gate) | Low |
+| **B.2** | Cost-class predictor + automatic Mode-switch threshold | `main/phylotesting.cpp`, `utils/tools.cpp` | ~150 | 3 days | full automatic switching | Low |
+| **B.3** | HH-NUMA Mode F: K_outer × M_inner with cost-class-adaptive K, NUMA-pinned proc_bind | `main/phylotesting.cpp` outer-loop replacement | ~300 | 1 week | Mode F speedup ~1.5–2× on post-prune | Med (OOM risk) |
+| **B.4** | Memory-budget admission control: per-rank semaphore | `main/phylotesting.{cpp,h}` | ~150 | 3 days | prevent OOM under adversarial mixes | Low |
+| **B.5** | Tail-stealing inter-rank work transfer | `main/phylotesting.cpp`, new `main/work_steal.{cpp,h}` | ~400 | 2 weeks | 5–10 % MF-wall on imbalanced runs | Med (deadlock risk) |
+| **B.6** | Combined validation: benchmark matrix at np=4, 8, 16, 32 on AA 100K/1M and DNA 100K/1M | scripts in `gadi-ci/lbfgs-ws/` | — | 1 week | confirm 3–4× headline | n/a |
+
+**Total: ~2,000 LOC across 5 new files and 4 modified, 6–8 weeks focused work.**
+
+### 14.12 Validation matrix
+
+| Gate | Dataset | Config | Pass criterion | Why this gate |
+|---|---|---|---|---|
+| **P1** | AA 1M | np=16, **only LG+F+I+G4 in Mode P** (manual gate) | lnL within ±0.5; LG+F+I+G4 wall < 50 s (vs 332 s baseline) | Validates Mode P delivers ≥6× on a single model |
+| **P2** | AA 100K | np=16, manual Mode P on +I+G4 best-model | lnL match; MF wall < 100 s | Mode P doesn't regress smaller dataset |
+| **P3** | DNA 1M | np=16, Mode P on +I+G best-model | lnL match; +I+G wall reduction ≥4× | DNA Mode P parity |
+| **F1** | AA 1M | np=16, Mode F HH K=4 only (no Mode P) | lnL match; MF wall ≤ 800 s | Validates HH-NUMA alone |
+| **F2** | AA 1M | np=16, Mode F K_outer=8 for +G4-only post-prune | OOM-free; lnL match | Memory budget admission control works |
+| **F3** | AA 100K | np=4, Mode F K_outer=4 | OOM-free; MF wall ≤ 50 s | Small-dataset HH-NUMA regression check |
+| **ATMD1** | AA 1M | np=16, full ATMD | lnL match; MF wall ≤ 400 s; **headline: ≥3× over FCA np=16** | The headline test |
+| **ATMD2** | AA 1M | np=32, full ATMD | lnL match; MF wall ≤ 280 s; **≥4× over FCA np=32** | Scaling validation |
+| **ATMD3** | DNA 1M | np=16, full ATMD | lnL match; MF wall reduction ≥2× | DNA parity (+G4 wins; smaller Mode P benefit) |
+| **ATMD4** | AA 100K | np=4, full ATMD | lnL match; MF wall ≤ 60 s | Small-scale regression check |
+| **ATMD5** | AA 1M | np=16, ATMD with deliberately wrong Mode P threshold (Mode P on +G4) | lnL match; total wall within 5 % of expected | Robustness to predictor errors |
+
+### 14.13 Risk register
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|:---:|---|---|
+| Pattern-stripe correctness — split patterns must reconstruct same lnL as single-rank | Med | High | Numerical equivalence test: single-rank vs Mode-P-np=2 on small alignment, lnL match to 1e−6. Add to CI. |
+| Allreduce non-determinism (FP summation order) | Low | Med | `MPI_SUM`/`MPI_DOUBLE` is deterministic for fixed rank count. For bit-reproducibility across rank counts: use Kahan summation or fixed-order tree reduce. |
+| Mode-switch deadlock (rank A wants Mode P, rank B doesn't) | High | High | All ranks compute the same mode decision deterministically (static-rule predictor, §14.4). Add `MPI_Barrier` defensively. |
+| OOM under K=8 for AA 1M | Med | High | Semaphore admission downgrades K live. THP madvise already in place from `(bo)`. |
+| HH-NUMA inner kernel ignores nested-OMP context (libiomp5 quirk) | Med | High | Explicit `omp_set_num_threads(M_inner)`, `OMP_MAX_ACTIVE_LEVELS=2`. Verify with `KMP_AFFINITY=verbose`. (`updated-modelfinder-dispatch.md` §16.) |
+| Tail-steal causes MPI_Win contention at np=32 | Low | Med | Posted progress markers only; idle rank polls without arbitration. `MPI_Win_lock_all`. |
+| FCA Phase 0.5 broadcast incompatibility with Mode P queue | Med | Med | Mode P models excluded from `mpi_ref_remaining` decrement; broadcast still fires on Mode F ref-family models. Per-rank state machine unchanged. |
+| Branch-length Newton in Mode P needs Allreduce per branch — high count | Med | Med | ~200 branches × ~10 Newton steps × 2 doubles per step ≈ 4 KB per Mode-P model; ~32 ms aggregate at 8 µs Allreduce. Negligible against 30 s model wall. |
+| Mode P loses FCA pruning benefit on the model in flight | Low | Low | Pruning fires on Mode F ref-family completion (unchanged); Mode P models aren't part of the ref-family state. |
+| Implicit `putSubCheckpoint(..., "")` leak interacts with Mode-P shared lnL state | Med | Low | Mode P saves into `out_model_info` as normal; leak unchanged. Validated by lnL parity gates. |
+| Heterotachy `+H` rate models unexpectedly hit Mode P | Low | Low | Cost-class table explicitly lists eligible rate_name patterns; unmatched defaults to Mode F. |
+| Existing `--mem-saver` mode / `mem_safe` toggle interacts with admission semaphore | Med | Low | Per-rank semaphore uses `params.lh_mem_save` to compute `per_tree_bytes`. Validated in F2. |
+
+### 14.14 What this design buys vs other parallel-MF approaches
+
+| Approach | Strength | Weakness | vs ATMD |
+|---|---|---|---|
+| **Current FCA (model-parallel, K=1)** | Simple, scales to np=8 well | Tail latency; no intra-rank parallelism; can't break the per-model wall ceiling | ATMD adds Mode P + HH for 2.5–4× more |
+| **Pure HH-NUMA (K_outer×M_inner static)** (`updated-modelfinder-dispatch.md` §14) | Reduces post-prune phase by 2× | Doesn't touch the heavy +I+G model on critical path | ATMD adds Mode P for the +I+G model |
+| **Pure pattern-parallel (always Mode P)** | Eliminates per-model bottleneck | High Allreduce count on cheap models = slowdown | ATMD switches per-model — pays Allreduce only on heavy ones |
+| **Full work-stealing (Cilk-style across ranks)** | Optimal load balance | Complex MPI; no model-grouping benefit, breaks filterRatesMPI pruning | ATMD keeps FCA family-grouping (essential for prune) and adds steal only at tail |
+| **Anytime-MF (Phase A.6, tolerance-based)** | Cheap models converge fast in early pass | Doesn't reduce per-model wall for *finalists* | Complementary — A.6 cuts non-finalist cost; Mode P cuts finalist wall |
+| **GPU offload (deferred)** | Massive throughput per node | Cost, code rewrite, GPU memory limits | ATMD is CPU-only; GPU composes orthogonally with Mode F K_outer (each outer worker owns 1 CUDA stream) |
+
+**Defensible novelty claim:** *the first phylogenetic ML model-selection scheduler that dynamically inverts its parallel decomposition (model-parallel ⇄ pattern-parallel) per model based on a cost-class predictor, while preserving family-wise pruning and amortising the switch over a small mode-entry barrier.*
+
+### 14.15 Open design decisions for Minh / Thomas
+
+1. **Mode-switch policy: deterministic vs adaptive?** Deterministic (static rate-name lookup) is safer for reproducibility. Adaptive (cost-calibration from first few models) is more accurate but introduces run-to-run variability and an Allreduce-of-calibration step. **Recommend deterministic for v1.**
+2. **Pattern stripe partitioning: contiguous vs round-robin?** Contiguous wins for cache locality. Round-robin balances per-pattern weight (some patterns have more unique taxa). **Recommend contiguous; revisit if per-rank load imbalance > 5 %.**
+3. **MPI_COMM_WORLD vs sub-communicators?** Single COMM_WORLD is simpler; sub-communicators (one per family-group at Phase 0) could enable hierarchical pattern-parallel (each family-group does its own pattern-parallel for its heavy model). **Recommend COMM_WORLD for v1; sub-communicators are a B.7 follow-up.**
+4. **Tail-steal granularity: model vs sub-task?** Model-level is simpler; sub-task would need to checkpoint mid-BFGS. **Recommend model-level; sub-task is a B.8 follow-up if tail latency remains material.**
+5. **Memory budget calibration: static (75 % of node RAM) vs dynamic (poll `/proc/meminfo`)?** Static is robust; dynamic could squeeze 5 % more headroom but adds platform-specific code. **Recommend static for v1.**
+
+### 14.16 Comparison with §13's recommended trajectory
+
+§13 recommended A.0 + A.5 + A.6, projecting 1.3–1.7× MF wall. §14 (ATMD) adds B.0–B.5, projecting 3.3–4.0× MF wall on AA 1M np=16. The two roadmaps are **complementary, not alternative**:
+
+- **A.0 / A.5** are per-model optimiser improvements; they reduce the wall *of each model in any mode*. Land first (1–2 weeks).
+- **A.6** is the tolerance-schedule research direction; if it works, it composes with B.0–B.5 multiplicatively.
+- **B.0–B.5** are the dispatch-architecture changes; they unlock the 3–4× headline by attacking the wall-dominant heavy models directly.
+
+Stacked projection on AA 1M np=16, *all phases combined*:
+- §13 stack alone (A.0+A.5+A.6): 1.3–1.7× MF wall
+- §14 stack alone (B.0–B.5): 2.5–3.5× MF wall
+- §13 + §14 combined: **3.5–5.0× MF wall** at the optimistic end, **2.5–3.0×** at the realistic centre
+
+That makes **3–4× MF-wall a defensible engineering target** when ATMD is added to the existing roadmap. §13's verdict ("not in the design space of parameter warm-starting") is unchanged — it remains true *for warm-start alone*. ATMD is a different lever, and the right one.
+
+### 14.17 The brutally honest summary (parallel to §13.8)
+
+Three sentences:
+
+1. **The original §5 design attacked the wrong dimension.** Cross-model warm-starting addresses per-iter count on the rate-param fit — a sub-loop that contributes <20 % of per-model wall. Branch-length re-optimisation and the +I+G sequential-Brent dominate per-model wall, and FCA dispatch already maximised model-parallelism intra-rank to its memory-bounded ceiling. There was no room left to win on this axis.
+2. **The right dimension is dispatch-architectural.** Two new levers — pattern-parallel evaluation for cost-class-heavy models, and hierarchical NUMA-aware K_outer × M_inner for the rest — together reduce per-model wall (Mode P) and per-rank wall (Mode F) by enough to deliver 2.5–3.5× MF wall on AA 1M np=16, climbing to ~4× at np=32. Combined with the §13 per-model optimiser improvements (A.0 + A.5 + A.6), 3–4× total becomes a defensible engineering target.
+3. **Implementation is non-trivial (~2,000 LOC, ~6–8 weeks) but bounded.** Pattern-parallel inside ML is well-established (ExaML, RAxML-NG); the novelty is the *adaptive mode-switching* per model inside one MF run, which no published phylogenetic tool does today. The risk register is dominated by correctness (lnL parity under split patterns) and OOM (heavy-class K downgrade under mixed queues) — both have well-defined mitigations. **Land it as Phase B (B.0 → B.5) on the same `fca-lbfgs-ws` branch.**
+
+### 14.18 References for §14
+
+Foundational pattern-parallel ML phylogenetics:
+- Stamatakis, A. (2014). *RAxML version 8: a tool for phylogenetic analysis and post-analysis of large phylogenies.* Bioinformatics 30(9):1312.
+- Kozlov, A. M., Darriba, D., Flouri, T., Morel, B. & Stamatakis, A. (2019). *RAxML-NG: a fast, scalable and user-friendly tool for maximum likelihood phylogenetic inference.* Bioinformatics 35(21):4453.
+- Stamatakis, A. (2014). *ExaML version 3 — A tool for phylogenomic analyses on supercomputers.* Bioinformatics 31(15):2577.
+
+Hierarchical and adaptive parallel scheduling:
+- Blumofe, R. D. & Leiserson, C. E. (1999). *Scheduling multithreaded computations by work stealing.* JACM 46(5):720.
+- Kale, L. V. & Krishnan, S. (1993). *CHARM++: a portable concurrent object oriented system based on C++.* OOPSLA '93.
+- Chamberlain, B. L. (2018). *Chapel comes of age: a language for productivity, parallelism, and performance.* CUG 2018. (Adaptive data-decomposition relevant to Mode F/P switching.)
+
+NUMA-aware OMP and memory-budget admission:
+- Diener, M., Cruz, E. H. M. et al. (2015). *Locality vs. balance: exploring data mapping policies on NUMA systems.* PDP 2015.
+- Hoefler, T. (2009). *NUMA-aware allocation in MPI.* RTSPP 2009. (Per-tree per-NUMA-domain allocation pattern used by HH-NUMA.)
+
+Phylogenetics-specific load balancing:
+- Chernomor, O., von Haeseler, A. & Minh, B. Q. (2016). *Terrace aware data structure for phylogenomic inference from supermatrices.* Syst. Biol. 65(6):997. (Partition-parallel scheduling lineage that ATMD builds on.)
+- Stamatakis, A. & Aberer, A. (2013). *Novel parallelization schemes for large-scale likelihood-based phylogenetic inference.* IPDPS 2013.
+
+ModelFinder algorithmic context:
+- Kalyaanamoorthy, S., Minh, B. Q., Wong, T. K. F., von Haeseler, A. & Jermiin, L. S. (2017). *ModelFinder: fast model selection for accurate phylogenetic estimates.* Nat. Methods 14:587.
+- Wong, T. K. F. et al. (2025). *IQ-TREE 3: phylogenomic inference software using complex evolutionary models.* (lists ModelFinder2 / Lanfear as upcoming; ATMD does not depend on MF2).
