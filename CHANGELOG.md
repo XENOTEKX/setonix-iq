@@ -139,7 +139,7 @@ All builds: `build-atmd-b3*/iqtree3-mpi-atmd-b3*`, icpx 2025.3.2, OpenMPI 4.1.7,
 | 169110375 | b3b | −7,541,976.853 | LG+G4 ✓ | 1711s | ABSENT (B.4-2) |
 | 169111545 | b3c | **−7,541,976.853** ✓ | **LG+G4** ✓ | MF=423s / total=1,720s | **K_outer=8 M_inner=12** ✓ |
 
-**AA 1M 4-node b3 (job 169109673)**: completed with truncated SPR. MF=4,017.842s, best=LG+G4, lnL at NNI-1=−78,605,196.445. SPR reached iteration 40 before PBS walltime. `[ATMD Mode F]` absent (B.4-2 dual-write conflict, b3 lacks sidecar). MF 2× slower than FCA np=4 (1,974s) — nested OMP overhead with K_outer=1 (B.4-1 sysconf bug).
+**AA 1M 4-node b3 (job 169109673)**: ~~**CANCELLED 2026-05-24**~~ — manually terminated (`qdel`) as superseded and producing no useful results. Binary is b3 (B.4-1 sysconf bug → K_outer=1, B.4-2 dual-write → `[ATMD Mode F]` absent). Superseded by b3c 16-node (job 169112256). Prior partial result: MF=4,017.842s (SPR truncated at iter 40 by walltime, lnL at NNI-1=−78,605,196.445).
 
 ### Bug B.4-1: `sysconf(_SC_AVPHYS_PAGES)` returns near-zero on HPC nodes
 

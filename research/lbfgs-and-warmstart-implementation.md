@@ -2707,26 +2707,20 @@ B.4-2 is reclassified as a **false alarm**: the block executes correctly, but a 
 logging conflict in the run script masked the output in b3 and b3b runs. The fix (separate
 filenames for `--prefix` and shell redirect) is already applied in all b3c run scripts.
 
-#### 15.9.11 AA 1M 4-node b3 result (job 169109673) — SPR TRUNCATED
+#### 15.9.11 AA 1M 4-node b3 result (job 169109673) — CANCELLED (superseded)
 
 | Field | Value |
 |---|---|
 | Binary | `build-atmd-b3/iqtree3-mpi-atmd-b3` (md5 `c53122e2`) |
 | Config | NRANKS=4, OMP=103, 4 normalsr SPR nodes, 3h30m walltime |
-| Best-fit model | **LG+G4** ✓ |
-| Initial lnL | **−78,605,196.445** (NNI iteration 1) |
-| MF wall | **4,017.842s** (1h:6m:57s) |
-| CPU time MF | 342,454.713s (95h:7m:34s) — correct for 4-rank × 103T |
-| ATMD Mode F | **NOT ACTIVATED** — `[ATMD Mode F]` ABSENT (B.4-2 dual-write, b3 lacks sidecar) |
-| SPR status | TRUNCATED — job hit 3h30m walltime at SPR iteration 40 |
+| Disposition | **Manually cancelled (`qdel`) 2026-05-24** — superseded by b3c 16-node (job 169112256) |
+| Reason | b3 binary carries both B.4-1 (sysconf → K_outer=1) and B.4-2 (dual-write → `[ATMD Mode F]` absent). No valid ATMD diagnostic possible. Results uninformative. |
+| Prior partial data | MF=4,017.842s, best=LG+G4, lnL at NNI-1=−78,605,196.445, SPR truncated at iter 40 by walltime |
 
-**Note**: MF=4,017s is intentionally slow compared to Phase A.2 (MF=1,139s at np=16) — this is
-the b3 binary (ATMD patch only, no FCA MPI dispatch, no warm-start), running AA 1M with 4 MPI
-ranks where each rank evaluates ALL models sequentially. Its purpose is K_outer activation
-testing, not production MF performance.
-
-`[ATMD Mode F]` is definitively absent between `filterRatesMPI_enabled=1` and the first
-`MF-TIME: rank 0 model=0 name=LG` line — confirming B.4-2 bug affects np=4 just as it does np=1.
+This job was killed while still running (2h21m elapsed at time of cancellation). The prior
+partial result (MF wall, truncated SPR) is recorded above for completeness but is not used
+in any comparison — b3 has known bugs at both B.4-1 and B.4-2 that invalidate ATMD mode.
+The b3c 16-node run (job 169112256) is the authoritative ATMD benchmark.
 
 Full results (lnL SPR, wall time, exit code) will be appended when the job completes.
 
