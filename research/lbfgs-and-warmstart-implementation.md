@@ -5,9 +5,11 @@
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
  - Source repo (`XENOTEKX/setonix-iq` fork of `iqtree/iqtree3`): `fca-lbfgs-ws`, branched from `test_MF2` @ `9603247f`
-**Working binary (baseline copy of validated FCA, untouched code):** `iqtree3-mpi-fca-lbfgs-ws` — md5 `a103bc6c97860145033206c47b184367` (identical to validated `test_MF2`/`c8f11a24` FCA Phase 0.5+0.6+MF-TIME+THP binary)
- - `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` (build dir)
- - `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` (PBS runtime)
+**Working binary (baseline copy of validated FCA, untouched code):** `iqtree3-mpi-fca-phase0506` (symlink → `iqtree3-mpi-fca-lbfgs-ws`) — md5 `a103bc6c97860145033206c47b184367` (identical to validated `test_MF2`/`c8f11a24` FCA Phase 0.5+0.6+MF-TIME+THP binary, **no warm-start**)
+ - `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-phase0506` (symlink, build dir)
+ - `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-phase0506` (symlink, PBS runtime)
+
+> **Naming note:** The underlying file is `iqtree3-mpi-fca-lbfgs-ws` (named after the branch, not for warm-start features). The symlink `iqtree3-mpi-fca-phase0506` is the canonical unambiguous name. The warm-start binary is `iqtree3-mpi-fca-ws-a1` (md5 `fa9ee60...`).
 **Related docs:** `research/updated-modelfinder-dispatch.md` (FCA), `research/bfgs&CrossModelWarmStart.md` (transcript), `research/modelfinder-mpi.md`, `research/aa-walltime-analysis.md`, `CHANGELOG.md` entries `(aw)`–`(bs)`
 
 Composes on the validated FCA + MPI + Phase 0.5 broadcast + Phase 0.6 ref-priority + MF-TIME + THP-madvise stack. Targets the next per-rank speedup axis after dispatch — the BFGS loop itself.
@@ -661,7 +663,7 @@ The `model_info.putSubCheckpoint(&out_model_info, "")` at [phylotesting.cpp:3965
 
 ## 8. Test orchestration on Gadi SPR
 
-All tests run against the new working binary at `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` (the baseline-FCA copy created 2026-05-23, identical md5 to the validated test_MF2 binary). PBS scripts in `gadi-ci/cpu-bench/` and `gadi-ci/mf-iso/` will need the `IQTREE_BIN` variable updated to point at the new path; the script names and queue config are unchanged:
+All tests run against the new working binary at `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-phase0506` (symlink → `iqtree3-mpi-fca-lbfgs-ws`, the baseline-FCA copy created 2026-05-23, identical md5 to the validated test_MF2 binary). PBS scripts in `gadi-ci/cpu-bench/` and `gadi-ci/mf-iso/` will need the `IQTREE_BIN` variable updated to point at the new path; the script names and queue config are unchanged:
 
 ```
 gadi-ci/cpu-bench/run_cpu_bench_aa_100k_mf2_1node.sh       (L1, W1)
@@ -781,13 +783,15 @@ Before any code edits begin, a clean working branch and an untouched copy of the
 - Harness `XENOTEKX/setonix-iq`: `fca-lbfgs-ws` from `modelfinder2` @ `21d61e68`
 - Source `XENOTEKX/setonix-iq` (fork of `iqtree/iqtree3`): `fca-lbfgs-ws` from `test_MF2` @ `9603247f`
 
-**Binary (copy, code untouched):** `iqtree3-mpi-fca-lbfgs-ws`
+**Binary (copy, code untouched):** `iqtree3-mpi-fca-phase0506` (symlink → `iqtree3-mpi-fca-lbfgs-ws`)
 - md5: `a103bc6c97860145033206c47b184367` (matches `(bo)` THP-validated binary)
 - size: 145,059,584 bytes
 - Built from: commit `c8f11a24` on `test_MF2`, ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + THP-madvise + Phase 0.5/0.6/MF-TIME
 - Locations:
-  - `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` (build-side)
-  - `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` (PBS-side)
+  - `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-phase0506` (symlink, build-side)
+  - `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-phase0506` (symlink, PBS-side)
+
+> **Naming note:** The underlying file was named `iqtree3-mpi-fca-lbfgs-ws` after the branch, NOT because it has warm-start features. This caused confusion (see 2026-05-23 note). The symlink `iqtree3-mpi-fca-phase0506` is the canonical unambiguous name for this FCA-only baseline binary. The warm-start binary is `iqtree3-mpi-fca-ws-a1` (md5 `fa9ee60...`, +1.29 MB).
 
 **Why a renamed binary rather than overwriting `iqtree3-mpi`:**
 1. PBS jobs still under way against the validated `iqtree3-mpi` (e.g. job 168913089/91 results being analysed) must not be perturbed.

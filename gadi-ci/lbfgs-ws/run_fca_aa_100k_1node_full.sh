@@ -9,9 +9,12 @@
 #     - FCA baseline (this run): MF + SPR wall at np=1 without warm-start
 #     - WS-A.1 result (169094692): MF=261.694s, SPR=729.748s, total=994.904s
 #
-# Binary:    iqtree3-mpi-fca-lbfgs-ws  md5 a103bc6c97860145033206c47b184367
+# Binary:    iqtree3-mpi-fca-phase0506  md5 a103bc6c97860145033206c47b184367
 #            (FCA Phase 0.5+0.6 + THP-madvise + MF-TIME, ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512)
-#            Byte-identical to iqtree3-mpi at the same path (baseline copy from CHANGELOG (bs))
+#            Symlink → iqtree3-mpi-fca-lbfgs-ws (baseline copy from CHANGELOG (bs))
+#            NOTE: the 'lbfgs-ws' suffix in the underlying filename refers to the BRANCH name,
+#            NOT to warm-start features. This binary has NO warm-start code. The canonical
+#            alias iqtree3-mpi-fca-phase0506 is the unambiguous name for this baseline.
 # Baseline A: 168425673 — vanilla ICX+AVX-512, no FCA, no MPI, total=1169.556s
 # WS-A.1:    169094692 — FCA + warm-start A.1, MF=261.694s, SPR=729.748s, total=994.904s
 # Branch:    fca-lbfgs-ws
@@ -35,7 +38,9 @@ PROJECT="${PROJECT:-dx61}"
 USER_ID="${USER:-$(whoami)}"
 REPO_DIR="${REPO_DIR:-${HOME}/setonix-iq}"
 ISO_DIR="${ISO_DIR:-/scratch/${PROJECT}/${USER_ID}/iqtree3-mf-iso}"
-IQTREE="${IQTREE:-${ISO_DIR}/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws}"
+# Use the canonical phase0506 alias (symlink → iqtree3-mpi-fca-lbfgs-ws); the '-lbfgs-ws'
+# suffix in the underlying file refers to the branch name, NOT warm-start features.
+IQTREE="${IQTREE:-${ISO_DIR}/build-mpi-iso/iqtree3-mpi-fca-phase0506}"
 ALIGNMENT="${ALIGNMENT:-/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy}"
 RUNS_DIR="${REPO_DIR}/logs/runs"
 PROFILES_DIR="/scratch/${PROJECT}/${USER_ID}/mf_iso/profiles"
@@ -101,7 +106,7 @@ echo "╔═══════════════════════�
 echo "║  AA 100K FCA Baseline Full Run (MF+SPR) — 1-node"
 echo "║  run_id:       ${RUN_ID}"
 echo "║  ranks × OMP: ${NRANKS} × ${OMP_PER_RANK}  (= ${TOTAL_THREADS}T)"
-echo "║  binary:       $(basename "${IQTREE}")"
+echo "║  binary:       $(basename "${IQTREE}")  (→ iqtree3-mpi-fca-lbfgs-ws, no warm-start)"
 echo "║  md5 expected: a103bc6c97860145033206c47b184367"
 echo "║  alignment:    $(basename "${ALIGNMENT}")"
 echo "║  work_dir:     ${WORK_DIR}"
