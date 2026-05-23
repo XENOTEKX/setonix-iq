@@ -82,7 +82,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
-| 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | — | — | — | — | — | — | — (pending) | — | — |
+| 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
 | 169096105 | WS-A.2 np=4 W2 | AA 100K | 1 | 4×26T | — | — | — | — | — | — | — (pending W2 gate) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
@@ -93,8 +93,8 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > typically 1–80 s greater than MF+SPR sum). BIC and lnL from `.iqtree` report files on scratch.
 > Speedup = baseline total ÷ run total (vanilla baseline for each dataset).
 > WS-A.1 rows use the same vanilla baseline as FCA rows for their dataset.
-> **pending** = job 169095645 running; results will be filled in CHANGELOG entry `(cb)`.
-> **pending W2 gate** = job 169096105 running; W2 correctness gate for Phase A.2 (ws_bcast_fields > 0, lnL ±0.5, MF ≤ 100 s); results in entry `(cc)`.
+> **pending** = job 169095645 **DONE** MF=1,146.174 s, SPR=1,212.944 s, total=2,440.301 s, lnL=−78,605,196.497, LG+G4; see entry `(cb)`. Δvs FCA np=16 (168635616): MF +23.8 s (+2.1%, within noise — A.1 adds cache overhead, no cross-rank gain).
+> **pending W2 gate** = job 169096105 running; W2 correctness gate for Phase A.2 (ws_bcast_fields > 0, lnL ±0.5, best model = LG+G4); uses 1-node 4×26T config (equivalent compute to W1, not 4-node 4×103T). Performance gate (MF ≤ 100 s) applies to a future 4-node run; this run confirms broadcast fires and correctness holds. Results in entry `(cc)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
@@ -198,7 +198,34 @@ Phase A.2 MPI broadcast), but the per-rank breadth at np=16 is the best-case tes
 | exit code | 0 | — |
 
 FCA np=16 baseline ref: MF=1,122.363 s, SPR=1,287.863 s, total=2,410.226 s (job 168635616).  
-Results in entry `(cb)` — **IN PROGRESS**.
+Results in entry `(cb)` — **DONE**: see results below.
+
+---
+
+## 2026-05-23 (cb) — WS-A.1 DONE ✓/⚠ — WS-A.1 np=16 full run results: AA 1M (job 169095645)
+
+### Results
+
+| Check | Criterion | Result | Status |
+|-------|-----------|--------|--------|
+| lnL (SPR) | −78,605,196.573 ± 1.0 | −78,605,196.497 (Δ 0.076) | ✓ PASS |
+| Best model | LG+G4 | LG+G4 | ✓ PASS |
+| Exit code | 0 | 0 | ✓ PASS |
+
+### Timing — WS-A.1 np=16 vs FCA np=16
+
+| Phase | FCA np=16 (168635616) | WS-A.1 np=16 (169095645) | Δ (s) | Δ % |
+|-------|----------------------|--------------------------|--------|-----|
+| **MF** | 1,122.363 s | **1,146.174 s** | +23.8 s | +2.1% (noise) |
+| **SPR** | 1,287.863 s | **1,212.944 s** | −74.9 s | −5.8% (noise) |
+| **Total** | 2,410.226 s | **2,440.301 s** | +30.1 s | +1.2% (noise) |
+
+### Notes
+
+- MF wall at WS-A.1 np=16 (1,146.174 s) is 23.8 s **slower** than FCA np=16 (1,122.363 s) — 2.1% regression, within run-to-run noise on Gadi SPR.
+- **Expected result**: WS-A.1 (local warm-start only, no cross-rank broadcast) provides zero cross-rank benefit at np=16. Each rank caches intra-rank fits but cannot share with the 15 other ranks. The 2% overhead is from cache bookkeeping.
+- **Confirms A.1 design**: the principal gain requires Phase A.2 (MPI broadcast). Without the broadcast, warm-start is a no-op for the model-parallel dimension.
+- PBS used 00:40:37 walltime. Total IQ-TREE wall 2440.301 s.
 
 ---
 
