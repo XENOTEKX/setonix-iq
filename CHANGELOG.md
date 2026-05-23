@@ -73,6 +73,8 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168584737 | FCA np=2 | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | 86.613 | 113.754 | **2.54×** | — | — |
 | 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — | **1.878** | **56.02%** |
 | 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** | — | — |
+| 169095077 | FCA np=1 | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.861 | — | **258.773** | **738.569** | **1,000.811** | **1.169×** | — | — |
+| 169094692 | WS-A.1 np=1 | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.862 | — | **261.694** | **729.748** | **994.904** | **1.176×** | — | — |
 | 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — | — | — |
 | 168913089 | FCA np=1 | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.590 | — | 5,119.929 | 15,060.551 | 20,180.480 | **1.13×** | — | — |
 | 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** | **1.260** | **83.69%** |
@@ -80,6 +82,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
+| 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | — | — | — | — | — | — | — (pending) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -87,7 +90,9 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **Timing notes:** MF and SPR wall times from IQ-TREE stdout (`Wall-clock time for ModelFinder` /
 > `Wall-clock time used for tree search`). Total wall from PBS job wall-clock (includes startup + IO overhead;
 > typically 1–80 s greater than MF+SPR sum). BIC and lnL from `.iqtree` report files on scratch.
-> Speedup = baseline total ÷ FCA total.
+> Speedup = baseline total ÷ run total (vanilla baseline for each dataset).
+> WS-A.1 rows use the same vanilla baseline as FCA rows for their dataset.
+> **pending** = job 169095645 running; results will be filled in CHANGELOG entry `(cb)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 

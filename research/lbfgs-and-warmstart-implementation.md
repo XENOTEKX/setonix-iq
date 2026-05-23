@@ -907,3 +907,20 @@ Key observations:
 
 PBS used 00:16:46 walltime (WS-A.1) / 00:16:40 (FCA baseline). Run records: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json` / `logs/runs/gadi_AA_100k_fca_np1_full_seed1_169095077.json`
 CHANGELOG: `(bw)` submission · `(bx)` WS-A.1 results · `(by)` FCA submission · `(bz)` FCA results.
+
+**AA 1M parity run (np=16) submitted 2026-05-23 as job 169095645** (`normalsr`, 16×103T, `-m TEST`, seed=1).
+Script: `gadi-ci/lbfgs-ws/run_ws_a1_aa_1m_16node_full.sh`.
+Parity target: FCA np=16 baseline job 168635616 (MF=1,122.363s, SPR=1,287.863s, total=2,410.226s).
+At np=16 each rank visits ~77 models within its assigned family, giving the intra-rank cache the most
+opportunities to reuse fits under Phase A.1. This is the highest-value test of A.1 before Phase A.2.
+
+**AA 1M np=16 timing (pending — job 169095645 running):**
+
+| Phase | FCA np=16 baseline (168635616) | WS-A.1 np=16 (169095645) | WS vs FCA-np16 |
+|-------|-------------------------------|--------------------------|----------------|
+| MF (ModelFinder) | 1,122.363 s | — (pending) | — |
+| SPR (tree search) | 1,287.863 s | — (pending) | — |
+| Total | 2,410.226 s | — (pending) | — |
+
+Results to be filled in CHANGELOG entry `(cb)` once job 169095645 completes.
+CHANGELOG: `(ca)` submission.
