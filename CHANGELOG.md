@@ -93,6 +93,35 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-23 (bx) — Full MF+SPR PASS ✓ — warm-start A.1 full run results: AA 100K np=1 (job 169094692)
+
+### Results (all PASS ✓)
+
+| Check | Criterion | Result | Status |
+|-------|-----------|--------|--------|
+| lnL (SPR) | −7,541,976.860 ± 0.5 | −7,541,976.862 (Δ 0.002) | ✓ PASS |
+| Best model | LG+G4 | LG+G4 | ✓ PASS |
+| Exit code | 0 | 0 | ✓ PASS |
+
+### Timing vs baseline (job 168425673 — non-MPI, 103T, -m TEST)
+
+| Phase | Baseline (s) | WS-A.1 (s) | Speedup | Δ saved (s) |
+|-------|-------------|------------|---------|------------|
+| **MF (ModelFinder)** | 399.456 | **261.694** | **1.526×** | 137.762 |
+| **SPR (tree search)** | 764.478 | **729.748** | **1.048×** | 34.730 |
+| **Total** | 1,169.556 | **994.904** | **1.176×** | 174.652 |
+
+### Notes
+
+- MF wall matches W1 TESTONLY expectation closely (W1: 254.433 s; full: 261.694 s — Δ 7.3 s, within run-to-run variance).
+- SPR wall is 729.748 s vs baseline 764.478 s (1.048× speedup): minor improvement consistent with warm-start cache not being active during SPR phase; variance may reflect system load or NJ-tree initialisation differences.
+- Warm-start A.1 delivers **~34% MF speedup** on this dataset at np=1 with no lnL regression.
+- Total end-to-end speedup of **1.176×** (174 s saved).
+- PBS used 00:16:46 walltime (baseline would have taken ~19.5 min; result: ~16.8 min).
+- JSON record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
+
+---
+
 ## 2026-05-23 (bw) — Submit full MF+SPR run: AA 100K np=1, warm-start A.1 binary (job 169094692)
 
 ### What

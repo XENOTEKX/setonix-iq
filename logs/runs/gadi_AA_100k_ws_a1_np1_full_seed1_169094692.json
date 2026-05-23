@@ -1,0 +1,84 @@
+{
+  "run_id": "gadi_AA_100k_ws_a1_np1_full_seed1_169094692",
+  "label": "AA_100k_ws_a1_np1_full_seed1",
+  "platform": "gadi",
+  "run_type": "mf_iso",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_aa_100k",
+  "data_type": "AA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "threads": 103,
+  "seed": 1,
+  "model_finder_only": false,
+  "timing": [
+    {
+      "command": "mpirun -np 1 numactl --localalloc iqtree3-mpi-fca-ws-a1 -s alignment_100000.phy -m TEST -T 103 -seed 1",
+      "time_s": 994.904
+    }
+  ],
+  "verify": [
+    {
+      "file": "alignment_100000.phy",
+      "status": "pass",
+      "expected": -7541976.86,
+      "reported": -7541976.862,
+      "diff": 0.002,
+      "note": "Full SPR lnL vs baseline ref 168425673; tol=0.5"
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 994.904,
+    "mf_wall_s": 261.694,
+    "spr_wall_s": 729.748,
+    "lnL": -7541976.862,
+    "best_model": "LG+G4",
+    "all_pass": true,
+    "lnl_pass": true,
+    "model_pass": true,
+    "vs_baseline": {
+      "mf_speedup": 1.526,
+      "spr_speedup": 1.048,
+      "total_speedup": 1.176
+    }
+  },
+  "warm_start": {
+    "phase": "A.1"
+  },
+  "mf_time_summary": {},
+  "env": {
+    "hostname": "gadi-cpu-spr-0431.gadi.nci.org.au",
+    "date": "2026-05-23T14:43:29+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a1",
+    "iqtree_version": "IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built May 23 2026",
+    "mpi_nranks": 1,
+    "pbs": {
+      "job_id": "169094692.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "104",
+      "project": "dx61"
+    }
+  },
+  "profile": {
+    "nranks": 1,
+    "omp_per_rank": 103,
+    "placement": "mpi_1node_excl_full"
+  },
+  "build_tag": "fca_ws_a1_icx_avx512",
+  "branch": "fca-lbfgs-ws",
+  "non_canonical": true,
+  "non_canonical_label": "FCA-WS Phase A.1 (cross-model warm-start, local-only) \u00b7 ICX+MPI \u00b7 AVX-512 \u00b7 full MF+SPR",
+  "group": "fca_ws_a1"
+}

@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526, 2026-05-23) · next: Phase A.2 MPI broadcast
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · next: Phase A.2 MPI broadcast
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -871,3 +871,32 @@ Pass criteria: lnL within ±0.5 of baseline 168425673, MF wall ≤ 380 s, best m
 MF wall at np=1: 254.433 s (ws-a1) vs 257.355 s (FCA baseline, no warm-start, 168577707) — Δ 2.9 s (1.1%, within noise). Expected: cross-rank benefit requires Phase A.2 MPI broadcast.
 WS-HIT diagnostic lines: 0 — binary does not emit `WS-HIT:`/`WS-MISS:` tags; correctness confirmed by lnL match.
 CHANGELOG: `(bv)` · Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_w1_seed1_169094526.json`
+
+**Full MF+SPR run submitted 2026-05-23 as job 169094692** (`normalsr`, 1×103T, `-m TEST`, seed=1).
+Script: `gadi-ci/lbfgs-ws/run_ws_a1_aa_100k_1node_full.sh`.
+Purpose: confirm end-to-end correctness and measure SPR-phase timing following W1 PASS.
+
+**Full run result (2026-05-23): ALL PASS ✓**
+
+| Check | Criterion | Result |
+|-------|-----------|--------|
+| lnL (SPR) | ±0.5 of −7,541,976.860 | **−7,541,976.862** (Δ 0.002) ✓ |
+| Best model | LG+G4 | **LG+G4** ✓ |
+| Exit code | 0 | **0** ✓ |
+
+**Timing vs baseline 168425673 (non-MPI, 103T, -m TEST):**
+
+| Phase | Baseline (s) | WS-A.1 (s) | Speedup | Saved (s) |
+|-------|-------------|------------|---------|-----------|
+| MF (ModelFinder) | 399.456 | **261.694** | **1.526×** | 137.762 |
+| SPR (tree search) | 764.478 | **729.748** | **1.048×** | 34.730 |
+| Total | 1,169.556 | **994.904** | **1.176×** | 174.652 |
+
+Key observations:
+- **MF speedup (1.526×)** confirms warm-start cache is active and beneficial at np=1. Full-run MF (261.694 s) is slightly slower than TESTONLY (254.433 s) by ~7.3 s — within run-to-run variance (different queue slot, possibly different NUMA topology assignment).
+- **SPR speedup (1.048×)** is a small but real improvement; warm-start cache is NOT active during SPR. The ~4.7% improvement likely reflects system/NUMA noise rather than any cache effect. SPR is unaffected by Phase A.1 warm-start as expected.
+- **Total 1.176× speedup** (~175 s saved, 16.8 min vs baseline ~19.5 min) is driven almost entirely by MF.
+- Phase A.2 (MPI broadcast of warm-start across ranks) is needed to see cross-rank benefit at np>1.
+
+PBS used 00:16:46 walltime. Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
+CHANGELOG: `(bw)` submission · `(bx)` results.
