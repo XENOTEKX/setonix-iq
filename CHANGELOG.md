@@ -137,9 +137,9 @@ All builds: `build-atmd-b3*/iqtree3-mpi-atmd-b3*`, icpx 2025.3.2, OpenMPI 4.1.7,
 |-----|--------|-----|-----------|------|-------------|
 | 169109738 | b3 | −7,541,976.853 | LG+G4 ✓ | 1706s | ABSENT (B.4-1) |
 | 169110375 | b3b | −7,541,976.853 | LG+G4 ✓ | 1711s | ABSENT (B.4-2) |
-| 169111545 | b3c | pending | pending | pending | pending |
+| 169111545 | b3c | **−7,541,976.853** ✓ | **LG+G4** ✓ | MF=423s / total=1,720s | **K_outer=8 M_inner=12** ✓ |
 
-**AA 1M 4-node b3 (job 169109673)**: running. MF=4,017.842s, best=LG+G4, lnL at NNI-1=−78,605,196.445. SPR in progress. `[ATMD Mode F]` absent (B.4-2 confirmed for np=4).
+**AA 1M 4-node b3 (job 169109673)**: completed with truncated SPR. MF=4,017.842s, best=LG+G4, lnL at NNI-1=−78,605,196.445. SPR reached iteration 40 before PBS walltime. `[ATMD Mode F]` absent (B.4-2 dual-write conflict, b3 lacks sidecar). MF 2× slower than FCA np=4 (1,974s) — nested OMP overhead with K_outer=1 (B.4-1 sysconf bug).
 
 ### Bug B.4-1: `sysconf(_SC_AVPHYS_PAGES)` returns near-zero on HPC nodes
 
@@ -149,12 +149,21 @@ cache). Result: `avail_bytes ≈ tens of MB`, K_mem=1, K_outer=1 → Mode F sile
 serial path. **Fix**: read `MemAvailable` from `/proc/meminfo` (kernel's reclaimable-memory
 estimate). Fallback to sysconf if `/proc/meminfo` unavailable. Applied in b3b.
 
-### Bug B.4-2: `[ATMD Mode F]` block does not execute at runtime
+### Bug B.4-2: `[ATMD Mode F]` block does not execute at runtime — **RESOLVED**
 
-After fixing B.4-1, the `[ATMD Mode F]` diagnostic line STILL does not appear in the log.
+**Root cause (confirmed in b3c)**: dual-write conflict. `--prefix iqtree_run` and
+`> iqtree_run.log 2>&1` both wrote to the same file inode through independent file
+descriptors. IQ-TREE's TeeBuf and the shell redirect each held their own seek offset;
+concurrent writes caused bytes from the `[ATMD Mode F]` line to be overwritten at
+the overlapping file positions. The sidecar fopen diagnostic (which writes to a
+**different** filename `iqtree_inner.atmd_diag` via a separate `fopen()`) was unaffected
+and confirmed K_outer=8 — proving the code path DID execute. Fix: separate the two
+filenames (`--prefix iqtree_inner` → `iqtree_inner.log`, shell redirect → `iqtree_stdout.log`).
+
+After fixing B.4-1, the `[ATMD Mode F]` diagnostic line STILL did not appear in the log.
 Binary contains the string at byte ~9.97M; macros `_IQTREE_ATMD`, `_IQTREE_MPI`, `_OPENMP`
 are all defined; `params.atmd_K_outer=0 ≠ -1`; no goto/longjmp; `evaluateAll()` called.
-Root cause not yet isolated. Three diagnostics added to `phylotesting.cpp` for b3c:
+Root cause investigation: Three diagnostics added to `phylotesting.cpp` for b3c:
 
 1. **Entry**: `fprintf(stderr, "[ATMD-DIAG] evaluateAll() ENTRY: atmd_K_outer=%d openmp_by_model=%d\n", ...)` — at top of `evaluateAll()`, unconditional.
 2. **Pre-block**: `fprintf(stderr, "[ATMD-DIAG] evaluateAll B.3+B.4 pre-block: ...\n", ...)` — before `#if defined(_IQTREE_ATMD)...` guard, unconditional.
@@ -187,7 +196,74 @@ gadi-ci/lbfgs-ws/
   run_atmd_b3b_aa_100k_1node.sh K_outer>1 activation re-test, b3b
   run_atmd_b3b_aa_1m_4node.sh   1M 4-node correctness, b3b
   run_atmd_b3c_aa_100k_1node.sh b3c activation test (dual-write fix, diagnostics)
+  run_atmd_b3c_aa_1m_16node_full.sh ATMD Mode F perf gate: AA 1M, 16 nodes np=16
 ```
+
+---
+
+## 2026-05-24 (ci) — ATMD b3c Mode F confirmed + 16-node 1M perf gate submitted (job 169112256)
+
+### b3c AA 100K 1-node final results (job 169111545) — ALL PASS ✓
+
+| Check | Result | Status |
+|-------|--------|--------|
+| K_outer (sidecar) | **K_outer=8 M_inner=12** K_mem=8 per_tree_MB=46,414 avail_MB=496,978 | ✅ Mode F ACTIVE |
+| lnL | −7,541,976.853 (Δ0.007 vs ref) | ✅ PASS |
+| Best model | LG+G4 | ✅ PASS |
+| MF wall | 423.233 s | informational |
+| SPR wall | 1,288.476 s | informational |
+| Total wall | 1,719.858 s | informational |
+
+B.4-2 root cause confirmed: **dual-write conflict** (see `(ch)` Bug B.4-2 section above).
+
+ATMD b3c at 100K is slower than FCA np=1 (MF 423s vs 259s, total 1,720s vs 1,001s) because:
+- K_outer=8 × M_inner=12 = 96 active threads (not 103)
+- 8 concurrent models × 46 GB working set each = 368 GB DRAM pressure → memory bandwidth saturation
+- Nested OMP teams overhead
+At 100K the per-model working set fits in LLC on a single-model 103T run; K_outer=8 thrashes LLC.
+The gain from ATMD Mode F is expected only when the full 103T can't fit **any** models without OOM.
+
+### 16-node 1M ATMD run submitted (job 169112256)
+
+| Field | Value |
+|-------|-------|
+| Job | **169112256** (`normalsr`, 16 MPI ranks × 103 OMP = 1,648T, 16 nodes, `-m TEST`, seed=1) |
+| Binary | `iqtree3-mpi-atmd-b3c` md5 `1c6fc01921df0fbd67e45da280a036e9` |
+| Dataset | AA 1M (100 taxa × 1M sites) |
+| Resources | 16 nodes × 104 cpus = 1,664 cpus, 8,160 GB, walltime 03:30:00, excl |
+| Script | `gadi-ci/lbfgs-ws/run_atmd_b3c_aa_1m_16node_full.sh` |
+| FCA ref | 168635616: MF=1,122s  SPR=1,288s  total=2,410s  lnL=−78,605,196.497 |
+
+**Expected K_outer at 1M**: per_tree_MB scales ×10 from 100K → ~464,000 MB per tree.
+With avail_MB≈497,000: K_mem=floor(497,000/464,000)=1 → **K_outer=1** (memory-bound).
+At K_outer=1, ATMD Mode F = 1 model × 103 threads = same dispatch as FCA per rank.
+Potential gain: NUMA first-touch in `initializeAllPartialLh` may improve memory bandwidth
+even at K_outer=1 by ensuring all partial_lh pages are on the local NUMA node.
+The b3c sidecar (`iqtree_inner.atmd_diag`) will confirm the actual K_outer value.
+
+**If K_outer=1 and result matches FCA** → ATMD provides no MF gain at 1M on 500 GB nodes.
+Next direction: (a) reduce per_tree_MB via `MF_IGNORED` partial allocation, or
+(b) deploy ATMD only for datasets where K_mem ≥ 2 (per_tree_MB ≤ avail_MB/2 ≈ 248 GB).
+
+**If K_outer > 1** → unexpected; ATMD Mode F active at 1M; build b3d (clean, no diagnostics).
+
+### K_outer=1 confirmed (sidecar + log, MF in progress)
+
+While MF was running (models 5–6 of 224), sidecar and inner log both reported:
+- `[ATMD Mode F] K_outer=1 M_inner=103 K_mem=1 per_tree_MB=457507 avail_MB=493125`
+- Actual per_tree_MB=457,507 MB vs extrapolated 464,140 MB (1.4% error — formula accurate)
+- K_mem=floor(493,125/457,507)=**1** → K_outer=**1** (memory-bound, as predicted)
+- ATMD Mode F at 1M = structurally identical to FCA per-rank dispatch
+
+### b3d clean build + run scripts created (ready, conditional)
+
+- `gadi-ci/lbfgs-ws/build_atmd_b3d.sh` — strips b3c diagnostic fprintf/fopen blocks from
+  `phylotesting.cpp` via Python regex patch, builds `iqtree3-mpi-atmd-b3d`, verifies
+  `[ATMD-DIAG]` absent and `[ATMD Mode F]` retained in binary.
+- `gadi-ci/lbfgs-ws/run_atmd_b3d_aa_1m_16node_full.sh` — same gate as b3c 16-node, no sidecar.
+- Condition: submit only if b3c np=16 shows K_outer>1 (unexpected) or if testing <500K dataset.
+
+Final b3c 1M timing → entry `(cj)` once job 169112256 completes.
 
 ---
 

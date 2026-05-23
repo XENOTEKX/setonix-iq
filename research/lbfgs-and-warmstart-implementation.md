@@ -2676,9 +2676,38 @@ stdout redirect (`> iqtree_stdout.log`), eliminating the dual-write conflict. Ga
 reads all three sources: `iqtree_inner.atmd_diag` (sidecar), `iqtree_inner.log`, and
 `iqtree_stdout.log`.
 
-Results of the b3c run will be recorded in §15.9.11.
+Results of the b3c run are recorded in §15.9.12.
 
-#### 15.9.11 AA 1M 4-node b3 result (job 169109673) — PARTIAL (SPR in progress)
+**Root cause (identified via b3c diagnostics, job 169111545) — B.4-2 CLOSED**:
+
+The K_outer block at lines ~4100–4180 of `phylotesting.cpp` **was executing all along** in the
+b3 and b3b runs. The `[ATMD Mode F]` line is correctly printed by `cout` (TeeBuf), but was
+**invisible in `iqtree_run.log` due to the dual-write fd conflict**:
+
+- b3/b3b run scripts used `--prefix iqtree_run` **and** `> iqtree_run.log 2>&1` — both
+  file descriptors open the same filename. IQ-TREE's internal log fd (fopen, O_TRUNC) and
+  the shell stdout fd write concurrently at different file positions. The `[ATMD Mode F]`
+  segment was overwritten by whichever fd reached that file offset last, resulting in absent
+  or corrupted content at that position of `iqtree_run.log`.
+
+Evidence from b3c (separate filenames `iqtree_inner.log` vs `iqtree_stdout.log`):
+
+| File | `[ATMD Mode F]` | `[ATMD-DIAG]` |
+|---|---|---|
+| `iqtree_inner.atmd_diag` (sidecar, fopen) | **PRESENT** ✓ | n/a |
+| `iqtree_inner.log` (IQ-TREE internal log) | **byte 6589** ✓ | absent (stderr only) |
+| `iqtree_stdout.log` (shell stdout+stderr) | **byte 6995** ✓ | **byte 6523** ✓ |
+
+**ATMD Mode F activation values** (sidecar, job 169111545, AA 100K 1 node, b3c binary):
+```
+[ATMD Mode F] K_outer=8 M_inner=12 K_mem=8 per_tree_MB=46414 avail_MB=496978
+```
+
+B.4-2 is reclassified as a **false alarm**: the block executes correctly, but a cosmetic
+logging conflict in the run script masked the output in b3 and b3b runs. The fix (separate
+filenames for `--prefix` and shell redirect) is already applied in all b3c run scripts.
+
+#### 15.9.11 AA 1M 4-node b3 result (job 169109673) — SPR TRUNCATED
 
 | Field | Value |
 |---|---|
@@ -2688,8 +2717,8 @@ Results of the b3c run will be recorded in §15.9.11.
 | Initial lnL | **−78,605,196.445** (NNI iteration 1) |
 | MF wall | **4,017.842s** (1h:6m:57s) |
 | CPU time MF | 342,454.713s (95h:7m:34s) — correct for 4-rank × 103T |
-| ATMD Mode F | **NOT ACTIVATED** — `[ATMD Mode F]` ABSENT (B.4-2 bug confirmed for np=4) |
-| SPR status | IN PROGRESS at time of documentation — optimizing candidate tree set |
+| ATMD Mode F | **NOT ACTIVATED** — `[ATMD Mode F]` ABSENT (B.4-2 dual-write, b3 lacks sidecar) |
+| SPR status | TRUNCATED — job hit 3h30m walltime at SPR iteration 40 |
 
 **Note**: MF=4,017s is intentionally slow compared to Phase A.2 (MF=1,139s at np=16) — this is
 the b3 binary (ATMD patch only, no FCA MPI dispatch, no warm-start), running AA 1M with 4 MPI
@@ -2762,14 +2791,153 @@ occurrences of the old binary path are substituted, not just the label tokens. U
 specific pattern (e.g., `sed 's|iqtree3-mpi-atmd-b3[^c]|iqtree3-mpi-atmd-b3c|g'`) or edit
 the binary path explicitly.
 
-##### b3c 100K re-submission (job 169111545) — IN PROGRESS
+##### b3c 100K re-submission (job 169111545) — DIAGNOSTIC CONFIRMED
 
 After the fix, resubmitted as job **169111545** (`normalsr`, 1 node, 104 cpus, 1h30m walltime).
-Job confirmed running. Results will be appended here when complete.
 
-**Expected outcome from b3c diagnostics**:
-- `[ATMD-DIAG] evaluateAll() ENTRY` in `iqtree_stdout.log` → `evaluateAll()` is reached
-- `[ATMD-DIAG] evaluateAll B.3+B.4 pre-block` in `iqtree_stdout.log` → code reaches B.3+B.4
-- `iqtree_inner.atmd_diag` sidecar file exists → K_outer block executed
-- If pre-block fires but sidecar is absent → `params.atmd_K_outer` must be `-1` at runtime
-- If NEITHER pre-block NOR entry fires → `evaluateAll()` is not being called (contradicts code analysis)
+**Diagnostic results** (read from live logs at ≈12 min wall time):
+
+| Check | Result |
+|---|---|
+| `[ATMD-DIAG] evaluateAll() ENTRY` in `iqtree_stdout.log` | **PRESENT** ✓ |
+| `[ATMD-DIAG] B.3+B.4 pre-block` in `iqtree_stdout.log` | **PRESENT** ✓ |
+| Sidecar `iqtree_inner.atmd_diag` exists | **YES — K_outer block executed** ✓ |
+| `[ATMD Mode F]` in `iqtree_inner.log` (IQ-TREE internal) | **byte 6589** ✓ |
+| `[ATMD Mode F]` in `iqtree_stdout.log` (shell redirect) | **byte 6995** ✓ |
+| K_outer | **8** |
+| M_inner | **12** |
+| K_mem | **8** |
+| per_tree_MB | **46,414 MB** (≈45.3 GB, includes 4× safety factor) |
+| avail_MB | **496,978 MB** (≈485 GB, from `/proc/meminfo MemAvailable`) |
+| lnL at NNI iter 10 | **−7,541,976.853** (matches b3/b3b ✓) |
+
+Sidecar content (`iqtree_inner.atmd_diag`):
+```
+[ATMD Mode F] K_outer=8 M_inner=12 K_mem=8 per_tree_MB=46414 avail_MB=496978
+```
+
+**Root cause of B.4-2 identified and closed** — see §15.9.10 for full analysis. The
+block was always executing; the output was masked by the dual-write fd conflict in the
+b3/b3b run scripts.
+
+##### b3c 100K final results (job 169111545) — ALL PASS ✓
+
+| Metric | Value |
+|---|---|
+| lnL (SPR) | **−7,541,976.853** (Δ0.007 vs ref −7,541,976.860) ✓ |
+| Best model | **LG+G4** ✓ |
+| MF wall | **423.233 s** (0h:7m:3s) |
+| SPR wall | **1,288.476 s** (0h:21m:28s) |
+| Total wall | **1,719.858 s** (0h:28m:39s) |
+| ATMD Mode F | **K_outer=8 M_inner=12** ✓ |
+| Exit code | 0 ✓ |
+
+**Performance vs baselines (AA 100K 1-node)**:
+
+| Binary | MF wall | Total wall | vs FCA np=1 |
+|---|---|---|---|
+| Vanilla (168425673) | 399.456 s | 1,169.556 s | — |
+| FCA np=1 (169095077) | 258.773 s | 1,000.811 s | 1× |
+| ATMD b3c np=1 (169111545) | 423.233 s | 1,719.858 s | 1.63× slower |
+
+ATMD b3c is slower than FCA np=1 at 100K. At K_outer=8 × M_inner=12:
+- 8 models run concurrently with 12 threads each = 96 active threads (not 103)
+- Each concurrent model's working set: per_tree_MB=46,414 MB ≈ 46 GB
+- 8 models × 46 GB = 368 GB allocated simultaneously → DRAM bandwidth saturation
+- LLC (48 MB on SPR) thrashed by 8 × 46 GB → repeated DRAM loads for each model step
+- Nested OMP teams overhead (fork/join for each outer iteration)
+
+At 100K the FCA single-model 103T path benefits from L3 data reuse across threads.
+ATMD's gain is only realised when 103 concurrent single-thread models would OOM — not
+the case at 100K where the actual working set per model is ~91 MB (the 46 GB is the
+theoretical pre-allocated BIONJ-tree ceiling, not the actual runtime footprint).
+
+**The meaningful ATMD test is AA 1M on 16 nodes** — see §15.9.13.
+
+#### 15.9.13 ATMD b3c AA 1M 16-node performance gate (job 169112256) — IN PROGRESS
+
+##### Preliminary: K_outer=1 confirmed (sidecar read while MF running)
+
+At the start of ModelFinder, rank 0 wrote the sidecar and emitted the `[ATMD Mode F]` log line.
+Both confirm K_outer=1 exactly as predicted by the memory formula:
+
+| Source | K_outer | M_inner | K_mem | per_tree_MB | avail_MB |
+|---|---|---|---|---|---|
+| `iqtree_inner.atmd_diag` | **1** | 103 | 1 | **457,507** | 493,125 |
+| `iqtree_inner.log` line | **1** | 103 | 1 | **457,507** | 492,238 |
+| Predicted (extrapolation) | 1 | 103 | 1 | ~464,140 | ~496,978 |
+
+Actual per_tree_MB=457,507 MB is within 1.5% of the extrapolated 464,140 MB — formula accurate.
+K_mem=floor(493,125/457,507)=**1** → K_outer=min(1,8)=**1** → Mode F is effectively serial-per-model.
+MF was in early progress (models 5–6 of 224) at checkpoint. Final timing pending.
+
+Per the decision tree below: **K_outer=1 and MF ≈ FCA np=16 expected** → no b3d needed.
+b3d scripts are nonetheless created (`build_atmd_b3d.sh`, `run_atmd_b3d_aa_1m_16node_full.sh`)
+in case a sub-500K dataset is tested where K_outer>1 emerges.
+
+##### Submission
+
+| Field | Value |
+|---|---|
+| Job | **169112256** (`normalsr`, 16 MPI ranks × 103 OMP = 1,648T, 16 nodes, `-m TEST`, seed=1) |
+| Binary | `iqtree3-mpi-atmd-b3c` md5 `1c6fc01921df0fbd67e45da280a036e9` |
+| Dataset | AA 1M (100 taxa × 1M sites) |
+| Resources | 16 nodes × 104 cpus = 1,664 cpus, 8,160 GB, walltime 03:30:00, excl |
+| Script | `gadi-ci/lbfgs-ws/run_atmd_b3c_aa_1m_16node_full.sh` |
+
+##### Expected K_outer at 1M sites
+
+At 1M sites the ATMD memory formula scales the per_tree_MB estimate ~10× from the 100K value:
+
+| Parameter | AA 100K (confirmed) | AA 1M (extrapolated) |
+|---|---|---|
+| per_tree_MB | 46,414 MB | ~464,140 MB |
+| avail_MB | 496,978 MB | ~496,978 MB |
+| K_mem = floor(avail/per) | floor(497,000/46,414) = 10 | floor(497,000/464,000) = **1** |
+| K_cap | 8 | 8 |
+| **K_outer** | **min(10,8)=8** | **min(1,8)=1** |
+
+With K_outer=1: ATMD Mode F sets M_inner=floor(103/1)=103 — 1 model with all 103 threads.
+This is structurally identical to the FCA per-rank dispatch (1 model at a time, 103T).
+The b3c sidecar (`iqtree_inner.atmd_diag`) will confirm the actual K_outer at 1M.
+
+##### Gate criteria
+
+| Check | Criterion |
+|---|---|
+| K_outer | Report from sidecar — expect 1, flag if > 1 |
+| lnL | within ±1.0 of −78,605,196.497 (FCA np=16 ref) |
+| Best model | LG+G4 |
+| MF wall | compare vs FCA np=16 ref 1,122s |
+| Exit code | 0 |
+
+##### A/B comparison targets
+
+| Reference | Job | MF wall | SPR wall | Total | lnL |
+|---|---|---|---|---|---|
+| FCA np=16 baseline | 168635616 | 1,122s | 1,288s | 2,410s | −78,605,196.497 |
+| WS-A.2 np=16 | 169096801 | 1,139s | 1,199s | 2,420s | −78,605,196.497 |
+| **ATMD b3c np=16** | **169112256** | **pending** | **pending** | **pending** | **pending** |
+
+K_outer=1 confirmed → ATMD structurally equivalent to FCA at 1M sites. Performance parity expected.
+
+##### What to do with results
+
+**If K_outer=1 and MF ≈ FCA np=16 (1,100–1,200s)**:
+ATMD Mode F provides no MF speedup at 1M sites — the memory formula correctly gates K_outer=1.
+ATMD's NUMA first-touch (`initializeAllPartialLh`) may still reduce SPR wall via better
+memory-bandwidth utilisation per rank. Document result, close Phase B as "K_outer>1 requires
+per_tree_MB ≤ avail_MB/2 ≈ 248 GB, i.e., datasets ≤ ~500K sites". No b3d needed.
+
+**If K_outer=1 but MF or SPR noticeably slower than FCA np=16**:
+ATMD nested OMP overhead present even at K_outer=1. Investigate M_inner=103 teams setup cost.
+
+**If K_outer > 1 (formula underestimates per_tree_MB at 1M)**:
+ATMD Mode F is active at 1M. Build b3d (remove diagnostic fprintf/fopen overhead),
+rerun to measure clean production performance. b3d changes:
+- Remove from `phylotesting.cpp`: the three `fprintf(stderr, "[ATMD-DIAG] ...")` lines
+- Remove from `phylotesting.cpp`: the `fopen(prefix + ".atmd_diag", ...)` sidecar block
+- Keep the `[ATMD Mode F]` cout/TeeBuf log line (production diagnostic)
+
+Results → §15.9.14 once job 169112256 completes.
+
