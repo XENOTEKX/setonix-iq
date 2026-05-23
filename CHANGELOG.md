@@ -7,12 +7,12 @@
 All ModelFinder benchmarks are measured against **job 168425673** —
 the standard (non-MPI) IQ-TREE 3.1.2 SPR binary built by sa0557 at
 `/scratch/dx61/sa0557/iqtree2/cpu_opt_merge/builds/build-intel-vanila/iqtree3`
-(commit `4e91dd6` = v3.1.2, ICX + AVX-512 + -xSAPPHIRERAPIDS + R1+R2 patches).
+(canonical name: **`baseline-avx512-r1+r2`** · commit `4e91dd6` = v3.1.2, ICX + AVX-512 + -xSAPPHIRERAPIDS + R1+R2 patches).
 
 | Metric | Value |
 |--------|------:|
 | Job ID | 168425673 |
-| Binary | `build-intel-vanila/iqtree3` (non-MPI, OMP-across-models) |
+| Binary | **`baseline-avx512-r1+r2`** (`build-intel-vanila/iqtree3`, non-MPI, OMP-across-models) |
 | Node   | gadi-cpu-spr-0570 (SPR exclusive, 103 OMP threads on 104 cores) |
 | Alignment | AA 100K (100 taxa × 100K sites, 96K patterns) |
 | **MF wall** | **~405 s** (derived: 1,169.6 − 764.5 tree-search = 405.1 s) |
@@ -56,7 +56,7 @@ Summary of all completed full MF+SPR runs for both the standard baseline and the
 All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for every dataset.
 
 **FCA binary:** `iqtree3-mpi` · md5 `a78ffa2942d6b073490d503416ae554c` · commit `9603247f` on `test_MF2` (fast-forwarded 2026-05-18) · ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5 · seed=1 · `-m TEST -T 103`  
-**Baseline binary:** `build-intel-vanila/iqtree3` · non-MPI OMP-across-models · ICX + AVX-512 + R1+R2 · v3.1.2 (`4e91dd6`) · sa0557
+**Baseline binary:** **`baseline-avx512-r1+r2`** (`build-intel-vanila/iqtree3`) · non-MPI OMP-across-models · ICX + AVX-512 + R1+R2 · v3.1.2 (`4e91dd6`) · sa0557
 
 > **How to run the FCA binary** — see [`research/updated-modelfinder-dispatch.md`](research/updated-modelfinder-dispatch.md):
 > §22 (architecture diagram), §23 (operator guide + flag reference), §24 (validated results table with provenance).
@@ -90,6 +90,84 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > Speedup = baseline total ÷ FCA total.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
+
+---
+
+## 2026-05-23 (bs) — New phase branch + baseline-FCA binary copy: L-BFGS + cross-model warm-start work begins
+
+### What
+
+Set up the working environment for the next phase of FCA work — switching from dispatch-layer
+optimisations (Phases 0/0.5/0.6, validated, branch `test_MF2`) to per-rank BFGS-loop optimisations
+(L-BFGS-B promotion + cross-model parameter warm-starting with MPI broadcast). The full design is
+in `research/lbfgs-and-warmstart-implementation.md` (commit checkpoint Phase A.−1).
+
+**Branches created (local; remote push deferred — see "Push status" below):**
+
+| Repo | New branch | Branched from | Base commit |
+|------|-----------|---------------|-------------|
+| `XENOTEKX/setonix-iq` (harness) | `fca-lbfgs-ws` | `modelfinder2` | `21d61e68` |
+| `XENOTEKX/setonix-iq` fork of `iqtree/iqtree3` (source) | `fca-lbfgs-ws` | `test_MF2` | `9603247f` |
+
+**Working binary copied (code untouched, md5 preserved):**
+
+| Path | md5 | Origin |
+|------|-----|--------|
+| `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` | `a103bc6c97860145033206c47b184367` | copy of THP-validated binary from `(bo)` |
+| `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-lbfgs-ws` | `a103bc6c97860145033206c47b184367` | mirror for PBS jobs |
+
+Source commit underlying the binary: `c8f11a24` on `test_MF2` (ICX 2025.3.2 + OpenMPI 4.1.7 +
+AVX-512 + THP `madvise(MADV_HUGEPAGE)` + FCA Phase 0.5/0.6 + MF-TIME markers).
+
+### Why a renamed binary rather than overwriting `iqtree3-mpi`
+
+1. PBS jobs analysing `(br)` results still reference `iqtree3-mpi`; this avoids any chance of perturbing in-flight or future re-runs against the validated baseline.
+2. A/B comparison during the L-BFGS / warm-start phases requires the baseline and the modified binary co-resident on disk. The renamed copy makes the PBS `IQTREE_BIN` choice explicit per test.
+3. md5 audit trail: the baseline-of-record md5 (`a103bc6c…`) is preserved through the rename. Once the first patch lands (planned: `patches/iqtree3/0005-fca-lbfgs-promotion.patch`), the rebuilt binary will diverge — the md5 diff *is* the contribution being measured.
+
+### What this entry is NOT
+
+- Not a code change. `iqtree3-mpi-fca-lbfgs-ws` is byte-identical to the `(bo)` THP-validated binary. No new patch file. No new behaviour to validate.
+- Not a defaults change. PBS scripts in `gadi-ci/cpu-bench/` and `gadi-ci/mf-iso/` still reference the old `iqtree3-mpi` binary; the new path will be opt-in per script during A.0/A.1/A.2 testing.
+
+### Roadmap from this checkpoint
+
+Per `research/lbfgs-and-warmstart-implementation.md` §6:
+
+| Phase | Scope | Files | Expected MF-wall gain | Validation |
+|-------|-------|-------|----------------------|------------|
+| **A.0** | L-BFGS-B retune + opt-in for RateFree/RateFreeInvar/RateGammaInvar BFGS paths | `utils/optimization.{cpp,h}`, `model/rate*.cpp`, `utils/tools.cpp` (~40 lines) | 0–10% | L1–L5 (AA 100K np=1/4, AA 1M np=8/16, DNA 1M np=8) — lnL ±0.5 |
+| **A.1** | Local warm-start cache (no MPI) | `main/phylotesting.{cpp,h}` (~80 lines) | 5–15% on np=1 | W1 at np=1 |
+| **A.2** | Warm-start MPI broadcast piggybacked on `filterRatesMPI` | `main/phylotesting.cpp` (~60 lines) | 15–30% on np≥4 | W2–W5 + W6 corruption |
+| **A.3** | Cross-family +R chain warm-start (future) | `main/phylotesting.h`, `model/ratefree.cpp` | 5–10% on np≥4 | W3–W5 |
+| **A.4** | If A.0 passes gates, promote L-BFGS-B to default | 1 file, ~5 lines | reuse A.0 gain | Re-run L4 |
+
+Stacked expectation against `(bs)`/(bo) AA 1M np=16 (1,122 s MF wall): A.0+A.2+A.3 conservatively → ~750 s MF wall (~11.2× total vs single-node baseline, up from 9.45× at `(br)`).
+
+### Push status
+
+| Repo | Status |
+|------|--------|
+| Harness (`XENOTEKX/setonix-iq`) | **✅ Pushed** — `origin/fca-lbfgs-ws` live on GitHub |
+| Source (`iqtree/iqtree3` fork) | **⏳ Pending** — push from a credentialed shell needed |
+
+To push the source repo branch:
+
+```
+cd /scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3
+git push setonix-iq fca-lbfgs-ws
+```
+
+After push, both branches will be visible at
+- https://github.com/XENOTEKX/setonix-iq/tree/fca-lbfgs-ws (harness — already live)
+- https://github.com/XENOTEKX/setonix-iq/tree/fca-lbfgs-ws (source — same fork, different content)
+
+### Cross-references
+
+- Design + dependency map + literature audit: `research/lbfgs-and-warmstart-implementation.md`
+- Source-of-truth transcript with Minh/Thomas discussion (cross-model warm-start origin): `research/bfgs&CrossModelWarmStart.md` lines 720–741
+- THP-validated baseline this branch starts from: `(bo)` (binary md5 `a103bc6c…`)
+- np=16 headline this branch targets to improve: `(br)` (9.45× total speedup at np=16 AA 1M)
 
 ---
 
@@ -409,7 +487,7 @@ Extended the same isolation harness to DNA datasets to confirm:
 
 | Label | Binary | Build | Run type |
 |-------|--------|-------|----------|
-| **Baseline (R1+R2/AVX-512)** | `build-intel-vanila/iqtree3` (non-MPI, OMP) | ICX + AVX-512 + -xSAPPHIRERAPIDS + R1+R2 patches, v3.1.2 (4e91dd6) — sa0557 | Full run (MF + SPR tree search); also used for TESTONLY baselines |
+| **baseline-avx512-r1+r2** | `build-intel-vanila/iqtree3` (non-MPI, OMP) | ICX + AVX-512 + -xSAPPHIRERAPIDS + R1+R2 patches, v3.1.2 (4e91dd6) — sa0557 | Full run (MF + SPR tree search); also used for TESTONLY baselines |
 | **FCA mf-iso** | `iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` (MPI + OMP) | ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5, branch `mf-iso-phase0.5-0.6` — as1708 | **TESTONLY** (MF only) **and Full run** (MF + SPR tree search) — same binary |
 | **CLX build** | `cpu_bench/build-intel-clx/iqtree3` (non-MPI, OMP) | ICX + Cascade Lake; used for historical baseline only | Full run (MF + SPR tree search) |
 
@@ -552,7 +630,7 @@ SPR phase (~764 s for AA 100K, ~227 s for DNA 100K) runs in OMP within each rank
 | Label | Binary | Description |
 |-------|--------|-------------|
 | **CLX** | `cpu_bench/build-intel-clx/iqtree3` | Cascade Lake, OMP-only, historical reference |
-| **Baseline** | `build-intel-vanila/iqtree3` | Sapphire Rapids, OMP-only, R1+R2+AVX-512, v3.1.2 (sa0557) |
+| **baseline-avx512-r1+r2** | `build-intel-vanila/iqtree3` | Sapphire Rapids, OMP-only, R1+R2+AVX-512, v3.1.2 (sa0557) |
 | **FCA mf-iso** | `iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi` | MPI+OMP, branch `mf-iso-phase0.5-0.6` (as1708) |
 
 All `-m TESTONLY` runs use a starting NJ tree (no SPR). lnL values are therefore NJ-tree
