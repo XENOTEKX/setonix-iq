@@ -113,7 +113,7 @@ W2 correctness gate submitted: AA 100K, 4 MPI × 26 OMP = 104T, 1 node, seed=1, 
 |-------|-------|
 | Job | **169096105** (`normalsr`, 4 MPI ranks × 26 OMP, `-m TESTONLY`, seed=1) |
 | Binary | `iqtree3-mpi-fca-ws-a2` md5 `1547a906f1f75422514b0a0cdf2bc89e` (Phase A.2 broadcast) |
-| Source commit | `5604606d` (fca-lbfgs-ws, +101 lines `WarmStartPacket` MPI_Bcast) |
+| Source commit | `5604606d` (fca-lbfgs-ws-iqtree3, +101 lines `WarmStartPacket` MPI_Bcast) |
 | Alignment | AA 100K (100 taxa × 100K sites) |
 | Resources | 1 node × 104 cpus, 200 GB, walltime 01:00:00 |
 | Script | `gadi-ci/lbfgs-ws/run_ws_a2_aa_100k_1node_w2.sh` |

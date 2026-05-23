@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · next: W2 gate (np=4 AA 100K)
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · W2 gate submitted (job 169096105)
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -602,7 +602,7 @@ The MPI broadcast (A.2) builds on the cache structure. Local-only is the simpler
 - Binary: `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a2`
 - Mirror: `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a2`
 - md5: `1547a906f1f75422514b0a0cdf2bc89e` (≠ A.1 `fa9ee601`, confirms new code linked)
-- Source commit: `5604606d` on `fca-lbfgs-ws`
+- Source commit: `5604606d` on `fca-lbfgs-ws-iqtree3` (XENOTEKX/setonix-iq; IQ-TREE source branch, separate from harness)
 - Build environment: `openmpi/4.1.7` + `intel-compiler-llvm/2025.3.2` + `binutils/2.44` (see Finding 7)
 - Symbols verified: `_ZN17CandidateModelSet14filterRatesMPIEi` (filterRatesMPI) + `RateWarmStartCache` — `WarmStartPacket` is function-local, inlined, no separate nm symbol (expected).
 
