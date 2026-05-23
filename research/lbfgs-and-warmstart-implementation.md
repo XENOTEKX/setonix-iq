@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · W2 gate submitted (job 169096105)
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · W2 PASS ✓ (169096105, correctness) · W2p PASS ✓ (169096530, MF=91.700s ≤100s, ws_bcast_fields=4 cross-node) · **W4 DONE** (169096801, MF=1139.494s SPR=1198.689s total=2419.671s lnL=−78,605,196.497 LG+G4; MF gate miss — see CHANGELOG (cf)); W3/W5/W6 pending · **Contribution A (L-BFGS-B): not started**
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`

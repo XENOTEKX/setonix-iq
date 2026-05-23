@@ -83,7 +83,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
-| 169096801 | WS-A.2 np=16 W4 (full) | AA 1M | 16 | 16×103T | — | — | — | — | — | — | — (pending W4 gate) | — | — |
+| 169096801 | WS-A.2 np=16 W4 (full) | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,139.494** | **1,198.689** | **2,419.671** | **9.41×** | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -96,7 +96,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **pending** = job 169095645 **DONE** MF=1,146.174 s, SPR=1,212.944 s, total=2,440.301 s, lnL=−78,605,196.497, LG+G4; see entry `(cb)`. Δvs FCA np=16 (168635616): MF +23.8 s (+2.1%, within noise — A.1 adds cache overhead, no cross-rank gain).
 > **169096105** = W2 1-node correctness gate: **DONE** — `ws_bcast_fields=4` PASS, lnL=−7,541,976.853 (Δ0.007), LG+G4 PASS. MF=1,918.721 s — expected slow (4×26T intra-node, shared memory, not production parity). Correctness-only gate; performance gate requires 4-node config. See entry `(cc)`.
 > **169096530** = W2-parity gate: **DONE ALL PASS** — `ws_bcast_fields=4` (cross-node Infiniband) ✓, lnL=−7,541,976.853 (Δ0.007) ✓, LG+G4 ✓, MF=91.700 s ≤ 100 s ✓. PBS "E" state was normal exit (completed in ~3 min). Phase A.2 cross-node MPI_Bcast confirmed at production parity. See entry `(cd)`.
-> **169096801** = W4 gate (submitted): 16 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. Parity with FCA np=16 (168635616) and WS-A.1 np=16 (169095645). See entry `(ce)`.
+> **169096801** = W4 gate: **DONE** — lnL=−78,605,196.497 ✓, LG+G4 ✓, ws_bcast_fields=4 ✓. MF=1,139.494 s (Δ+17.1 s vs FCA np=16, Δ−6.7 s vs WS-A.1 np=16), SPR=1,198.689 s (Δ−89.2 s vs FCA, Δ−14.3 s vs WS-A.1), total=2,419.671 s. MF wall gate (≤900 s) not met — see entry `(cf)` for analysis.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
@@ -246,6 +246,53 @@ This is the direct comparison against FCA np=16 baseline (168635616) and WS-A.1 
 | **WS-A.2 np=16 (this)** | **169096801** | **pending** | **pending** | **pending** | **pending** |
 
 Results in entry `(cf)` once job completes.
+
+---
+
+## 2026-05-23 (cf) — W4 gate DONE (job 169096801): Phase A.2 AA 1M np=16 full MF+SPR results
+
+### Results
+
+| Metric | WS-A.2 np=16 (169096801) | FCA np=16 (168635616) | WS-A.1 np=16 (169095645) | Δ vs FCA | Δ vs WS-A.1 |
+|--------|--------------------------|----------------------|--------------------------|----------|-------------|
+| MF wall | **1,139.494 s** | 1,122.363 s | 1,146.174 s | +17.1 s (+1.5%) | −6.7 s (−0.6%) |
+| SPR wall | **1,198.689 s** | 1,287.863 s | 1,212.944 s | −89.2 s (−6.9%) | −14.3 s (−1.2%) |
+| Total wall | **2,419.671 s** | 2,410.226 s | 2,440.301 s | +9.4 s (+0.4%) | −20.6 s (−0.8%) |
+| lnL | −78,605,196.497 | −78,605,196.497 | −78,605,196.497 | 0.000 ✓ | 0.000 ✓ |
+| Best model | LG+G4 | LG+G4 | LG+G4 | match ✓ | match ✓ |
+| ws_bcast_fields | 4 | — | — | — | — |
+| Speedup vs vanilla | **9.41×** | 9.45× | 9.32× | | |
+
+### W4 gate checks
+
+| Check | Status | Detail |
+|-------|--------|--------|
+| Exit code = 0 | ✅ PASS | |
+| lnL within ±1.0 | ✅ PASS | Δ = 0.000 vs FCA np=16 |
+| Best model = LG+G4 | ✅ PASS | |
+| ws_bcast_fields > 0 | ✅ PASS | 4 fields broadcast over cross-node Infiniband |
+| MF wall ≤ 900 s | ❌ MISS | 1,139.494 s — criterion was aspirational (§5.7) |
+
+### Analysis — why MF wall didn't improve at np=16
+
+At np=16 the FCA dispatch assigns only ~14 models per rank. Rank 0 fires `filterRatesMPI`
+after its 7th model evaluation (at model index 7 in the MF-MPI-DIAG line), with only
+~6 models remaining on that rank. The warm-start broadcast therefore benefits at most 6
+subsequent models across all 16 ranks — far too few to move the 1,139 s MF wall, which is
+dominated by the first-model BFGS convergence on each rank (no prior data).
+
+The warm-start benefit is most visible at low np (W2: 4 ranks × 103T gives a 38.8% MF gain
+vs FCA np=4 estimate). At np=16 the per-rank model count is too small. This is a fundamental
+Amdahl ceiling for Contribution B at high parallelism — not a correctness issue.
+
+Contribution A (L-BFGS-B, §4) targets exactly this regime: it reduces per-model BFGS cost
+independently of how many models a rank handles, so it composes correctly with np=16 FCA.
+
+### What's still needed from §5.7
+
+- **W3** (AA 1M np=8): Expected to show more benefit than np=16 (more models/rank)
+- **W5** (DNA 1M np=8): DNA parity
+- **W6** (AA 100K np=1): Robustness — inject corrupted cache, verify BFGS still converges
 
 ---
 
