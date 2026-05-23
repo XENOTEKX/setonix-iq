@@ -1,0 +1,100 @@
+{
+  "run_id": "gadi_AA_1m_ws_a1_np16_full_seed1_169095645",
+  "label": "AA_1m_ws_a1_np16_full_seed1",
+  "platform": "gadi",
+  "run_type": "mf_iso",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy",
+  "dataset_short": "complex_aa_1m",
+  "data_type": "AA",
+  "seq_len": 1000000,
+  "n_taxa": 100,
+  "threads": 1648,
+  "seed": 1,
+  "model_finder_only": false,
+  "timing": [
+    {
+      "command": "mpirun -np 16 -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi-fca-ws-a1 -s alignment_1000000.phy -m TEST -T 103 -seed 1",
+      "time_s": 2440.301
+    }
+  ],
+  "verify": [
+    {
+      "file": "alignment_1000000.phy",
+      "status": "pass",
+      "expected": -78605196.573,
+      "reported": -78605196.497,
+      "diff": 0.076,
+      "note": "Full-run SPR lnL vs vanilla ref 168425491 (AA 1M); tol=1.0"
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 2440.301,
+    "mf_wall_s": 1146.174,
+    "spr_wall_s": 1212.944,
+    "lnL": -78605196.497,
+    "best_model": "LG+G4",
+    "all_pass": true,
+    "lnl_pass": true,
+    "model_pass": true,
+    "vs_fca_np16_baseline": {
+      "mf_speedup": 0.979,
+      "spr_speedup": 1.062,
+      "total_speedup": 0.988
+    },
+    "vs_vanilla_baseline": {
+      "mf_speedup": 6.62,
+      "spr_speedup": 12.448,
+      "total_speedup": 9.333
+    }
+  },
+  "warm_start": {
+    "phase": "A.1"
+  },
+  "mf_time_summary": {
+    "rank_0": {
+      "n_models": 6,
+      "total_eval_s": 665.305,
+      "mean_s": 110.884,
+      "max_s": 329.902
+    }
+  },
+  "phase0_5_broadcast": {
+    "fired": true,
+    "ok_rates_size": 1
+  },
+  "env": {
+    "hostname": "gadi-cpu-spr-0685.gadi.nci.org.au",
+    "date": "2026-05-23T16:15:27+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a1",
+    "iqtree_version": "IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built May 23 2026",
+    "mpi_nranks": 16,
+    "pbs": {
+      "job_id": "169095645.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "1664",
+      "project": "dx61"
+    }
+  },
+  "profile": {
+    "nranks": 16,
+    "omp_per_rank": 103,
+    "placement": "mpi_16node_full_perrank_logs"
+  },
+  "build_tag": "fca_ws_a1_icx_avx512",
+  "branch": "fca-lbfgs-ws",
+  "non_canonical": true,
+  "non_canonical_label": "FCA-WS Phase A.1 (cross-model warm-start, local-only) \u00b7 ICX+MPI \u00b7 AVX-512 \u00b7 full MF+SPR \u00b7 AA 1M \u00b7 np=16",
+  "group": "fca_ws_a1"
+}

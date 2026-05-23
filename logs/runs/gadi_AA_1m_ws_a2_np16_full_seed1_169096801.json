@@ -1,0 +1,128 @@
+{
+  "run_id": "gadi_AA_1m_ws_a2_np16_full_seed1_169096801",
+  "label": "AA_1m_ws_a2_np16_full_seed1",
+  "platform": "gadi",
+  "run_type": "mf_iso",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy",
+  "dataset_short": "complex_aa_1m",
+  "data_type": "AA",
+  "seq_len": 1000000,
+  "n_taxa": 100,
+  "threads": 1648,
+  "seed": 1,
+  "model_finder_only": false,
+  "timing": [
+    {
+      "command": "mpirun -np 16 -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi-fca-ws-a2 -s alignment_1000000.phy -m TEST -T 103 -seed 1",
+      "time_s": 2419.671
+    }
+  ],
+  "verify": [
+    {
+      "check": "lnL",
+      "status": "pass",
+      "expected": -78605196.573,
+      "reported": -78605196.497,
+      "diff": 0.076,
+      "note": "Full-run SPR lnL vs vanilla ref 168425491 (AA 1M); tol=1.0"
+    },
+    {
+      "check": "best_model",
+      "status": "pass",
+      "expected": "LG+G4",
+      "reported": "LG+G4"
+    },
+    {
+      "check": "ws_bcast_fields_A2",
+      "status": "pass",
+      "ws_bcast_fields_max": 4,
+      "ws_bcast_count": 1,
+      "note": "Phase A.2 cross-rank WarmStartPacket MPI_Bcast must fire (fields > 0)"
+    },
+    {
+      "check": "mf_wall_W4",
+      "status": "fail",
+      "limit_s": 900.0,
+      "actual_s": 1139.494,
+      "note": "\u00a75.7 W4 gate: MF wall \u2264 900 s at np=16"
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 2419.671,
+    "mf_wall_s": 1139.494,
+    "spr_wall_s": 1198.689,
+    "lnL": -78605196.497,
+    "best_model": "LG+G4",
+    "all_pass": false,
+    "lnl_pass": true,
+    "model_pass": true,
+    "ws_bcast_pass": true,
+    "mf_wall_pass": false,
+    "vs_fca_np16_baseline": {
+      "mf_speedup": 0.985,
+      "spr_speedup": 1.074,
+      "total_speedup": 0.996
+    },
+    "vs_ws_a1_np16": {
+      "mf_speedup": 1.006,
+      "spr_speedup": 1.012,
+      "total_speedup": 1.009
+    },
+    "vs_vanilla_baseline": {
+      "mf_speedup": 6.659,
+      "spr_speedup": 12.596,
+      "total_speedup": 9.413
+    }
+  },
+  "warm_start": {
+    "phase": "A.2",
+    "ws_bcast_fields_max": 4,
+    "ws_bcast_count": 1,
+    "broadcast_fired_A0_5": true,
+    "bcast_ok_rates_size": 1
+  },
+  "mf_time_summary": {
+    "rank_0": {
+      "n_models": 6,
+      "total_eval_s": 668.949,
+      "mean_s": 111.491,
+      "max_s": 332.667
+    }
+  },
+  "env": {
+    "hostname": "gadi-cpu-spr-0685.gadi.nci.org.au",
+    "date": "2026-05-23T17:21:54+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a2",
+    "iqtree_md5": "1547a906f1f75422514b0a0cdf2bc89e",
+    "iqtree_version": "IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built May 23 2026",
+    "mpi_nranks": 16,
+    "pbs": {
+      "job_id": "169096801.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "1664",
+      "project": "dx61"
+    }
+  },
+  "profile": {
+    "nranks": 16,
+    "omp_per_rank": 103,
+    "placement": "mpi_16node_full_perrank_logs"
+  },
+  "build_tag": "fca_ws_a2_icx_avx512",
+  "branch": "fca-lbfgs-ws",
+  "non_canonical": true,
+  "non_canonical_label": "FCA-WS Phase A.2 (cross-rank MPI broadcast) \u00b7 ICX+MPI \u00b7 AVX-512 \u00b7 full MF+SPR \u00b7 AA 1M \u00b7 np=16",
+  "group": "fca_ws_a2"
+}

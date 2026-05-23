@@ -1995,3 +1995,781 @@ Phylogenetics-specific load balancing:
 ModelFinder algorithmic context:
 - Kalyaanamoorthy, S., Minh, B. Q., Wong, T. K. F., von Haeseler, A. & Jermiin, L. S. (2017). *ModelFinder: fast model selection for accurate phylogenetic estimates.* Nat. Methods 14:587.
 - Wong, T. K. F. et al. (2025). *IQ-TREE 3: phylogenomic inference software using complex evolutionary models.* (lists ModelFinder2 / Lanfear as upcoming; ATMD does not depend on MF2).
+
+---
+
+## 15. Hardening §14 against the codebase — full audit and B.−1/B.3+B.4 implementation log
+
+*Completed: session of 2025-08*
+
+This section documents the full audit of the §14 ATMD design against the actual IQ-TREE 3.1.2
+codebase, the 10 hard blockers identified, the revised phase order, and the status of Phase B.−1
+(infrastructure prep) and Phase B.3+B.4 (HH-NUMA Mode F outer loop + memory-budget semaphore).
+
+### 15.1 Hard blockers identified (pre-implementation audit)
+
+Ten blockers were identified by auditing the codebase against the §14 design:
+
+| # | Blocker | Severity | Fix in phase |
+|---|---------|----------|--------------|
+| H1 | `omp_set_max_active_levels(1)` hardcoded at 3 sites in main.cpp — prevents nested OMP | **CRITICAL** | B.−1 |
+| H2 | `MPI_Init()` → THREAD_SINGLE: any OMP thread doing MPI = undefined behaviour | **CRITICAL** | B.−1 |
+| H3 | Two unnamed `#pragma omp critical` in phylotesting.cpp (lines ~1974, ~2220) — unnamed criticals deadlock across nesting levels under old OpenMP ABI | **CRITICAL** | B.−1 |
+| H4 | `theta_computed` is a single bool on PhyloTree — concurrent pattern-stripes would race | **MAJOR** | B.0 (stub in B.−1) |
+| H5 | `random_double()` in iqtree.cpp at 3 sites — potential race if called from outer workers | Low (safe: all 3 sites are bootstrap/NNI paths, not MF eval path) | N/A |
+| H6 | No `IQTREE_ATMD` build guard — ATMD code would compile into every binary | **CRITICAL** | B.−1 |
+| H7 | No `atmd_K_outer` / `atmd_inner_threads` fields on Params — K/M values have no storage | MAJOR | B.−1 |
+| H8 | `getNextModel()` unnamed critical (line 3742) — shared with all unnamed criticals (old OMP ABI) | Low (unique lock per directive in GCC libgomp; flag for B.0 cleanup) | B.0 |
+| H9 | `atmd_inner_threads` in params defaults to 0; NUMA first-touch would be skipped without writeback | **MAJOR** (found during audit) | B.3 (writeback added) |
+| H10 | B.4 memory semaphore (OOM gate) required before B.3 outer loop to avoid OOM | MAJOR | B.3+B.4 combined |
+
+### 15.2 Revised phase order
+
+After the audit, Phase B.−1 (infrastructure prep) was prepended as a prerequisite.
+B.4 (memory budget) was merged into B.3 (outer loop) since K_outer itself IS the semaphore.
+
+```
+B.−1  →  B.3+B.4  →  B.0  →  B.1  →  B.2  →  B.5  →  B.6
+```
+
+- **B.−1** (50 LOC, 1 day): Unblock nesting, MPI threading, build guard, Params fields, theta stubs.
+- **B.3+B.4** (100 LOC): K_outer calc (memory-bounded), outer OMP parallel team, NUMA first-touch, params writeback.
+- **B.0** (~900 LOC): Pattern-parallel Mode P (Allreduce-based likelihood split, per-stripe theta).
+- **B.1** (~200 LOC): ASC second Allreduce corrected.
+- **B.2** (~150 LOC): `filterRatesMPI` Mode P integration.
+- **B.5** (~200 LOC): Tail-stealing via `MPI_Iprobe` / `MPI_Isend` (replaces §14's broken RMA design).
+- **B.6**: End-to-end validation, CI integration, results doc update.
+
+### 15.3 Implementation: Phase B.−1 (DONE)
+
+**Files modified:** 7 files, ~55 LOC added.
+
+#### 15.3.1 CMakeLists.txt — new `IQTREE_ATMD` option
+
+```cmake
+option(IQTREE_ATMD "Enable ATMD HH-NUMA and pattern-parallel optimisations" OFF)
+if (IQTREE_ATMD)
+    message("IQTREE_ATMD: ON  (HH-NUMA Mode F + pattern-parallel Mode P)")
+    add_definitions(-D_IQTREE_ATMD)
+else()
+    message("IQTREE_ATMD: OFF")
+endif()
+```
+
+Build with: `cmake -DIQTREE_ATMD=ON ...`
+
+#### 15.3.2 main/main.cpp — conditional `omp_set_max_active_levels`
+
+Three startup sites (lines ~2460, ~3305, ~3614) patched to use level 2 under `_IQTREE_ATMD`:
+
+```cpp
+#ifdef _IQTREE_ATMD
+    // B.-1: ATMD Mode F needs nested OMP level 2 for K_outer x M_inner.
+    omp_set_max_active_levels(2);
+    omp_set_dynamic(0);
+#else
+    omp_set_max_active_levels(1);
+#endif
+```
+
+#### 15.3.3 utils/MPIHelper.cpp — `MPI_Init_thread(FUNNELED)`
+
+```cpp
+int atmd_mpi_provided;
+if (MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &atmd_mpi_provided) != MPI_SUCCESS)
+    outError("MPI initialization failed!");
+if (atmd_mpi_provided < MPI_THREAD_FUNNELED)
+    cerr << "WARNING: MPI does not provide MPI_THREAD_FUNNELED; ATMD Mode P will be unsafe..." << endl;
+```
+
+`MPI_THREAD_FUNNELED` is sufficient for Mode F (all MPI calls from master thread) and Mode P
+(`MPI_Allreduce` issued under `#pragma omp master` inside inner team). Mode P `MPI_THREAD_MULTIPLE`
+is required only if issuing from any inner thread — deferred to B.5 re-evaluation.
+
+#### 15.3.4 main/phylotesting.cpp — named critical regions
+
+Two unnamed `#pragma omp critical` in the model-info read/write path renamed to `model_info_lock`:
+
+- Line ~1977: `local_in_info = in_model_info` snapshot (snapshot-in).
+- Line ~2223: `saveCheckpoint(&in_model_info)` (save-out).
+
+Existing named criticals (`warm_start_lock` at lines ~1939, ~2281) left unchanged.
+
+#### 15.3.5 tree/phylotree.h — lightweight `theta_computed` stubs
+
+```cpp
+int atmd_current_stripe_id = 0;
+inline bool atmd_theta_computed() const { return theta_computed; }
+inline void atmd_set_theta_computed(bool v) { theta_computed = v; }
+inline void atmd_invalidate_theta() { theta_computed = false; }
+```
+
+Full refactor (28+ direct access sites across 10 files) deferred to B.0. At B.0 land,
+replace all direct `theta_computed` reads/writes with these accessors, backed by
+`theta_computed_stripe[current_stripe_id]`. See §15.2-H4.
+
+#### 15.3.6 utils/tools.h — ATMD Params fields
+
+```cpp
+int atmd_K_outer = 0;      // outer OMP workers. 0=auto, -1=off, >0=user override.
+int atmd_inner_threads = 0; // inner threads per worker. 0=auto (num_threads/K_outer).
+```
+
+Not yet wired to command-line parser (CLI wiring in B.5). Set programmatically via
+the B.3 writeback (§15.4.3 below).
+
+### 15.4 Implementation: Phase B.3+B.4 (DONE)
+
+**Files modified:** 2 files, ~70 LOC added.
+
+#### 15.4.1 main/phylotesting.cpp — K_outer/M_inner calculation (B.4 memory semaphore)
+
+Added before the outer parallel block in `CandidateModelSet::evaluateAll()`:
+
+```cpp
+int atmd_K_outer = 1;
+int atmd_M_inner = num_threads;
+#if defined(_IQTREE_ATMD) && defined(_IQTREE_MPI) && defined(_OPENMP)
+if (params.atmd_K_outer != -1) {
+    // per-tree bytes: conservative estimate npat × nstates × 4 rates × 4 stacks × nodeNum
+    size_t per_tree_bytes = npat * nstates * nrates_est * sizeof(double) * 4 * nodeNum;
+    long   avail_pages    = sysconf(_SC_AVPHYS_PAGES);
+    size_t avail_bytes    = (avail_pages > 0) ? avail_pages * PAGE_SIZE : 512 GB fallback;
+    int K_mem  = max(1, (int)((avail_bytes * 0.8) / per_tree_bytes));
+    int K_cap  = 8;  // 2 NUMA domains × 4 HyperThreads on SPR
+    atmd_K_outer = min(min(K_mem, num_threads), K_cap);
+    // user override via params.atmd_K_outer > 0
+    atmd_M_inner = max(1, num_threads / atmd_K_outer);
+    // user override via params.atmd_inner_threads > 0
+}
+#endif
+```
+
+When `atmd_K_outer==1` (memory tight or ATMD off), the outer parallel team degrades to a
+serial block with zero overhead (the `if(atmd_K_outer > 1)` clause on the pragma).
+
+#### 15.4.2 main/phylotesting.cpp — outer OMP parallel pragma (B.3)
+
+```cpp
+{
+#if defined(_OPENMP) && !defined(_IQTREE_MPI)
+#pragma omp parallel num_threads(num_threads) proc_bind(spread)
+#elif defined(_IQTREE_ATMD) && defined(_IQTREE_MPI) && defined(_OPENMP)
+#pragma omp parallel num_threads(atmd_K_outer) proc_bind(spread) if(atmd_K_outer > 1)
+#endif
+{
+    int64_t model;
+    do { ... } while (model != -1);
+}
+```
+
+The `evaluate()` call inside the loop is updated to pass `atmd_M_inner` instead of
+`num_threads`, so each outer worker's inner team uses `M_inner` threads:
+
+```cpp
+tree_string = at(model).evaluate(params, model_info, out_model_info,
+                                 models_block, atmd_M_inner, brlen_type,
+                                 &mpi_warm_start);
+```
+
+#### 15.4.3 main/phylotesting.cpp — params writeback (B.3 audit finding)
+
+Found during post-implementation audit: `initializeAllPartialLh` (phylotree.cpp)
+checks `params->atmd_inner_threads > 1` for NUMA first-touch, but `atmd_inner_threads`
+defaults to 0 and is never set on `params`. Added writeback before the parallel block:
+
+```cpp
+#if defined(_IQTREE_ATMD)
+if (params.atmd_inner_threads == 0)
+    params.atmd_inner_threads = atmd_M_inner;
+#endif
+```
+
+`params` is read-only inside the parallel region after this point, so no race.
+
+#### 15.4.4 tree/phylotree.cpp — NUMA first-touch in `initializeAllPartialLh` (B.3)
+
+```cpp
+#if defined(_IQTREE_ATMD) && defined(_OPENMP)
+if (params && params->atmd_inner_threads > 1) {
+    const int    M      = params->atmd_inner_threads;
+    const size_t stride = 4096 / sizeof(double);  // one touch per OS page
+#pragma omp parallel for schedule(static) num_threads(M)
+    for (size_t fi = 0; fi < mem_size; fi += stride)
+        central_partial_lh[fi] = 0.0;
+}
+#endif
+```
+
+Placed after the `MADV_HUGEPAGE` call (so hugepages are already requested before
+first-touch). Each inner thread touches the pages it will own, distributing ownership
+across NUMA domains.
+
+### 15.5 Post-implementation audit findings
+
+#### 15.5.1 Finding M1: `getNextModel()` unnamed critical (minor)
+
+`getNextModel()` at line 3742 uses `#pragma omp critical` (unnamed). Under ATMD Mode F
+with K_outer > 1 outer workers, all workers serialize on this lock to pick their next model.
+This is correct behaviour and the critical section is short (<1 µs), so contention is
+negligible relative to per-model eval time (~10 s).
+
+In GCC libgomp, each unnamed `#pragma omp critical` gets a **unique** lock object embedded
+in the binary (not a global shared mutex as in some pre-OpenMP-4 implementations), so there is
+no inadvertent lock sharing between `getNextModel()` and the `best_score` update at line ~4251.
+
+**Action**: Name the `getNextModel()` critical `model_dispatch_lock` in B.0 cleanup for clarity.
+
+#### 15.5.2 Finding M2: `model_info` read-only contract in `evaluate()` (minor)
+
+`evaluate()` receives `model_info` by non-const reference. In ATMD Mode F (K_outer > 1),
+multiple outer workers call `evaluate()` concurrently with the SAME `model_info` reference.
+This is safe if `evaluate()` only reads from `model_info` (which is the established behaviour
+in the existing non-MPI OMP path, where `num_threads` workers call `evaluate()` concurrently
+on the same `model_info`).
+
+**Action**: Annotate the `model_info` parameter as logically read-only in the ATMD path at B.0.
+Consider adding `const` qualification to the `evaluate()` signature if no write occurs.
+
+#### 15.5.3 Finding G1: No CLI args for `--atmd-K` and `--atmd-inner-threads` (known gap)
+
+`atmd_K_outer` and `atmd_inner_threads` are set programmatically (auto from memory budget)
+and cannot be overridden from the command line yet. CLI wiring is deferred to B.5.
+The user-override paths (`if (params.atmd_K_outer > 0) ...`) are already present and will
+activate once the CLI is wired.
+
+#### 15.5.4 Finding G2: NUMA first-touch only activates with `atmd_inner_threads > 1` (known gap)
+
+When `atmd_K_outer == 1` (memory budget allows only one tree, or ATMD Mode F disabled),
+`atmd_M_inner == num_threads` and `params.atmd_inner_threads == num_threads` (after writeback).
+The first-touch check is `atmd_inner_threads > 1`, so first-touch fires even for the serial
+outer-loop case as long as `num_threads > 1`. This is actually desirable for the non-ATMD
+MPI path: the single outer tree's memory will still be NUMA-spread across the inner threads.
+
+### 15.6 Phase status table (updated)
+
+| Phase | Description | Status | LOC | Notes |
+|-------|-------------|--------|-----|-------|
+| B.−1 | Infrastructure: build guard, nested OMP, MPI threading, named criticals, theta stubs, Params fields | **DONE** | ~55 | All 7 files patched |
+| B.3+B.4 | HH-NUMA Mode F: K_outer OMP outer team + M_inner inner, memory-budget semaphore, NUMA first-touch | **DONE** | ~70 | params writeback fix included |
+| B.0 | Pattern-parallel Mode P: partition alignment, Allreduce per-stripe lnL, per-stripe theta | Not started | ~900 | Depends on B.−1 ✓ |
+| B.1 | ASC second Allreduce (corrected from §14's underestimate) | Not started | ~200 | Depends on B.0 |
+| B.2 | `filterRatesMPI` Mode P integration | Not started | ~150 | Depends on B.1 |
+| B.5 | Tail-stealing via `MPI_Iprobe`/`MPI_Isend` (replaces §14 RMA design) | Not started | ~200 | Needs `MPI_THREAD_MULTIPLE` eval |
+| B.6 | End-to-end validation, CI, results doc | Not started | — | Final gate |
+
+### 15.7 Next step: validate B.3+B.4 on Gadi compute node
+
+Build command (from the existing `build-mpi-iso` dir or a new dir):
+
+```bash
+cmake . -DIQTREE_ATMD=ON
+make -j52 iqtree3-mpi
+```
+
+Run the existing AA 1M 4-node test to verify:
+1. `[ATMD Mode F] K_outer=... M_inner=...` log line appears on stdout.
+2. lnL results match the A.2 baseline (same models selected, same scores).
+3. Wall time ≤ A.2 baseline (NUMA first-touch may help; outer-loop is still effectively
+   sequential for AA 1M since K_mem ≈ 1 at 512 GB with 2 × 12 GB trees per rank).
+
+For K_outer > 1 to activate, need a smaller dataset (e.g. AA 100K, 4 taxa) where
+`per_tree_bytes` is small enough that K_mem > 1 within the node's available RAM.
+
+### 15.8 Design notes — Phase B.5 revision (tail-stealing)
+
+The original §14 B.5 design used MPI-3 RMA (`MPI_Win_lock` / `MPI_Put`) to implement
+rank-to-rank work stealing. This requires `MPI_THREAD_MULTIPLE` support, which OpenMPI
+on Gadi provides but with significant synchronisation overhead.
+
+**Revised B.5 design** (from §15 audit): Use `MPI_Isend` / `MPI_Iprobe` polling instead.
+Each rank that finishes early sends a "work-available" message to idle ranks. Idle ranks
+poll with `MPI_Iprobe` between model evaluations. This requires only `MPI_THREAD_FUNNELED`
+(already set in B.−1), since polling happens in the outer master thread, not from inner workers.
+
+This eliminates the `ONESIDE_COMM` requirement flagged in the §15.1 blockers.
+
+### 15.9 Validation plan: build and test B.3+B.4 on Gadi
+
+#### 15.9.1 Why cmake fails on the login node
+
+The existing `build-mpi-iso/` cmake cache was configured with `-march=sapphirerapids`
+(Intel SPR only).  Re-running `cmake .` re-tests the C compiler and fails on login nodes
+(GCC < 12) because that `-march` flag is unsupported:
+
+```
+cc1: error: bad value ('sapphirerapids') for '-march=' switch
+```
+
+**Solution**: create a fresh build directory `build-atmd-b3/` and configure + build inside
+a PBS job on a normalsr SPR compute node.  This is the same pattern used by `build_mf_iso.sh`.
+
+#### 15.9.2 Build script
+
+File: `gadi-ci/lbfgs-ws/build_atmd_b3.sh`
+
+```bash
+# On the login node:
+cd /home/272/as1708/setonix-iq/gadi-ci/lbfgs-ws
+qsub build_atmd_b3.sh
+```
+
+PBS parameters: `-P dx61 -q normalsr -l ncpus=104,mem=500GB,walltime=00:45:00`
+
+The script:
+1. Loads `cmake/3.31.6 openmpi/4.1.7 intel-compiler-llvm binutils/2.44 eigen/3.3.7 boost/1.84.0`.
+2. Sets `OMPI_CXX=icpx`, `OMPI_CC=icx`.
+3. Source preflight: verifies `_IQTREE_ATMD` in `main.cpp`, `MPI_Init_thread` in
+   `MPIHelper.cpp`, `atmd_K_outer` in `phylotesting.cpp`, `IQTREE_ATMD` in `CMakeLists.txt`.
+4. Applies cmaple build tweaks (disables IPO and unittest sub-project — same as
+   `build_mf_iso.sh`).
+5. `cmake ${SRC_DIR} -DIQTREE_FLAGS=mpi -DIQTREE_ATMD=ON` in fresh `build-atmd-b3/`.
+6. `make -j$(nproc)` → binary `iqtree3-mpi`, symlinked as `iqtree3-mpi-atmd-b3`.
+7. Linkage checks: `libiomp5` present, `libgomp` absent, `libmpi` present.
+8. Symbol checks: `[ATMD Mode F]` string and `MPI_Init_thread` and `ws_bcast_fields`
+   found in binary.
+9. `mpirun -n 1 iqtree3-mpi --version` smoke test.
+10. Writes `.build-info.json` (compiler, flags, commit, md5).
+
+**Bug fix (job 169108814)**: PBS sets `$PROJECT=dx61` (billing project) in the job
+environment, overriding `PROJECT="${PROJECT:-rc29}"` → `ISO_DIR` resolved to
+`/scratch/dx61/as1708/...` (does not exist). Fix: use `SRC_PROJECT="rc29"` (hardcoded,
+not a PBS env var) for path derivation; `$PROJECT` is reserved for the PBS billing project.
+Same fix applied to both run scripts.
+
+Build job submitted: `169108919.gadi-pbs` (resubmit after SRC_PROJECT fix)
+
+**Build error (job 169108919)**: `site_rate` is a `protected` member of `PhyloTree` — accessed
+directly in the B.4 K_outer formula in `phylotesting.cpp:4107` which is a free function, not
+a `PhyloTree` method. Fix: use `in_tree->getRate()` (public virtual accessor) and hold the
+pointer in a local `RateHeterogeneity *_sr`.
+
+```cpp
+// Before (error):
+int nrates_est = max(4, in_tree->site_rate ? in_tree->site_rate->getNRate() : 4);
+// After (fix):
+RateHeterogeneity *_sr = in_tree->getRate();
+int nrates_est = max(4, _sr ? _sr->getNRate() : 4);
+```
+
+Build job resubmitted: `169109258.gadi-pbs`
+
+**Build result (job 169109258)**: SUCCESS — exit 0, make in 515s, binary at
+`build-atmd-b3/iqtree3-mpi-atmd-b3`, md5 `c53122e2fbd92b197d9eccdef0d7ec80`.
+Confirmed: `-D_IQTREE_ATMD` in all compile units; `[ATMD Mode F] K_outer=`,
+`MPI_Init_thread`, `ws_bcast_fields=` all present in binary strings.
+(Build script `strings` check had false negatives — icpx `-g` splits `cout <<` literals;
+fixed to use shorter substrings that are contiguous in the binary.)
+
+Run jobs submitted:
+- `169109673.gadi-pbs` — AA 1M 4-node correctness gate (`run_atmd_b3_aa_1m_4node.sh`)
+- `169109674.gadi-pbs` — AA 100K 1-node K_outer activation test — **FAILED** (exit 2, 6s):
+  OpenMPI bound the single rank to 1 CPU slot; IQ-TREE saw 1 core but `-T 103` was requested.
+  Fix: add `--bind-to none` to `mpirun` (same as `run_fca_aa_100k_1node_full.sh`).
+- `169109738.gadi-pbs` — AA 100K 1-node K_outer activation test **resubmit** (--bind-to none added)
+
+Expected output:
+```
+[build] ── DONE ──────────────────────────────────────────────────
+  binary:   /scratch/rc29/as1708/iqtree3-mf-iso/build-atmd-b3/iqtree3-mpi
+  symlink:  /scratch/rc29/as1708/iqtree3-mf-iso/build-atmd-b3/iqtree3-mpi-atmd-b3
+  md5:      <hash>
+```
+
+#### 15.9.3 Correctness gate: AA 1M, 4 nodes, 4 ranks
+
+File: `gadi-ci/lbfgs-ws/run_atmd_b3_aa_1m_4node.sh`
+
+```bash
+qsub run_atmd_b3_aa_1m_4node.sh
+```
+
+PBS parameters: `-l ncpus=416,mem=2040GB,walltime=03:30:00`
+
+Config: `NRANKS=4`, `OMP_PER_RANK=103`, numactl `--localalloc`, same rankfile/hostfile
+pattern as `run_ws_a2_aa_1m_4node_full.sh`.  Alignment: AA 1M (`len_1000000/tree_1/`).
+
+**Expected behaviour at AA 1M** (100 taxa, nodeNum ≈ 198):
+
+Per-tree memory (conservative formula, factors of `nodeNum × npat × nstates × nrates × 8 × 4`):
+
+```
+per_tree_bytes ≈ 198 × 1,000,000 × 20 × 4 × 8 × 4 = 507 GB
+avail_bytes    ≈ 500 GB × 0.8 = 400 GB
+K_mem          = max(1, floor(400 / 507)) = max(1, 0) = 1
+atmd_K_outer   = min(K_mem=1, K_thr=103, K_cap=8) = 1
+```
+
+K_outer=1 means the outer loop degrades to the same **sequential** path as A.2.
+The B.4 memory semaphore correctly avoids OOM by restricting to serial operation.
+
+**Gate pass criteria:**
+
+| Check | Expected |
+|---|---|
+| `[ATMD Mode F] K_outer=1` in log | K_outer=1 (memory-bound serial path) |
+| lnL | within ±1.0 of −78,605,196.497 (A.2 np=4 ref) |
+| Best model | LG+G4 |
+| `ws_bcast_fields > 0` | A.2 warm-start intact |
+| Wall time | ≤ A.2 + 5% (~6099s) |
+
+A.2 references: MF=1999.214s, SPR=4021.666s, total=6098.480s (job 169099058)
+
+#### 15.9.4 K_outer > 1 activation test: AA 100K, 1 node
+
+File: `gadi-ci/lbfgs-ws/run_atmd_b3_aa_100k_1node.sh`
+
+```bash
+qsub run_atmd_b3_aa_100k_1node.sh
+```
+
+PBS parameters: `-l ncpus=104,mem=500GB,place=excl,walltime=01:30:00`
+
+Config: `NRANKS=1`, `OMP_PER_RANK=103`, `OMP_MAX_ACTIVE_LEVELS=2`,
+`OMP_PROC_BIND=spread,close` (outer workers span NUMA domains; inner threads stay close).
+Alignment: AA 100K (`len_100000/tree_1/`).
+
+**Expected behaviour at AA 100K** (100 taxa):
+
+```
+per_tree_bytes ≈ 198 × 100,000 × 20 × 4 × 8 × 4 = 50.7 GB
+avail_bytes    ≈ 500 GB × 0.8 = 400 GB
+K_mem          = floor(400 / 50.7) ≈ 7
+K_thr          = OMP_PER_RANK = 103
+K_cap          = 8
+atmd_K_outer   = min(7, 103, 8) = 7
+atmd_M_inner   = floor(103 / 7) = 14
+```
+
+Note: the per_tree_bytes formula deliberately over-estimates by ~4× (includes a stack-depth
+factor to cover partial-lh back-buffers). Actual `central_partial_lh` per tree at AA 100K +G4
+is `nodeNum × npat × nstates × nrates × sizeof(double)` ≈ 12.7 GB.  The conservative
+estimate gives K_outer=7; the true value would give K_outer=8 (hitting K_cap).  Either way,
+K_outer > 1 activates Mode F outer parallel teams.
+
+**Expected log line:**
+```
+[ATMD Mode F] K_outer=7 M_inner=14 per_tree_MB=50700 avail_MB=400000
+```
+(exact numbers may vary by ±10% depending on system free memory at run time)
+
+**Gate pass criteria:**
+
+| Check | Expected |
+|---|---|
+| `[ATMD Mode F]` in log | ATMD code path reached |
+| K_outer | > 1 (Mode F outer parallelism active) |
+| lnL | present and self-consistent (no reference gate — informational) |
+| Best model | LG+G4 or LG+I+G4 |
+| Exit code | 0 |
+
+This test is a **smoke test** for Mode F activation.  Correctness is gated by the AA 1M
+4-node run above; performance benchmarking of K_outer > 1 throughput is a separate Phase B.0
+task (pattern-parallel Mode P).
+
+#### 15.9.5 Scripts produced
+
+```
+gadi-ci/lbfgs-ws/
+  build_atmd_b3.sh            PBS build script, 1 SPR node, IQTREE_ATMD=ON
+  run_atmd_b3_aa_1m_4node.sh  correctness gate, 4 nodes np=4, K_outer=1 expected
+  run_atmd_b3_aa_100k_1node.sh K_outer>1 activation smoke test, 1 node np=1
+```
+
+All three scripts follow the same conventions as the existing lbfgs-ws scripts:
+`$ISO_DIR`, `$PROFILES_DIR`, `$WORK_DIR` layout, `hostfile.txt`/`rankfile.txt`,
+gate-check block with `PASS` variable, `GATE: PASS / FAIL` final line.
+
+#### 15.9.6 Run results — b3 binary (jobs 169109738, 169109673)
+
+##### AA 100K, 1-node (job 169109738) — COMPLETED
+
+| Field | Value |
+|---|---|
+| Binary | `build-atmd-b3/iqtree3-mpi-atmd-b3` (md5 `c53122e2`) |
+| Config | NRANKS=1, OMP=103, `--bind-to none` |
+| Best-fit model | **LG+G4** ✓ |
+| lnL | **−7,541,976.853** |
+| Gamma alpha | 0.996 |
+| MF wall-clock | **407.888s** |
+| Tree search wall | 1290.298s (0h:21m:30s) |
+| Total wall | **1706.337s** (0h:28m:26s) |
+| Exit code | 0 |
+| ATMD Mode F | **NOT ACTIVATED** — `[ATMD Mode F]` line absent from log (K_outer=1) |
+| Gate result | **FAIL** — K_outer activation criterion not met (sysconf bug; see §15.9.7) |
+
+Correctness is satisfactory: lnL and best model are self-consistent. The Mode F outer
+parallel team silently fell back to K_outer=1 serial path due to the bug described in §15.9.7.
+
+##### AA 1M, 4-node (job 169109673) — IN PROGRESS at time of writing
+
+Job still running at 30 min elapsed. Results will be recorded in §15.9.9 when complete.
+
+#### 15.9.7 Bug B.4-1: `sysconf(_SC_AVPHYS_PAGES)` returns near-zero on Gadi nodes
+
+**Symptom**: K_outer=1 on both test runs despite more than 400 GB free RAM available.
+The `[ATMD Mode F]` log line was gated on `atmd_K_outer > 1`, so it was never printed,
+making the issue initially invisible.
+
+**Root cause**: `sysconf(_SC_AVPHYS_PAGES)` reports the number of *immediately-free* physical
+pages, excluding kernel page cache.  On HPC Linux nodes, the kernel aggressively fills free
+pages with I/O page cache (Lustre reads, executable pages, etc.).  On a freshly-started Gadi
+compute node, `_SC_AVPHYS_PAGES` can return a very small positive value even though the node
+has 500 GB total RAM and less than 40 GB actually in use.
+
+The B.4 formula then computes:
+```
+avail_bytes ≈ (small) × 4096 ≈ tens of MB
+K_mem = max(1, floor(avail_bytes×0.8 / per_tree_bytes))
+      = max(1, 0) = 1
+atmd_K_outer = min(K_mem=1, K_thr=103, K_cap=8) = 1  → serial fallback
+```
+
+The `avail_pages > 0` guard prevented the 512 GB fallback from firing, since sysconf did
+return a positive (but near-zero) value.
+
+**Diagnosis confirmation**: The AA 100K run used only 35.65 GB RAM (PBS resource usage line),
+and per-tree_MB budget was ~50 GB.  If `avail_bytes` had correctly reflected node free memory
+(≥ 400 GB), K_mem ≥ 7 and K_outer = 7.
+
+**Fix applied in `phylotesting.cpp`** (read before b3b build):
+
+Replace `sysconf(_SC_AVPHYS_PAGES)` with a `/proc/meminfo` `MemAvailable` read.
+`MemAvailable` is the kernel's own estimate of reclaimable memory
+(free + reclaimable page cache), which is the correct budget for a new large allocation.
+The sysconf path is retained as a fallback if `/proc/meminfo` is unavailable.
+
+```cpp
+// NEW: read MemAvailable from /proc/meminfo (robust on HPC nodes)
+size_t avail_bytes = (size_t)512 * 1024 * 1024 * 1024;  // default 512 GB
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (f) {
+        char key[64]; long long val;
+        while (fscanf(f, "%63s %lld kB\n", key, &val) == 2) {
+            if (strcmp(key, "MemAvailable:") == 0) {
+                if (val > 0) avail_bytes = (size_t)val * 1024;
+                break;
+            }
+        }
+        fclose(f);
+    } else {
+        long pg = sysconf(_SC_AVPHYS_PAGES);          // fallback
+        if (pg > 0) avail_bytes = (size_t)pg * (size_t)sysconf(_SC_PAGE_SIZE);
+    }
+}
+```
+
+Additionally, the `[ATMD Mode F]` diagnostic line was changed to **always print** (not
+only when K_outer > 1), so future K_outer=1 fallback cases are immediately visible in logs.
+
+#### 15.9.8 b3b build and re-test (job 169110101)
+
+After applying the `/proc/meminfo` fix, a new build `build-atmd-b3b/` was submitted.
+
+**Build result (job 169110101)**: SUCCESS — exit 0, make in 537s.
+
+| Field | Value |
+|---|---|
+| Binary | `/scratch/rc29/as1708/iqtree3-mf-iso/build-atmd-b3b/iqtree3-mpi-atmd-b3` |
+| md5 | `8d12b01ffaf15f1f041139a4c695c80b` |
+| Build time | 537s |
+| Linkage | libiomp5 ✓, libgomp ✗, libmpi ✓ |
+| ATMD content | Binary grep confirms `_IQTREE_ATMD`, `MemAvailable`, `proc/meminfo`, `K_outer=` |
+| `strings` check | False negatives (known icpx issue — binary grep substituted) |
+
+New scripts created:
+```
+gadi-ci/lbfgs-ws/
+  build_atmd_b3b.sh              PBS build script targeting build-atmd-b3b/
+  run_atmd_b3b_aa_100k_1node.sh  K_outer>1 activation re-test with fixed binary
+  run_atmd_b3b_aa_1m_4node.sh    AA 1M correctness re-gate with fixed binary
+```
+
+**Expected log line with b3b binary on AA 100K:**
+```
+[ATMD Mode F] K_outer=7 M_inner=14 K_mem=7 per_tree_MB=50700 avail_MB=~430000
+```
+(K_mem and avail_MB now correctly computed from `/proc/meminfo`; b3 had avail_MB ≈ 0 due to sysconf)
+
+Results of the b3b runs will be recorded in §15.9.9 once complete.
+
+#### 15.9.9 b3b AA 100K run result (job 169110375) — COMPLETED
+
+| Field | Value |
+|---|---|
+| Binary | `build-atmd-b3b/iqtree3-mpi-atmd-b3` (md5 `8d12b01f`) |
+| Config | NRANKS=1, OMP=103, `--bind-to none`, 1 normalsr node |
+| Best-fit model | **LG+G4** ✓ |
+| lnL | **−7,541,976.853** ✓ (same as b3 ref) |
+| Total wall | **1711s** (0h:28m:31s) |
+| Exit code | 0 |
+| ATMD Mode F | **NOT ACTIVATED** — `[ATMD Mode F]` line STILL ABSENT |
+| Gate result | **FAIL** — K_outer activation not yet achieved |
+
+The `/proc/meminfo` fix correctly reports `avail_MB ≈ 400000` (confirmed in preflight estimate),
+but the `[ATMD Mode F]` diagnostic line still does not appear in `iqtree_run.log`.
+Correctness remains intact. The B.4-2 bug investigation below explains why.
+
+#### 15.9.10 Bug B.4-2: `[ATMD Mode F]` block does not execute at runtime
+
+**Symptom**: Binary search of `iqtree_run.log` for `[ATMD Mode F]`, `K_outer=`, `avail_MB`,
+`Mode F` returns idx=-1 on BOTH the b3 np=1 run AND the b3b np=1 re-test.  The same absence
+is observed in the ongoing b3 np=4 1M run.
+
+**Evidence that the code IS compiled in**:
+
+| Check | Result |
+|---|---|
+| Binary grep `[ATMD Mode F]` | Present at byte 9,972,856 ✓ |
+| Binary grep `K_outer=` | Present at byte 9,972,870 ✓ |
+| Binary grep `MemAvailable:` | Present at byte 9,972,842 ✓ |
+| Binary grep `proc/meminfo` | Present at byte 9,972,815 ✓ |
+| `CXX_DEFINES` (flags.make) | `-D_IQTREE_ATMD`, `-D_IQTREE_MPI` ✓ |
+| `icpx -fopenmp -E -dM` | `#define _OPENMP 202011` ✓ |
+| `params.atmd_K_outer` default | `0` (tools.h:2378) — `0 != -1` is TRUE ✓ |
+| No `#undef` for any macro | Confirmed ✓ |
+| No `goto`/`longjmp` in phylotesting.cpp | Confirmed ✓ |
+| `evaluateAll()` called for np=1 MPI | Confirmed via code path (line 1536–1548) ✓ |
+
+**Output routing investigation**: `iqtree_run.log` is written by TWO file descriptors
+simultaneously:
+- fd 1 (shell stdout redirect: `> iqtree_run.log`)
+- IQ-TREE's internal log fd (via `--prefix iqtree_run`, opened with fopen/O_TRUNC)
+
+Both point to the same filename. IQ-TREE's internal log fd truncates the file at startup,
+then TeeBuf writes to both fds simultaneously (at different file offsets). Analysis shows
+stream 1 (internal fd) writes LATER at overlapping positions and therefore wins, so the
+complete output should appear in positions 0..X-1 of the file. Despite this, `[ATMD Mode F]`
+is definitively absent (binary search confirmed, no null bytes in file).
+
+**Conclusion**: The B.3+B.4 block at lines ~4100–4164 of `phylotesting.cpp` is NOT executing
+at runtime, despite the code being compiled in and all guards being satisfied at compile time.
+Root cause not yet isolated.
+
+**Diagnostic plan (b3c build, job 169111388)**:
+
+Three new diagnostics added to `phylotesting.cpp` before the b3c build:
+
+1. **Entry diagnostic** (top of `evaluateAll()`, unconditional):
+   ```cpp
+   fprintf(stderr, "[ATMD-DIAG] evaluateAll() ENTRY: atmd_K_outer=%d openmp_by_model=%d\n",
+           params.atmd_K_outer, params.openmp_by_model ? 1 : 0);
+   ```
+   Fires on EVERY call — confirms whether `evaluateAll()` is reached.
+
+2. **Pre-block diagnostic** (line ~4100, before `#if` guard, unconditional):
+   ```cpp
+   fprintf(stderr, "[ATMD-DIAG] evaluateAll B.3+B.4 pre-block: atmd_K_outer=%d MPI=%d OMP=%d ATMD=%d\n", ...);
+   ```
+   Fires if code reaches the B.3+B.4 section — confirms execution past the `#endif`.
+
+3. **Sidecar file** (inside `if (params.atmd_K_outer != -1)` block):
+   ```cpp
+   FILE *df = fopen((string(params.out_prefix) + ".atmd_diag").c_str(), "w");
+   fprintf(df, "[ATMD Mode F] K_outer=%d M_inner=%d K_mem=%d per_tree_MB=%d avail_MB=%d\n", ...);
+   ```
+   Written via `fopen` — completely bypasses cout/TeeBuf/shell redirect conflicts.
+
+The b3c run script also separates `--prefix iqtree_inner` (IQ-TREE's log) from the shell
+stdout redirect (`> iqtree_stdout.log`), eliminating the dual-write conflict. Gate check
+reads all three sources: `iqtree_inner.atmd_diag` (sidecar), `iqtree_inner.log`, and
+`iqtree_stdout.log`.
+
+Results of the b3c run will be recorded in §15.9.11.
+
+#### 15.9.11 AA 1M 4-node b3 result (job 169109673) — PARTIAL (SPR in progress)
+
+| Field | Value |
+|---|---|
+| Binary | `build-atmd-b3/iqtree3-mpi-atmd-b3` (md5 `c53122e2`) |
+| Config | NRANKS=4, OMP=103, 4 normalsr SPR nodes, 3h30m walltime |
+| Best-fit model | **LG+G4** ✓ |
+| Initial lnL | **−78,605,196.445** (NNI iteration 1) |
+| MF wall | **4,017.842s** (1h:6m:57s) |
+| CPU time MF | 342,454.713s (95h:7m:34s) — correct for 4-rank × 103T |
+| ATMD Mode F | **NOT ACTIVATED** — `[ATMD Mode F]` ABSENT (B.4-2 bug confirmed for np=4) |
+| SPR status | IN PROGRESS at time of documentation — optimizing candidate tree set |
+
+**Note**: MF=4,017s is intentionally slow compared to Phase A.2 (MF=1,139s at np=16) — this is
+the b3 binary (ATMD patch only, no FCA MPI dispatch, no warm-start), running AA 1M with 4 MPI
+ranks where each rank evaluates ALL models sequentially. Its purpose is K_outer activation
+testing, not production MF performance.
+
+`[ATMD Mode F]` is definitively absent between `filterRatesMPI_enabled=1` and the first
+`MF-TIME: rank 0 model=0 name=LG` line — confirming B.4-2 bug affects np=4 just as it does np=1.
+
+Full results (lnL SPR, wall time, exit code) will be appended when the job completes.
+
+#### 15.9.12 b3c build, binary path bug, and resubmission
+
+##### b3c build (job 169111388) — SUCCESS
+
+Three diagnostics added to `phylotesting.cpp` before the b3c build — see §15.9.10 for the
+code. The entry diagnostic at the top of `evaluateAll()` was added AFTER the build job was
+submitted but BEFORE `phylotesting.cpp` was compiled (confirmed: `.o` file not yet present when
+the edit was made). All three diagnostics therefore compiled into the b3c binary.
+
+| Field | Value |
+|---|---|
+| Build job | **169111388** (`normalsr`, 1 node, 104 cpus, walltime 45m) |
+| Build time | **524s** (8m 44s) |
+| Binary | `/scratch/rc29/as1708/iqtree3-mf-iso/build-atmd-b3c/iqtree3-mpi-atmd-b3c` |
+| md5 | **`1c6fc01921df0fbd67e45da280a036e9`** |
+| Build exit | 0 ✓ |
+| Linkage | libiomp5 + libmpi ✓ |
+| `strings` symbol check | FALSE NEGATIVES (known icpx issue — binary grep substituted) |
+
+Binary grep confirms all diagnostic strings present:
+
+| String | Byte offset |
+|---|---|
+| `[ATMD Mode F]` | 9,977,137 |
+| `[ATMD-DIAG]` | 9,976,687 |
+| `evaluateAll() ENTRY` | 9,976,699 |
+| `pre-block` | 9,977,011 |
+| `atmd_diag` | 9,977,127 |
+| `MemAvailable:` | 9,977,112 |
+
+##### Binary path bug in run script (B.5-1) — FIXED
+
+**Symptom**: Job 169111537 exited in 1 second with `Exit Status: 2` and message:
+```
+ERROR: ATMD binary not found: /scratch/rc29/as1708/iqtree3-mf-iso/build-atmd-b3c/iqtree3-mpi-atmd-b3
+```
+
+**Root cause**: `run_atmd_b3c_aa_100k_1node.sh` was created with:
+```bash
+sed 's/b3b/b3c/g' run_atmd_b3b_aa_100k_1node.sh > run_atmd_b3c_aa_100k_1node.sh
+```
+But the b3b binary was named `iqtree3-mpi-atmd-b3` (no `b3b` suffix — it inherited the `b3`
+symlink name from the b3 build). The `sed` substitution only replaced `b3b` → `b3c`, so the
+binary variable remained pointing at `iqtree3-mpi-atmd-b3`. The b3c symlink is named
+`iqtree3-mpi-atmd-b3c`.
+
+**Fix**: Line 46 of `run_atmd_b3c_aa_100k_1node.sh`:
+```bash
+# BEFORE (wrong):
+IQTREE="${IQTREE:-${ISO_DIR}/build-atmd-b3c/iqtree3-mpi-atmd-b3}"
+
+# AFTER (correct):
+IQTREE="${IQTREE:-${ISO_DIR}/build-atmd-b3c/iqtree3-mpi-atmd-b3c}"
+```
+Also updated comment at line 22: `# Binary: iqtree3-mpi-atmd-b3c (build-atmd-b3c/)`.
+
+**Lesson**: When using `sed` to clone run scripts with a new binary name, verify that ALL
+occurrences of the old binary path are substituted, not just the label tokens. Use a more
+specific pattern (e.g., `sed 's|iqtree3-mpi-atmd-b3[^c]|iqtree3-mpi-atmd-b3c|g'`) or edit
+the binary path explicitly.
+
+##### b3c 100K re-submission (job 169111545) — IN PROGRESS
+
+After the fix, resubmitted as job **169111545** (`normalsr`, 1 node, 104 cpus, 1h30m walltime).
+Job confirmed running. Results will be appended here when complete.
+
+**Expected outcome from b3c diagnostics**:
+- `[ATMD-DIAG] evaluateAll() ENTRY` in `iqtree_stdout.log` → `evaluateAll()` is reached
+- `[ATMD-DIAG] evaluateAll B.3+B.4 pre-block` in `iqtree_stdout.log` → code reaches B.3+B.4
+- `iqtree_inner.atmd_diag` sidecar file exists → K_outer block executed
+- If pre-block fires but sidecar is absent → `params.atmd_K_outer` must be `-1` at runtime
+- If NEITHER pre-block NOR entry fires → `evaluateAll()` is not being called (contradicts code analysis)

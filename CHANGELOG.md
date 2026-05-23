@@ -113,6 +113,84 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-24 (ch) — Phase B (ATMD HH-NUMA Mode F) builds b3/b3b/b3c, bugs B.4-1 + B.4-2
+
+### What
+
+Built and tested the ATMD (HH-NUMA, Mode F) code path: B.−1 MPI_Init_thread patch, B.3+B.4
+K_outer×M_inner nested-OMP dispatch, and NUMA first-touch in `initializeAllPartialLh`.
+Three builds (b3, b3b, b3c) were needed to isolate bugs B.4-1 and B.4-2.
+
+### Builds
+
+| Build | Job | md5 | Key change |
+|-------|-----|-----|------------|
+| b3 | 169109706 | `c53122e2` | First ATMD build; sysconf avail-memory bug |
+| b3b | 169110101 | `8d12b01f` | Fix B.4-1: `/proc/meminfo` for `MemAvailable` |
+| b3c | 169111388 | `1c6fc01921df0fbd67e45da280a036e9` | Add triple diagnostics for B.4-2 |
+
+All builds: `build-atmd-b3*/iqtree3-mpi-atmd-b3*`, icpx 2025.3.2, OpenMPI 4.1.7, `-O3 -march=sapphirerapids -fopenmp -qopenmp`, macros `-D_IQTREE_ATMD -D_IQTREE_MPI`.
+
+### Test runs (AA 100K, 1 node, NRANKS=1, OMP=103)
+
+| Job | Binary | lnL | Best model | Wall | ATMD Mode F |
+|-----|--------|-----|-----------|------|-------------|
+| 169109738 | b3 | −7,541,976.853 | LG+G4 ✓ | 1706s | ABSENT (B.4-1) |
+| 169110375 | b3b | −7,541,976.853 | LG+G4 ✓ | 1711s | ABSENT (B.4-2) |
+| 169111545 | b3c | pending | pending | pending | pending |
+
+**AA 1M 4-node b3 (job 169109673)**: running. MF=4,017.842s, best=LG+G4, lnL at NNI-1=−78,605,196.445. SPR in progress. `[ATMD Mode F]` absent (B.4-2 confirmed for np=4).
+
+### Bug B.4-1: `sysconf(_SC_AVPHYS_PAGES)` returns near-zero on HPC nodes
+
+`sysconf(_SC_AVPHYS_PAGES)` reports free physical pages excluding kernel page cache. On Gadi
+nodes this is near-zero even with 460 GB free (kernel uses all free pages for Lustre I/O
+cache). Result: `avail_bytes ≈ tens of MB`, K_mem=1, K_outer=1 → Mode F silently degrades to
+serial path. **Fix**: read `MemAvailable` from `/proc/meminfo` (kernel's reclaimable-memory
+estimate). Fallback to sysconf if `/proc/meminfo` unavailable. Applied in b3b.
+
+### Bug B.4-2: `[ATMD Mode F]` block does not execute at runtime
+
+After fixing B.4-1, the `[ATMD Mode F]` diagnostic line STILL does not appear in the log.
+Binary contains the string at byte ~9.97M; macros `_IQTREE_ATMD`, `_IQTREE_MPI`, `_OPENMP`
+are all defined; `params.atmd_K_outer=0 ≠ -1`; no goto/longjmp; `evaluateAll()` called.
+Root cause not yet isolated. Three diagnostics added to `phylotesting.cpp` for b3c:
+
+1. **Entry**: `fprintf(stderr, "[ATMD-DIAG] evaluateAll() ENTRY: atmd_K_outer=%d openmp_by_model=%d\n", ...)` — at top of `evaluateAll()`, unconditional.
+2. **Pre-block**: `fprintf(stderr, "[ATMD-DIAG] evaluateAll B.3+B.4 pre-block: ...\n", ...)` — before `#if defined(_IQTREE_ATMD)...` guard, unconditional.
+3. **Sidecar**: `fopen(out_prefix + ".atmd_diag", "w")` write inside K_outer block — bypasses TeeBuf/cout entirely.
+
+b3c run script uses `--prefix iqtree_inner` (separate from `> iqtree_stdout.log`) to eliminate the dual-write conflict identified in b3/b3b runs.
+
+### Bug B.5-1: Wrong binary path in b3c run script
+
+First b3c test (job 169111537, walltime 1s) failed:
+```
+ERROR: ATMD binary not found: .../build-atmd-b3c/iqtree3-mpi-atmd-b3
+```
+**Root cause**: `sed 's/b3b/b3c/g'` was used to clone the run script, but the b3b binary
+variable pointed to `iqtree3-mpi-atmd-b3` (no `b3b` suffix — b3b reused the `b3` symlink
+name). The sed substitution missed this token. The b3c symlink IS `iqtree3-mpi-atmd-b3c`.
+**Fix**: explicitly set `IQTREE=.../build-atmd-b3c/iqtree3-mpi-atmd-b3c` (line 46).
+**Lesson**: when cloning run scripts with sed, verify binary path manually; do not rely on
+token-substitution to catch paths where the old version name appears as a suffix.
+
+### New scripts
+
+```
+gadi-ci/lbfgs-ws/
+  build_atmd_b3.sh              build script for b3 (IQTREE_ATMD=ON, icpx, SPR)
+  build_atmd_b3b.sh             build script for b3b (/proc/meminfo fix)
+  build_atmd_b3c.sh             build script for b3c (triple diagnostics)
+  run_atmd_b3_aa_100k_1node.sh  K_outer>1 activation test, b3, 1 node np=1
+  run_atmd_b3_aa_1m_4node.sh    correctness gate, b3, 4 nodes np=4
+  run_atmd_b3b_aa_100k_1node.sh K_outer>1 activation re-test, b3b
+  run_atmd_b3b_aa_1m_4node.sh   1M 4-node correctness, b3b
+  run_atmd_b3c_aa_100k_1node.sh b3c activation test (dual-write fix, diagnostics)
+```
+
+---
+
 ## 2026-05-23 (cc) — Phase A.2 implemented + W2 correctness gate submitted (job 169096105)
 
 ### What
