@@ -3150,6 +3150,106 @@ void CandidateModelSet::filterRatesMPI(int finished_model) {
     // -- Step 3: MPI_Bcast from root=0. Collective on MPI_COMM_WORLD.
     MPI_Bcast(buf, BUF, MPI_CHAR, 0, MPI_COMM_WORLD);
 
+    // -- Phase A.2: broadcast rank 0's warm-start cache to all ranks.
+    // Rank 0 evaluates the ref-family first (Phase 0.6 ordering) and holds
+    // early-converged rate params (gamma-shape, p_invar, +R props/rates).
+    // Pack into a fixed-size POD struct (~3.6 KB) and broadcast with a
+    // single MPI_Bcast.  Non-root ranks seed their mpi_warm_start for any
+    // field not yet filled by their own evaluations (first-fit wins).
+    int ws_bcast_fields = 0;
+    {
+        struct WarmStartPacket {
+            double rg_gamma_shape;    // +G  alpha       sentinel = -1
+            double ri_p_invar;        // +I  p_invar     sentinel = -1
+            double rgi_gamma_shape;   // +I+G alpha      sentinel = -1
+            double rgi_p_invar;       // +I+G p_invar    sentinel = -1
+            double rf_prop [11][10];  // +Rk prop[k][i]  sentinel = -1
+            double rf_rates[11][10];  // +Rk rate[k][i]  sentinel = -1
+            double rfi_p_invar[11];   // +I+Rk p_invar   sentinel = -1
+            double rfi_prop [11][10]; // +I+Rk prop[k][i]sentinel = -1
+            double rfi_rates[11][10]; // +I+Rk rate[k][i]sentinel = -1
+        };
+        static_assert(sizeof(WarmStartPacket) % sizeof(double) == 0,
+                      "WarmStartPacket must be double-aligned");
+
+        WarmStartPacket pkt;
+        pkt.rg_gamma_shape = pkt.ri_p_invar =
+            pkt.rgi_gamma_shape = pkt.rgi_p_invar = -1.0;
+        for (int k = 0; k < 11; k++) {
+            pkt.rfi_p_invar[k] = -1.0;
+            for (int i = 0; i < 10; i++) {
+                pkt.rf_prop[k][i] = pkt.rf_rates[k][i] = -1.0;
+                pkt.rfi_prop[k][i] = pkt.rfi_rates[k][i] = -1.0;
+            }
+        }
+
+        if (my_rank == 0) {
+            pkt.rg_gamma_shape  = mpi_warm_start.rg_gamma_shape;
+            pkt.ri_p_invar      = mpi_warm_start.ri_p_invar;
+            pkt.rgi_gamma_shape = mpi_warm_start.rgi_gamma_shape;
+            pkt.rgi_p_invar     = mpi_warm_start.rgi_p_invar;
+            int klim = (int)mpi_warm_start.rf_prop.size();
+            for (int k = 1; k < 11 && k < klim; k++) {
+                if ((int)mpi_warm_start.rf_prop[k].size() == k)
+                    for (int i = 0; i < k && i < 10; i++) {
+                        pkt.rf_prop[k][i]  = mpi_warm_start.rf_prop[k][i];
+                        pkt.rf_rates[k][i] = mpi_warm_start.rf_rates[k][i];
+                    }
+                if (mpi_warm_start.rfi_p_invar[k] > 0)
+                    pkt.rfi_p_invar[k] = mpi_warm_start.rfi_p_invar[k];
+                if ((int)mpi_warm_start.rfi_prop[k].size() == k)
+                    for (int i = 0; i < k && i < 10; i++) {
+                        pkt.rfi_prop[k][i]  = mpi_warm_start.rfi_prop[k][i];
+                        pkt.rfi_rates[k][i] = mpi_warm_start.rfi_rates[k][i];
+                    }
+            }
+        }
+
+        MPI_Bcast(&pkt, sizeof(pkt), MPI_BYTE, 0, MPI_COMM_WORLD);
+
+        // Count non-sentinel fields for diagnostics.
+        if (pkt.rg_gamma_shape  > 0) ws_bcast_fields++;
+        if (pkt.ri_p_invar      > 0) ws_bcast_fields++;
+        if (pkt.rgi_gamma_shape > 0) ws_bcast_fields++;
+        if (pkt.rgi_p_invar     > 0) ws_bcast_fields++;
+        for (int k = 1; k < 11; k++) {
+            if (pkt.rf_prop[k][0]  > 0) ws_bcast_fields++;
+            if (pkt.rfi_prop[k][0] > 0) ws_bcast_fields++;
+        }
+
+        // Unpack on non-root ranks; skip fields already populated (first-fit).
+        if (my_rank != 0) {
+            if (pkt.rg_gamma_shape  > 0 && mpi_warm_start.rg_gamma_shape  < 0)
+                mpi_warm_start.rg_gamma_shape  = pkt.rg_gamma_shape;
+            if (pkt.ri_p_invar      > 0 && mpi_warm_start.ri_p_invar      < 0)
+                mpi_warm_start.ri_p_invar      = pkt.ri_p_invar;
+            if (pkt.rgi_gamma_shape > 0 && mpi_warm_start.rgi_gamma_shape < 0)
+                mpi_warm_start.rgi_gamma_shape = pkt.rgi_gamma_shape;
+            if (pkt.rgi_p_invar     > 0 && mpi_warm_start.rgi_p_invar     < 0)
+                mpi_warm_start.rgi_p_invar     = pkt.rgi_p_invar;
+            for (int k = 1; k < 11; k++) {
+                if (pkt.rf_prop[k][0] > 0 && mpi_warm_start.rf_prop[k].empty()) {
+                    mpi_warm_start.rf_prop[k].resize(k);
+                    mpi_warm_start.rf_rates[k].resize(k);
+                    for (int i = 0; i < k && i < 10; i++) {
+                        mpi_warm_start.rf_prop[k][i]  = pkt.rf_prop[k][i];
+                        mpi_warm_start.rf_rates[k][i] = pkt.rf_rates[k][i];
+                    }
+                }
+                if (pkt.rfi_p_invar[k] > 0 && mpi_warm_start.rfi_p_invar[k] < 0)
+                    mpi_warm_start.rfi_p_invar[k] = pkt.rfi_p_invar[k];
+                if (pkt.rfi_prop[k][0] > 0 && mpi_warm_start.rfi_prop[k].empty()) {
+                    mpi_warm_start.rfi_prop[k].resize(k);
+                    mpi_warm_start.rfi_rates[k].resize(k);
+                    for (int i = 0; i < k && i < 10; i++) {
+                        mpi_warm_start.rfi_prop[k][i]  = pkt.rfi_prop[k][i];
+                        mpi_warm_start.rfi_rates[k][i] = pkt.rfi_rates[k][i];
+                    }
+                }
+            }
+        }
+    }
+
     // -- Step 4: parse on all ranks (including 0 to keep code uniform).
     set<string> global_ok_rates;
     {
@@ -3181,6 +3281,7 @@ void CandidateModelSet::filterRatesMPI(int finished_model) {
          << " |bcast_ok_rates|=" << global_ok_rates.size()
          << " local_pruned=" << pruned_here
          << " best_score=" << best_score
+         << " ws_bcast_fields=" << ws_bcast_fields
          << endl;
     cout.flush();
 }
