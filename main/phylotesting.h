@@ -36,6 +36,64 @@ const int MF_CANNOT_BE_IGNORED  = 32; // those models added by -madd cannot be f
 enum MixtureAction {MA_NONE, MA_FIND_RATE, MA_NUMBER_CLASS, MA_FIND_CLASS, MA_ADD_CLASS};
 
 /**
+    Cross-model rate-parameter warm-start cache (Phase A.1).
+    Populated from converged params of each completed model evaluation;
+    read by subsequent same-rate models before optimizeParameters. First-fit
+    wins (do not overwrite already-cached values) for first commit; running
+    mean deferred to a later commit if cross-family α drift proves significant.
+    Index range for free-rate / heterotachy vectors is [0, MAX_K); a request
+    for k beyond MAX_K silently skips warm-start (BFGS still converges from
+    default init).
+    See research/lbfgs-and-warmstart-implementation.md §5 for design rationale.
+ */
+struct RateWarmStartCache {
+    // Default upper bound on ncategory; matches Params::max_rate_cats default.
+    // Raise alongside Params::max_rate_cats if higher k requested.
+    static const int MAX_K = 11;
+
+    // 1D Brent (RateGamma α, RateInvar p_invar)
+    double rg_gamma_shape;   // α from any +G fit
+    double ri_p_invar;       // p from any +I fit
+
+    // 2D (RateGammaInvar — Brent default, optional joint BFGS)
+    double rgi_gamma_shape;
+    double rgi_p_invar;
+
+    // BFGS / 2k-2 D — RateFree, indexed by k=ncategory.
+    // rf_prop[k] / rf_rates[k] are either empty (not yet fitted at this k) or
+    // hold k doubles each.
+    std::vector<std::vector<double> > rf_prop;
+    std::vector<std::vector<double> > rf_rates;
+
+    // BFGS / 2k D — RateFreeInvar — adds p_invar per k.
+    std::vector<double>               rfi_p_invar;
+    std::vector<std::vector<double> > rfi_prop;
+    std::vector<std::vector<double> > rfi_rates;
+
+    RateWarmStartCache() { clear(); }
+
+    bool any() const {
+        if (rg_gamma_shape > 0 || ri_p_invar > 0
+            || rgi_gamma_shape > 0 || rgi_p_invar > 0) return true;
+        for (int k = 0; k < MAX_K; k++)
+            if (!rf_prop[k].empty() || !rfi_prop[k].empty()) return true;
+        return false;
+    }
+
+    void clear() {
+        rg_gamma_shape = -1.0;
+        ri_p_invar     = -1.0;
+        rgi_gamma_shape = -1.0;
+        rgi_p_invar     = -1.0;
+        rf_prop.assign(MAX_K, std::vector<double>());
+        rf_rates.assign(MAX_K, std::vector<double>());
+        rfi_p_invar.assign(MAX_K, -1.0);
+        rfi_prop.assign(MAX_K, std::vector<double>());
+        rfi_rates.assign(MAX_K, std::vector<double>());
+    }
+};
+
+/**
     Candidate model under testing
  */
 class CandidateModel {
@@ -94,11 +152,15 @@ public:
      @param models_block models block
      @param num_thread number of threads
      @param brlen_type BRLEN_OPTIMIZE | BRLEN_FIX | BRLEN_SCALE | TOPO_UNLINKED
+     @param warm_start_cache (optional) cross-model rate-parameter cache; if
+            non-null, read before optimizeParameters and updated after.
+            Default nullptr preserves pre-A.1 behaviour for non-MF callers.
      @return tree string
      */
     string evaluate(Params &params,
                     ModelCheckpoint &in_model_info, ModelCheckpoint &out_model_info,
-                    ModelsBlock *models_block, int &num_threads, int brlen_type);
+                    ModelsBlock *models_block, int &num_threads, int brlen_type,
+                    RateWarmStartCache *warm_start_cache = nullptr);
     
     /**
      evaluate concatenated alignment
@@ -375,6 +437,16 @@ public:
 
     /** Phase 0.5 broadcast active? false means fall back to legacy per-rank filterRates. */
     bool mpi_filterRatesMPI_enabled;
+
+    /**
+     Cross-model warm-start cache (Phase A.1). Populated from each completed
+     model's converged rate params; read by next same-rate-class model
+     before optimizeParameters. Reset at top of every evaluateAll() call for
+     PartitionFinder / MixtureFinder repeated-invocation safety. MPI broadcast
+     piggyback (Phase A.2) populates rank>0 caches via filterRatesMPI.
+     See research/lbfgs-and-warmstart-implementation.md §5.
+     */
+    RateWarmStartCache mpi_warm_start;
 
 private:
 
