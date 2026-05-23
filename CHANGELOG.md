@@ -118,7 +118,34 @@ table in entry `(bx)`.
 | exit code | 0 | — |
 
 Expected: MF ≈ 257 s (matching FCA TESTONLY 168577707), SPR ≈ 764 s (FCA dispatch is a no-op at np=1).  
-Results will be in entry `(bz)`.
+Results in entry `(bz)` — **DONE: MF=258.773 s, SPR=738.569 s, total=1000.811 s, all PASS ✓**.
+
+---
+
+## 2026-05-23 (bz) — FCA PASS ✓ — FCA Phase 0.5+0.6 full run results: AA 100K np=1 (job 169095077)
+
+### Results (all PASS ✓)
+
+| Check | Criterion | Result | Status |
+|-------|-----------|--------|--------|
+| lnL (SPR) | −7,541,976.860 ± 0.5 | −7,541,976.861 (Δ 0.001) | ✓ PASS |
+| Best model | LG+G4 | LG+G4 | ✓ PASS |
+| Exit code | 0 | 0 | ✓ PASS |
+
+### Timing — three-way comparison
+
+| Phase | Vanilla (168425673) | FCA np=1 **this run** (169095077) | WS-A.1 np=1 (169094692) |
+|-------|---------------------|-----------------------------------|---------------------------|
+| **MF (ModelFinder)** | 399.456 s | **258.773 s** (1.544× vs vanilla) | 261.694 s (1.526×) |
+| **SPR (tree search)** | 764.478 s | **738.569 s** (1.035× vs vanilla) | 729.748 s (1.048×) |
+| **Total** | 1,169.556 s | **1,000.811 s** (1.169× vs vanilla) | 994.904 s (1.176×) |
+
+### Notes
+
+- FCA MF (258.773 s) and WS-A.1 MF (261.694 s) differ by only 2.9 s — within run-to-run variance. At np=1 the warm-start cache reuses intra-rank fits only; no cross-rank benefit until Phase A.2.
+- FCA SPR (738.569 s) vs WS-A.1 SPR (729.748 s): Δ 8.8 s, noise — warm-start does not touch SPR.
+- FCA dispatch is a no-op at np=1; the **1.544× MF speedup** over vanilla is entirely from the FCA Phase 0.5+0.6 binary (ICX+AVX-512, MPI-enabled, Phase 0.5/0.6/THP stack).
+- PBS used 00:16:40 walltime. JSON record: `logs/runs/gadi_AA_100k_fca_np1_full_seed1_169095077.json`
 
 ---
 
@@ -132,25 +159,22 @@ Results will be in entry `(bz)`.
 | Best model | LG+G4 | LG+G4 | ✓ PASS |
 | Exit code | 0 | 0 | ✓ PASS |
 
-### Timing — two baselines
+### Timing — three baselines (all measured, all PASS ✓)
 
 **Baseline A** — vanilla ICX+AVX-512 (job 168425673): stock IQ-TREE 3, no FCA, no MPI, `-nt 103`  
-**Baseline B** — FCA Phase 0.5+0.6 MPI (job 168577707): same ICX+AVX-512 binary with FCA dispatch patches, np=1, MPI; MF figure from TESTONLY run — SPR phase is unaffected by FCA dispatch so vanilla SPR applies.
+**Baseline B** — FCA Phase 0.5+0.6 np=1 full run (job 169095077): same ICX+AVX-512 binary with FCA dispatch patches, 1 MPI rank × 103 OMP, `-m TEST`, seed=1.
 
-| Phase | Baseline A: Vanilla (s) | Baseline B: FCA np=1 (s) | WS-A.1 np=1 (s) | vs A speedup | vs B speedup |
-|-------|------------------------|--------------------------|-----------------|-------------|-------------|
-| **MF (ModelFinder)** | 399.456 | 257.355 †| **261.694** | **1.526×** | 0.983× |
-| **SPR (tree search)** | 764.478 | ~764 (est.) ‡ | **729.748** | **1.048×** | ~1.047× |
-| **Total** | 1,169.556 | ~1,021 (est.) ‡ | **994.904** | **1.176×** | ~1.027× |
-
-† Baseline B MF from TESTONLY run (job 168577707); no FCA np=1 full MF+SPR run recorded.  
-‡ FCA dispatch does not affect SPR; SPR estimated from vanilla baseline.
+| Phase | Baseline A: Vanilla (s) | Baseline B: FCA np=1 (s) | WS-A.1 np=1 (s) | WS vs A speedup | WS vs B |
+|-------|------------------------|--------------------------|-----------------|-----------------|----------|
+| **MF (ModelFinder)** | 399.456 | **258.773** | **261.694** | **1.526×** | 1.011× slower |
+| **SPR (tree search)** | 764.478 | **738.569** | **729.748** | **1.048×** | 1.012× faster |
+| **Total** | 1,169.556 | **1,000.811** | **994.904** | **1.176×** | 1.006× faster |
 
 ### Notes
 
 - **vs vanilla (Baseline A):** WS-A.1 delivers **1.526× MF speedup** and **1.176× total speedup** — 174 s saved.
-- **vs FCA baseline (Baseline B):** WS-A.1 MF (261.694 s) is effectively identical to FCA MF (257.355 s, Δ 4.3 s, within noise). The warm-start cache at np=1 reuses intra-rank fits only — the principal gain is in Phase A.2 (MPI broadcast across ranks, not yet implemented).
-- SPR wall (729.748 s) is unaffected by warm-start as expected; minor variance vs vanilla is system noise.
+- **vs FCA baseline (Baseline B):** WS-A.1 MF (261.694 s) is effectively identical to FCA MF (258.773 s, Δ 2.9 s, within noise). The warm-start cache at np=1 reuses intra-rank fits only — the principal gain is in Phase A.2 (MPI broadcast across ranks, not yet implemented).
+- SPR: FCA (738.569 s) vs WS-A.1 (729.748 s), Δ 8.8 s — noise; warm-start does not affect SPR.
 - MF wall matches W1 TESTONLY closely (254.433 s → 261.694 s, Δ 7.3 s, within run-to-run variance).
 - PBS used 00:16:46 walltime. JSON record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
 

@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · next: Phase A.2 MPI broadcast
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · next: Phase A.2 MPI broadcast
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -888,25 +888,22 @@ Purpose: confirm end-to-end correctness and measure SPR-phase timing following W
 | Best model | LG+G4 | **LG+G4** ✓ |
 | Exit code | 0 | **0** ✓ |
 
-**Timing — two baselines:**
+**Timing — three baselines (all measured, job 169095077 now provides actual FCA np=1 full figures):**
 
 - **Baseline A** (job 168425673): vanilla ICX+AVX-512, stock IQ-TREE 3, no FCA, no MPI, `-nt 103`
-- **Baseline B** (job 168577707): FCA Phase 0.5+0.6 MPI, same ICX+AVX-512 build, np=1, MPI + FCA dispatch; MF figure from TESTONLY; SPR unaffected by FCA → vanilla SPR used as estimate.
+- **Baseline B** (job 169095077): FCA Phase 0.5+0.6 np=1 full run, `iqtree3-mpi-fca-phase0506`, 1 MPI rank × 103 OMP, `-m TEST`, seed=1. All PASS ✓.
 
-| Phase | Baseline A: Vanilla (s) | Baseline B: FCA np=1 (s) | WS-A.1 np=1 (s) | vs A | vs B |
-|-------|------------------------|--------------------------|-----------------|------|------|
-| MF | 399.456 | 257.355 † | **261.694** | **1.526×** | 0.983× |
-| SPR | 764.478 | ~764 (est.) ‡ | **729.748** | **1.048×** | ~1.047× |
-| Total | 1,169.556 | ~1,021 (est.) ‡ | **994.904** | **1.176×** | ~1.027× |
-
-† FCA MF time from TESTONLY job 168577707; no FCA np=1 full MF+SPR run recorded.  
-‡ FCA dispatch is a ModelFinder-only optimisation; SPR phase unaffected — estimated from vanilla.
+| Phase | Baseline A: Vanilla (s) | Baseline B: FCA np=1 (s) | WS-A.1 np=1 (s) | WS vs A | WS vs B |
+|-------|------------------------|--------------------------|-----------------|---------|----------|
+| MF | 399.456 | **258.773** | **261.694** | **1.526×** | 1.011× slower |
+| SPR | 764.478 | **738.569** | **729.748** | **1.048×** | 1.012× faster |
+| Total | 1,169.556 | **1,000.811** | **994.904** | **1.176×** | 1.006× faster |
 
 Key observations:
 - **vs Baseline A (vanilla):** WS-A.1 delivers 1.526× MF speedup, 1.176× total speedup — 174 s saved. This is driven entirely by the warm-start cache reducing BFGS iterations during ModelFinder.
-- **vs Baseline B (FCA np=1):** WS-A.1 MF (261.694 s) is within noise of plain FCA MF (257.355 s, Δ 4.3 s). At np=1, the warm-start cache reuses intra-rank fits only; the FCA+WS binary evaluates the same models in the same order as plain FCA with the same OMP count. The expected gain from warm-start at np=1 is marginal — cross-rank benefit requires **Phase A.2 MPI broadcast**.
-- SPR (729.748 s) is unaffected by warm-start as expected; Δ vs vanilla 34.7 s is system/NUMA noise.
+- **vs Baseline B (FCA np=1):** WS-A.1 MF (261.694 s) is within noise of plain FCA MF (258.773 s, Δ 2.9 s). At np=1, the warm-start cache reuses intra-rank fits only; the FCA+WS binary evaluates the same models in the same order as plain FCA with the same OMP count. The expected gain from warm-start at np=1 is marginal — cross-rank benefit requires **Phase A.2 MPI broadcast**.
+- SPR: FCA (738.569 s) vs WS-A.1 (729.748 s), Δ 8.8 s — noise; warm-start does not affect SPR.
 - **Conclusion:** Phase A.1 confirms correctness (lnL, model, exit code all PASS) and establishes the np=1 timing baseline for measuring Phase A.2 MPI broadcast benefit. The real speedup from warm-start will appear at np≥2 once Phase A.2 is in place.
 
-PBS used 00:16:46 walltime. Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
-CHANGELOG: `(bw)` submission · `(bx)` results.
+PBS used 00:16:46 walltime (WS-A.1) / 00:16:40 (FCA baseline). Run records: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json` / `logs/runs/gadi_AA_100k_fca_np1_full_seed1_169095077.json`
+CHANGELOG: `(bw)` submission · `(bx)` WS-A.1 results · `(by)` FCA submission · `(bz)` FCA results.
