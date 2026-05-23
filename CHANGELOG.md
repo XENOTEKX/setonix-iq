@@ -83,8 +83,9 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
-| 169096105 | WS-A.2 np=4 W2 (1-node) | AA 100K | 1 | 4×26T | — | — | — | — | — | — | — (pending) | — | — |
-| 169096530 | WS-A.2 np=4 W2p (4-node) | AA 100K | 4 | 4×103T | — | — | — | — | — | — | — (pending W2p gate) | — | — |
+| 169096105 | WS-A.2 np=4 W2 (1-node, 4×26T) | AA 100K | 1 | 4×26T | LG+G4 | −7,541,976.853 | — | 1,918.721 | — | — | — (intra-node, ≪prod parity) | — | — |
+| 169096530 | WS-A.2 np=4 W2p (4×103T) | AA 100K | 4 | 4×103T | LG+G4 | −7,541,976.853 | — | **91.700** | — | — | **ALL PASS** (W2p gate ✓) | — | — |
+| 169096801 | WS-A.2 np=16 W4 (full) | AA 1M | 16 | 16×103T | — | — | — | — | — | — | — (pending W4 gate) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -95,8 +96,9 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > Speedup = baseline total ÷ run total (vanilla baseline for each dataset).
 > WS-A.1 rows use the same vanilla baseline as FCA rows for their dataset.
 > **pending** = job 169095645 **DONE** MF=1,146.174 s, SPR=1,212.944 s, total=2,440.301 s, lnL=−78,605,196.497, LG+G4; see entry `(cb)`. Δvs FCA np=16 (168635616): MF +23.8 s (+2.1%, within noise — A.1 adds cache overhead, no cross-rank gain).
-> **169096105** = W2 1-node correctness gate: `ws_bcast_fields=4` **CONFIRMED** (broadcast fired with 4 LG-family rate fields); `local_pruned=39`; lnL and best model pending final output. Config: 4×26T on 1 node — intra-node shared-memory MPI, not the production-parity config. Performance gate (MF ≤ 100 s) requires 4-node config. See entry `(cc)`.
-> **169096530** = W2-parity gate (submitted): 4 nodes × 103T each = production-parity config, cross-node MPI_Bcast. This is the gate the §5.7 performance spec (MF ≤ 100 s vs FCA np=2 149 s) was designed for. See entry `(cd)`.
+> **169096105** = W2 1-node correctness gate: **DONE** — `ws_bcast_fields=4` PASS, lnL=−7,541,976.853 (Δ0.007), LG+G4 PASS. MF=1,918.721 s — expected slow (4×26T intra-node, shared memory, not production parity). Correctness-only gate; performance gate requires 4-node config. See entry `(cc)`.
+> **169096530** = W2-parity gate: **DONE ALL PASS** — `ws_bcast_fields=4` (cross-node Infiniband) ✓, lnL=−7,541,976.853 (Δ0.007) ✓, LG+G4 ✓, MF=91.700 s ≤ 100 s ✓. PBS "E" state was normal exit (completed in ~3 min). Phase A.2 cross-node MPI_Bcast confirmed at production parity. See entry `(cd)`.
+> **169096801** = W4 gate (submitted): 16 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. Parity with FCA np=16 (168635616) and WS-A.1 np=16 (169095645). See entry `(ce)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
@@ -188,7 +190,57 @@ one MPI rank per node, full memory bandwidth, cross-node `MPI_Bcast` over Infini
 | Performance gate | NOT testable at 26T | ≤ 100 s MF at 103T |
 | ws_bcast tested | intra-node only | cross-node (production path) |
 
-Results in entry `(ce)` once job completes.
+### W2-parity results (169096530) — PASS
+
+| Check | Result |
+|-------|--------|
+| Exit code | 0 (PBS "E" = normal exit, completed ~3 min) |
+| lnL | −7,541,976.853 (Δ0.007 vs ref −7,541,976.860) ✓ within ±0.5 |
+| Best model | LG+G4 ✓ |
+| MF wall | **91.700 s** ✓ ≤ 100 s gate |
+| ws_bcast_fields | **4** > 0 ✓ (cross-node Infiniband MPI_Bcast confirmed) |
+| bcast_ok_rates | 1 (LG family rates carried) |
+| local_pruned | 39 |
+| **Overall** | **ALL PASS — W2-parity gate ✓** |
+
+Note: PBS "E" (Exiting) state observed immediately after submission is normal for fast jobs —
+it means the job completed and PBS is staging output files back. Not an error.
+
+---
+
+## 2026-05-23 (ce) — W4 gate submitted (job 169096801): Phase A.2 AA 1M, 16-node full MF+SPR
+
+### What
+
+After W2 (169096105) and W2-parity (169096530) gates both PASSED, submitted the W4 full parity run:
+Phase A.2 binary at 16 nodes × 103T = 1648T, AA 1M dataset, full MF+SPR (`-m TEST`).
+This is the direct comparison against FCA np=16 baseline (168635616) and WS-A.1 np=16 (169095645).
+
+| Field | Value |
+|-------|-------|
+| Job | **169096801** (`normalsr`, 16 MPI ranks × 103 OMP = 1648T, 16 nodes, `-m TEST`, seed=1) |
+| Binary | `iqtree3-mpi-fca-ws-a2` md5 `1547a906f1f75422514b0a0cdf2bc89e` (Phase A.2 broadcast) |
+| Alignment | AA 1M (100 taxa × 1M sites) |
+| Resources | 16 nodes × 104 cpus = 1664 cpus, 8160 GB, walltime 02:00:00 |
+| Script | `gadi-ci/lbfgs-ws/run_ws_a2_aa_1m_16node_full.sh` |
+
+### Gate criteria (W4 — §5.7 validation matrix)
+
+- Exit code = 0
+- **lnL** within ±1.0 of −78,605,196.573 (vanilla AA 1M ref 168425491)
+- **Best model** = LG+G4
+- **ws_bcast_fields > 0** in MF-MPI-DIAG (Phase A.2 cross-rank broadcast at 16 nodes)
+- **MF wall ≤ 900 s** (§5.7 W4 criterion)
+
+### A/B references
+
+| Reference | Job | MF wall | SPR wall | Total | lnL |
+|-----------|-----|---------|----------|-------|-----|
+| FCA np=16 baseline | 168635616 | 1,122.363 s | 1,287.863 s | 2,410.226 s | −78,605,196.497 |
+| WS-A.1 np=16 | 169095645 | 1,146.174 s | 1,212.944 s | 2,440.301 s | −78,605,196.497 |
+| **WS-A.2 np=16 (this)** | **169096801** | **pending** | **pending** | **pending** | **pending** |
+
+Results in entry `(cf)` once job completes.
 
 ---
 
