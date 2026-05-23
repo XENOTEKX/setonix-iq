@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** design — pre-implementation
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented + W1 submitted (job 169094526)
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -855,4 +855,6 @@ Single-line addition: `mpi_warm_start.clear();` next to the four existing `mpi_*
 - Verified symbols: `_ZN14CandidateModel8evaluate...RateWarmStartCache`, `_ZN18RateWarmStartCache5clearEv`, `.gomp_critical_user_warm_start_lock.AS0.var`.
 - Smoke test (`--version`) passes; build via incremental `make -j 8` on Gadi login node, ~3 min.
 
-**Ready for W1 (np=1, AA 100K) as the first correctness gate.** Pass criteria: lnL within ±0.5 of baseline 168425673, MF wall ≤ 405 s, best model = LG+G4.
+**W1 gate submitted 2026-05-23 as job 169094526** (`normalsr`, 1×103T, `-m TESTONLY`, seed=1).
+Script: `gadi-ci/lbfgs-ws/run_ws_a1_aa_100k_1node_w1.sh`.
+Pass criteria: lnL within ±0.5 of baseline 168425673, MF wall ≤ 380 s, best model = LG+G4.

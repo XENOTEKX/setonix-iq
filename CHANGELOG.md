@@ -93,6 +93,50 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-23 (bu) — Submit W1 correctness gate: AA 100K np=1, warm-start A.1 binary (job 169094526)
+
+### What
+
+Submitted job **169094526** (`normalsr`, 1 MPI rank × 103 OMP threads, `-m TESTONLY`, seed=1)
+against the Phase A.1 warm-start binary `iqtree3-mpi-fca-ws-a1`
+(md5 `fa9ee60103a1a922505cf4dfa26a2fca`, built 2026-05-23 14:00).
+Script: `gadi-ci/lbfgs-ws/run_ws_a1_aa_100k_1node_w1.sh`.
+
+### Purpose
+
+First correctness gate (W1) for the `RateWarmStartCache` cross-model init (Phase A.1).
+At np=1 the cache populates from every completed model on the single rank and injects
+prior-fit α / p_invar / props / rates before BFGS/Brent on subsequent same-rate-class
+models. FCA dispatch (`filterRatesMPI`) is a no-op at np=1 — the only active change
+vs the baseline `iqtree3-mpi` is the warm-start injection path.
+
+### Acceptance gate (W1)
+
+| Check | Criterion | Baseline ref |
+|-------|-----------|-------------|
+| lnL | −7,541,976.860 ± 0.5 | 168425673 |
+| Best model | LG+G4 | 168425673 |
+| MF wall | ≤ 380 s | 168425673: ~405 s |
+| exit code | 0 | — |
+
+### Environment
+
+| Field | Value |
+|-------|-------|
+| Binary | `iqtree3-mpi-fca-ws-a1` md5 `fa9ee60103a1a922505cf4dfa26a2fca` |
+| Queue | `normalsr` · 1 node (`-l place=excl`, 104 PBS CPUs) |
+| Config | 1 MPI rank × 103 OMP · `numactl --localalloc` · `KMP_BLOCKTIME=200` · seed=1 |
+| Branch | `fca-lbfgs-ws` (harness) · `fca-lbfgs-ws` (source) |
+| Baseline | `iqtree3-mpi-fca-lbfgs-ws` md5 `a103bc6c...` (identical code, no warm-start) |
+
+### Next
+
+Results will be harvested in entry `(bv)` once the job completes.
+If W1 passes, next is W6 (safety oracle: deliberately corrupted cache, np=1).
+W2–W5 require Phase A.2 (MPI broadcast of warm-start cache across ranks).
+
+---
+
 ## 2026-05-23 (bt) — Phase A.1: cross-model warm-start cache (local-only) implemented + built
 
 ### What
