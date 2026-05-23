@@ -93,6 +93,32 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-23 (bw) — Submit full MF+SPR run: AA 100K np=1, warm-start A.1 binary (job 169094692)
+
+### What
+
+Following W1 PASS (job 169094526, TESTONLY), submitted a full MF+SPR run against the same
+warm-start binary to confirm end-to-end correctness and measure SPR-phase timing.
+
+| Field | Value |
+|-------|-------|
+| Job | **169094692** (`normalsr`, 1 MPI rank × 103 OMP, `-m TEST`, seed=1) |
+| Binary | `iqtree3-mpi-fca-ws-a1` md5 `fa9ee60103a1a922505cf4dfa26a2fca` |
+| Script | `gadi-ci/lbfgs-ws/run_ws_a1_aa_100k_1node_full.sh` |
+| Walltime | 2:00:00 (baseline total ~1,170 s) |
+
+### Pass criteria
+
+| Check | Criterion | Baseline ref |
+|-------|-----------|-------------|
+| lnL (SPR) | −7,541,976.860 ± 0.5 | 168425673 |
+| Best model | LG+G4 | 168425673 |
+| exit code | 0 | — |
+
+Results will be in entry `(bx)`.
+
+---
+
 ## 2026-05-23 (bv) — W1 PASS ✓ — warm-start A.1 correctness gate: AA 100K np=1 (job 169094526)
 
 ### Results (all PASS ✓)
