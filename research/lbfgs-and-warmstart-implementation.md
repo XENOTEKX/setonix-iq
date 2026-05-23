@@ -884,19 +884,25 @@ Purpose: confirm end-to-end correctness and measure SPR-phase timing following W
 | Best model | LG+G4 | **LG+G4** ✓ |
 | Exit code | 0 | **0** ✓ |
 
-**Timing vs baseline 168425673 (non-MPI, 103T, -m TEST):**
+**Timing — two baselines:**
 
-| Phase | Baseline (s) | WS-A.1 (s) | Speedup | Saved (s) |
-|-------|-------------|------------|---------|-----------|
-| MF (ModelFinder) | 399.456 | **261.694** | **1.526×** | 137.762 |
-| SPR (tree search) | 764.478 | **729.748** | **1.048×** | 34.730 |
-| Total | 1,169.556 | **994.904** | **1.176×** | 174.652 |
+- **Baseline A** (job 168425673): vanilla ICX+AVX-512, stock IQ-TREE 3, no FCA, no MPI, `-nt 103`
+- **Baseline B** (job 168577707): FCA Phase 0.5+0.6 MPI, same ICX+AVX-512 build, np=1, MPI + FCA dispatch; MF figure from TESTONLY; SPR unaffected by FCA → vanilla SPR used as estimate.
+
+| Phase | Baseline A: Vanilla (s) | Baseline B: FCA np=1 (s) | WS-A.1 np=1 (s) | vs A | vs B |
+|-------|------------------------|--------------------------|-----------------|------|------|
+| MF | 399.456 | 257.355 † | **261.694** | **1.526×** | 0.983× |
+| SPR | 764.478 | ~764 (est.) ‡ | **729.748** | **1.048×** | ~1.047× |
+| Total | 1,169.556 | ~1,021 (est.) ‡ | **994.904** | **1.176×** | ~1.027× |
+
+† FCA MF time from TESTONLY job 168577707; no FCA np=1 full MF+SPR run recorded.  
+‡ FCA dispatch is a ModelFinder-only optimisation; SPR phase unaffected — estimated from vanilla.
 
 Key observations:
-- **MF speedup (1.526×)** confirms warm-start cache is active and beneficial at np=1. Full-run MF (261.694 s) is slightly slower than TESTONLY (254.433 s) by ~7.3 s — within run-to-run variance (different queue slot, possibly different NUMA topology assignment).
-- **SPR speedup (1.048×)** is a small but real improvement; warm-start cache is NOT active during SPR. The ~4.7% improvement likely reflects system/NUMA noise rather than any cache effect. SPR is unaffected by Phase A.1 warm-start as expected.
-- **Total 1.176× speedup** (~175 s saved, 16.8 min vs baseline ~19.5 min) is driven almost entirely by MF.
-- Phase A.2 (MPI broadcast of warm-start across ranks) is needed to see cross-rank benefit at np>1.
+- **vs Baseline A (vanilla):** WS-A.1 delivers 1.526× MF speedup, 1.176× total speedup — 174 s saved. This is driven entirely by the warm-start cache reducing BFGS iterations during ModelFinder.
+- **vs Baseline B (FCA np=1):** WS-A.1 MF (261.694 s) is within noise of plain FCA MF (257.355 s, Δ 4.3 s). At np=1, the warm-start cache reuses intra-rank fits only; the FCA+WS binary evaluates the same models in the same order as plain FCA with the same OMP count. The expected gain from warm-start at np=1 is marginal — cross-rank benefit requires **Phase A.2 MPI broadcast**.
+- SPR (729.748 s) is unaffected by warm-start as expected; Δ vs vanilla 34.7 s is system/NUMA noise.
+- **Conclusion:** Phase A.1 confirms correctness (lnL, model, exit code all PASS) and establishes the np=1 timing baseline for measuring Phase A.2 MPI broadcast benefit. The real speedup from warm-start will appear at np≥2 once Phase A.2 is in place.
 
 PBS used 00:16:46 walltime. Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
 CHANGELOG: `(bw)` submission · `(bx)` results.

@@ -103,22 +103,27 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | Best model | LG+G4 | LG+G4 | ✓ PASS |
 | Exit code | 0 | 0 | ✓ PASS |
 
-### Timing vs baseline (job 168425673 — non-MPI, 103T, -m TEST)
+### Timing — two baselines
 
-| Phase | Baseline (s) | WS-A.1 (s) | Speedup | Δ saved (s) |
-|-------|-------------|------------|---------|------------|
-| **MF (ModelFinder)** | 399.456 | **261.694** | **1.526×** | 137.762 |
-| **SPR (tree search)** | 764.478 | **729.748** | **1.048×** | 34.730 |
-| **Total** | 1,169.556 | **994.904** | **1.176×** | 174.652 |
+**Baseline A** — vanilla ICX+AVX-512 (job 168425673): stock IQ-TREE 3, no FCA, no MPI, `-nt 103`  
+**Baseline B** — FCA Phase 0.5+0.6 MPI (job 168577707): same ICX+AVX-512 binary with FCA dispatch patches, np=1, MPI; MF figure from TESTONLY run — SPR phase is unaffected by FCA dispatch so vanilla SPR applies.
+
+| Phase | Baseline A: Vanilla (s) | Baseline B: FCA np=1 (s) | WS-A.1 np=1 (s) | vs A speedup | vs B speedup |
+|-------|------------------------|--------------------------|-----------------|-------------|-------------|
+| **MF (ModelFinder)** | 399.456 | 257.355 †| **261.694** | **1.526×** | 0.983× |
+| **SPR (tree search)** | 764.478 | ~764 (est.) ‡ | **729.748** | **1.048×** | ~1.047× |
+| **Total** | 1,169.556 | ~1,021 (est.) ‡ | **994.904** | **1.176×** | ~1.027× |
+
+† Baseline B MF from TESTONLY run (job 168577707); no FCA np=1 full MF+SPR run recorded.  
+‡ FCA dispatch does not affect SPR; SPR estimated from vanilla baseline.
 
 ### Notes
 
-- MF wall matches W1 TESTONLY expectation closely (W1: 254.433 s; full: 261.694 s — Δ 7.3 s, within run-to-run variance).
-- SPR wall is 729.748 s vs baseline 764.478 s (1.048× speedup): minor improvement consistent with warm-start cache not being active during SPR phase; variance may reflect system load or NJ-tree initialisation differences.
-- Warm-start A.1 delivers **~34% MF speedup** on this dataset at np=1 with no lnL regression.
-- Total end-to-end speedup of **1.176×** (174 s saved).
-- PBS used 00:16:46 walltime (baseline would have taken ~19.5 min; result: ~16.8 min).
-- JSON record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
+- **vs vanilla (Baseline A):** WS-A.1 delivers **1.526× MF speedup** and **1.176× total speedup** — 174 s saved.
+- **vs FCA baseline (Baseline B):** WS-A.1 MF (261.694 s) is effectively identical to FCA MF (257.355 s, Δ 4.3 s, within noise). The warm-start cache at np=1 reuses intra-rank fits only — the principal gain is in Phase A.2 (MPI broadcast across ranks, not yet implemented).
+- SPR wall (729.748 s) is unaffected by warm-start as expected; minor variance vs vanilla is system noise.
+- MF wall matches W1 TESTONLY closely (254.433 s → 261.694 s, Δ 7.3 s, within run-to-run variance).
+- PBS used 00:16:46 walltime. JSON record: `logs/runs/gadi_AA_100k_ws_a1_np1_full_seed1_169094692.json`
 
 ---
 
