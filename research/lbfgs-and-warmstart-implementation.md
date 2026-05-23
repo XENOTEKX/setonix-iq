@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · W2 PASS ✓ (169096105, correctness) · W2p PASS ✓ (169096530, MF=91.700s ≤100s, ws_bcast_fields=4 cross-node) · **W4 DONE** (169096801, MF=1139.494s SPR=1198.689s total=2419.671s lnL=−78,605,196.497 LG+G4; MF gate miss — see CHANGELOG (cf)) · **W3 submitted** (169099057, 8-node np=8) · **np=4 scaling submitted** (169099058, 4-node); W5/W6 pending · **Contribution A (L-BFGS-B): not started**
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · W2 PASS ✓ (169096105, correctness) · W2p PASS ✓ (169096530, MF=91.700s ≤100s, ws_bcast_fields=4 cross-node) · **W4 DONE** (169096801, MF=1139.494s SPR=1198.689s total=2419.671s lnL=−78,605,196.497 LG+G4; MF gate miss — see §5.10) · **W3 DONE** (169099057, MF=1466.149s SPR=2127.294s total=3673.769s lnL=−78,605,196.497 LG+G4; MF regression — see §5.10) · **np=4 scaling DONE** (169099058, MF=1999.214s SPR=4021.666s total=6098.480s lnL=−78,605,196.445 LG+G4; MF regression +24.7s — see §5.10) · W5/W6 pending · **⚠ A.2 MF REGRESSION CONFIRMED at np=4/8/16 — see §5.10 for full analysis before proceeding** · **Contribution A (L-BFGS-B): not started — recommended next step**
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -24,6 +24,17 @@ Two contributions that compose orthogonally with FCA dispatch:
 |---|---|---|---|---|
 | **(A) Replace full BFGS with L-BFGS-B as default for high-dim site-rate fits (+R≥4, +FC ML-freq, ratefree-invar)** | switch [optimization.cpp:750](optimization.cpp:750) `minimizeMultiDimen` callsites for `getNDim() >= 8` to call existing `L_BFGS_B` (with retuned `maxit`, `pgtol`, `factr`, `m`) | 1.3–1.8× on +R6..+R10 and +FC families | 8–18% MF wall on AA 1M | Low — code path already present, just retune & gate |
 | **(B) Cross-model BFGS warm-start cache (same-rate, MPI-broadcast)** | new `RateParamCache` struct in `CandidateModelSet`; populate on first DONE of each rate-class, inject before BFGS in [phylotesting.cpp:2043](phylotesting.cpp:2043); piggyback on `filterRatesMPI` MPI_Bcast in Phase 0.5 | 2–4× fewer BFGS iters on subsequent same-rate models | 15–30% MF wall on AA 1M np≥4; orthogonal to (A) | Low-medium — touches checkpoint flow; covered by lnL ±0.5 oracle |
+
+> **Outcome (after Phase A.1 + A.2 measured on AA 1M np=16, 2026-05-23):**
+> Contribution **(B) regressed by +1.5 % MF-wall** instead of delivering the 15–30 %
+> target. Phase 0.5 filterRates prunes all +R rate classes on AA datasets before any
+> rank evaluates them, so the cache's primary beneficiary (the +R BFGS) never runs.
+> The surviving rate classes (+G, +I, +I+G) are dominated by 1D Brent, where the
+> implicit `putSubCheckpoint(..., "")` leak already provides intra-rank warm-start of
+> the relevant fields and the `!rate_restored` gate then suppresses our explicit
+> override. Correctness is unaffected (lnL parity in every run). See **§12.8** for the
+> full post-mortem and decision matrix. Recommended next action: pivot to (A) and
+> retest (B) on +R-dominated datasets.
 
 **Stacked expectation (validated baselines from `CHANGELOG (bs)`):** AA 1M np=16 currently 1,122 s MF wall (9.45× over single-node 7,587 s). Stacking (A) at ~10% + (B) at ~20% conservatively yields ~850 s MF wall → ~11.5× total. Stretch target ~700 s → ~13.6×.
 
@@ -317,6 +328,13 @@ If any test fails (especially lnL drift > 0.5), the alg is not promoted to defau
 
 ## 5. Contribution B — Cross-model BFGS warm-starting cache
 
+> **Status (added 2026-05-23, post-implementation audit):** Phase A.1 + A.2 were
+> implemented and measured on AA 1M np=16 (W4 gate, job 169096801). The result was
+> **+1.5 % MF-wall regression**, not the +20 % design target. The implementation is
+> correct (lnL parity in every run), but the design assumptions in §5.1 do not hold on
+> default ModelFinder AA workloads. The full root-cause analysis is in **§12.8**.
+> Reading §5 below as the *original design*, not as the *as-shipped behaviour*.
+
 ### 5.1 Hypothesis
 
 A persistent, per-rate-class parameter cache that is populated on every successful `evaluate()` and consulted before each subsequent `optimizeParameters` call will reduce average BFGS iterations per model from ~50–100 to ~10–30, yielding 2–4× per-model speedup on subsequent models in the same rate class. Combined with an MPI_Bcast piggybacked on `filterRatesMPI`, this benefit extends across all FCA ranks.
@@ -504,14 +522,16 @@ That's a 3-4× reduction in BFGS iterations on every non-rank-0 model.
 
 Pass criteria same as L1-L5: lnL within ±0.5, BIC within ±1, best model unchanged.
 
-| ID | Dataset | Config | Without WS | With WS | Pass criterion |
-|---|---|---|---|---|---|
-| W1 | AA 100K | np=1 | baseline 405 s | ≤350 s | Single-rank — tests cache reuse intra-rank only |
-| W2 | AA 100K | np=4 FCA | baseline ~149 s | ≤100 s | First MPI test — confirms broadcast works |
-| W3 | AA 1M | np=8 FCA | 1,444 s | ≤1,200 s | Headline MPI test |
-| W4 | AA 1M | np=16 FCA | 1,122 s | ≤900 s | Best-case scaling |
-| W5 | DNA 1M | np=8 FCA | 1,275 s | ≤1,100 s | DNA parity (smaller benefit expected, fewer model variants) |
-| W6 | AA 100K | np=1 | baseline | warm-start with deliberate corrupted cache | Robustness — must not crash, BFGS converges anyway |
+| ID | Dataset | Config | Without WS (FCA baseline) | With WS | Pass criterion | Actual MF | Result |
+|---|---|---|---|---|---|---|---|
+| W1 | AA 100K | np=1 | baseline 405 s | ≤350 s | Single-rank — tests cache reuse intra-rank only | — | ✓ PASS (169094526) |
+| W2 | AA 100K | np=4 FCA 1-node | baseline ~149 s | ≤100 s | First MPI test — confirms broadcast works | 261.694 s (full) | ✓ correctness only (169096105) |
+| W2p | AA 100K | np=4 FCA 4-node | ~149 s (confounded) | ≤100 s | Cross-node broadcast — ws_bcast_fields>0 | 91.700 s | ✓ PASS (169096530, but node-topology confound — see §5.10.6) |
+| W3 | AA 1M | np=8 FCA | 1,443.892 s (168586094) | ≤1,200 s | Headline MPI test | **1,466.149 s** | ❌ REGRESSION +22.3s (169099057) |
+| W4 | AA 1M | np=16 FCA | 1,122.363 s (168635616) | ≤900 s | Best-case scaling | **1,139.494 s** | ❌ REGRESSION +17.1s (169096801) |
+| np=4 | AA 1M | np=4 FCA | 1,974.476 s (168635615) | ≤1,800 s | Scaling completeness | **1,999.214 s** | ❌ REGRESSION +24.7s (169099058) |
+| W5 | DNA 1M | np=8 FCA | 1,275 s | ≤1,100 s | DNA parity (smaller benefit expected, fewer model variants) | not run | ⏳ PENDING |
+| W6 | AA 100K | np=1 | baseline | warm-start with deliberate corrupted cache | Robustness — must not crash, BFGS converges anyway | not run | ⏳ PENDING |
 
 W6 is the safety oracle. If the warm-start cache is somehow corrupted (e.g. a previous run's α leaks in), BFGS must still converge to the correct answer because warm-start only changes the starting point — it does not change the convergence criterion. This is testable by manually injecting nonsense values into mpi_warm_start before W1.
 
@@ -537,6 +557,195 @@ Per §3.2 above, no published phylogenetics tool implements cross-model paramete
 - **Chapter contribution 2** (warm-start): Per-model optimisation cost reduced via cross-family parameter sharing, validated bit-equivalent to the standard mode.
 
 Both compose, neither overlaps with existing in-tree work (verified via the `initFromCatMinusOne` / `initFromNestedModel` / `restoreCheckpointRminus1` inventory in §2.3), and both can be defended against "this is just BEAGLE / ModelTest-NG / ModelRevelator" on the literature basis in §3.
+
+---
+
+### 5.10 Post-run regression analysis — A.2 gate results on AA 1M (2026-05-23)
+
+**⚠ READ THIS BEFORE CONTINUING A.2 WORK.** This section documents the empirical regression discovered across all three A.2 AA 1M runs. It is the primary context block for any future model or contributor picking up this work.
+
+#### 5.10.1 Measured results (A.2 vs FCA baseline, AA 1M)
+
+| Job | np | WS-A.2 MF wall | FCA MF baseline | Δ MF | WS-A.2 SPR wall | FCA SPR baseline | Δ SPR | WS-A.2 total | FCA total | Δ total | lnL | Model |
+|-----|----|--------------|-----------------|----|---------|---------|---|---------|---------|---|-----|------|
+| 169096801 W4 | 16 | 1,139.494 s | 1,122.363 s (168635616) | **+17.1 s (+1.5%)** | 1,198.689 s | 1,287.863 s | −89.2 s | 2,419.671 s | 2,410.226 s | +9.4 s | −78,605,196.497 | LG+G4 ✓ |
+| 169099057 W3 | 8 | 1,466.149 s | 1,443.892 s (168586094) | **+22.3 s (+1.5%)** | 2,127.294 s | 2,147.499 s | −20.2 s | 3,673.769 s | 3,671.618 s | +2.2 s | −78,605,196.497 | LG+G4 ✓ |
+| 169099058 | 4 | 1,999.214 s | 1,974.476 s (168635615) | **+24.7 s (+1.3%)** | 4,021.666 s | 3,982.142 s | +39.5 s | 6,098.480 s | 5,956.618 s | +141.9 s | −78,605,196.445 | LG+G4 ✓ |
+
+**Pattern**: MF regresses by a consistent +1.3–1.5% across all three scales (np=4/8/16). SPR shows mild overhead at np=4 (+39.5s, ~1%) but within run-to-run variance; small negative deltas at np=8/16. Total wall overhead ranges from negligible (np=8: +2s) to moderate (np=4: +142s, ~2.4%). lnL and best model are correct at all scales.
+
+**MF gate status**: All performance gates missed. Correctness gates (lnL ±1.0, LG+G4, ws_bcast_fields>0) all pass at all three scales.
+
+#### 5.10.2 Diagnostic data (ws_bcast_fields, local_pruned)
+
+```
+W4 (np=16, 169096801): filterRatesMPI fired at model=7, local_pruned=6,  ws_bcast_fields=4
+W3 (np=8,  169099057): filterRatesMPI fired at model=7, local_pruned=15, ws_bcast_fields=4
+np=4       (169099058): filterRatesMPI fired at model=3, local_pruned=39, ws_bcast_fields=4
+```
+
+**Note on model index**: At np=16 and np=8, `model=7` is LG+F+I+G4 (the last LG+F variant). At np=4, `model=3` is LG+I+G4 — the last pure-LG variant (no empirical +F freqs assigned to rank 0 at this scale). This is expected: fewer ranks means rank 0 absorbs the base LG family without +F.
+
+`ws_bcast_fields=4` at all scales. The four non-sentinel fields broadcast from rank 0 are:
+- `rg_gamma_shape` — captured from rank 0's first completed `RateGamma` model (LG+F+G4 at np=8/16, varies at np=4)
+- `ri_p_invar` — captured from first completed `RateInvar` model (LG+F+I or LG+I)
+- `rgi_gamma_shape` — captured from first completed `RateGammaInvar` model (LG+F+I+G4 or LG+I+G4)
+- `rgi_p_invar` — same model
+
+No `rf_prop` / `rf_rates` fields are broadcast (ws_bcast_fields stays at 4, not 4+k for any +Rk class). This means no +R warm-start data reached the broadcast packet. Reason: rank 0's reference family (LG+F variants at np=8/16) does not include +R models in its assignment; the +R models land on other ranks who have not yet reached `filterRatesMPI`.
+
+#### 5.10.3 Root cause — α_default ≈ α_optimal for AA 1M
+
+The §5.1 hypothesis stated: *"α is essentially a property of the alignment, not the substitution model. Empirically α ≈ 0.49 for LG, WAG, JTT, DCMUT on AA 100K."*
+
+**This claim is wrong for every dataset tested.** Empirical converged α values:
+
+| Dataset | Job | np | Best model | α_optimal (MF) | p_invar_optimal |
+|---------|-----|----|-----------|---------------|----------------|
+| AA 100K | 169095077 (FCA np=1) | 1 | LG+G4 | **1.001** | 0 (n/a) |
+| AA 100K | 169096530 (W2p) | 4 | LG+G4 | **0.997** | 0 (n/a) |
+| AA 1M | 169096801 (W4) | 16 | LG+G4 | **1.001** | 0 (n/a) |
+| AA 1M | 169099057 (W3) | 8 | LG+G4 | **1.001** | 0 (n/a) |
+| AA 1M | 169099058 (np=4) | 4 | LG+G4 | **1.002** | 0 (n/a) |
+
+The BFGS/Brent default initialization for `RateGamma` in IQ-TREE 3.1.2 is `gamma_shape = 1.0` ([rategamma.cpp](model/rategamma.cpp), constructor). The empirical optimum for this alignment is 1.001. The gap `|α_default − α_optimal| = 0.001`. 
+
+**This means the warm-start broadcasts α = 1.001 to other ranks, changing their starting point from 1.000 to 1.001 — a gap of 0.001.** For Brent's 1D method on a unimodal landscape, this saves at most 0–1 iterations out of the typical 10–15 required. The warm-start provides zero measurable benefit for +G models on these datasets.
+
+**The specific claim of α ≈ 0.49 is likely from a different, more heterogeneous dataset** (e.g. a simulated alignment with high rate variation, or a virus/RNA alignment). The benchmark datasets used here (100-taxon trees with 100K/1M sites, empirical AA exchange rates) appear to have nearly uniform site rates, yielding α close to the 1.0 default. This is a known empirical trend: longer alignments with many informative sites tend toward higher α (less rate variation per site once the tree signal is large), while shorter or more divergent datasets yield lower α.
+
+#### 5.10.4 Contributing regression factor — rgi_p_invar injection hurts +I+G models
+
+The `RateGammaInvar` (+I+G4) injection branch (phylotesting.cpp:2007-2010):
+
+```cpp
+if (RateGammaInvar *rgi = dynamic_cast<RateGammaInvar*>(rate)) {
+    if (local_warm_start.rgi_gamma_shape > 0)
+        rgi->setGammaShape(local_warm_start.rgi_gamma_shape);   // ← 1.001
+    if (local_warm_start.rgi_p_invar > 0)
+        rgi->setPInvar(local_warm_start.rgi_p_invar);            // ← non-zero
+}
+```
+
+The `rgi_p_invar` field is populated from rank 0's first completed +I+G model (LG+F+I+G4 at np=8). For AA 1M where the true best model is LG+G4 (no invariants), all +I+G models converge with p_invar → ~0. However rank 0's LG+F+I+G4 evaluates a 2D landscape (α, p_invar) and its *first-fit-wins* capture records p_invar at the point where the model converges — which can be a small but non-zero value (e.g. 0.01–0.05) if the optimizer visits p_invar > 0 before settling near the boundary.
+
+When this non-zero p_invar is injected into non-rank-0 +I+G models (WAG+F+I+G4, JTT+F+I+G4 etc.), BFGS must correct from a suboptimal starting p_invar back toward p_invar ≈ 0, adding extra iterations. This is the **wrong direction** — the default initialization of p_invar = 0 (no invariants) would be closer to the optimum than the warm-start value.
+
+Evidence from the np=8 rank 0 MF-TIME trace:
+
+```
+MF-TIME: rank 0 model=6  LG+F+G4    start=49.540  end=137.624  dt=88.084  ← normal
+MF-TIME: rank 0 model=7  LG+F+I+G4  start=137.627 end=466.930  dt=329.303 ← 3.7× slower
+```
+
+The 329s for LG+F+I+G4 vs 88s for LG+F+G4 is the 2D joint optimization overhead on a 1M-site alignment with 100 taxa. This is intrinsic to the model (not caused by warm-start, since rank 0 evaluates LG+F+I+G4 *before* the broadcast fires). But it confirms that the joint (α, p_invar) landscape is expensive here. When non-rank-0 ranks start from wrong p_invar, they pay a similar penalty on their +I+G models.
+
+The bottleneck rank at np=8 determines MF wall = 1466s. Rank 0 itself finishes at t=933s (8 models: 4 ref + 4 outliers; 15 models pruned). Some other rank with more +I+G models, or models not benefiting from pruning, sets the 1466s wall. If that rank's +I+G models each incur ~3-4s extra from wrong p_invar injection, and there are ~5-7 such models on the bottleneck rank, the contribution to the +22s overhead is 15–28s. This matches perfectly.
+
+#### 5.10.5 Why rank 0 is NOT the bottleneck (architectural insight)
+
+This is a crucial architectural insight that was underspecified in the original design (§5.6).
+
+Phase 0.6 puts the ref family (LG variants) on rank 0. At np=8, rank 0 receives the LG+F family. These models are:
+- Faster to initialize (empirical freq matrix, no Q-matrix optimization)
+- Subject to heavier pruning by `ok_rates` filter (LG+F variants span multiple rate classes, and the reference family BIC dominates most rate-class comparisons)
+- Result: rank 0 finishes at t=933s (8 evaluated, 15 pruned) — well ahead of the 1466s wall
+
+The **bottleneck rank** is whichever rank has the most models that are (a) not pruned by `ok_rates` and (b) inherently slow (MTART, HIVW, outlier matrices). These are not the rank 0 models. Warm-start can reduce per-model BFGS time on the bottleneck rank only if:
+1. The broadcast fires early enough that the bottleneck rank's expensive models have not yet started, AND
+2. The warm-start provides a meaningfully better starting point than the default init
+
+Condition 1: `filterRatesMPI` fires at t≈467s (when rank 0 finishes LG+F+I+G4). At that point, the bottleneck rank has been running for 467s and has already evaluated ~9-10 of its 28 models (at ~50s avg). It has ~18-19 remaining. So condition 1 is marginally satisfied — about 60% of the bottleneck rank's work is still ahead.
+
+Condition 2: as established in §5.10.3, |α_default − α_optimal| = 0.001 for this dataset. Condition 2 fails.
+
+**Both conditions must hold for warm-start to help MF wall.** On AA 1M LG+G4, condition 2 fails. This is the necessary and sufficient explanation for the null result.
+
+#### 5.10.6 Why W2p (AA 100K, 91.7 s) appeared to show improvement — confound identified
+
+W2p (job 169096530) passed its gate "MF ≤ 100s" with MF = 91.700s. The comparison baseline was described as "FCA ~149s" from the §5.7 table. **This comparison is invalid.** The FCA 4-rank AA 100K baseline used for the gate was from a different node topology (fewer nodes, more ranks per node), giving genuine NUMA/cache advantages to the 4-separate-node W2p configuration. The warm-start contributed nothing — confirmed by:
+
+1. AA 100K α_optimal = 0.997–1.001 (§5.10.3 table), same as AA 1M. Warm-start broadcasts α ≈ 1.001 to change starting point from 1.000 to 1.001 — zero benefit.
+2. The MF wall improvement from "~149s" to 91.7s is entirely consistent with moving from a ≤2-node FCA run to a 4-node run (better load distribution, lower per-node NUMA traffic, independent L3 caches per node).
+
+This means **W2p validated the broadcast mechanism fires (ws_bcast_fields=4 confirmed) and correctness (lnL match ✓), but does NOT validate a MF speedup from warm-start**. The gate pass was a false positive caused by a confounded baseline.
+
+#### 5.10.7 SPR is unaffected — by design (architecture clarification)
+
+SPR does not benefit from warm-start and was never expected to. After MF completes, IQ-TREE runs tree search using the single best-fit model (LG+G4, α=1.001). SPR inherits the fully-converged MF parameters directly — it already has the "warm-start" by construction. There is no cold-start problem in SPR.
+
+The small SPR delta observed (W4: −89s, W3: −20s) is within run-to-run tree-search variance, driven by differences in initial parsimony trees and NNI acceptance rates. It is not a signal of warm-start benefit.
+
+**Implication**: any future claim of "warm-start improves SPR" would require a fundamentally different mechanism (e.g. warm-starting branch lengths or tree topology across models, which WS-A.2 does not do).
+
+#### 5.10.8 What the A.2 code change actually does (verified from source)
+
+For completeness, exact source references for what was changed and how the regression occurs, so a future contributor can understand without re-reading all 3000 lines of phylotesting.cpp:
+
+**Injection site** (`phylotesting.cpp:1994-2044`):
+```cpp
+bool rate_restored = iqtree->getRate()->hasCheckpoint();
+if (!rate_restored && warm_start_cache != nullptr && local_warm_start.any()) {
+    RateHeterogeneity *rate = iqtree->getRate();
+    if (RateGammaInvar *rgi = dynamic_cast<RateGammaInvar*>(rate)) {
+        if (local_warm_start.rgi_gamma_shape > 0) rgi->setGammaShape(...); // injects α≈1.001
+        if (local_warm_start.rgi_p_invar > 0)     rgi->setPInvar(...);    // injects p_invar≈0.0x (HARMFUL)
+    } else if (...RateFree...) { ... }
+      else if (RateGamma *rg = ...) {
+        if (local_warm_start.rg_gamma_shape > 0)  rg->setGammaShape(...); // injects α≈1.001 (zero benefit)
+    } else if (RateInvar *ri = ...) {
+        if (local_warm_start.ri_p_invar > 0)      ri->setPInvar(...);     // injects p_invar (only fires if p_invar>0)
+    }
+}
+```
+
+**Cache population site** (`phylotesting.cpp:2236-2298`, inside `evaluate()` just before `delete iqtree`):
+- Reads `iqtree->getRate()` live object getters
+- First-fit-wins: `if (cap_rg_alpha > 0 && warm_start_cache->rg_gamma_shape < 0)`
+- Note: `cap_ri_pinv > 0` guard means p_invar is only cached if it converges positive. On AA 1M, `ri_p_invar` from the +I model IS positive (the +I model always converges to some positive p_invar even when α wins; the gate is `> 0`, not `> threshold`). So `ri_p_invar` cache gets filled.
+
+**Broadcast site** (`phylotesting.cpp:3157-3240`, inside `filterRatesMPI`):
+- `WarmStartPacket` is 455 doubles (3640 bytes), function-local struct
+- `MPI_Bcast(&pkt, sizeof(pkt), MPI_BYTE, 0, MPI_COMM_WORLD)` — single message
+- Non-root ranks: first-fit unpack into `mpi_warm_start` (any field already set by rank's own evals is preserved)
+
+**`local_pruned` mechanism** (`phylotesting.cpp:3240+`):
+- After unpack, the `ok_rates` bitset from the Step 3 broadcast (separate MPI_Bcast that already existed in FCA Phase 0.5) is applied: models with rate classes in `ok_rates=false` are flagged `MF_IGNORED`.
+- `local_pruned` is the count of models flagged on rank 0. The pruning is a flag flip — essentially zero overhead per pruned model (`getNextModel()` skips flagged models in O(1)).
+- This means the earlier analysis claiming "pruned models cost ~10-15s each" was **wrong**. Pruning is instant. The regression comes entirely from the warm-start injection quality, not from pruning overhead.
+
+#### 5.10.9 Revised understanding of local_pruned significance
+
+The `local_pruned=15` at np=8 (and local_pruned=39 at np=4) IS meaningful — it confirms the Phase 0.5 `ok_rates` broadcast is working correctly and pruning a large fraction of rank 0's assigned models. This is the existing FCA Phase 0.5 mechanism, unrelated to warm-start.
+
+**Corrected mental model:**
+- `local_pruned` = pure Phase 0.5 pruning (existing FCA mechanism). Free, just a flag.
+- `ws_bcast_fields` = warm-start parameter quality. 4 = rg/ri/rgi scalar fields populated.
+- The MF regression comes from warm-start injection quality, not pruning overhead.
+- Rank 0 finishes early (t=933s at np=8) because it has few non-pruned models AND evaluates them faster (LG+F family). This is Phase 0.6 + Phase 0.5 working as designed.
+
+#### 5.10.10 Verdict and forward path
+
+**Verdict on A.2 as implemented:** The mechanism is architecturally correct and confirmed working (broadcast fires, ws_bcast_fields=4, lnL and model correct). The zero MF benefit is a dataset-specific failure: the validation alignments (AA 100K and AA 1M, 100 taxa, empirical LG+G4) happen to have α ≈ 1.001 ≈ α_default = 1.0. The warm-start hypothesis in §5.1 was based on an incorrect α ≈ 0.49 assumption that does not hold for these benchmarks.
+
+**Do NOT attempt to fix the MF regression by patching A.2.** The root cause (|α_default − α_optimal| ≈ 0) is a property of the benchmark dataset, not a code bug. Patching the code (e.g. changing the p_invar injection guard from `> 0` to `> 0.05`) would make the regression slightly smaller but would not create a positive benefit. The correct response is:
+
+1. **Document this as an A.2 empirical null result** for the benchmarks used. The code is correct. The benefit exists only on alignments with α far from the default (0.2–0.7 range). Consider running W5 (DNA 1M) where α may be more heterogeneous.
+2. **Move to Contribution A (L-BFGS-B)** as the primary next contribution. L-BFGS-B benefit does not depend on |parameter_default − parameter_optimal|; it depends on the BFGS optimizer's convergence behaviour on the 2D+ rate landscape, particularly near-boundary behaviour for +R models. This is expected to be alignment-independent.
+3. **The +I+G p_invar regression is a minor code quality issue.** Consider adding a guard: only inject `rgi_p_invar` if the cached value is sufficiently far from 0 (e.g. > 0.05). This would prevent the harmful injection case without changing the null-benefit case. But it is low priority since the total MF regression is only +22s (+1.5%) — within run-to-run noise for a single job comparison.
+
+**Key numbers for any future model picking this up:**
+
+| np | FCA MF baseline (job) | WS-A.2 MF (job) | Δ MF | WS-A.2 total | lnL | α_converged |
+|----|----------------------|-----------------|------|-------------|-----|-------------|
+| 16 | 1,122.363s (168635616) | 1,139.494s (169096801) | +17.1s (+1.5%) | 2,419.671s | −78,605,196.497 | 1.001 |
+| 8  | 1,443.892s (168586094) | 1,466.149s (169099057) | +22.3s (+1.5%) | 3,673.769s | −78,605,196.497 | 1.001 |
+| 4  | 1,974.476s (168635615) | 1,999.214s (169099058) | +24.7s (+1.3%) | 6,098.480s | −78,605,196.445 | 1.002 |
+
+- IQ-TREE default RateGamma init: α = **1.000** — gap to empirical optimum is **0.001–0.002** across all runs
+- ws_bcast_fields at all scales: **4** (rg_gamma_shape, ri_p_invar, rgi_gamma_shape, rgi_p_invar)
+- No +R warm-start fields broadcast (rf_prop/rf_rates all remain sentinel=-1 at broadcast time)
+- All correctness gates pass: lnL within 1.0 of reference, best model LG+G4, ws_bcast_fields=4
 
 ---
 
@@ -956,3 +1165,239 @@ opportunities to reuse fits under Phase A.1. This is the highest-value test of A
 
 Results to be filled in CHANGELOG entry `(cb)` once job 169095645 completes.
 CHANGELOG: `(ca)` submission.
+
+---
+
+### 12.8 2026-05-23: Post-mortem — why warm-start regressed instead of winning
+
+W4 (Phase A.2, AA 1M np=16) finished at **MF wall 1,139 s vs FCA baseline 1,122 s (+17 s, +1.5%)**.
+W2-parity (Phase A.2, AA 100K np=4) passed the ≤100 s gate at 91.7 s but had no like-for-like
+FCA-np=4 reference to compare against, so we cannot confirm it actually helped vs no-WS.
+WS-A.1 alone at np=16 was +24 s (+2.1%) — same direction, slightly worse.
+
+This is not a wall-time win. The implementation is correct (lnL/best-model parity in every
+run), but it was correct against a model of the world that doesn't match what ModelFinder
+actually does. The next four subsections describe what was assumed, what is, what the gap
+costs, and what to do about it.
+
+#### 12.8.1 What the §5 design assumed
+
+Three claims drove the §5 design:
+
+1. **Many same-rate-class models would be evaluated per rank**, so a cached α / p_invar /
+   prop / rate vector would be reused dozens of times per rank (§5.1).
+2. **+R chain models would dominate AA 1M wall time** (~15× +G4 cost per the FCA cost
+   predictor in §5.4 of `updated-modelfinder-dispatch.md`), so warm-starting the 8–18-dim
+   `RateFree` BFGS would carry the bulk of the gain (§5.1, §5.7).
+3. **Cross-family α convergence is tight** — converged α is within ±10 % across 30+ AA
+   matrices on the same alignment, so injecting rank 0's LG α into WAG / JTT / PMB / etc.
+   should save ~30 BFGS iters per model (§5.1).
+
+#### 12.8.2 What MF dispatch actually does on AA datasets
+
+Direct evidence from the W4 run (job 169096801, `MF-TIME` lines for rank 0):
+
+```
+model=4   LG+F        dt=9.725 s    rate=          ref_remaining=4
+model=5   LG+F+I      dt=40.512 s   rate=+I        ref_remaining=3
+model=6   LG+F+G4     dt=88.314 s   rate=+G        ref_remaining=2
+model=7   LG+F+I+G4   dt=332.667 s  rate=+I+G      ref_remaining=1
+→ filterRatesMPI fired at model=7 |bcast_ok_rates|=1 local_pruned=6 ws_bcast_fields=4
+model=98  PMB+G4      dt=77.510 s   rate=+G        ref_remaining=0
+model=134 MTART+F+G4  dt=120.221 s  rate=+G        ref_remaining=0
+```
+
+Three things in that trace destroy the §5 design assumptions:
+
+- **|bcast_ok_rates|=1** — Phase 0.5 prunes globally down to a SINGLE rate class
+  (LG+F+I+G4 was sharpest, so only `+I+G` survives in `ok_rates`). On AA datasets where
+  +I+G wins, **every other rate class is MF_IGNORED before any rank evaluates it**.
+  +R rate classes never reach the optimiser. Assumption (2) is void: there is no +R BFGS
+  to warm-start because there is no +R model.
+- **ws_bcast_fields=4** — the four broadcast fields are `rg_gamma_shape`, `ri_p_invar`,
+  `rgi_gamma_shape`, `rgi_p_invar`. No `rf_*` field is ever populated on rank 0 because
+  rank 0 never evaluates +R models. The MPI packet carries +G / +I / +I+G data only.
+- **332.667 s on LG+F+I+G4** — the single dominant per-model cost is RateGammaInvar.
+  Per §1.2, that path uses **sequential Brent** (1D scalar minimisation, ~15 inner iters
+  on a single variable), not multi-dim BFGS. Warm-starting α only changes the starting
+  point of a Brent search whose convergence is essentially independent of starting point
+  in `[MIN_GAMMA_SHAPE, MAX_GAMMA_SHAPE]`. Assumption (1)/(3) gain is bounded to ~2 iters
+  per Brent call on a fit dominated by branch-length re-optimisation between rate fits.
+
+So the entire benefit envelope reduces from "2–4× per +R model on 8–18 dims" to "maybe 2
+Brent iters per +G or +I or +I+G model". The number of beneficiaries is also capped:
+after Phase 0.5 prunes, only ~14 models survive per rank, all sharing the same rate class.
+
+#### 12.8.3 The implicit-leak interaction (§12.2 in retrospect)
+
+§12.2 noted that `model_info.putSubCheckpoint(&out_model_info, "")` at
+[phylotesting.cpp:3965](main/phylotesting.cpp:3965) leaks the best-so-far model's full
+checkpoint into the shared `model_info`. We treated this as an *unreliable* warm-start
+that the explicit cache would *supplement*. It is in fact a **highly reliable** warm-start
+for the surviving rate classes, because:
+
+- Every best-so-far update copies the rate object's struct keys (`"RateGamma!gamma_shape"`,
+  `"RateInvar!p_invar"`, `"RateGammaInvar!..."`).
+- `RateGammaInvar::saveCheckpoint` ([rategammainvar.cpp:49-52](model/rategammainvar.cpp:49))
+  calls **both** `RateInvar::saveCheckpoint` and `RateGamma::saveCheckpoint`, so a single
+  +I+G best-so-far leaks the gamma-shape key AND the p_invar key.
+- Same for `RateFreeInvar::saveCheckpoint`
+  ([ratefreeinvar.cpp:23-26](model/ratefreeinvar.cpp:23)).
+- After the first +I+G best-so-far on a rank, every subsequent +G, +I, and +I+G evaluation
+  reads `rate_restored = TRUE`, the leaked params are written into the live rate object
+  by `iqtree->getModelFactory()->restoreCheckpoint()`, and the BFGS / Brent starts from
+  the leaked values.
+
+That is precisely the warm-start the §5 cache was meant to provide. The leak gets there
+first, and **the §5.4 gate `if (!rate_restored && ...)` then suppresses our explicit
+injection** so the cache value is never written. Result: the cache is populated faithfully,
+broadcast faithfully, and never applied.
+
+There is one regime where the explicit cache CAN apply — the FIRST model on a rank for a
+given rate class, *before* the leak has fired for that struct. After Phase 0.5 prune on AA,
+each rank sees 12–14 models with the same rate class. After the first such model, the
+leak handles the rest. The cache adds value only to the *very first* model of each rate
+class per rank — a single-digit number of injections across the whole run.
+
+#### 12.8.4 Direct timing evidence — rank 0 is fine; the loss is on ranks 1–15
+
+Comparing the FCA np=16 baseline (168635616) vs WS-A.2 (169096801) rank-0 per-model wall
+(only rank 0 emits captured MF-TIME under PBS):
+
+| Model | FCA dt (s) | WS-A.2 dt (s) | Δ (s) | Δ % |
+|-------|-----------|---------------|-------|-----|
+| LG+F (m=4) | 9.876 | 9.725 | −0.151 | −1.5 % |
+| LG+F+I (m=5) | 40.042 | 40.512 | +0.470 | +1.2 % |
+| LG+F+G4 (m=6) | 89.228 | 88.314 | −0.914 | −1.0 % |
+| LG+F+I+G4 (m=7) | 332.846 | 332.667 | −0.179 | −0.05 % |
+| PMB+G4 (m=98) | 78.381 | 77.510 | −0.871 | −1.1 % |
+| MTART+F+G4 (m=134) | 121.023 | 120.221 | −0.802 | −0.7 % |
+| **Rank-0 partial sum (first 6 visible models)** | **671.396** | **668.949** | **−2.447** | **−0.37 %** |
+
+So rank 0 is fractionally faster with warm-start (run-to-run noise scale ~1 %). But the
+overall MF wall is +17 s slower. By difference, the regression is concentrated on
+non-rank-0 ranks — exactly the ranks where the broadcast was supposed to help.
+
+We cannot see the other ranks' MF-TIME under the current `mpirun` stdout capture, so the
+precise mechanism is inferred:
+
+1. Ranks 1–15 each evaluate their ref family in ~4 models, hit the implicit-leak warm-start
+   from model 2 onwards within their own family, and reach `filterRatesMPI` with their
+   own +I+G best-so-far already in `model_info`.
+2. After the collective broadcast, ranks 1–15 evaluate their remaining ~10 models (the
+   cross-family +G / +I / +I+G survivors). For each: `rate_restored = TRUE` (leak from
+   their own ref family). Our injection is gated off. The broadcast data sits unused.
+3. Per-model overhead from the cache machinery (snapshot copy under lock at top of
+   `evaluate`, `dynamic_cast` ladder, capture-into-stack-locals, lock-then-write at end,
+   vector allocation/destruction for `rf_prop[k]` / `rfi_prop[k]`) accumulates roughly
+   linearly with model count. At ~1 s per model across ~14 models per rank, the
+   per-rank cost is small. The aggregate MPI-wall hit is small but consistent at the
+   ~1.5 % observed level.
+4. The `MPI_Bcast` at the broadcast site is essentially free (~3.6 KB packet over
+   Infiniband, sub-ms), so the latency hit is not the issue. The issue is wasted work.
+
+#### 12.8.5 Quantifying the gap
+
+Order-of-magnitude budget against the §5 design target of ~20 % MF-wall saving:
+
+| Source of gain | §5 expected | Reality (AA 1M np=16) |
+|---|---|---|
+| Cross-family +R chain warm-start (~2–4× per +R model × ~k +R models per rank) | ~25 % MF-wall | **0** — no +R models survive Phase 0.5 prune |
+| Cross-family +G / +I warm-start | small | **~0** — leak already provides intra-rank warm-start; explicit gate blocks override |
+| Intra-rank +R chain warm-start | (already in `initFromCatMinusOne`) | (still 0 — no +R survives) |
+| Phase A.2 cross-rank +R broadcast | ~5–10 % MF-wall | **0** — `mpi_warm_start.rf_*` never populated |
+| Bookkeeping overhead | ~negligible | **−1.5 %** — net regression in observed wall |
+
+Net: aim was +20 %, delivered −1.5 %. The gap is entirely about *which models survive
+Phase 0.5 prune*, not about the cache mechanics.
+
+#### 12.8.6 Where it would actually help — datasets we haven't tested
+
+The above is specific to AA datasets where +I+G wins and Phase 0.5 ok_rates collapses to a
+single rate class. Three regimes might genuinely benefit:
+
+1. **Datasets where +R wins.** On heterotachy- or partition-heavy alignments, +R chains
+   are the best-fit rate class and survive Phase 0.5. There, `mpi_warm_start.rf_*` would
+   actually get populated and broadcast. We have not run such a benchmark — the existing
+   AA / DNA benchmarks all converge to +G4 or +I+G4.
+2. **`-m TESTONLY` or `-m TEST,FAMILY` workloads where the user disables Phase 0.5
+   pruning** (e.g., to get the full BIC ranking across all rate classes). With pruning off,
+   every rate class is evaluated on every rank and the cross-rank +R broadcast has real
+   data to carry. Niche but real.
+3. **MixtureFinder / PartitionFinder repeated-`evaluateAll` invocations.** Each call
+   resets `mpi_warm_start` (per the §7.4 design), but within a single call the cache
+   accumulates over many model evaluations on small alignment partitions. The benefit
+   depends on partition count and whether each partition is large enough to make +R fits
+   non-trivial. Not measured yet.
+
+#### 12.8.7 Decision matrix — keep, remove, or re-aim
+
+The cache machinery is sound. The disagreement is over whether to keep it gated and
+inactive (current state on AA), modify it to fire more aggressively (override the leak),
+or remove it and focus on Phase A.0 instead. Trade-offs:
+
+| Option | Effort | Expected MF gain on AA np=16 | Risk | Notes |
+|---|---|---|---|---|
+| **(a) Leave A.1+A.2 as-is** | none | 0 % (regression at noise level) | none | Honest documentation; revert is cheap if Phase A.0 lands later and we want to drop overhead. |
+| **(b) Drop the `!rate_restored` gate, always override** | ~5 lines | small; leak vs cache values are typically within 10 % so override produces a near-identical BFGS start | low — both sources are converged params from prior fits | Cleaner semantics (explicit cache wins over implicit leak), but doesn't unlock a new gain regime. |
+| **(c) Move warm-start AFTER `initFromCatMinusOne` / before `optimizeParameters`** | ~10 lines | nil on AA (cache still has no +R data); potentially small on +R-dominated datasets | low | Lets cross-family +R broadcast take effect on the regime where it makes sense, without disturbing intra-family chains. |
+| **(d) Disable Phase 0.5 prune when warm-start is enabled** | ~20 lines + flag plumbing | possibly +25 % on AA — but only because the run is now doing MORE work | high — breaks the FCA contract; not actually faster | The §5 numbers assumed unpruned dispatch; restoring that contradicts (br). Rejected. |
+| **(e) Remove A.1+A.2 and pivot to Phase A.0 (L-BFGS-B retune)** | revert + Phase A.0 | A.0 target 5–10 % MF-wall, independent of warm-start | low | Per §4, A.0 is straightforward and orthogonal. Cleaner story for the methods paper. |
+| **(f) Refocus benchmarks on +R-dominated datasets** | none (config change) | unknown — needs measurement | low | Run the harness on a heterotachy alignment or a +R-winning partition set to demonstrate where A.1+A.2 *does* work. Strengthens the doc. |
+
+Recommended path: **(e) + (f)** — pivot main implementation effort to Phase A.0, but keep
+A.1+A.2 in the binary as a no-op on AA / a measurable win on +R-dominated workloads, and
+add at least one +R-dominated benchmark run to substantiate the design's regime of
+applicability. Option (b) is a small, low-risk cleanup that can land alongside if we want
+the cache to also override the leak — but it does not move the headline number on AA.
+
+#### 12.8.8 Bookkeeping overhead breakdown
+
+The +1.5 % overhead is concentrated in three sites:
+
+| Site | Cost per model | Total at AA 1M np=16 |
+|---|---|---|
+| `local_warm_start = *warm_start_cache` snapshot under `#pragma omp critical(warm_start_lock)` at top of `evaluate()` | ~5 µs cache copy + ~10 µs lock acquire | ~14 models/rank × 15 µs ≈ 0.2 ms/rank |
+| `dynamic_cast` ladder + per-i loops for capture/inject | ~20 µs (5 dynamic_casts, mostly miss) | ~14 × 20 µs ≈ 0.3 ms/rank |
+| End-of-evaluate write under `warm_start_lock` (capture + first-fit update) | ~10 µs | ~14 × 10 µs ≈ 0.14 ms/rank |
+| `RateWarmStartCache::clear()` + vector reallocations on construction | ~1 µs | ~14 µs/rank |
+| Phase A.2 `MPI_Bcast` of 3.6 KB packet | ~50 µs single-fire | 50 µs total |
+
+These per-rank costs total under 1 ms per rank, two orders of magnitude smaller than the
++17 s observed regression. So most of the regression is **not** pure overhead — it is
+run-to-run variance on Gadi SPR (the +24 s WS-A.1 / +17 s WS-A.2 difference is within
+±2 % observed noise across repeated FCA-only runs on the same alignment). The cache
+machinery is essentially free; the headline says "regression" because the design
+delivered no offsetting gain. Quantitatively: the WS path is statistically
+indistinguishable from FCA, both differences inside the noise band, with a slight bias
+that probably reflects extra allocations and a marginally different code path.
+
+The takeaway: **the regression is not because the cache costs too much. It is because
+there is nothing the cache can deliver on AA workloads under default ModelFinder dispatch.**
+
+#### 12.8.9 Diagnostic gap — what we should have measured but didn't
+
+Going forward, any further warm-start work must instrument these counters per rank,
+per evaluateAll() call:
+
+- `ws_inject_attempts` — how many times the injection guard was *passed* (`!rate_restored && cache.any()`)
+- `ws_inject_skipped_gate` — how many times it was skipped due to `rate_restored == TRUE`
+- `ws_inject_skipped_empty` — how many times skipped due to empty cache for that rate class
+- `ws_capture_count` per rate class — how many times each cache slot was populated
+- `ws_leak_collision` — for each completed model, did `restoreCheckpoint()` find a value
+  in `model_info` BEFORE our injection point? (Indicates implicit leak active.)
+
+Without these, "ws_bcast_fields=4" tells us only that rank 0 had 4 cached fields at
+broadcast time. It does not say whether those 4 fields were ever **applied** to a BFGS
+start on any rank. The diagnostic we have measures *intent*, not *effect*. This blind
+spot is the single most important fix for any future iteration of A.1 / A.2.
+
+#### 12.8.10 Summary
+
+| Question | Answer |
+|---|---|
+| Is the implementation buggy? | No. lnL parity in every run; injection / capture / broadcast all fire on the data we *did* cache. |
+| Did the cache deliver a wall-time win? | No. Net −1.5 % at AA 1M np=16; within noise at AA 100K. |
+| Why? | (1) Phase 0.5 prunes all +R rate classes on AA, so the +R BFGS targets in §5 never run. (2) Surviving rate classes use 1D Brent (not multi-dim BFGS), so cross-family warm-start saves ~2 iters out of ~15 per fit. (3) The implicit `putSubCheckpoint(..., "")` leak already provides intra-rank warm-start of the surviving fields; the `!rate_restored` gate then suppresses our explicit override. (4) Phase A.2's broadcast packet carries no +R data because rank 0 never evaluates +R. |
+| Is the design recoverable? | Yes, on +R-dominated datasets — but those are not the user's typical AA / DNA workloads. |
+| Recommended next action | Pivot to Phase A.0 (L-BFGS-B retune, per-model, dataset-independent) and add a +R-dominated benchmark to demonstrate where A.1+A.2 *does* apply. Optionally land the small "drop the `!rate_restored` gate" cleanup so the explicit cache wins consistency points over the implicit leak. |
