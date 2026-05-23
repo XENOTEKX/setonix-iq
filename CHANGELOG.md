@@ -83,8 +83,6 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
-| 169096105 | WS-A.2 np=4 W2 (1-node, 4×26T) | AA 100K | 1 | 4×26T | LG+G4 | −7,541,976.853 | — | 1,918.721 | — | — | — (intra-node, ≪prod parity) | — | — |
-| 169096530 | WS-A.2 np=4 W2p (4×103T) | AA 100K | 4 | 4×103T | LG+G4 | −7,541,976.853 | — | **91.700** | — | — | **ALL PASS** (W2p gate ✓) | — | — |
 | 169096801 | WS-A.2 np=16 W4 (full) | AA 1M | 16 | 16×103T | — | — | — | — | — | — | — (pending W4 gate) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
@@ -101,6 +99,13 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **169096801** = W4 gate (submitted): 16 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. Parity with FCA np=16 (168635616) and WS-A.1 np=16 (169095645). See entry `(ce)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
+
+**ModelFinder-only runs** (`-m TESTONLY` — no SPR tree search; MF wall only):
+
+| Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | MF wall (s) | Gate | Result |
+|-----|------|---------|-------|-----------|------------|-----|------------|------|--------|
+| 169096105 | WS-A.2 np=4 W2 (1-node, 4×26T) | AA 100K | 1 | 4×26T | LG+G4 | −7,541,976.853 | 1,918.721 | correctness only | PASS (ws_bcast_fields=4 ✓; intra-node, ≪prod parity) |
+| 169096530 | WS-A.2 np=4 W2p (4×103T) | AA 100K | 4 | 4×103T | LG+G4 | −7,541,976.853 | **91.700** | W2p ≤ 100 s | **ALL PASS** ✓ |
 
 ---
 
