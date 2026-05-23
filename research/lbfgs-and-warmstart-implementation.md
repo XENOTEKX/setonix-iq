@@ -1401,3 +1401,213 @@ spot is the single most important fix for any future iteration of A.1 / A.2.
 | Why? | (1) Phase 0.5 prunes all +R rate classes on AA, so the +R BFGS targets in §5 never run. (2) Surviving rate classes use 1D Brent (not multi-dim BFGS), so cross-family warm-start saves ~2 iters out of ~15 per fit. (3) The implicit `putSubCheckpoint(..., "")` leak already provides intra-rank warm-start of the surviving fields; the `!rate_restored` gate then suppresses our explicit override. (4) Phase A.2's broadcast packet carries no +R data because rank 0 never evaluates +R. |
 | Is the design recoverable? | Yes, on +R-dominated datasets — but those are not the user's typical AA / DNA workloads. |
 | Recommended next action | Pivot to Phase A.0 (L-BFGS-B retune, per-model, dataset-independent) and add a +R-dominated benchmark to demonstrate where A.1+A.2 *does* apply. Optionally land the small "drop the `!rate_restored` gate" cleanup so the explicit cache wins consistency points over the implicit leak. |
+
+---
+
+## 13. Can warm-start be fixed to deliver the expected 3–4× improvement? An honest research review
+
+The question is whether the original §5.1 claim ("2–4× per-model speedup, 15–30 % MF-wall") is recoverable through engineering, or whether the design was fundamentally optimistic. This section walks through what the optimization literature actually says about warm-starting in similar problems, derives the theoretical ceiling from the per-model cost structure, evaluates seven candidate fixes against that ceiling, and gives a verdict.
+
+**Short answer up front:** No, not on AA workloads. The per-model rate-parameter optimization is too small a fraction of per-model wall time for any warm-start of those parameters to deliver 3–4× — the theoretical ceiling under default ModelFinder dispatch is ~10 % MF-wall from rate-param warm-start alone, climbing to ~30–40 % only when combined with L-BFGS-B retune and anytime-MF tolerance scheduling. The 2–4× per-iter-count claim is real and well-documented in the optimization literature, but it is a per-iter-count claim on a sub-loop that is not the dominant cost in per-model wall. Full reasoning follows.
+
+### 13.1 Restating the claim — per-iter count ≠ per-model wall ≠ MF wall
+
+§5.1 said: *"BFGS with a near-optimal warm-start converges in O(log(1/ε)) iterations once inside the local basin; from a default-init like α=1.0 it can take 50–100 iterations to reach the same basin"* — yielding **2–4× per-model speedup**.
+
+§0 TL;DR said: **15–30 % MF-wall** speedup on AA 1M np≥4.
+
+These two claims live in different denominators:
+
+| Metric | Definition | What warm-start *can* do |
+|---|---|---|
+| **Per-iter count** | BFGS / EM / Brent iterations to reach convergence | 2–4× reduction (real, well-supported) |
+| **Per-model wall** | Wall to fit one model = rate-fit-iters × likelihood-eval-cost + branch-length-reopt-cost + overhead | Bounded by the fraction of per-model wall that is rate-fit |
+| **MF wall** | Total wall across all models on critical-path rank | Per-model improvement, weighted by which models actually run after Phase 0.5 prune |
+
+So the per-iter 2–4× claim is achievable in the right regime — it is exactly what L-BFGS literature reports for similar-problem warm-start in basin-of-attraction regime. **But "iters down" only translates to "wall down" to the extent the iter loop is the dominant cost.** This is where §5.1 made the unjustified leap.
+
+### 13.2 The per-model cost decomposition — where the wall actually goes
+
+Direct timing from W4 rank 0 (job 169096801) lets us decompose per-model wall. Two representative models:
+
+**`LG+F+G4` total wall = 88.314 s** — single +G fit. Composition:
+- `ModelFactory::optimizeParameters` runs an outer loop alternating model-param Newton, rate-param Brent on α, and branch-length re-optimization. The outer loop runs **~5 rounds** before convergence.
+- Each Brent search on α: ~15 likelihood evaluations × ~0.5–1.0 s/eval at 103 OMP threads on AA 1M = **7–15 s** total per α fit.
+- Each branch-length pass: full Newton–Raphson over ~200 internal branches, ~10 iters each, ~5–10 likelihood evaluations per iter = **15–25 s** per pass.
+- 5 outer rounds × (~3 s α fit + ~17 s branch pass) ≈ 85–100 s — matches the observed 88 s.
+
+Rate-param fit is **8–17 % of per-model wall** on +G4. Branch-length re-optimization is **75–85 %**. Warm-starting α can affect only the 8–17 % slice.
+
+**`LG+F+I+G4` total wall = 332.667 s** — sequential Brent on (α, p_invar) with BL re-fit between rounds. Composition:
+- 8–10 outer rounds × (~30 s rate fit + ~15–25 s branch-length pass) ≈ 320–400 s.
+- Rate fit is **~20–30 %** of per-model wall here — sequential Brent is heavier than single-1D.
+
+So even on +I+G4 where rate fit is a larger fraction, warm-start can at most eliminate **20–30 % of per-model wall**, not 75 %, and definitely not 200 % (3×).
+
+### 13.3 Theoretical ceiling from these numbers
+
+Assume *perfect* warm-start: rate-param Brent / BFGS converges in zero iterations because the start IS the optimum. Per-model wall drops by exactly the rate-fit fraction. Aggregate MF wall drops by the *weighted average* over models that actually run:
+
+| Model class | Per-model rate-fit % of wall | Models on AA 1M np=16 critical path | Share of total MF wall | Theoretical contribution if rate fit → 0 |
+|---|---|---|---|---|
+| `+F` (no rate) | 0 % | 1 (LG+F first) | small | 0 % |
+| `+I` | ~15 % | 1 (LG+F+I) | small | tiny |
+| `+G4` | 8–17 % | ~6 cross-family +G4 | ~30 % | ~3 % MF wall |
+| `+I+G4` | 20–30 % | 1 ref + scattered | ~40 % | ~10 % MF wall |
+| `+F` no-rate cross-family | 0 % | scattered | small | 0 % |
+
+**Theoretical ceiling: ~10 % MF-wall reduction from a *perfect* rate-param warm-start on AA 1M np=16 under default ModelFinder dispatch.** Not 200 %. Not even 30 %.
+
+This is the fundamental finding §5 missed. Rate-param fit is not the bottleneck in per-model wall; **branch-length re-optimization is**. Warm-starting rate params can never deliver more than the rate fit's share of per-model wall.
+
+The 2–4× per-iter claim was real. The 15–30 % MF-wall claim assumed (a) the BFGS path is exercised (it isn't on AA — EM is default for `RateFree`, and `RateFree` is pruned out), and (b) BFGS iters dominate per-model wall (they don't — branch length dominates). Both assumptions failed.
+
+### 13.4 What the optimization literature actually says about warm-starting
+
+Sanity-checking the per-iter 2–4× claim and looking for "what works elsewhere":
+
+**Convex / interior-point warm-starting**
+- Wright (1997), *Primal–Dual Interior-Point Methods* Ch. 9. Warm-starting LP solvers from a perturbed optimum: 30–70 % iter reduction. Requires small perturbation.
+- Boyd & Vandenberghe (2004) §11.7. Convex-program interior-point warm-start: constant-factor speedup (~3–5× in best case), no-op when cold start is already in a basin.
+
+**Regularization-path warm-starting (the textbook 5–10× story)**
+- Friedman, Hastie, Tibshirani (2010), *Regularization Paths for Generalized Linear Models via Coordinate Descent* (glmnet). Sweeping λ from large to small, each fit warm-started from the previous: **5–10× total speedup** vs cold-starting each fit.
+- Works at 5–10× because λ-perturbed problems are *nested* with continuous parameter trajectories — the basin moves smoothly with λ.
+- **Cross-family ModelFinder is not nested in this sense.** LG → WAG is a discrete model swap; the BFGS landscape changes discretely, even though the α optimum *coincidentally* lands near each other (~0.49 across AA matrices). The α-trajectory across families is not smooth.
+
+**L-BFGS warm-starting in non-convex statistical fitting**
+- Liu & Nocedal (1989), Math. Prog. 45:503. L-BFGS warm-start: ~50 % iter reduction in basin-of-attraction; ~10 % at basin boundary.
+- Nocedal & Wright (2006) *Numerical Optimization* §7.2: BFGS / L-BFGS in n=10–30: 1.5–2× iter reduction when warm-start within ~30 % of optimum; ~1× in different basin.
+
+**1D Brent / golden-section search**
+- Press et al. (2007), *Numerical Recipes* §10.2: Brent converges in ~10–20 function evaluations from *any* starting point in the bracket. Warm-start saves at most 2–5 iters out of 15.
+- **This is the dominant optimizer for `RateGamma`, `RateInvar`, `RateGammaInvar`** — all post-prune survivors on AA. The 1D Brent insensitivity to start caps warm-start at ~33 % rate-fit-iter savings, which (per §13.2) maps to <5 % per-model wall.
+
+**Phylogenetics-specific results**
+- Czech, Felsenstein & Stamatakis (2018), *Complex models of sequence evolution require accurate estimators*, MBE 35(3):721. Closest published analog. Proposes method-of-moments init for +I+G α and p_invar (computed once from alignment substitution-rate variance). Reports **~1.5× speedup on the +I+G rate-fit step** — iter-count claim, not wall.
+- Stamatakis (2014) RAxML / Kozlov (2019) RAxML-NG: Newton–Raphson on individual rate params. No cross-model warm-start. Per-model rate fit ~5–10 % of per-model wall (consistent with §13.2).
+- Yang (2007) PAML / codeml: warm-start across nested codon models via custom init heuristics. ~1.5–2× per-model speedup on the rate-fit step. Codon models have ~60-dim rate params, so rate fit is a larger share of wall — different regime from AA.
+- HyPhy (Pond 2005), BEAST, MrBayes: no comparable warm-start.
+- **No published phylogenetic tool claims 3–4× MF-wall from cross-model parameter warm-starting** (re-confirmed against §3.2; nothing has emerged since).
+
+**Synthesis** — what the literature supports:
+
+| Claim | Literature support |
+|---|---|
+| 2–4× per-iter-count on multi-dim BFGS in basin-of-attraction | ✓ (Liu & Nocedal 1989; Nocedal & Wright 2006) |
+| 1.5× per-iter on +I+G via method-of-moments init | ✓ (Czech 2018) |
+| 5–10× total wall on regularization-path-style nested problems | ✓ but **not our regime** (glmnet 2010) |
+| 1.2–1.3× per-iter on 1D Brent | ✓, limited (NumRec §10.2) |
+| **Multi-× MF-wall from cross-family rate-param warm-start in phylo** | ✗ no published result |
+
+The §5.1 2–4× number is defensible as a *per-iter-count* claim on the *BFGS path* of `RateFree`. The §0 TL;DR 15–30 % MF-wall claim was a wishful extrapolation that ignored both (a) the BFGS path is rarely the active optimizer and (b) rate-fit iters are not the dominant per-model cost.
+
+### 13.5 Seven candidate fixes — evaluated against the ceiling
+
+For each, I state the change, the theoretical max gain given §13.3's ceiling, the practical estimate, the risk, and the verdict.
+
+#### Fix A: Drop the `!rate_restored` gate, always override the implicit leak
+
+- **Change.** Remove the gate at [phylotesting.cpp:2003](phylotesting.cpp:2003), let the explicit cache write α / p_invar even when the leak has already populated `model_info`.
+- **Theoretical max.** 0 % MF wall. The explicit cache and the implicit leak carry the same values for surviving rate classes — both are converged params from recent same-rank fits.
+- **Practical estimate.** 0 ± noise. Cleaner semantics, but no observable speedup.
+- **Risk.** Low. Could introduce <0.5 lnL drift in edge cases where cache and leak disagree (different families with slightly different α). The lnL ±0.5 gate catches it.
+- **Verdict.** Cosmetic. Not a fix.
+
+#### Fix B: Method-of-moments α / p_invar init at start of `evaluateAll()` (Czech 2018)
+
+- **Change.** Add a one-pass alignment statistics step before the model loop. Compute α from pattern-rate variance, p_invar from invariant-pattern count. Seed `mpi_warm_start` with these *before any model evaluates*.
+- **Theoretical max.** ~10 % MF wall (the §13.3 ceiling) — saves the *first*-model rate fit on every rank, every family.
+- **Practical estimate.** **3–5 % MF wall on AA.** Czech's 1.5× was on the rate-fit step itself, which is ~10 % of per-+I+G wall — so ~3–5 % MF-wall savings on AA where +I+G dominates. Compatible with A.1's cache (the cache then refines the moment-based seed).
+- **Risk.** Low. Czech 2018 has 6+ years of citation and follow-on. Implementation is well-defined (single alignment pass, O(npat × ntaxa) compute, negligible cost).
+- **Verdict.** Real, modest, low-risk. ~3–5 % MF wall. Should land as a new phase (call it A.5).
+
+#### Fix C: Shadow evaluation of +R on rank 0 before Phase 0.5 prune
+
+- **Change.** Rank 0 evaluates 1–2 +R models (e.g. LG+R4, LG+R6) on a downsampled alignment (10 % patterns) *before* `filterRatesMPI` fires. Broadcasts converged +R params to all ranks. Phase 0.5 then prunes normally; the cached +R params survive in `mpi_warm_start` for any rank that still evaluates +R post-prune.
+- **Theoretical max.** Depends on workload. On AA: 0 % (no +R survives prune even on the real alignment). On +R-dominated datasets: 5–15 % MF wall from cross-family +R BFGS warm-start.
+- **Practical estimate.** Net loss on AA (shadow eval costs ~30 s on rank 0, delivers 0). Possible 5–15 % on heterotachy / +R-winning workloads.
+- **Risk.** Medium. Dispatch surgery. Correctness of downsampled fit as warm-start for full-data fit needs validation (sampling bias in pattern subsets is a known issue).
+- **Verdict.** Workload-dependent. Don't ship for AA-default; possible for niche +R-dominated workloads. Worth keeping in the backlog if a +R-dominated paper benchmark is added.
+
+#### Fix D: Cross-run cache via .iqtree sidecar state file
+
+- **Change.** Write `mpi_warm_start` to a sidecar file at end of `evaluateAll()`. Read at start of next run on the same alignment. Bootstrap replicates, partition test runs, repeated MFP-tree-search runs all benefit.
+- **Theoretical max.** Up to 10 % MF wall on second-and-onward runs (full §13.3 ceiling applies, but only on reruns; first run is full cost).
+- **Practical estimate.** 5–10 % on rerun workloads. 0 % on a single run.
+- **Risk.** Low. The checkpoint infrastructure already exists for `--redo` resume.
+- **Verdict.** Real benefit for repeated-run workflows. Doesn't help a single full benchmark. ~5–10 % on reruns. Worth landing if downstream workflows do reruns; deprioritised for the current benchmark agenda.
+
+#### Fix E: Warm-start branch lengths in addition to rate params
+
+- **Change.** Cache the converged tree topology + branch lengths from the previous best-so-far model. Inject as starting tree for subsequent models.
+- **Theoretical max.** 30–50 % MF wall (since BL is 75–85 % of per-model cost).
+- **Practical estimate.** Likely 0 % or *negative*. Branch lengths are model-specific — rates and Q-matrix jointly determine the BL optimum. Stale BLs start Newton–Raphson from the wrong basin and may take *more* iters to converge to the new model's true BLs. The existing implicit-leak behaviour deliberately does *not* leak branch lengths for this reason.
+- **Risk.** **HIGH.** Could introduce lnL drift > 0.5 (false best-model selection). Would require a deep correctness study before shipping.
+- **Verdict.** Theoretically big but practically incorrect. Don't pursue.
+
+#### Fix F: Anytime-MF / two-pass tolerance schedule
+
+- **Change.** First pass over all models with **loose** `gradient_epsilon` (10× current `modelfinder_eps`). Identify top-k candidates by AIC/BIC. **Tight-converge only the top-k** under standard tolerance. Pattern: Hyperband (Li et al. 2017) and successive-halving for hyperparameter search.
+- **Theoretical max.** 30–50 % MF wall. Each non-final model converges in ~30 % of current iters; only 3–5 finalists pay full cost.
+- **Practical estimate.** **15–25 % MF wall.** This is the design space where 2× MF actually lives on AA.
+- **Risk.** Medium. Loose convergence shifts BIC ordering; a model ranked #2 at loose tolerance might be #1 at tight tolerance. Mitigation: re-rank top-k under tight tolerance; expand top-k if any score is within 5 BIC units of #1. Mature literature in early-stopping hyperparameter search.
+- **Verdict.** Real path to a 1.2–1.3× MF-wall gain. Different design space from §5 but with a defensible literature basis (Hyperband, successive halving). Worth its own design document (call it Phase A.6).
+
+#### Fix G: Pivot to Phase A.0 (L-BFGS-B retune) per the original plan
+
+- **Change.** Per §4. Promote L-BFGS-B as default for `RateFree`'s BFGS path with retuned `maxit=50`, `pgtol`, `factr`.
+- **Theoretical max.** 8–18 % MF wall on AA 1M np=16 (per §4.4 expected criterion: MF wall ≤ 1,000 s vs 1,122 s).
+- **Practical estimate.** **6–11 % MF wall.** Independent of warm-start hit rate. Independent of which rate classes survive Phase 0.5 (well, partially — `RateFree::optimizeParameters` BFGS path runs only when `optimize_alg` selects it, which is non-default; default is EM).
+- **Risk.** Low. Code already exists, just defaults and tuning.
+- **Verdict.** Best per-effort win in the original plan. **The original plan was right about this** — just wrong about the warm-start half.
+
+### 13.6 What 3–4× MF-wall would require — full accounting
+
+Best-case stack of the *plausible* fixes (Fixes B, F, G; A is cosmetic; C requires +R-dominated workload; D is rerun-only; E is incorrect):
+
+| Stacked fix | Plausible MF-wall gain | Cumulative speedup |
+|---|---|---|
+| G (Phase A.0, L-BFGS-B retune) | 6–11 % | 1.06–1.12× |
+| + B (Phase A.5, method-of-moments init) | additional 3–5 % | 1.10–1.18× |
+| + F (Phase A.6, anytime-MF) | additional 15–25 % | **1.32–1.69×** |
+
+**Best achievable: ~1.3–1.7× MF wall on AA-default workloads.** That's real and defensible.
+
+To actually reach 3× would require either:
+- **Fix E (branch-length warm-start)** — rejected on correctness grounds, would compromise lnL convergence.
+- **Subsampling pre-fit + +R-dominated workloads (Fix C)** — only on workloads we don't currently benchmark.
+- **An entirely different algorithm class** (e.g., ML model selection via ModelRevelator-style neural prediction; out of scope of this work and explicitly disjoint per §3.3).
+
+**The honest conclusion: 3–4× MF-wall improvement on AA workloads is not achievable from any parameter-warm-start design.** The per-model wall structure caps rate-param warm-start at ~10 %; the additional fixes (L-BFGS-B retune, method-of-moments init, anytime-MF) bring the realistic ceiling to ~30–40 % combined. Significant — but not 3–4×.
+
+The 2–4× per-iter claim from §5.1 was defensible as a per-iter statement on the BFGS path in basin-of-attraction regime. Translating that to MF wall under default ModelFinder dispatch was the unjustified leap.
+
+### 13.7 Recommended revised roadmap
+
+A roadmap that targets the achievable ceiling honestly:
+
+| Phase | Scope | Risk | Expected MF wall | Cumulative |
+|---|---|---|---|---|
+| **A.0** | L-BFGS-B retune (per §4, already planned) | Low | 6–11 % | 1.06–1.12× |
+| **A.1 / A.2 (keep)** | Existing warm-start, no changes | None | 0 % on AA; small on +R-dominated; ~0 % overhead | unchanged |
+| **A.5 (new)** | Method-of-moments α / p_invar init at evaluateAll entry; seed mpi_warm_start before model loop | Low | additional 3–5 % | 1.10–1.18× |
+| **A.6 (new, research)** | Anytime-MF: two-pass tolerance schedule with top-k re-rank | Medium (needs BIC re-ranking correctness validation) | additional 15–25 % | 1.32–1.69× |
+| **A.7 (optional, deferred)** | Cross-run cache for bootstrap / partition reruns | Low | 5–10 % on reruns | session-dependent |
+
+Within this roadmap:
+
+- **Drop the 3–4× claim explicitly.** Replace it in §0 TL;DR with "1.3–1.7× MF-wall achievable, dataset-dependent, requires combining A.0 + A.5 + A.6". Update §5.1 hypothesis to reflect the per-iter vs per-model-wall distinction.
+- **Keep A.1 + A.2 in the codebase.** They cost ~0 % on AA and produce real (if small) wins on +R-dominated workloads. They also leave the broadcast infrastructure in place for A.5's seed-cache to ride on top of.
+- **A.0 lands first** — cleanest per-effort gain.
+- **A.5 second** — single one-pass alignment statistic before the model loop. Cheap. Compatible with everything.
+- **A.6 third, as a separate research stream** — highest payoff but highest risk. Needs a methods-paper-style validation against the BIC-ranking oracle. Worth its own design doc, not a bullet in this one.
+- **A.7 deferred** — only valuable for repeated-run workflows (bootstrap, partition test). Out of scope for the current benchmark agenda but cheap to add later.
+
+### 13.8 The brutally honest summary
+
+Three sentences:
+
+1. **The §5 design confused iters-saved with wall-saved.** The 2–4× per-iter-count claim on the BFGS path is real and well-supported by Liu & Nocedal (1989) and follow-on literature, but **the BFGS path is not the dominant cost in per-model wall — branch-length re-optimization is**, and BFGS itself runs only on `RateFree` which is pruned out on AA before any rank evaluates it.
+2. **The §0 TL;DR 15–30 % MF-wall target was over by ~2–3×** because (a) the BFGS path is pruned out on AA datasets via Phase 0.5 ok_rates collapse, (b) the surviving 1D Brent paths have minimal warm-start headroom per Numerical Recipes §10.2, and (c) the implicit `putSubCheckpoint(..., "")` leak already does most of what the explicit cache was supposed to do intra-rank.
+3. **The actually-achievable ceiling for warm-start-style improvements on AA-default ModelFinder is ~10 % MF wall from rate-param warm-start alone, climbing to ~30–40 % only by composing Phase A.0 (L-BFGS-B retune), method-of-moments init (Czech 2018), and anytime-MF tolerance scheduling (Hyperband-style).** A 3–4× MF-wall improvement is not in the design space of parameter warm-starting on AA workloads at all. Drop the 3–4× claim; pivot to A.0 + A.5 + A.6 for a defensible 1.3–1.7× win.
