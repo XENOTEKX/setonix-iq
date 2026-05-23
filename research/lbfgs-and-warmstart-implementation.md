@@ -813,3 +813,46 @@ git push setonix-iq fca-lbfgs-ws
 ```
 
 Both branches currently point at the same commits as their respective bases (`modelfinder2` / `test_MF2`). The first real code-change commit will be the Phase A.0 patch.
+
+### 12.7 2026-05-23: Phase A.1 implementation — findings during source-level work
+
+Worked through the warm-start implementation. A handful of facts in §§2–5 were either slightly wrong or required design refinement once we read the actual source. Recording them here so the design doc reflects what was actually shipped.
+
+**Finding 1 — Checkpoint key separator is `'!'`, not `'::'`.**
+[utils/checkpoint.h:45](utils/checkpoint.h:45) defines `const char CKP_SEP = '!';`. So a `startStruct("RateGamma")` + `put("gamma_shape", ...)` pair writes the key as `"RateGamma!gamma_shape"`, not `"RateGamma::gamma_shape"` as §5.3 sketched. This affected only the *sketch* of reading params back from `out_model_info`, not the design itself.
+
+**Finding 2 — Capture via live RateHeterogeneity getters, not via the checkpoint.**
+Rather than parsing `out_model_info` after evaluate() returns (which requires knowing the `!`-separated key format and the precise CKP_SAVE field names), we capture converged params directly from `iqtree->getRate()` inside evaluate(), just before `delete iqtree`. This:
+- Works uniformly across `RateGamma`, `RateInvar`, `RateGammaInvar`, `RateFree`, `RateFreeInvar` via `getGammaShape() / getPInvar() / getProp(i) / getRate(i)` — all defined on the `RateHeterogeneity` base.
+- Avoids any dependency on `CKP_SEP`, struct nesting, or `CKP_ARRAY_SAVE` macros.
+- Doesn't require the cache populate step to live in the caller — it stays inside evaluate(), which is also where the snapshot-for-injection happens. Symmetric and self-contained.
+
+The trade-off: writes happen in a critical section inside evaluate() rather than in the caller's existing `#pragma omp critical` at [phylotesting.cpp:3956](main/phylotesting.cpp:3956). This costs one extra lock acquisition per model but keeps `evaluateAll` free of warm-start logic. A separate named critical section (`warm_start_lock`) ensures the write doesn't serialise against the existing `model_info` critical-section traffic.
+
+**Finding 3 — `RateFree::getProp` is virtual-dispatched on the base, and `setProp` is too.**
+[model/rateheterogeneity.h:152](model/rateheterogeneity.h:152) and [model/ratefree.h:75](model/ratefree.h:75): `setProp` is virtual in the base and overridden by RateFree. Same for setRate / setPInvar / setGammaShape. So we can use the base-class pointer with virtual dispatch — but the *type* still has to be recovered to know *which* fields to populate. Hence the dynamic_cast ladder in §5.4 stays correct, dispatched in most-derived-first order so `RateGammaInvar` matches before `RateGamma`, and `RateFreeInvar` before `RateFree`.
+
+**Finding 4 — `getNCategory` doesn't exist on the rate hierarchy; the name is `getNRate`.**
+Returns `ncategory` (the `k` in `+R k`). Used as the index into the cache vectors. The doc §5.4 wrote `getNCategory()`; the implementation uses `getNRate()`.
+
+**Finding 5 — Cache is captured for *every* completed model, not only best-so-far.**
+The implicit `putSubCheckpoint(..., "")` leak at [phylotesting.cpp:3965](main/phylotesting.cpp:3965) fires only when best-so-far. The explicit cache fires unconditionally (first-fit wins), so cross-family +G4 reuse no longer depends on dispatch order. This is the *novelty axis* the design targets — by going via the live rate object, we observe every fit, not just the lucky ones.
+
+**Finding 6 — Cache reset goes into the existing FCA reset block at line 3663.**
+Single-line addition: `mpi_warm_start.clear();` next to the four existing `mpi_*` resets. PartitionFinder / MixtureFinder safety inherits for free from the existing pattern.
+
+**Final patch surface for A.1:**
+| File | Lines added | Section |
+|------|-------------|---------|
+| `main/phylotesting.h` | ~62 | RateWarmStartCache struct + member + evaluate signature |
+| `main/phylotesting.cpp` | ~140 | snapshot (top of evaluate), injection (after restoreCheckpoint), population (before delete iqtree), reset (FCA reset block), pass-through (evaluateAll call site) |
+
+**Build status (2026-05-23 14:00):**
+- Binary path: `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a1`
+- Mirror: `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a1`
+- md5: `fa9ee60103a1a922505cf4dfa26a2fca` (diverges from baseline `a103bc6c...`, confirming new code linked in)
+- Size: 146,350,456 bytes (+1.29 MB vs baseline — extra symbols + lock metadata)
+- Verified symbols: `_ZN14CandidateModel8evaluate...RateWarmStartCache`, `_ZN18RateWarmStartCache5clearEv`, `.gomp_critical_user_warm_start_lock.AS0.var`.
+- Smoke test (`--version`) passes; build via incremental `make -j 8` on Gadi login node, ~3 min.
+
+**Ready for W1 (np=1, AA 100K) as the first correctness gate.** Pass criteria: lnL within ±0.5 of baseline 168425673, MF wall ≤ 405 s, best model = LG+G4.

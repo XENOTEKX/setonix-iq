@@ -93,6 +93,114 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-23 (bt) — Phase A.1: cross-model warm-start cache (local-only) implemented + built
+
+### What
+
+First real code change on branch `fca-lbfgs-ws`. Implements the local-only
+half of the cross-model parameter warm-start design from
+`research/lbfgs-and-warmstart-implementation.md` §5 — a per-rate-class
+parameter cache that captures converged params from every completed model
+and injects them into subsequent same-rate-class models before BFGS / Brent
+starts. No MPI broadcast in this entry; that ships in Phase A.2.
+
+### Files modified
+
+| File | Change |
+|------|--------|
+| `main/phylotesting.h` | Added `RateWarmStartCache` struct (file-scope, before `class CandidateModel`); added optional `RateWarmStartCache*` to `CandidateModel::evaluate` (default `nullptr` preserves non-MF callers); added `RateWarmStartCache mpi_warm_start` member to `CandidateModelSet`. |
+| `main/phylotesting.cpp` | (1) Top of `evaluate()`: Fix-G-style snapshot of cache into `local_warm_start` under `#pragma omp critical(warm_start_lock)`. (2) After `rate_restored` check, before `optimizeParameters`: inject cached values via dynamic_cast ladder (most-derived first: `RateGammaInvar` / `RateFreeInvar` / `RateFree` / `RateGamma` / `RateInvar`). (3) Just before `delete iqtree`: capture converged params from `iqtree->getRate()` getters, first-fit update of shared cache under the same lock. (4) FCA reset block (`evaluateAll` line 3663): added `mpi_warm_start.clear()`. (5) Main evaluate call site (`evaluateAll` line 4025): pass `&mpi_warm_start`. |
+
+Diff size: **~200 lines added** across the two files (62 in `.h`, ~140 in
+`.cpp`), no other files touched. Composes on FCA Phase 0.5/0.6 without
+touching the dispatch state machine.
+
+### Binary
+
+| Path | md5 | Build | Notes |
+|------|-----|-------|-------|
+| `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a1` | `fa9ee60103a1a922505cf4dfa26a2fca` | 2026-05-23 14:00 | rc29 build-side |
+| `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a1` | `fa9ee60103a1a922505cf4dfa26a2fca` | mirror | dx61 PBS-side |
+| `…/iqtree3-mpi-fca-lbfgs-ws` | `a103bc6c97860145033206c47b184367` | baseline (unchanged) | A/B reference |
+
+Size: 146,350,456 bytes (+1.29 MB over baseline — symbol table growth
+from new struct + named critical-section metadata). Toolchain identical
+to `(bo)`: ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + THP-madvise + FCA
+Phase 0.5/0.6 + MF-TIME.
+
+Verified symbols (via `nm | grep`):
+- `_ZN14CandidateModel8evaluateB5cxx11ER6ParamsR15ModelCheckpointS3_P11ModelsBlockRiiP18RateWarmStartCache` — new evaluate() signature with warm-start parameter
+- `_ZN18RateWarmStartCache5clearEv` — `RateWarmStartCache::clear()`
+- `.gomp_critical_user_warm_start_lock.AS0.var` — OMP critical-section lock metadata
+
+Smoke test (`--version`) passes.
+
+### Why this design (deviations from doc §5)
+
+Three implementation refinements documented in
+`research/lbfgs-and-warmstart-implementation.md §12.7`:
+
+1. **Capture via live `RateHeterogeneity` getters, not via the post-evaluate
+   checkpoint.** The doc §5.3 sketched reading `out_model_info` after
+   evaluate() returns. The implementation reads the live rate object inside
+   evaluate() just before `delete iqtree`. This avoids any dependency on
+   `CKP_SEP` (which is `'!'`, not `'::'` — doc §5.3 was wrong about that)
+   and works uniformly across all RateHeterogeneity subclasses through the
+   virtual `getGammaShape/getPInvar/getProp/getRate` methods.
+
+2. **Capture for every completed model, not only best-so-far.** The implicit
+   `putSubCheckpoint(..., "")` leak at line 3965 fires only when the model
+   is best-so-far (dispatch-order-dependent). The explicit cache fires
+   unconditionally with first-fit-wins semantics. This is the novelty axis:
+   we observe every converged α / p_invar / prop / rates fit, not just the
+   lucky ones.
+
+3. **Snapshot-on-read + lock-on-write avoids races without serialising the
+   BFGS loop.** Matches the Fix-G discipline already used for `local_in_info`.
+   The named critical section `warm_start_lock` is distinct from the
+   model_info critical sections, so warm-start writes do not compete with
+   the existing dispatch traffic.
+
+### What this entry is NOT
+
+- **Not validated yet.** No PBS runs have been submitted against this binary.
+  The first correctness gate is W1 (np=1, AA 100K — see doc §5.7). Until W1
+  passes, the binary is "built and smoke-tested" but unproven on real data.
+- **Not the MPI half.** Cross-rank warm-start broadcast is Phase A.2, a
+  separate commit that extends `filterRatesMPI` with a `WarmStartPacket`
+  `MPI_Bcast`.
+- **Not the L-BFGS-B retune.** Phase A.0 (L-BFGS-B promotion / retune for
+  `RateFree::optimizeParameters`) is independent — has not been started yet.
+  The cache will deliver some benefit on its own; pairing with A.0 amplifies
+  the per-model gain on +R fits.
+- **Not a default-on change.** The cache is automatically used during
+  `evaluateAll()` (the MF dispatch path), but the `CandidateModel::evaluate`
+  signature defaults `warm_start_cache = nullptr`, so non-MF callers
+  (single-model `test()`, partition test loops, concatenation eval) are
+  unaffected.
+
+### Validation plan (per doc §5.7)
+
+| Gate | Dataset | Config | Pass criterion |
+|------|---------|--------|----------------|
+| **W1** | AA 100K | np=1 baseline build (no FCA dispatch) | lnL within ±0.5 of 168425673, best model = LG+G4, MF wall ≤ 380 s (vs 405 s baseline) |
+| W2 | AA 100K | np=4 FCA (binary unchanged but cache populates across MPI ranks via Phase A.2 — deferred) | lnL match, MF wall ≤ 100 s |
+| W3-W4 | AA 1M | np=8/16 FCA | lnL match, MF wall ≤ 1,200 s (np=8) / ≤ 900 s (np=16) |
+| W5 | DNA 1M | np=8 FCA | lnL match, MF wall ≤ 1,100 s |
+| **W6** | AA 100K | np=1, deliberately corrupted cache injected | BFGS must still converge to correct answer — safety oracle |
+
+W1 is the immediate next action. W2–W6 either need Phase A.2 (MPI broadcast)
+or are safety checks.
+
+### Cross-references
+
+- Design + finding log: `research/lbfgs-and-warmstart-implementation.md` §5 (design), §12.7 (implementation findings & build status)
+- Baseline copy this branch started from: `(bs)` (md5 `a103bc6c…`)
+- THP-validated source: `(bo)` (`test_MF2` commit `c8f11a24`)
+- Next entry expected: `(bu)` — W1 results
+
+---
+
 ## 2026-05-23 (bs) — New phase branch + baseline-FCA binary copy: L-BFGS + cross-model warm-start work begins
 
 ### What
