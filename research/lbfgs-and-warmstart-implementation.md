@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented + W1 submitted (job 169094526)
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526, 2026-05-23) · next: Phase A.2 MPI broadcast
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -858,3 +858,16 @@ Single-line addition: `mpi_warm_start.clear();` next to the four existing `mpi_*
 **W1 gate submitted 2026-05-23 as job 169094526** (`normalsr`, 1×103T, `-m TESTONLY`, seed=1).
 Script: `gadi-ci/lbfgs-ws/run_ws_a1_aa_100k_1node_w1.sh`.
 Pass criteria: lnL within ±0.5 of baseline 168425673, MF wall ≤ 380 s, best model = LG+G4.
+
+**W1 result (2026-05-23): ALL PASS ✓**
+
+| Check | Criterion | Result |
+|-------|-----------|--------|
+| lnL | ±0.5 of −7,541,976.860 | **−7,541,976.862** (Δ 0.002) ✓ |
+| Best model | LG+G4 | **LG+G4** ✓ |
+| MF wall | ≤ 380 s | **254.433 s** ✓ |
+| Exit code | 0 | **0** ✓ |
+
+MF wall at np=1: 254.433 s (ws-a1) vs 257.355 s (FCA baseline, no warm-start, 168577707) — Δ 2.9 s (1.1%, within noise). Expected: cross-rank benefit requires Phase A.2 MPI broadcast.
+WS-HIT diagnostic lines: 0 — binary does not emit `WS-HIT:`/`WS-MISS:` tags; correctness confirmed by lnL match.
+CHANGELOG: `(bv)` · Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_w1_seed1_169094526.json`

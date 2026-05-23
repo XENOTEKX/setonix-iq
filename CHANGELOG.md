@@ -93,6 +93,49 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 ---
 
+## 2026-05-23 (bv) — W1 PASS ✓ — warm-start A.1 correctness gate: AA 100K np=1 (job 169094526)
+
+### Results (all PASS ✓)
+
+| Check | Criterion | Result | Status |
+|-------|-----------|--------|--------|
+| lnL | −7,541,976.860 ± 0.5 | **−7,541,976.862** (Δ 0.002) | ✓ PASS |
+| Best model | LG+G4 | **LG+G4** | ✓ PASS |
+| MF wall | ≤ 380 s | **254.433 s** | ✓ PASS |
+| Exit code | 0 | **0** | ✓ PASS |
+
+### Timing
+
+| Metric | This run (ws-a1, 169094526) | FCA baseline (no ws, 168577707) | Non-MPI baseline (168425673) |
+|--------|----------------------------|---------------------------------|------------------------------|
+| MF wall (s) | **254.433** | 257.355 | ~405 s |
+| Total wall (s) | 255.445 | — | 1,169.556 |
+| PBS walltime used | 0:04:28 | — | — |
+| Memory used | 6.99 GB | — | 9.36 GB |
+
+MF wall at np=1 is **2.9 s faster** than the FCA baseline without warm-start (1.1%, within noise).
+This is expected — at np=1 the warm-start cache populates sequentially and each rate class only
+gets warm-start benefit from its second model onward. The Phase A.2 MPI broadcast (across ranks)
+is where the cross-rank benefit materialises (deferred). The 37% MF improvement over the non-MPI
+baseline (254 vs 405 s) is the FCA dispatch gain, not warm-start specific.
+
+### WS-HIT diagnostic
+
+WS-HIT / WS-MISS log lines: **0** (the binary does not emit `WS-HIT:`/`WS-MISS:` diagnostic
+tags — this instrumentation was not part of the A.1 source patch). Cache correctness is validated
+indirectly: lnL converges to the reference value (Δ 0.002), confirming the injected warm-start
+params do not break BFGS/Brent convergence.
+
+### Next
+
+- W6 (safety oracle: deliberately corrupted cache, np=1) — optional; can proceed to A.2 first
+  since W1 correctness is now confirmed.
+- **Phase A.2**: extend `filterRatesMPI` with a `WarmStartPacket` `MPI_Bcast` so all ranks
+  share early-converged params. This is where the 15–30% MF-wall gain at np≥4 is expected.
+- Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_w1_seed1_169094526.json`
+
+---
+
 ## 2026-05-23 (bu) — Submit W1 correctness gate: AA 100K np=1, warm-start A.1 binary (job 169094526)
 
 ### What
@@ -241,7 +284,7 @@ or are safety checks.
 - Design + finding log: `research/lbfgs-and-warmstart-implementation.md` §5 (design), §12.7 (implementation findings & build status)
 - Baseline copy this branch started from: `(bs)` (md5 `a103bc6c…`)
 - THP-validated source: `(bo)` (`test_MF2` commit `c8f11a24`)
-- Next entry expected: `(bu)` — W1 results
+- Next entry expected: `(bv)` — **W1 PASS ✓ (job 169094526, MF wall 254.433 s)**
 
 ---
 
