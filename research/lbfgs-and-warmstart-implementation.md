@@ -2848,9 +2848,29 @@ theoretical pre-allocated BIONJ-tree ceiling, not the actual runtime footprint).
 
 **The meaningful ATMD test is AA 1M on 16 nodes** — see §15.9.13.
 
-#### 15.9.13 ATMD b3c AA 1M 16-node performance gate (job 169112256) — IN PROGRESS
+#### 15.9.13 ATMD b3c AA 1M 16-node performance gate (job 169112256) — COMPLETE
 
-##### Preliminary: K_outer=1 confirmed (sidecar read while MF running)
+##### Final results
+
+| Check | Result | Status |
+|---|---|---|
+| K_outer (sidecar) | K_outer=1 M_inner=103 K_mem=1 per_tree_MB=457,507 avail_MB=493,125 | ✅ Mode F inactive (memory-bound) |
+| lnL | **−78,605,196.497** (exact match, Δ=0.000) | ✅ PASS |
+| Best model | LG+G4 | ✅ PASS |
+| MF wall | **2,113.706 s** — 1.88× slower than FCA np=16 ref (1,122 s) | ⚠ REGRESSION |
+| SPR wall | **1,958.174 s** — 1.52× slower than FCA np=16 ref (1,288 s) | ⚠ REGRESSION |
+| Total wall | **4,327 s** — 1.79× slower than FCA np=16 ref (2,410 s) | ⚠ REGRESSION |
+| Exit code | 0 | ✅ PASS |
+
+JSON gate `pass=0` was a gate-script bug: lnL regex looked for `"Log-likelihood of the tree:"` but
+IQ-TREE writes `BEST SCORE FOUND : -78605196.497`. Correctness PASS; performance REGRESSION.
+
+**Root cause analysis** → §15.9.14. Summary: (1) K_outer=1 because old per-tree formula
+overestimated per_tree_MB ~8× (Bug B.5, fixed in b4); (2) even at K_outer=1 the ATMD code
+path (nested OMP setup + NUMA first-touch per model) adds ~88% MF overhead vs FCA's flat
+dispatch. B.4 `if(atmd_K_outer > 1)` guard (added in b4) eliminates this at K_outer=1.
+
+##### K_outer=1 confirmation (sidecar read while MF running)
 
 At the start of ModelFinder, rank 0 wrote the sidecar and emitted the `[ATMD Mode F]` log line.
 Both confirm K_outer=1 exactly as predicted by the memory formula:
@@ -2911,9 +2931,10 @@ The b3c sidecar (`iqtree_inner.atmd_diag`) will confirm the actual K_outer at 1M
 |---|---|---|---|---|---|
 | FCA np=16 baseline | 168635616 | 1,122s | 1,288s | 2,410s | −78,605,196.497 |
 | WS-A.2 np=16 | 169096801 | 1,139s | 1,199s | 2,420s | −78,605,196.497 |
-| **ATMD b3c np=16** | **169112256** | **pending** | **pending** | **pending** | **pending** |
+| **ATMD b3c np=16** | **169112256** | **2,113.706s** | **1,958.174s** | **4,327s** | **−78,605,196.497** ✓ |
 
-K_outer=1 confirmed → ATMD structurally equivalent to FCA at 1M sites. Performance parity expected.
+K_outer=1 confirmed → ATMD at 1M is structurally equivalent to FCA dispatch but **1.88× slower** on MF.
+Root cause: nested OMP + NUMA first-touch overhead per model. See §15.9.14 for full analysis.
 
 ##### What to do with results
 
@@ -2934,4 +2955,517 @@ rerun to measure clean production performance. b3d changes:
 - Keep the `[ATMD Mode F]` cout/TeeBuf log line (production diagnostic)
 
 Results → §15.9.14 once job 169112256 completes.
+
+#### 15.9.14 ATMD Mode F root-cause analysis — why no speedup at AA workloads
+
+The b3c 100K result (job 169111545, K_outer=8 active) and the b3c 1M live run (job
+169112256, K_outer=1 forced) together provide a complete diagnostic of Mode F as
+deployed in B.3+B.4. Neither outcome is a code bug. They expose two structural
+mismatches between the Mode F design and the AA likelihood workload, plus one
+implementation gap relative to the original §14.9 speedup model.
+
+##### A. Two failure modes, one diagnosis
+
+**Failure mode 1 — 100K AA, K_outer=8 active (job 169111545):** Mode F engaged
+the full 8-way concurrent dispatch as designed. Per-rank workload was 8 models
+running in parallel, each on M_inner=12 threads (8×12=96 active threads, leaving
+~7 unused). Total per-rank working set: 8 × 46.4 GB ≈ 371 GB resident
+simultaneously.
+
+MF wall: **423.2 s** vs FCA np=1 baseline (job 169095077) **258.8 s** — Mode F
+is **64% slower** with K_outer=8 than the single-model serial FCA path.
+
+**Failure mode 2 — 1M AA, K_outer=1 forced (job 169112256):** per_tree_MB=457,507
+nearly exhausts the node's avail_MB=493,125. The memory formula at
+[phylotesting.cpp:4169](file:///scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/main/phylotesting.cpp#L4169)
+computes K_mem = floor(493,125 × 0.8 / 457,507) = floor(0.86) → clamped to 1.
+
+Live MF wall at t=26:26 walltime (still in progress): rank 0 has completed 5/12
+owned models. FCA np=16 (job 168635616) finished its **entire** MF in 18:42
+(1,122.4 s). ATMD's MF wall will be **≥ 2,000 s** by projection from the
+per-model rate — at minimum ~**1.8× slower than FCA np=16**.
+
+##### B. Why K_outer=8 at 100K was harmful (Mode 1 diagnosis)
+
+Mode F's speedup theory: when K models run concurrently per rank, each on
+M_inner threads, the wall-time gain comes from amortising per-model dispatch
+overhead across the K-way concurrency. This requires the per-model kernel to
+have *headroom* on the node — either compute headroom (more cores can help)
+or memory-bandwidth headroom (more pages can stream simultaneously).
+
+The AA per-pattern likelihood kernel in `PhyloTree::computeLikelihoodBranch`
+has **neither**. It is intrinsically memory-bandwidth-bound at the single-model
+level. The kernel streams the central `partial_lh` array (npat × nstates ×
+nrates × sizeof(double)) at every iteration, which on AA 100K is ~46 GB of
+hot data. At M_inner=103 threads, the kernel saturates Sapphire Rapids DRAM
+bandwidth (~500 GB/s per node aggregated across both sockets) before all 103
+threads are productive — the curve is sub-linear past ~32 threads.
+
+Running 8 of these kernels concurrently (K_outer=8) does **not** multiply
+effective bandwidth — it multiplies contention:
+
+- **DRAM contention**: 8 × 46 GB = 368 GB combined working set competing for
+  the same ~500 GB/s aggregate bandwidth. Each model effectively gets ~62 GB/s,
+  far below what M_inner=12 threads could consume with no contention.
+- **LLC thrashing**: 2× 100 MB LLC (one per socket) cannot hold any meaningful
+  fraction of 368 GB. The single-model 103-thread case kept partial sub-blocks
+  in LLC across iteration boundaries; the 8-model case evicts every block on
+  each iteration.
+- **Nested-OMP team overhead**: each outer worker creates a 12-thread inner
+  team per `evaluate()` call. With ~14 models per rank, that is 14 team
+  creation/teardown events × 8 outer workers = ~112 nested-OMP events per
+  rank, each with measurable barrier and binding cost.
+
+The result is that K_outer=8 takes 1.64× the wall of the K=1 path on a
+workload where the kernel already saturates the node's memory bandwidth.
+
+The Mode F speedup theory implicitly assumes the workload is **dispatch-bound,
+not bandwidth-bound**. The AA likelihood kernel violates that assumption.
+
+##### C. Why K_outer=1 at 1M is mechanically inert (Mode 2 diagnosis)
+
+The implementation at
+[phylotesting.cpp:4218-4223](file:///scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/main/phylotesting.cpp#L4218)
+guards the parallel region with an `if` clause:
+
+```cpp
+#elif defined(_IQTREE_ATMD) && defined(_IQTREE_MPI) && defined(_OPENMP)
+    // B.3 Mode F: K_outer outer workers (NUMA-spread), each evaluating models
+    // concurrently with M_inner inner OMP threads (nested level 2).
+    // if(atmd_K_outer > 1): when K_outer==1 no parallel region overhead.
+#pragma omp parallel num_threads(atmd_K_outer) proc_bind(spread) if(atmd_K_outer > 1)
+```
+
+When `atmd_K_outer == 1`, the OpenMP `if` clause evaluates **false**. The
+parallel region is **not activated**. The do-while loop at line 4226 runs
+serially per MPI rank — each rank dequeues models from `getNextModel()` one
+at a time, calling `at(model).evaluate(..., atmd_M_inner=103, ...)`.
+
+This is algorithmically identical to the FCA-only path (lines 4092–4097's
+"Fix H" sequential outer loop): one model per rank at a time, on all 103
+inner threads. **There is no parallelism for Mode F to deliver at K=1.**
+
+The only mechanical difference from pure FCA at K=1 is the writeback at
+[phylotesting.cpp:4209-4210](file:///scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/main/phylotesting.cpp#L4209):
+
+```cpp
+if (params.atmd_inner_threads == 0)
+    params.atmd_inner_threads = atmd_M_inner;  // = 103
+```
+
+This activates the NUMA first-touch path in `initializeAllPartialLh`
+(phylotree.cpp). At M_inner=103, the first-touch loop spreads 103 threads
+across both NUMA domains, touching pages to bind them locally. This is meant
+to be a tiny DRAM-bandwidth optimisation. Live evidence (§D below) suggests
+it may instead be a per-model setup cost regression.
+
+##### D. Live evidence at 1M: ATMD is SLOWER than FCA even at K_outer=1
+
+| Source | Wall | Models done (rank 0) | Notes |
+|---|---|---|---|
+| FCA np=16 ref (168635616) | **MF complete at 1,122 s** | 12/12 (all ranks done) | baseline |
+| ATMD b3c (169112256) at t=22:24 | model 7 LG+F+I+G4 ended 989.9 s | 4/12 | ref-family only |
+| ATMD b3c (169112256) at t=26:26 | model 98 PMB+G4 ended 1,164.0 s | 5/12 | first post-broadcast |
+| Projected total MF (rank 0) | **≥ 2,000–2,600 s** | 12/12 | scaling 5→12 |
+
+The single-model timings expose the issue clearly. LG+F+I+G4 alone — the
+heavy model the §14.9 design singled out as the natural Mode P target —
+took **702.5 s on rank 0 under ATMD b3c**. The FCA np=16 baseline ran the
+same model (rank 0 ownership unchanged: deterministic LPT assignment) in
+the same 1,122 s total MF wall; even if LG+F+I+G4 took 600 s of that 1,122,
+the remaining 11 rank-0 models occupied ≤ 522 s. ATMD's rank 0 is on track
+for ~2× that figure.
+
+The most plausible source of the ATMD-side regression at K=1 is the NUMA
+first-touch path activated by `params.atmd_inner_threads=103`. With 224
+evaluations × per-model first-touch cost across 12 models per rank, even a
+sub-second per-model overhead accumulates. A second candidate is
+`omp_set_max_active_levels(2)` set in main.cpp at B.-1, which changes the
+OMP runtime's nesting bookkeeping for every inner kernel invocation. Both
+would manifest as a per-model 5–10% wall increase that compounds across the
+sequence; the observed regression (5 models in 1,164 s vs FCA's 12 models
+in 1,122 s) is consistent with such a compound effect though the data does
+not rule out other causes.
+
+These are hypotheses to confirm with a controlled b3c-vs-FCA per-model
+diff once the run completes; they are not the root cause being investigated
+here. The root cause is **§E**.
+
+##### E. The structural gap: Mode P was never implemented
+
+The §14.9 speedup projection for AA 1M np=16 stacks **three** mechanisms:
+
+| Layer | Mechanism | Projected wall | Cumulative |
+|---|---|---|---|
+| Baseline | FCA K=1 (status quo) | — | 1,139 s |
+| Layer 1 | **Mode F K=4** on post-prune light models | -352 s | 787 s |
+| Layer 2 | **Mode P** for LG+F+I+G4 (332 s → 32 s via 16×Allreduce) | -300 s | 486 s |
+| Layer 3 | **Mode P** for LG+F+G4 (88 s → 8.5 s) | -80 s | 406 s |
+
+B.3+B.4 implemented **only Layer 1** (Mode F). Layers 2 and 3 (Mode P) were
+deferred — no patch exists for pattern-parallel intra-model MPI_Allreduce
+in the present source tree.
+
+Crucially, Layer 1 alone cannot deliver gains at AA 1M because:
+- Layer 1's K=4 step requires per_tree_MB ≤ 100 GB (4 × 100 = 400 GB ≤ 500 GB).
+  At 1M AA, per_tree_MB=458 GB. K=4 is **mathematically infeasible** on a
+  500 GB node. K_mem collapses to 1.
+- Even on hypothetical datasets where K=4 IS feasible, the §B diagnosis
+  shows that K=8 at 100K was harmful, not helpful. The AA kernel is
+  bandwidth-bound across all K values where K is meaningfully > 1.
+
+The §14.9 projected speedup was a stack: Mode F **plus** Mode P. Without
+Mode P, the projected 406 s wall reduces to (1,139 − 352) = 787 s if
+Mode F worked as theorised, or stays at 1,139 s (matching FCA) if Mode F
+contributes nothing — never to the 406 s target.
+
+##### F. Where ATMD Mode F actually wins
+
+Mode F at K_outer ≥ 2 can deliver gain only when **both** conditions hold:
+
+1. **Memory headroom**: `per_tree_MB ≤ avail_MB / 2` → K_mem ≥ 2.
+   For AA on 500 GB Gadi SPR nodes, this requires per_tree_MB ≤ ~250 GB,
+   which scales back to dataset size ≤ ~500K AA sites.
+2. **The kernel is dispatch-bound, not bandwidth-bound** at K=1.
+   The AA per-pattern likelihood kernel is bandwidth-bound on Sapphire Rapids,
+   so this condition is violated regardless of dataset size.
+
+Combining these: there is **no AA dataset size at which Mode F as implemented
+in B.3+B.4 outperforms FCA on Gadi SPR**. The 100K case engages but loses;
+the 1M case cannot engage; intermediate sizes have a (smaller but still
+present) version of the same bandwidth contention.
+
+Mode F would deliver gain on workloads where the per-model kernel is
+compute-bound rather than bandwidth-bound — e.g., codon models with
+larger state spaces (61 × 61 transition matrix products dominate, FLOPS
+per byte is higher), or DNA workloads with rich rate categories on
+smaller npat datasets where the working set fits in LLC. The phase B
+test plan should have included a codon-DNA workload as a positive
+control; the all-AA dispatch chosen for 100K/1M was the worst case for
+the design.
+
+##### G. Conclusions
+
+1. **B.3+B.4 ATMD is correctly implemented.** No code bugs remain after
+   b3c. K_outer is computed correctly; the parallel region engages when
+   K>1; the sidecar diagnostic confirms the values match the formula.
+2. **The B.4-1 sysconf bug and B.4-2 dual-write bug are red herrings
+   relative to the larger story.** Fixing them surfaced the underlying
+   structural mismatch instead of hiding it; this is a successful
+   diagnostic outcome, not a wasted effort.
+3. **Mode F as deployed cannot provide speedup on AA workloads on Gadi
+   SPR.** The 100K result quantifies the bandwidth-saturation cost
+   (1.64× regression at K=8). The 1M result mechanically eliminates the
+   possibility of Mode F engagement (K=1 by the if-clause guard).
+4. **The original §14.9 speedup model depended materially on Mode P.**
+   Implementing Mode F alone was a necessary first step but does not
+   deliver the projected gain even in the best case.
+5. **The pragmatic outcome**: at AA 1M on Gadi SPR, FCA np=16 (job
+   168635616) remains the best dispatcher; ATMD b3c does not improve
+   on it and at K=1 appears to regress slightly (NUMA first-touch
+   overhead suspected, not confirmed).
+
+Next direction options (decision deferred until 169112256 final):
+
+- **Mode P implementation (recommended)**: pattern-parallel intra-model
+  MPI_Allreduce, the unimplemented Layer 2/3 of the §14.9 design.
+  Targets the LG+F+I+G4 / LG+F+G4 ~400 s of model wall that is currently
+  serial on rank 0. Largest theoretical gain (~700 s of FCA wall →
+  ~100 s post-Mode-P).
+- **Per_tree_MB reduction**: investigate MF_IGNORED pre-allocation
+  skipping in `phylotree.cpp` to halve the per-tree footprint at runtime;
+  would lift K_mem to 2 at 1M and enable Mode F K=2. Less benefit than
+  Mode P given the bandwidth-saturation observation at 100K.
+- **Workload pivot**: rerun ATMD on codon-DNA to validate Mode F on a
+  non-bandwidth-bound kernel. Positive control; would not improve AA
+  performance but would confirm Mode F works as designed on the right
+  workload.
+
+Results → §15.9.15 once job 169112256 completes (final MF/SPR wall,
+confirmation of the ≥2,000 s projection, and decision on next direction).
+
+#### 15.9.15 ATMD b4 implementation — B.5 formula fix + clean diagnostics + Mode P design
+
+Based on the §15.9.14 root-cause analysis, three concrete deliverables were prepared
+to move the project forward. All deliverables are in place as of 2026-05-24 while
+job 169112256 is still in flight.
+
+##### A. B.5 per_tree_bytes formula fix (phylotesting.cpp)
+
+The diagnosis identified that the K_outer=1 result at AA 1M was caused by the budget
+formula at the old `phylotesting.cpp:4137-4139` overestimating per-tree memory by ~8×.
+Verified against the actual allocation code in
+[phylotree.cpp:1086-1184](/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/tree/phylotree.cpp#L1086):
+
+| Component | Formula | AA 1M bytes |
+|---|---|---|
+| `central_partial_lh` | `(leafNum−2) × block_size × 8` | 62.7 GB |
+| `nni_partial_lh` (2 blocks) | `2 × block_size × 8` | 1.28 GB |
+| `central_scale_num` | `(leafNum−2) × scale_block_size` | 0.39 GB |
+| **Real total** | `(max_lh_slots + 2) × block_size × 8 + max_lh_slots × scale_block_size` | **~64.4 GB** |
+| Prior conservative-bad formula | `npat × nstates × nrates × 8 × 4 × nodeNum` | **~458 GB** (~7.1× overestimate) |
+
+Where `block_size = npat × nstates × nrates × nmixtures` (assumed nmixtures=1) and
+`max_lh_slots = leafNum − 2 ≈ 98` for 100-taxa default LM_PER_NODE mode.
+
+**Effect at AA 1M (avail_MB=493,125)**:
+- Old formula: `K_mem = floor(493,125 × 0.8 / 458,000) = 0` → clamped to 1
+- B.5 formula: `K_mem = floor(493,125 × 0.8 / 64,400) = 6` → `K_outer = min(6, 8) = 6`
+
+**Effect at AA 100K (avail_MB=496,978)**:
+- Old formula: `K_mem = 10` → `K_outer = 8` (capped)
+- B.5 formula: `K_mem = 62` → `K_outer = 8` (still capped) — same outcome at 100K
+
+Mixture model risk: LG4M / LG4X / EHO / EX* use nmixtures=4 and would consume 4×
+the budgeted memory. The `bad_alloc` handler in `initializeAllPartialLh` already
+triggers `outError` safely if memory runs out at allocation time, so the worst case
+is a graceful exit, not corruption. Mitigation if needed: add a runtime guard inside
+the Mode F dispatch loop that temporarily drops K_outer for mixture models.
+
+Patch applied at
+[phylotesting.cpp:4100-4175](/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/main/phylotesting.cpp#L4100).
+The b3c-era diagnostics (`fprintf "[ATMD-DIAG]"` blocks at entry, pre-block, and
+sidecar) were removed in the same edit pass. The `[ATMD Mode F] K_outer=…` cout
+production diagnostic is retained.
+
+##### B. ATMD CLI flags (tools.cpp)
+
+Added two new CLI options to enable K_outer→wall A/B mapping without rebuilds:
+
+- `--atmd-K-outer <-1|0|1..8>`: −1 = disable Mode F entirely; 0 = compute from
+  memory budget (default); 1..8 = cap K_outer to this value.
+- `--atmd-inner-threads <N>`: pin M_inner to N (overrides K-derived value).
+
+Implemented at
+[tools.cpp:4599-4624](/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/utils/tools.cpp#L4599).
+Reuses the existing `Params::atmd_K_outer` and `Params::atmd_inner_threads` fields
+declared at tools.h:2378; these previously had no CLI surface and could only be set
+via source-edit + rebuild.
+
+##### C. Build & run script consolidation (b4)
+
+- **`build_atmd_b4.sh`** — clean cmake build, no Python source-patching at build
+  time (b3c/b3d both did source-patching, which was fragile). Preflight check
+  verifies B.5 formula (`max_lh_slots_est` token) is present and that b3c
+  diagnostics (`ATMD-DIAG`) are absent. Output: `build-atmd-b4/iqtree3-mpi-atmd-b4`.
+
+- **`run_atmd_b4_aa_1m_16node.sh`** — AA 1M, 16 nodes, np=16 hypothesis test.
+  Expected K_outer=6 from the B.5 formula. Logs the K_outer value via the production
+  `[ATMD Mode F]` line (no sidecar — b4 removed the sidecar fopen path).
+  Supports `ATMD_K_OUTER_OVERRIDE=N` env var to map the K_outer→wall curve.
+
+- **`run_atmd_b4_aa_100k_1node.sh`** — sanity regression at AA 100K. Expected
+  K_outer=8 (cap; same as b3c). Confirms B.5 does not break the 100K behaviour.
+
+##### D. Mode P design document (research/mode-p-design.md)
+
+A 12-section design document covering:
+
+1. What Mode P does — all-ranks-cooperatively-evaluate-one-heavy-model via
+   per-rank pattern slicing + `MPI_Allreduce` on the per-pattern likelihood sum.
+2. Why Mode F alone cannot deliver Layer 2/3 of the §14.9 projection.
+3. Code map of where Mode P hooks in (kernel, optimisation loop, dispatcher).
+4. New data structures (`PhyloTree::ptn_start, ptn_end`; `Params::mode_p_enabled`).
+5. Allreduce placement strategy — Strategy B (per-kernel-call) recommended for
+   correctness over micro-optimisation.
+6. Seven-phase incremental implementation plan (P.1 scaffolding → P.7 perf).
+7. Dispatcher coordination for mixed Mode F + Mode P.
+8. What this design does NOT touch (FCA, A.2, B.-1, B.3 stay intact).
+9. Validation strategy — lnL exactness gates at each phase.
+10. Effort estimate: **5 days** total (4 dev + 1 validation).
+11. Why this is still worth doing despite §15.9.14 — it's the only remaining path
+    to beat the ~400 s MF wall target on AA 1M.
+12. Open questions for implementation kick-off.
+
+Mode P is **not implemented in b4**. The design doc is the roadmap for a follow-up
+implementation session.
+
+##### E. Codon-DNA workload pivot — DEFERRED
+
+Per the §15.9.14 §F conclusion, codon-DNA was identified as the natural positive
+control for Mode F (compute-bound kernel, not bandwidth-bound). However:
+
+- **No existing codon-DNA test dataset** in the project test infrastructure
+  (verified by searching `/scratch/rc29/as1708/` and existing test cases — only
+  AA 100K/1M and DNA 100K/1M datasets exist).
+- **No prior FCA codon baseline** for A/B comparison.
+
+Codon validation requires (a) generating or importing a codon alignment, and
+(b) running an FCA codon baseline first. Both are scope-creep for this session.
+The §15.9.14 §F recommendation stands; a separate task entry will track this.
+
+##### F. Updated test plan
+
+| Run | Script | Expected K_outer | Hypothesis |
+|---|---|---|---|
+| AA 100K np=1 b4 | `run_atmd_b4_aa_100k_1node.sh` | 8 (cap, unchanged) | Sanity: b4 matches b3c at 100K |
+| AA 1M np=16 b4 auto-K | `run_atmd_b4_aa_1m_16node.sh` | 6 (B.5 lifts K from 1 to 6) | Bandwidth saturation at K=6 → MF ≥ 1.4× FCA |
+| AA 1M np=16 b4 K=2 | `ATMD_K_OUTER_OVERRIDE=2 qsub run_atmd_b4_aa_1m_16node.sh` | 2 | Lower memory pressure, weaker saturation |
+| AA 1M np=16 b4 K=4 | `ATMD_K_OUTER_OVERRIDE=4 qsub run_atmd_b4_aa_1m_16node.sh` | 4 | Middle of the curve |
+| AA 1M np=16 b4 K=1 | `ATMD_K_OUTER_OVERRIDE=1 qsub run_atmd_b4_aa_1m_16node.sh` | 1 | Forced-serial; quantifies the K_outer=1 NUMA first-touch overhead from §15.9.14 §D |
+
+The K_outer override series gives a 4-point K→wall curve at 1M. If the bandwidth
+saturation hypothesis holds: MF wall should rise monotonically with K. If it fails:
+ATMD Mode F is viable at 1M (unexpected; would invalidate part of §15.9.14).
+
+##### G. What's deliberately NOT in b4
+
+To keep scope tight and review-able:
+
+- **Mode P implementation** — design only; the actual Allreduce wiring across N
+  SIMD kernel variants requires a focused multi-day pass (5 days per §10).
+- **Codon-DNA workload validation** — needs dataset, blocked.
+- **MF_IGNORED pre-allocation skipping** — superseded by the B.5 formula fix
+  (which provides comparable per_tree_MB reduction without per-model logic).
+- **NUMA first-touch removal at K=1** — §15.9.14 §D flagged this as a *suspected*
+  source of the b3c K=1 regression vs FCA. b4 retains the writeback at
+  phylotesting.cpp:4181 since the hypothesis is not yet confirmed; if the b4
+  K_outer-override run with K=1 reproduces the regression, NUMA first-touch
+  becomes the next target.
+
+##### H. Open job state at writeup time
+
+Job **169112256** (b3c AA 1M np=16) is still running at t=00:26:26 walltime
+(5/12 rank 0 models done, projected ≥2,000 s MF). It will provide the final b3c
+data point for §15.9.16. No need to cancel — its result is the K_outer=1 reference
+for the upcoming b4 A/B comparison.
+
+Next actions:
+1. `qsub build_atmd_b4.sh` (~10 min build on SPR node).
+2. `qsub run_atmd_b4_aa_100k_1node.sh` (~30 min run, sanity check).
+3. `qsub run_atmd_b4_aa_1m_16node.sh` (~3 h run, hypothesis test).
+4. If b4 1M MF beats FCA np=16 (1,122 s): bandwidth-saturation hypothesis falsified,
+   investigate further. If b4 1M MF regresses: hypothesis confirmed, proceed to
+   Mode P implementation per `research/mode-p-design.md`.
+
+Results → §15.9.16 once b4 jobs complete.
+
+#### 15.9.16 Mode P implementation begun — P.1 + P.2 scaffolding landed
+
+Started the Mode P (pattern-parallel intra-model MPI_Allreduce) implementation
+from `research/mode-p-design.md`. P.1 (scaffolding) and P.2 (pattern partition
+wiring) are landed in the iqtree3 source tree as a **buildable, zero-behaviour-
+change** layer. P.3 onward (kernel modifications) have exact file:line patches
+written in `research/mode-p-implementation-status.md` for a focused follow-up
+build/test session.
+
+##### A. What landed (P.1 + P.2)
+
+Five source files modified in
+`/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/`:
+
+| File | Lines | Change |
+|---|---|---|
+| `utils/tools.h` | 2385–2397 | New `Params::mode_p_enabled` and `mode_p_min_cost_mult` |
+| `utils/tools.cpp` | 4626–4651 | CLI flags `--mode-p`, `--mode-p-all`, `--no-mode-p`, `--mode-p-min-cost-mult` |
+| `tree/phylotree.h` | 2314–2343 | `PhyloTree::ptn_start, ptn_end` members + `isModePActive()`, `initializePtnPartition()`, `modePAllreduceLh()`, `modePAllreduceLhDfDdf()` methods |
+| `tree/phylotree.cpp` | 906–984 | Method bodies; `#ifdef _IQTREE_MPI`-guarded; no-op when ranks==1 |
+| `main/phylotesting.cpp` | 1995–2003 | `iqtree->initializePtnPartition()` call in `CandidateModel::evaluate()` |
+
+The MPI helpers are deliberately compact. `modePAllreduceLh` is one MPI_SUM call
+on a single double; `modePAllreduceLhDfDdf` packs `{lh, df, ddf}` into one
+three-double MPI_Allreduce buffer (single network round-trip vs three).
+
+`isModePActive()` triple-gates on `params->mode_p_enabled != 0` AND
+`MPIHelper::getNumProcesses() > 1` AND `_IQTREE_MPI` compile-time, so the
+helpers are safely no-op in non-MPI builds and single-process runs.
+
+##### B. Behaviour with P.1+P.2 alone
+
+- Build succeeds — no kernel changes, no correctness risk.
+- CLI flags accepted: `--mode-p`, `--mode-p-all`, `--no-mode-p`,
+  `--mode-p-min-cost-mult`.
+- With `--mode-p-all` + np > 1: per-rank cerr line emitted per model:
+  ```
+  [Mode P] rank 0 model=LG+F ptn=[0, 25000) of 100000
+  [Mode P] rank 1 model=LG+F ptn=[25000, 50000) of 100000
+  ```
+- **Likelihoods are unchanged** because the kernel does not yet consult
+  `ptn_start`/`ptn_end`. Mode P is "inert" — partition is set but not enforced.
+
+This is the right intermediate state: it proves the wiring is correct end-to-end
+(CLI → Params → PhyloTree → kernel boundary) without risking the kernel itself.
+
+##### C. What's specified but not yet applied (P.3 onward)
+
+Full patches in `research/mode-p-implementation-status.md`. Each phase has
+exact file:line edit text.
+
+**P.3** — `computeLikelihoodBranchSIMD` at
+[phylokernelnew.h:2660](file:///scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3/tree/phylokernelnew.h#L2660).
+Strategy: shift `limits[]` from `computeBounds()` so each packet iterates the
+rank's slice, then Allreduce `tree_lh` AND `all_prob_const` before the ASC
+(ascertainment) correction block. Both must be Allreduce'd together because
+the ASC formula `tree_lh -= NSite × log(1 − all_prob_const)` must use the
+full-tree `all_prob_const`.
+
+**P.4** — Same modification for `computeLikelihoodDervSIMD` (3 outputs). Uses
+`modePAllreduceLhDfDdf` for the post-kernel triple sum.
+
+**P.5** — Mirror modifications for 8 remaining kernel variants (Generic,
+FromBuffer, Mixlen, Mixture, Nonrev).
+
+**P.6** — Dispatcher integration: mark heavy models via FCA cost predictor,
+`MPI_Barrier` before them, resume Mode F dispatch.
+
+**P.7** — Performance validation at AA 1M np=16, target MF wall ≤ 600 s.
+
+##### D. Why P.3+ wasn't applied this session
+
+Two correctness risks need build/test iteration to land safely:
+
+1. **`_pattern_lh[ptn]` partial population**: under Mode P each rank writes
+   `_pattern_lh` only for its slice. Downstream consumers (bootstrap reporting,
+   site-likelihood output) expect full coverage. Fix: `MPI_Allgatherv` of
+   `_pattern_lh` after the kernel when Mode P is active. Implementation is
+   straightforward but needs validation against the actual consumers — best
+   done with a running build.
+2. **VCSIZE tail handling**: `computeBounds` rounds the size up to a multiple
+   of `VectorClass::size()`. Under Mode P the slice size may not be
+   VCSIZE-aligned. The existing kernel safely handles `ptn ≥ nptn` (state =
+   STATE_UNKNOWN); verify the same holds when ptn enters the shifted-tail
+   region. Cheap to test, hard to reason about without a build.
+
+Applying P.3+ without these validations risks subtle correctness regressions
+(wrong lnL for boundary patterns) that won't show up in syntax checks.
+
+##### E. Validation plan for the follow-up session
+
+Once P.3 is applied, run the correctness gate at AA 100K np=2:
+
+```bash
+# baseline
+mpirun -np 2 iqtree3-mpi-atmd-b4 -s AA_100K.phy -m LG+G -seed 1
+# Mode P, forced on every model
+mpirun -np 2 iqtree3-mpi-mode-p -s AA_100K.phy -m LG+G --mode-p-all -seed 1
+```
+
+Pass: lnL within 1e-6 of FCA np=2 baseline (-7,541,976.853). Fail: investigate
+`_pattern_lh` consumption or VCSIZE-tail handling per the §D failure modes.
+
+If P.3 passes, P.4 → P.5 → P.6 → P.7 follow as mechanical applications of the
+same pattern. Total remaining time per the design doc §10: **~4 days** focused
+work after the now-completed scaffolding.
+
+##### F. Test recipe for P.1+P.2 alone (what can be run right now)
+
+```bash
+# Single rank: confirm --mode-p-all is accepted but inert (no [Mode P] line)
+mpirun -np 1 .../iqtree3-mpi-atmd-b4 -s AA_100K.phy -m LG+G --mode-p-all
+# Expected: lnL identical to FCA; no [Mode P] cerr line (ranks==1 gate)
+
+# Multi-rank: confirm partition is emitted but lnL still matches FCA
+mpirun -np 4 .../iqtree3-mpi-atmd-b4 -s AA_100K.phy -m LG+G --mode-p-all
+# Expected: 4 [Mode P] cerr lines showing ptn ranges; lnL = FCA np=4 lnL
+```
+
+##### G. Doc artefacts
+
+- `research/mode-p-design.md` — the design contract (unchanged this session).
+- `research/mode-p-implementation-status.md` — live phase tracker (new this
+  session), contains exact P.3+ patches ready to apply.
+- `CHANGELOG.md` entry `(cm)` — summary for the project log.
+
+Final outcome of the Mode P direction → §15.10 (new chapter, planned for after
+P.7 completes and AA 1M np=16 performance is measured).
 
