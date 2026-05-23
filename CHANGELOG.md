@@ -83,6 +83,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | — | — | — | — | — | — | — (pending) | — | — |
+| 169096105 | WS-A.2 np=4 W2 | AA 100K | 1 | 4×26T | — | — | — | — | — | — | — (pending W2 gate) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -93,8 +94,47 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > Speedup = baseline total ÷ run total (vanilla baseline for each dataset).
 > WS-A.1 rows use the same vanilla baseline as FCA rows for their dataset.
 > **pending** = job 169095645 running; results will be filled in CHANGELOG entry `(cb)`.
+> **pending W2 gate** = job 169096105 running; W2 correctness gate for Phase A.2 (ws_bcast_fields > 0, lnL ±0.5, MF ≤ 100 s); results in entry `(cc)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
+
+---
+
+## 2026-05-23 (cc) — Phase A.2 implemented + W2 correctness gate submitted (job 169096105)
+
+### What
+
+Phase A.2 (`WarmStartPacket` MPI_Bcast inside `filterRatesMPI`) implemented and built.
+Binary `iqtree3-mpi-fca-ws-a2` (md5 `1547a906f1f75422514b0a0cdf2bc89e`) deployed.
+Source commit `5604606d` on `fca-lbfgs-ws` branch (IQ-TREE fork).
+W2 correctness gate submitted: AA 100K, 4 MPI × 26 OMP = 104T, 1 node, seed=1, `-m TESTONLY`.
+
+| Field | Value |
+|-------|-------|
+| Job | **169096105** (`normalsr`, 4 MPI ranks × 26 OMP, `-m TESTONLY`, seed=1) |
+| Binary | `iqtree3-mpi-fca-ws-a2` md5 `1547a906f1f75422514b0a0cdf2bc89e` (Phase A.2 broadcast) |
+| Source commit | `5604606d` (fca-lbfgs-ws, +101 lines `WarmStartPacket` MPI_Bcast) |
+| Alignment | AA 100K (100 taxa × 100K sites) |
+| Resources | 1 node × 104 cpus, 200 GB, walltime 01:00:00 |
+| Script | `gadi-ci/lbfgs-ws/run_ws_a2_aa_100k_1node_w2.sh` |
+
+### Gate criteria (W2 — §5.7 validation matrix)
+
+- **lnL** within ±0.5 of −7,541,976.860 (ref 168425673)
+- **Best model** = LG+G4
+- **MF wall ≤ 100 s** (FCA np=4 AA 100K without WS: ~149 s est.)
+- **ws_bcast_fields > 0** in MF-MPI-DIAG output (Phase A.2 broadcast confirmed to carry real data)
+- Exit code = 0
+
+### Phase A.2 implementation summary
+
+Inserted `WarmStartPacket` struct (function-local, 455 doubles = 3640 bytes) after the `ok_rates` broadcast
+in `filterRatesMPI`. Rank 0 packs its warm-start cache into the packet; all ranks call `MPI_Bcast(&pkt, sizeof(pkt), MPI_BYTE, 0, MPI_COMM_WORLD)`. Non-zero ranks unpack with first-fit semantics into their local `mpi_warm_start`. Diagnostic counter `ws_bcast_fields` counts non-sentinel (≥ 0) doubles packed/unpacked. `MF-MPI-DIAG` line extended to include `ws_bcast_fields=N`.
+
+**Build issues resolved (Finding 7)**:
+- Must use `intel-compiler-llvm/2025.3.2` (not 2023.2.0) — booster lib linked against 2025.3.2 libiomp5 (`__kmpc_dispatch_deinit`)
+- Must use `binutils/2.44` — cmake 3.31.6 emits `--dependency-file` linker arg requiring ld ≥ 2.35
+- Must set `OMPI_CXX=icpx make -j 8 iqtree3` — otherwise system g++ 8.5.0 breaks with `-qopenmp`
 
 ---
 

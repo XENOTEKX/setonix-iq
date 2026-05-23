@@ -1,6 +1,6 @@
 # L-BFGS Optimisation + Cross-Model Warm-Starting for ModelFinder FCA — Implementation Plan
 
-**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · next: Phase A.2 MPI broadcast
+**Author:** as1708 | **Date (orig):** 2026-05-23 | **Status:** A.1 implemented ✓ · W1 PASS ✓ (job 169094526) · Full MF+SPR PASS ✓ (job 169094692, MF=261.694s SPR=729.748s total=994.904s) · FCA baseline PASS ✓ (job 169095077, MF=258.773s SPR=738.569s total=1000.811s) · **A.2 implemented ✓ (commit 5604606d, binary iqtree3-mpi-fca-ws-a2 md5=1547a906)** · next: W2 gate (np=4 AA 100K)
 **Target source:** IQ-TREE 3.1.2 (commit `4e91dd61`)
 **Working branch:** `fca-lbfgs-ws` (both repos, created 2026-05-23)
  - Harness repo (`XENOTEKX/setonix-iq`): `fca-lbfgs-ws`, branched from `modelfinder2` @ `21d61e68`
@@ -577,19 +577,34 @@ Both compose, neither overlaps with existing in-tree work (verified via the `ini
 **Why this commit must come before A.2:**
 The MPI broadcast (A.2) builds on the cache structure. Local-only is the simpler debug surface.
 
-### 6.3 Phase A.2 — Warm-start MPI broadcast (this commit)
+### 6.3 Phase A.2 — Warm-start MPI broadcast ✓ IMPLEMENTED (commit 5604606d)
 
-**Files:**
-- `main/phylotesting.cpp:2967` (filterRatesMPI) — extend with WarmStartPacket Bcast.
-- `main/phylotesting.h` — declare `mpi_warm_start_broadcasted` flag (single-fire).
+**Files changed:**
+- `main/phylotesting.cpp` — `filterRatesMPI()`: after the existing `MPI_Bcast(buf, BUF, MPI_CHAR, 0, ...)` (ok_rates broadcast, Step 3), added Phase A.2 block inserting a second `MPI_Bcast` for the warm-start cache.  No changes to `phylotesting.h` — the `mpi_warm_start_broadcasted` flag from the earlier design proved unnecessary since `filterRatesMPI` is already single-fire (guarded by `mpi_filterRatesMPI_fired`).
+
+**Design summary (as implemented):**
+- Local struct `WarmStartPacket` defined inside `filterRatesMPI` scope: 4 scalar doubles + `rf_prop[11][10]` + `rf_rates[11][10]` + `rfi_p_invar[11]` + `rfi_prop[11][10]` + `rfi_rates[11][10]` = **455 doubles = 3640 bytes**.
+- Sentinels: all fields initialised to -1.0 (consistent with `RateWarmStartCache::clear()`).
+- Pack: rank 0 copies its `mpi_warm_start` into the packet; if a vector `rf_prop[k]` has exactly `k` entries, they are written to `pkt.rf_prop[k][0..k-1]`.
+- Broadcast: `MPI_Bcast(&pkt, sizeof(pkt), MPI_BYTE, 0, MPI_COMM_WORLD)` — single message, eager-send threshold (~32 KB) never exceeded.
+- Unpack: non-root ranks apply received fields to their `mpi_warm_start` with first-fit semantics (`local value < 0` → overwrite with broadcast value). Fields already populated by the rank's own evaluations are preserved.
+- Diagnostic: `ws_bcast_fields=N` appended to the existing `MF-MPI-DIAG: rank X/Y filterRatesMPI fired` line.
 
 **Test:**
-- W2, W3, W4 — the MPI tests.
-- W6 corruption test.
+- W2, W3, W4 — the MPI tests (pending).
+- W6 corruption test (pending).
 
 **Merge gate:**
 - ΔlnL ≤ 0.5 on every benchmark.
 - MF wall improvement ≥ 10% on AA 1M np≥8 (else fold back).
+
+**A.2 build status (2026-05-23 15:58):**
+- Binary: `/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a2`
+- Mirror: `/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a2`
+- md5: `1547a906f1f75422514b0a0cdf2bc89e` (≠ A.1 `fa9ee601`, confirms new code linked)
+- Source commit: `5604606d` on `fca-lbfgs-ws`
+- Build environment: `openmpi/4.1.7` + `intel-compiler-llvm/2025.3.2` + `binutils/2.44` (see Finding 7)
+- Symbols verified: `_ZN17CandidateModelSet14filterRatesMPIEi` (filterRatesMPI) + `RateWarmStartCache` — `WarmStartPacket` is function-local, inlined, no separate nm symbol (expected).
 
 ### 6.4 Phase A.3 — Cross-family +R chain warm-start (future, separate commit)
 
@@ -875,6 +890,23 @@ Pass criteria: lnL within ±0.5 of baseline 168425673, MF wall ≤ 380 s, best m
 MF wall at np=1: 254.433 s (ws-a1) vs 257.355 s (FCA baseline, no warm-start, 168577707) — Δ 2.9 s (1.1%, within noise). Expected: cross-rank benefit requires Phase A.2 MPI broadcast.
 WS-HIT diagnostic lines: 0 — binary does not emit `WS-HIT:`/`WS-MISS:` tags; correctness confirmed by lnL match.
 CHANGELOG: `(bv)` · Run record: `logs/runs/gadi_AA_100k_ws_a1_np1_w1_seed1_169094526.json`
+
+---
+
+**Finding 7 — A.2 build: libiomp5 version and linker mismatch.**
+The `build-mpi-iso` cmake cache was generated with `intel-compiler-llvm/2025.3.2` (confirmed via `ldd iqtree3-mpi-fca-ws-a1 | grep iomp` → `2025.3.2/lib/libiomp5.so`) and `cmake/3.31.6` (which emits `--dependency-file` linker args requiring binutils ≥ 2.35). Two issues arise when trying to rebuild on a fresh login shell:
+1. **`-qopenmp` flag in CMake cache** (Intel flag) causes `g++: unrecognised option '-qopenmp'` when the shell lacks `OMPI_CXX=icpx`. Fix: `OMPI_CXX=icpx make -j 8`.
+2. **`/bin/ld: unrecognised option '--dependency-file'`** when `intel-compiler-llvm/2023.2.0` is loaded instead of `2025.3.2`. The `booster/libbooster.a` object has `__kmpc_dispatch_deinit` (Intel OMP symbol from 2025.3.2 runtime); linking with 2023.2.0's libiomp5 fails. Fix: `module load intel-compiler-llvm/2025.3.2` + `module load binutils/2.44`.
+**Build recipe to reproduce A.2:**
+```bash
+module load openmpi/4.1.7 intel-compiler-llvm/2025.3.2 cmake/3.31.6 binutils/2.44
+cd /scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso
+OMPI_CXX=icpx make -j 8 iqtree3
+```
+**Implication for CI:** bootstrap scripts that do a full cmake reconfigure are more robust than incremental builds from the cache. Pin `intel-compiler-llvm/2025.3.2` and `binutils/2.44` in future bootstrap scripts.
+
+**Finding 8 — WarmStartPacket is function-local; sizeof(pkt) = 3640 bytes.**
+`WarmStartPacket` defined as a local struct inside `filterRatesMPI`. At 455 doubles = 3640 bytes it is well within the MPI eager-send buffer (default 64–128 KB for OpenMPI), so `MPI_BYTE` broadcast is non-blocking from the application's perspective (no rendezvous handshake). The `static_assert(sizeof(WarmStartPacket) % sizeof(double) == 0)` guards alignment at compile time. First-fit semantics on unpack: non-root ranks keep any value they computed themselves before the broadcast fires; only unset fields (sentinel = -1) are overwritten. This is conservative and safe — correctness does not depend on all ranks having identical warm-start states.
 
 **Full MF+SPR run submitted 2026-05-23 as job 169094692** (`normalsr`, 1×103T, `-m TEST`, seed=1).
 Script: `gadi-ci/lbfgs-ws/run_ws_a1_aa_100k_1node_full.sh`.
