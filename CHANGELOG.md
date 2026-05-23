@@ -84,6 +84,8 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
 | 169096801 | WS-A.2 np=16 W4 (full) | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,139.494** | **1,198.689** | **2,419.671** | **9.41×** | — | — |
+| 169099057 | WS-A.2 np=8 W3 (full) | AA 1M | 8 | 8×103T | — | — | — | — | — | — | — (pending W3) | — | — |
+| 169099058 | WS-A.2 np=4 scaling (full) | AA 1M | 4 | 4×103T | — | — | — | — | — | — | — (pending) | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
 | 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
@@ -97,6 +99,8 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **169096105** = W2 1-node correctness gate: **DONE** — `ws_bcast_fields=4` PASS, lnL=−7,541,976.853 (Δ0.007), LG+G4 PASS. MF=1,918.721 s — expected slow (4×26T intra-node, shared memory, not production parity). Correctness-only gate; performance gate requires 4-node config. See entry `(cc)`.
 > **169096530** = W2-parity gate: **DONE ALL PASS** — `ws_bcast_fields=4` (cross-node Infiniband) ✓, lnL=−7,541,976.853 (Δ0.007) ✓, LG+G4 ✓, MF=91.700 s ≤ 100 s ✓. PBS "E" state was normal exit (completed in ~3 min). Phase A.2 cross-node MPI_Bcast confirmed at production parity. See entry `(cd)`.
 > **169096801** = W4 gate: **DONE** — lnL=−78,605,196.497 ✓, LG+G4 ✓, ws_bcast_fields=4 ✓. MF=1,139.494 s (Δ+17.1 s vs FCA np=16, Δ−6.7 s vs WS-A.1 np=16), SPR=1,198.689 s (Δ−89.2 s vs FCA, Δ−14.3 s vs WS-A.1), total=2,419.671 s. MF wall gate (≤900 s) not met — see entry `(cf)` for analysis.
+> **169099057** = W3 gate (submitted): 8 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. ~28 models/rank; broadcast fires at model ~14 leaving ~14 to benefit. Expected: more MF gain than np=16. See entry `(cg)`.
+> **169099058** = Scaling np=4 (submitted): 4 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. ~56 models/rank; broadcast fires at model ~28 leaving ~28 to benefit. Highest warm-start coverage; expected largest A.2 MF gain. See entry `(cg)`.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
@@ -290,9 +294,40 @@ independently of how many models a rank handles, so it composes correctly with n
 
 ### What's still needed from §5.7
 
-- **W3** (AA 1M np=8): Expected to show more benefit than np=16 (more models/rank)
+- **W3** (AA 1M np=8): Submitted as job 169099057 — see entry `(cg)` ↓
+- **np=4 scaling**: Submitted as job 169099058 — see entry `(cg)` ↓
 - **W5** (DNA 1M np=8): DNA parity
 - **W6** (AA 100K np=1): Robustness — inject corrupted cache, verify BFGS still converges
+
+---
+
+## 2026-05-23 (cg) — W3 gate + np=4 scaling submitted (jobs 169099057, 169099058)
+
+### What
+
+Submitted two Phase A.2 full MF+SPR runs on AA 1M to measure warm-start broadcast benefit
+at lower np, where each rank handles substantially more models.
+
+| Field | np=8 W3 gate | np=4 scaling |
+|-------|--------------|--------------|
+| Job | **169099057** | **169099058** |
+| Script | `gadi-ci/lbfgs-ws/run_ws_a2_aa_1m_8node_full.sh` | `gadi-ci/lbfgs-ws/run_ws_a2_aa_1m_4node_full.sh` |
+| PBS | `normalsr`, 8 nodes, 832 cpus, 4080 GB, 2h | `normalsr`, 4 nodes, 416 cpus, 2040 GB, 3h |
+| Config | NRANKS=8, 8×103T = 824T | NRANKS=4, 4×103T = 412T |
+| Binary | `iqtree3-mpi-fca-ws-a2` md5 `1547a906` | same |
+| FCA ref | 168586094 (MF=1,443.892s total=3,671.618s) | 168635615 (MF=1,974.476s total=5,956.618s) |
+| Models/rank | ~28 | ~56 |
+| Broadcast fires at | model ~14 (~14 remaining) | model ~28 (~28 remaining) |
+| Expected A.2 benefit | moderate–large | largest of any np tested |
+
+### Gate criteria (W3, §5.7)
+
+- exit code = 0
+- lnL within ±1.0 of −78,605,196.573 (vanilla AA 1M ref 168425491)
+- Best model = LG+G4
+- ws_bcast_fields > 0 (Phase A.2 broadcast confirmed)
+
+Results → entry `(ch)` once jobs complete.
 
 ---
 
