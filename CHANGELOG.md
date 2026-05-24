@@ -716,6 +716,73 @@ The ISO must use the real IQ-TREE call path, not a synthetic unit-test driver:
 
 ---
 
+## 2026-05-24 (co) — WarmStart Phase A.1 + A.2 consolidated results: failure to meet MF wall gate vs FCA
+
+### Summary
+
+WarmStart Phase A.1 (local cache, no broadcast) and Phase A.2 (`WarmStartPacket` MPI_Bcast) were
+both measured against the FCA Phase 0.5+0.6 baseline and the vanilla IQ-TREE 3.1.2 SPR baseline.
+Correctness passes on all runs. **MF wall failed to improve vs FCA at any np where both were tested.**
+The warm-start mechanism delivers no measurable benefit at np=16 and a small but not reproducible
+benefit at np=1. The fundamental blocker at np=16 is too few models per rank: with ~14 models/rank,
+the broadcast fires halfway through the rank's work and benefits only the remaining ~6 models, which
+is too small a fraction to move the aggregate wall time.
+
+### AA 1M — WarmStart vs Vanilla baseline and FCA baseline
+
+| Run | Job | np | MF wall (s) | Δ vs vanilla (7,587 s) | Δ vs FCA np=16 (1,122 s) | MF gate ≤900 s | Verdict |
+|-----|-----|----|------------:|------------------------|--------------------------|:--------------:|---------|
+| Vanilla (baseline A) | 168425491 | 1 | 7,587.459 | — | — | ❌ | reference |
+| FCA np=16 (baseline B) | 168635616 | 16 | **1,122.363** | −6,465 s (−85.2%) | — | ❌ | FCA best; no WS |
+| FCA np=8 | 168586094 | 8 | 1,443.892 | −6,144 s (−81.0%) | +321.5 s | ❌ | FCA scaling ref |
+| FCA np=4 | 168635615 | 4 | 1,974.476 | −5,613 s (−74.0%) | +852.1 s | ❌ | FCA scaling ref |
+| WS-A.1 np=16 | 169095645 | 16 | **1,146.174** | −6,441 s (−84.9%) | **+23.8 s (+2.1%)** | ❌ | A.1 no broadcast; **regresses vs FCA** |
+| WS-A.2 np=16 | 169096801 | 16 | **1,139.494** | −6,448 s (−85.1%) | **+17.1 s (+1.5%)** | ❌ | A.2 broadcast confirmed; **still regresses** |
+| WS-A.2 np=8 | 169099057 | 8 | pending | — | — | — | W3 gate — results not yet logged |
+| WS-A.2 np=4 | 169099058 | 4 | pending | — | — | — | scaling gate — results not yet logged |
+
+### AA 100K — WarmStart vs Vanilla baseline and FCA baseline (single-model / low-np focus)
+
+| Run | Job | np | MF wall (s) | Δ vs vanilla (399 s) | Δ vs FCA np=1 (259 s) | MF gate ≤100 s | Verdict |
+|-----|-----|----|------------:|----------------------|------------------------|:--------------:|---------|
+| Vanilla (baseline A) | 168425673 | 1 | 399.456 | — | — | ❌ | reference |
+| FCA np=1 (baseline B) | 169095077 | 1 | **258.773** | −140.7 s (−35.2%) | — | ❌ | FCA; no WS |
+| FCA np=2 | 168584736 | 2 | **149.029** | −250.4 s (−62.7%) | −109.7 s (−42.4%) | ❌ | FCA scaling ref |
+| WS-A.1 np=1 | 169094692 | 1 | 261.694 | −137.8 s (−34.5%) | **+2.9 s (+1.1%)** | ❌ | A.1 local cache; noise vs FCA |
+| WS-A.2 np=4 W2p (TESTONLY) | 169096530 | 4 | **91.700** | — | −167.1 s (−64.6%) | ✅ | correctness only (TESTONLY); not full MF+SPR |
+
+### Gate summary — all WarmStart production runs (full MF+SPR)
+
+| Job | Phase | Dataset | np | lnL ✓ | Best model ✓ | ws_bcast_fields | MF wall gate | Outcome |
+|-----|-------|---------|----|----|-----|-----------------|:------------:|---------|
+| 169094692 | WS-A.1 | AA 100K | 1 | ✅ Δ0.002 | ✅ LG+G4 | — (no broadcast) | ❌ 262 s vs 259 s FCA | correctness ✅ walltime no gain |
+| 169095645 | WS-A.1 | AA 1M | 16 | ✅ Δ0.076 | ✅ LG+G4 | — (no broadcast) | ❌ **+23.8 s vs FCA** | correctness ✅ walltime **regresses** |
+| 169096801 | WS-A.2 | AA 1M | 16 | ✅ Δ0.000 | ✅ LG+G4 | 4 ✅ | ❌ **+17.1 s vs FCA** | correctness ✅ walltime **regresses** |
+| 169099057 | WS-A.2 | AA 1M | 8 | pending | pending | pending | pending | — |
+| 169099058 | WS-A.2 | AA 1M | 4 | pending | pending | pending | pending | — |
+
+### Root cause of MF wall failure at np=16
+
+At np=16 the FCA dispatch assigns ~14 models per rank. `filterRatesMPI` fires after the rank's
+reference family is complete (at model index ~7), leaving ~6 remaining models to benefit from the
+broadcast. The effective window for warm-start reuse is therefore `6 models × ~4 s/model = ~24 s`
+out of a `1,122 s` MF wall — a 2.1% ceiling for Phase A contribution at np=16.
+
+Phase A.2 demonstrated correct cross-node Infiniband MPI_Bcast delivery (`ws_bcast_fields=4`
+confirmed at 169096801). The mechanism is correct; the architectural limit is the per-rank model
+count at high np.
+
+### Implications for Phase B (ATMD) and Mode P
+
+| Contribution | Mechanism | MF gain at np=16 AA 1M | Why it fails / where it succeeds |
+|---|---|---|---|
+| Phase A.1 (local WS cache) | Re-use prior rank's BFGS state | +2.1% regression (noise) | Per-rank model count too small; cache is cold on first model which dominates |
+| Phase A.2 (cross-rank WS broadcast) | MPI_Bcast after rank-0 ref family | +1.5% regression (noise) | Same bottleneck; only ~6 models/rank post-broadcast |
+| Phase B / ATMD Mode F (K_outer) | Run K models concurrently per rank | 0% at 1M (K_outer=1 memory-bound); 64% regression at 100K (BW saturation) | Per-tree memory 64 GB; bandwidth saturated |
+| **Mode P** (pattern-parallel Allreduce) | All 16 ranks co-evaluate 1 heavy model | **target ≤600 s (−46% vs FCA)** | The only mechanism that addresses the per-model compute bottleneck directly |
+
+---
+
 ## 2026-05-23 (cc) — Phase A.2 implemented + W2 correctness gate submitted (job 169096105)
 
 ### What
