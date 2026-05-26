@@ -111,6 +111,20 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 169096105 | WS-A.2 np=4 W2 (1-node, 4×26T) | AA 100K | 1 | 4×26T | LG+G4 | −7,541,976.853 | 1,918.721 | correctness only | PASS (ws_bcast_fields=4 ✓; intra-node, ≪prod parity) |
 | 169096530 | WS-A.2 np=4 W2p (4×103T) | AA 100K | 4 | 4×103T | LG+G4 | −7,541,976.853 | **91.700** | W2p ≤ 100 s | **ALL PASS** ✓ |
 
+**FCA -m MF / -m MFP runs** (`iqtree3-mpi-fca-ws-a2` · md5 `1547a906f1f75422514b0a0cdf2bc89e` · Phase A.2 warm-start · AA 100K · seed=1 · all PASS ✓):
+
+| Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup | Parity |
+|-----|------|---------|-------|-----------|------------|-----|------------|--------------|----------------|---------|--------|
+| 169332771 | FCA -m **MF** np=1 | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.862 | 1,341.278 | — | 1,342.274 | 1.00× (ref) | — |
+| 169332772 | FCA -m **MF** np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.852 | 481.295 | — | 483.801 | **2.77×** | ✓ PASS |
+| 169332773 | FCA -m **MF** np=4 | AA 100K | 4 | 4×103T | LG+G4 | −7,541,976.853 | 872.055 | — | 874.554 | 1.54× | ✓ PASS |
+| 169332775 | FCA -m **MFP** np=1 | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.862 | 1,352.872 | 724.927 | 2,081.285 | 1.00× (ref) | — |
+| 169332777 | FCA -m **MFP** np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.852 | 476.489 | ~388 | 864.544 | **2.41×** total / **2.84×** MF | ✓ PASS |
+| 169332778 | FCA -m **MFP** np=4 | AA 100K | 4 | 4×103T | LG+G4 | −7,541,976.853 | 872.413 | ~202 | 1,074.778 | 1.94× total / 1.55× MF | ✓ PASS |
+
+> **MF run notes:** `-m MF` tests all substitution models × rate categories (FreeRate + FreeRate+I); no tree search. MF wall ≈ total wall. Speedup vs np=1 MF (169332771, 1,342.274 s). np=2 achieves superlinear **2.77×** total speedup; np=4 regresses to 1.54× — FCA communication overhead dominates over 4 nodes at 100 K sites. Best model LG+G4 (standard Gamma beats all FreeRate variants by BIC).
+> **MFP run notes:** `-m MFP` = ModelFinder Plus (all MF models + mixture models C10–C60) + full SPR tree reconstruction. Speedup vs np=1 MFP (169332775, 2,081.285 s total / 1,352.872 s MF). MF speedup: np=2 = **2.84×**, np=4 = 1.55× (same pattern as -m MF). SPR wall for np=2,4 = total wall − MF wall (approx). FCA also parallelises tree search: np=1 SPR=725 s → np=2 ≈388 s (1.87×) → np=4 ≈202 s (3.6×). LG+G4 wins over all C10–C60 mixture models by BIC.
+
 ---
 
 ## 2026-05-24 (ch) — Phase B (ATMD HH-NUMA Mode F) builds b3/b3b/b3c, bugs B.4-1 + B.4-2
