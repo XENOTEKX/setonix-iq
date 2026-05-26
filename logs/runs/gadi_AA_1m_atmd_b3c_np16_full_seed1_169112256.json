@@ -1,0 +1,19 @@
+{
+  "run_id": "gadi_AA_1m_atmd_b3c_np16_full_seed1_169112256",
+  "label": "AA_1m_atmd_b3c_np16_full_seed1",
+  "job_id": "169112256",
+  "binary": "iqtree3-mpi-atmd-b3c",
+  "md5": "1c6fc01921df0fbd67e45da280a036e9",
+  "dataset": "AA_1M",
+  "nranks": 16,
+  "omp_per_rank": 103,
+  "seed": 1,
+  "wall_s": 4327,
+  "mf_wall_s": "2113.706",
+  "spr_wall_s": "1958.174",
+  "lnl": "null",
+  "best_model": "LG+G4",
+  "atmd_line": "[ATMD Mode F] K_outer=1 M_inner=103 K_mem=1 per_tree_MB=457507 avail_MB=493125",
+  "pass": 0,
+  "timestamp": "2026-05-23T15:42:47Z"
+}

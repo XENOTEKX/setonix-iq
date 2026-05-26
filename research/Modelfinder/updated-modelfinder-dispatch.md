@@ -1,6 +1,6 @@
  # Updated ModelFinder Dispatch — Adaptive Two-Phase Family-Local Scheduling for IQ-TREE 3.1.2
 
-**Author:** as1708 | **Date (orig):** 2026-05-16 | **Last updated:** 2026-05-17
+**Author:** as1708 | **Date (orig):** 2026-05-16 | **Last updated:** 2026-05-24
 **Target source:** IQ-TREE 3.1.2 (`v3.1.2`, commit `4e91dd61` — confirmed latest stable; master is 21 commits ahead but `phylotesting.{cpp,h}` are unchanged), MPI build, branches `gadi-spr-r2-avx512` / `cpu_opt_merge` / `mf-iso-phase0.5-0.6`
 **Related docs:** `research/modelfinder-mpi.md` · `research/lb-analysis.md` · `research/aa-walltime-analysis.md` §2.4 · CHANGELOG `2026-05-17` baseline note + `2026-05-17 (bk)`
 
@@ -42,6 +42,52 @@ once we have the MF-iso run data.
 
 ---
 
+## 0.1 Amdahl analysis: MF scaling ceiling from measured FCA data (2026-05-24)
+
+Using FCA np=1 (job 168913089, AA 1M, MF wall=5,119.929 s) as $T(1)$ and the
+AA 1M full-run series (jobs 168635614/15/16) as $T(p)$:
+
+$$\frac{1}{S(p)} = f_s + \frac{1-f_s}{p} \quad\Rightarrow\quad f_s = \frac{1/S(p) - 1/p}{1 - 1/p}$$
+
+| $p$ | MF wall (s) | $S(p)$ | $E(p) = S(p)/p$ | $\hat{f}_s$ |
+|---:|---:|---:|---:|---:|
+| 1 | 5,119.929 | 1.000 | 100.0% | — |
+| 2 | 3,076.873 | 1.664 | 83.2% | 0.202 |
+| 4 | 1,974.476 | 2.593 | 64.8% | 0.181 |
+| 8 | 1,443.892 | 3.547 | 44.3% | 0.179 |
+| 16 | 1,122.363 | **4.562** | **28.5%** | 0.167 |
+
+$$\hat{f}_s^{\text{MF}} = 0.182 \quad\Rightarrow\quad S_{\max}^{\text{MF}} = \frac{1}{0.182} \approx 5.5\times$$
+
+**At np=16 we are at 83% of the Amdahl ceiling** ($4.56\times$ out of $5.5\times$). The
+efficiency has collapsed to 28.5%. No amount of additional island parallelism can break
+through this ceiling: the 18.2% serial fraction is attributable to per-rank model
+initialization, `initializeAllPartialLh()` allocation, `filterRates()` coordination, and
+BIONJ reference tree construction — all serial within a rank.
+
+For tree search the situation is very different: $\hat{f}_s^{\text{tree}} = 0.027$,
+$S_{\max}^{\text{tree}} \approx 37\times$, and at np=16 we are at only 32% of the ceiling
+with 73.1% efficiency. Tree search scales well because each rank runs an independent
+topology trajectory.
+
+**The implication for this document is direct:** FCA (island model dispatch) has
+exhausted its MF gains at np=16. The only architectural path that can reduce MF wall
+beyond 1,122 s at np=16 is one that reduces $\hat{f}_s^{\text{MF}}$ — that is, one that
+parallelises the computation *inside* a single model evaluation rather than just
+distributing different models to different ranks. This is the precise definition and
+motivation of Mode P.
+
+For reference, tree search contributes $w_{\text{tree}} = 0.746$ of total wall at FCA
+np=1. The weighted total-wall Amdahl prediction:
+
+$$\hat{f}_s^{\text{total}} \approx 0.254 \times 0.182 + 0.746 \times 0.027 = 0.066$$
+
+matches the empirical $\hat{f}_s^{\text{total}} = 0.068$ within noise, confirming the
+two-phase decomposition is correct. Once Mode P reduces $\hat{f}_s^{\text{MF}}$ to ~5%,
+the total-wall ceiling rises to $\approx 30\times$ and tree-search work becomes the next lever.
+
+---
+
 ## 1. Executive summary
 
 ModelFinder at MPI `np=4` on AA 100K regressed from 573 s (pre-fix, broken pruning) to
@@ -75,6 +121,15 @@ parameterises on `aln->num_states` and `aln->getNPattern()`.
 | np=1          | 1,289 s        | **~1,289 s**         | **1.0×**    | FCA is `if (numProcesses > 1)` guarded → no-op at np=1. Both runs go through the same Amdahl-limited site-parallel sequential outer loop (§2.4.7); the bottleneck is the 75% per-model serial fraction, not dispatch. |
 | np=2          | 475 s          | 400–430 s            | 1.1–1.2×    | Modest. Greedy-LPT + `freq_mult=3` spreads +F families across 2 ranks (vs round-robin's accidental load balance). Remaining ceiling = Amdahl 32.5× headroom over observed 27.4× = ~16%. |
 | **np=4**      | **2,335 s** ⚠ | **200–300 s**       | **~10×**    | Headline. If the +F-concentration hypothesis (§2.2) is correct, balancing +F across all 4 ranks restores expected sub-300 s. Per-model wall ≈ 3.17 s × ~80 pruned models = ~250 s. |
+
+**Amdahl ceiling note (added 2026-05-24):** The FCA MPI AA 1M scaling series shows
+$\hat{f}_s^{\text{MF}} = 0.182$, giving $S_{\max}^{\text{MF}} \approx 5.5\times$ and an
+efficiency of 28.5% at np=16. FCA has already consumed 83% of the available island-model
+speedup. This is not a bug in FCA; it is the Amdahl ceiling of distributing *different*
+models to *different* ranks. The Phase 0 targets above (np=4 → 200-300 s) remain valid
+but represent the last substantial gain available from island dispatch. Beating 1,122 s
+at np=16 requires Mode P (§0.1 above). See also
+`research/Modelfinder/mode-p-implementation-status.md` §Amdahl motivation.
 
 (The earlier "≤ 100 s" target from `modelfinder-mpi.md` §17.4 assumed Fix B parallel outer loop, which Fix H disabled at AA 100K scale for OOM safety. Sub-100 s at np=4 requires the future Phase 1 telemetry rebalance + Phase 2 work-stealing, **or** a per-rank memory-footprint reduction allowing concurrent model evaluations — neither of which Phase 0 attempts.)
 

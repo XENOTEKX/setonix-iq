@@ -29,3 +29,7 @@ gadi-ci/*.e[0-9]*
 
 # Raw PBS job output logs (archived separately)
 logs/jobs/
+logs/archive/
+
+# AI agent session data
+.claude/

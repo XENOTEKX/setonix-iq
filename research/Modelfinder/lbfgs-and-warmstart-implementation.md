@@ -3469,3 +3469,66 @@ mpirun -np 4 .../iqtree3-mpi-atmd-b4 -s AA_100K.phy -m LG+G --mode-p-all
 Final outcome of the Mode P direction → §15.10 (new chapter, planned for after
 P.7 completes and AA 1M np=16 performance is measured).
 
+#### 15.9.16 Bug B.4-3c (MISDIAGNOSIS) → B.4-5 (real fix): `errstreambuf` null `fout_buf` on worker ranks
+
+**Date:** 2026-05-24 (B.4-3c — misdiagnosed) / 2026-05-25 (B.4-5 — real root cause found and fixed)  
+**Binary:** `iqtree3-mpi-mode-p-iso-base` (md5 `54f33d41`) — P.ISO sandbox, built with P.1/P.2 scaffolding on top of the b4 ATMD source tree.
+
+##### B.4-3c (misdiagnosis — Mode F blamed incorrectly)
+
+**Symptom.** ISO-1 (job 169130806, 2 dedicated nodes + rankfile — B.4-3b fix correctly applied) died after 27 s with exit 139 (SIGSEGV). Rank 1 stderr contained only the OpenMPI binding line + `ERROR: [ERROR: S`. Rank 0 showed `[ATMD Mode F] K_outer=8 M_inner=12` and 8 `[Mode P] rank 0 ptn=[0, 48008)` lines.
+
+**Misdiagnosis.** Mode F K_outer=8 blamed. Fix `--atmd-k-outer 1` applied to ISO-1 and ISO-2 scripts. ISO-1 resubmitted as **job 169130878**. Job 169130878 **also crashed identically** (SIGSEGV after 26 s), proving B.4-3c was wrong.
+
+##### B.4-5 (real root cause — confirmed via gdb core dump analysis)
+
+**Root cause.** `errstreambuf::overflow` in `main.cpp:1801` dereferences a null `fout_buf` on worker MPI ranks:
+
+1. `outstreambuf::open()` calls `fout.open()` only inside `if (isMaster())`. Workers leave `fout_buf` unset (zero-initialized global → `nullptr`).
+2. `startLogFile()` calls `_err_buf.init(_out_buf.get_fout_buf())`. For workers, `get_fout_buf()` returns `nullptr`, so `_err_buf.fout_buf = nullptr`.
+3. `_err_buf` replaces `cerr`'s streambuf (via `cerr.rdbuf(this)` inside `init()`).
+4. Any `cerr` write from a worker rank reaches `errstreambuf::overflow`, which calls `fout_buf->sputn("ERROR: ", 7)` with `fout_buf = 0x0` → SIGSEGV.
+
+**Why ISO-1 specifically.** The first cerr write from rank 1 inside `evaluate()` is the Mode P diagnostic print at `phylotesting.cpp:1997`:
+```cpp
+cerr << "[Mode P] rank " << MPIHelper::getInstance().getProcessID()
+     << " model=" << getName()
+     << " ptn=[" << iqtree->ptn_start << ", " << iqtree->ptn_end << ")"
+     << " of " << iqtree->aln->size() << endl;
+```
+Without `--mode-p-all`, rank 1 never calls this code path, so the bug is never triggered in production. The ISO scaffolding test exposes it for the first time.
+
+**gdb evidence (core dump from job 169130878):**
+```
+#8  sputn(this=0x0, __n=7)           ← ORIGINAL crash: fout_buf=0x0
+#9  errstreambuf::overflow(this=0xfcca98 <_err_buf>, c=91)  ← c=91='['
+       at main.cpp:1801
+...
+#13 CandidateModel::evaluate(...)
+       at phylotesting.cpp:1997        ← cerr << "[Mode P] rank 1..."
+#6  funcAbort(signal_number=11)        ← signal handler catches SIGSEGV
+#5  print_stacktrace(out=cerr)         ← also tries to write to broken cerr
+#1  errstreambuf::overflow(c=83)       ← c=83='S', second crash in handler
+#0  sputn(this=0x0, __n=7)           ← double-fault → [ERROR: S in stderr
+```
+
+**Fix (2026-05-25).** Add null-guard for `fout_buf` in `errstreambuf::overflow` and `sync` in `main.cpp`:
+```cpp
+// In overflow(), before the fout_buf writes:
+if (fout_buf == nullptr) {
+    new_line = false;
+    if (c == '\n') new_line = true;
+    return c;
+}
+// In sync():
+if (fout_buf == nullptr) return 0;
+```
+
+**Files changed (2026-05-25):**
+- `src/iqtree3-mode-p-iso-base/main/main.cpp` — null-guard added (both `overflow` and `sync`)
+- `src/iqtree3-mode-p-iso-p3/main/main.cpp` — same
+
+**Base binary rebuild submitted as job 169131254.** ISO-1 to resubmit after rebuild completes.
+
+**Lesson.** This is a pre-existing bug in IQ-TREE's stream multiplexing: `errstreambuf` (the cerr→cerr+logfile tee) is globally installed for all MPI ranks, but the log-file streambuf (`fout_buf`) is only initialized for the master. Any cerr write from a worker rank crashes. The Mode P `[Mode P] rank N` diagnostic is the first such write — it exposed the bug. The fix is minimal: guard against null `fout_buf` rather than restructuring the log-file architecture.
+
