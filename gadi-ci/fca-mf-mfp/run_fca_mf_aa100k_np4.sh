@@ -46,6 +46,7 @@ cd "${WORK_DIR}"
 if command -v module >/dev/null 2>&1; then
     module load openmpi/4.1.7              2>/dev/null || true
     module load intel-compiler-llvm/2025.3.2 2>/dev/null || true
+    module load linaro-forge/24.0.2          2>/dev/null || true
 fi
 
 [[ -x "${IQTREE}" ]]    || { echo "ERROR: binary not found: ${IQTREE}" >&2; exit 2; }
@@ -93,7 +94,9 @@ echo "╚═══════════════════════�
 BASE_DIR="${WORK_DIR}/base_np1"; mkdir -p "${BASE_DIR}"
 echo ""
 echo "── Sub-run BASE (np=1, -m ${MODEL_FLAG}) ──────────────────────────────────"
+BASE_PROFILE="${BASE_DIR}/perf_report"
 START_BASE=$(date +%s)
+perf-report --no-mpi --output="${BASE_PROFILE}" \
 mpirun -np 1 \
     --host "${HOSTS[0]}" \
     --bind-to none \
@@ -112,7 +115,9 @@ FCA_DIR="${WORK_DIR}/fca_np4"; mkdir -p "${FCA_DIR}"
 RANK_LOGS="${FCA_DIR}/rank_logs"; mkdir -p "${RANK_LOGS}"
 echo ""
 echo "── Sub-run FCA (np=4, -m ${MODEL_FLAG}) ───────────────────────────────────"
+FCA_PROFILE="${FCA_DIR}/perf_report"
 START_FCA=$(date +%s)
+perf-report --no-mpi --output="${FCA_PROFILE}" \
 mpirun -np "${NRANKS}" \
     --hostfile "${HOSTFILE}" \
     --mca rmaps_base_mapping_policy "" \

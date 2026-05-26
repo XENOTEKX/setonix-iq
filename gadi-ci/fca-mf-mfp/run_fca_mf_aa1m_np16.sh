@@ -40,6 +40,7 @@ cd "${WORK_DIR}"
 if command -v module >/dev/null 2>&1; then
     module load openmpi/4.1.7              2>/dev/null || true
     module load intel-compiler-llvm/2025.3.2 2>/dev/null || true
+    module load linaro-forge/24.0.2          2>/dev/null || true
 fi
 
 [[ -x "${IQTREE}" ]]    || { echo "ERROR: binary not found: ${IQTREE}" >&2; exit 2; }
@@ -84,7 +85,9 @@ echo "╚═══════════════════════�
 
 RANK_LOGS="${WORK_DIR}/rank_logs"; mkdir -p "${RANK_LOGS}"
 
+PROFILE_REPORT="${WORK_DIR}/perf_report"
 START=$(date +%s)
+perf-report --no-mpi --output="${PROFILE_REPORT}" \
 mpirun -np "${NRANKS}" \
     --hostfile "${HOSTFILE}" \
     --mca rmaps_base_mapping_policy "" \
