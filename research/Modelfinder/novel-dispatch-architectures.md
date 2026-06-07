@@ -2,8 +2,10 @@
 
 **Author:** as1708 (with research synthesis by Claude Opus 4.7)
 **Date:** 2026-05-26
-**Status:** Design proposal — supersedes Mode P / MPGC / P.7 (failed) as the next architecture milestone.
+**Status:** Superseded by [event-driven-moldable-dispatch.md](event-driven-moldable-dispatch.md) after ATMD-AID v2 failed P.7 (job 169343365) with a Phase 0 `+G4`/`+F+G4` bottleneck.
 **Scope:** AA & DNA workloads, 100K – 10M unique patterns, np=2 – np=64.
+
+> **2026-05-27 reset:** keep this document as the ATMD-AID design/failure record. The active next architecture is Event-Driven Moldable Dispatch (EDM): a task-DAG scheduler with short moldable epochs, explicit rate-filter events, and per-task group-size selection. Do not continue tuning the ATMD-AID heavy/light threshold as the primary path to P.7.
 
 ---
 

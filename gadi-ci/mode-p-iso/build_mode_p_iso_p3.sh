@@ -143,7 +143,15 @@ if [[ "${AID_HEADER}" -lt 5 ]] || [[ "${AID_CPP}" -lt 10 ]] || [[ "${AID_CLI}" -
     echo "ERROR: ATMD-AID dispatch fix missing (header=${AID_HEADER}, cpp=${AID_CPP}, cli=${AID_CLI}; expect header≥5, cpp≥10, cli≥3)." >&2
     exit 4
 fi
-echo "[preflight] OK: P.1+P.2 present, P.3 patches applied (${P3_HITS}), P.4 patches applied (${P4_HITS}), P.5a patches applied (${P5A_HITS}), P.6-lite present, B.4-9 fixes applied (kernel=${B49_KERNEL_HITS}, EM=1), B.4-14 fix applied (header=${B414_HEADER}, cpp=${B414_CPP}), B.4-15 fix applied (header=${B415_HEADER}, cpp=${B415_CPP}, setComm=${B415_SETCOMM}), Architecture C applied (${ARCH_C}), ATMD-AID applied (header=${AID_HEADER}, cpp=${AID_CPP}, cli=${AID_CLI})."
+# EDM (Event-Driven Moldable Dispatch): v0 scheduler scaffold and CLI.
+EDM_HEADER=$(grep -c 'edmScheduleInitialEpochs' "${SRC_DIR}/main/phylotesting.h")
+EDM_CPP=$(grep -c 'edmScheduleInitialEpochs\|EDM-DIAG\|edm_active' "${SRC_DIR}/main/phylotesting.cpp")
+EDM_CLI=$(grep -c 'mf_edm_enabled\|--mf-edm' "${SRC_DIR}/utils/tools.h" "${SRC_DIR}/utils/tools.cpp" | awk -F: '{s+=$NF} END{print s+0}')
+if [[ "${EDM_HEADER}" -lt 1 ]] || [[ "${EDM_CPP}" -lt 5 ]] || [[ "${EDM_CLI}" -lt 3 ]]; then
+    echo "ERROR: EDM v0 scheduler missing (header=${EDM_HEADER}, cpp=${EDM_CPP}, cli=${EDM_CLI}; expect header≥1, cpp≥5, cli≥3)." >&2
+    exit 4
+fi
+echo "[preflight] OK: P.1+P.2 present, P.3 patches applied (${P3_HITS}), P.4 patches applied (${P4_HITS}), P.5a patches applied (${P5A_HITS}), P.6-lite present, B.4-9 fixes applied (kernel=${B49_KERNEL_HITS}, EM=1), B.4-14 fix applied (header=${B414_HEADER}, cpp=${B414_CPP}), B.4-15 fix applied (header=${B415_HEADER}, cpp=${B415_CPP}, setComm=${B415_SETCOMM}), Architecture C applied (${ARCH_C}), ATMD-AID applied (header=${AID_HEADER}, cpp=${AID_CPP}, cli=${AID_CLI}), EDM v0 applied (header=${EDM_HEADER}, cpp=${EDM_CPP}, cli=${EDM_CLI})."
 
 # ── cmaple disables ───────────────────────────────────────────────────
 CMAPLE_CML="${SRC_DIR}/cmaple/CMakeLists.txt"
@@ -154,7 +162,7 @@ if [[ -f "${CMAPLE_CML}" ]]; then
     if grep -qE '^[[:space:]]*add_subdirectory\(unittest\)' "${CMAPLE_CML}"; then
         sed -i 's|^\([[:space:]]*\)add_subdirectory(unittest)|\1# add_subdirectory(unittest) # Gadi: disabled|' "${CMAPLE_CML}"
     fi
-    if grep -qE 'FetchContent_MakeAvailable\(googletest\)' "${CMAPLE_CML}"; then
+    if grep -qE '^FetchContent_MakeAvailable\(googletest\)$' "${CMAPLE_CML}"; then
         sed -i '/^include(FetchContent)$/,/^FetchContent_MakeAvailable(googletest)$/ s|^|# GADI-DISABLED: |' "${CMAPLE_CML}"
     fi
 fi
@@ -163,21 +171,49 @@ ARCH_FLAGS="-O3 -march=sapphirerapids -mtune=sapphirerapids -fopenmp"
 EXTRA="-fno-omit-frame-pointer -g"
 
 # ── Configure & build ──────────────────────────────────────────────────
-echo "[build] ── configuring ${BUILD_DIR} ──"
-rm -rf "${BUILD_DIR}"
+# Incremental-build logic: only re-run cmake if the cache is absent or stale.
+# Preserving the build dir avoids the cmake C/CXX compiler-detection hang that
+# occurs when the intel-compiler-llvm module is slow to respond on compute nodes.
+# Force a full reconfigure by setting IQTREE_FORCE_RECONFIGURE=1 in the environment.
+FORCE_RECONFIGURE="${IQTREE_FORCE_RECONFIGURE:-0}"
+NEED_CMAKE=0
+if [[ "${FORCE_RECONFIGURE}" == "1" ]]; then
+    echo "[build] IQTREE_FORCE_RECONFIGURE=1 — full reconfigure requested"
+    NEED_CMAKE=1
+elif [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+    echo "[build] CMakeCache.txt absent — fresh configure"
+    NEED_CMAKE=1
+elif [[ ! -f "${BUILD_DIR}/model/libmodel.a" && ! -f "${BUILD_DIR}/iqtree3-mpi" ]]; then
+    echo "[build] No build artefacts found despite cache — reconfigure"
+    NEED_CMAKE=1
+fi
+
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
-CC="${CC}" CXX="${CXX}" cmake "${SRC_DIR}" \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DIQTREE_FLAGS=mpi \
-    -DIQTREE_ATMD=ON \
-    -DEIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR}" \
-    -DBOOST_ROOT="${BOOST_ROOT}" \
-    -DBoost_NO_SYSTEM_PATHS=ON \
-    -DCMAKE_C_FLAGS="${ARCH_FLAGS} ${EXTRA}" \
-    -DCMAKE_CXX_FLAGS="${ARCH_FLAGS} ${EXTRA}" \
-    -DCMAKE_EXE_LINKER_FLAGS="-fopenmp" 2>&1 | tee "${LOG_DIR}/cmake-p3.log"
+if [[ "${NEED_CMAKE}" == "1" ]]; then
+    echo "[build] ── cmake configure ──"
+    # Only wipe the build dir when doing a full reconfigure to avoid stale artefacts.
+    if [[ "${FORCE_RECONFIGURE}" == "1" || ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+        # Safe to wipe: either forced or cache was absent anyway.
+        find "${BUILD_DIR}" -mindepth 1 -maxdepth 1 -not -name '.build-info.json' \
+             -exec rm -rf {} + 2>/dev/null || true
+    fi
+    CC="${CC}" CXX="${CXX}" cmake "${SRC_DIR}" \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DIQTREE_FLAGS=mpi \
+        -DIQTREE_ATMD=ON \
+        -DEIGEN3_INCLUDE_DIR="${EIGEN3_INCLUDE_DIR}" \
+        -DBOOST_ROOT="${BOOST_ROOT}" \
+        -DBoost_NO_SYSTEM_PATHS=ON \
+        -DCMAKE_C_FLAGS="${ARCH_FLAGS} ${EXTRA}" \
+        -DCMAKE_CXX_FLAGS="${ARCH_FLAGS} ${EXTRA}" \
+        -DCMAKE_EXE_LINKER_FLAGS="-fopenmp" 2>&1 | tee "${LOG_DIR}/cmake-p3.log"
+    # cmake exit code check (tee swallows it; re-check via pipefail or manual test)
+    [[ -f CMakeCache.txt ]] || { echo "ERROR: cmake configure failed — CMakeCache.txt not produced." >&2; exit 4; }
+else
+    echo "[build] ── incremental build (cmake cache reused) ──"
+fi
 
 JOBS="${IQTREE_BUILD_JOBS:-$(nproc)}"
 echo "[build] ── make -j${JOBS} ──"
@@ -205,8 +241,8 @@ echo "[build] md5: ${MD5}"
 cat > "${BUILD_DIR}/.build-info.json" <<EOF
 {
   "build_tag":     "mode_p_iso_p3",
-  "phases":        ["P.1 scaffolding", "P.2 partition wiring", "P.3 kernel Allreduce"],
-  "kernel":        "computeLikelihoodBranch{,Generic}SIMD: limits-shift + Allreduce",
+    "phases":        ["P.1 scaffolding", "P.2 partition wiring", "P.3 kernel Allreduce", "EDM v0 scheduler scaffold"],
+    "kernel":        "computeLikelihoodBranch{,Generic}SIMD: limits-shift + Allreduce; EDM v0 uses existing Mode-P lattice epochs",
   "binary_name":   "${BINARY_NAME}",
   "md5":           "${MD5}",
   "source_dir":    "${SRC_DIR}",

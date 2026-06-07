@@ -1,0 +1,51 @@
+{
+  "run_id": "gadi_DNA_1m_r1r2avx512_seed1_170148474",
+  "label": "DNA_1m_r1r2avx512_seed1",
+  "platform": "gadi",
+  "run_type": "r1r2_avx512_mtest_np1",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy",
+  "dataset_short": "complex_dna_1m",
+  "data_type": "DNA",
+  "seq_len": 1000000,
+  "n_taxa": 100,
+  "np": 1,
+  "threads": 103,
+  "seed": 1,
+  "mf_mode": "-m TEST",
+  "binary": "/scratch/rc29/as1708/iqtree3-r1r2/build-icx-r1r2-avx512/iqtree3-r1r2",
+  "binary_md5": "9b60d9d24c27d44fa001acc90e300284",
+  "binary_note": "R1+R2+AVX-512 (gadi-spr-r2-avx512 @ 07966e4 + 0004-thp patch): schedule(static)+NUMA+cmake P2+P3+THP madvise, non-MPI, ICX 2025.3.2",
+  "summary": {
+    "pass": 1,
+    "all_pass": true,
+    "lnL": -59208019.212,
+    "model": "F81+F+G4",
+    "mf_wall_s": 2822.986,
+    "total_wall_s": 5424.184,
+    "lnL_delta_vs_ref": 0.0,
+    "parity_checks": {
+      "exit_0": true,
+      "lnL_parity": true,
+      "model_F81+G4": true
+    }
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "pbs": {
+      "job_id": "170148474.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "104",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "r1_avx512_icx_spr_nonmpi",
+  "headline_table_row": "R1+R2+AVX512 DNA-1M",
+  "compares_to": {
+    "aa_100k_r1r2_avx512": "170139976 (AA 100K, MF=221.594s)",
+    "dna_1m_fca_np1_nows": "168913091 (DNA 1M FCA no-WS np=1, MF=5121.153s)",
+    "dna_1m_fca_np8_nows": "168592214 (DNA 1M FCA no-WS np=8, MF=1274.686s)",
+    "dna_1m_spr_baseline": "168425675 (DNA 1M SPR ref, total=6114.5s)"
+  }
+}

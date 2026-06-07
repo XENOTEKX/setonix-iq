@@ -51,8 +51,9 @@ NRANKS=16
 OMP_PER_RANK="${OMP_PER_RANK:-103}"
 SEED="${SEED:-1}"
 
-# Expected binary: ATMD-AID canonical checkpoint/warm-start sync fix.
-EXPECTED_MD5="3e79db194ced77971a55c6a0ff476863"
+# Expected binary: ATMD-AID v2 — empirical cost predictor + gs=2 LPT-collapse.
+# (Override via env var EXPECTED_MD5 once new build's md5 is known.)
+EXPECTED_MD5="${EXPECTED_MD5:-0c493bd5ebaa06a72348ddafec3ae1a2}"
 
 PBS_ID_SHORT="${PBS_JOBID:-local_$(date +%Y%m%d_%H%M%S)}"; PBS_ID_SHORT="${PBS_ID_SHORT%%.*}"
 LABEL="p7_p3_aa1m_np16_seed${SEED}"

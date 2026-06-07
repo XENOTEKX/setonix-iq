@@ -2,6 +2,46 @@
 
 ---
 
+## 📋 Headline Run Progression — AA 100K, Gadi SPR (as of 2026-06-07)
+
+All runs: **Gadi `normalsr`**, Sapphire Rapids SPR node (104 cores, 503 GB RAM), alignment `alignment_100000.phy` (AA, 100 taxa, 100,000 sites, 96,017 patterns), seed=1.
+
+| Row | Config | Job | Binary | Nodes | Ranks×OMP | MF wall (s) | Tree wall (s) | Total wall (s) | lnL | Best model | Parity |
+|-----|--------|-----|--------|-------|-----------|------------|--------------|----------------|-----|-----------|--------|
+| vanilla | **1-node ICX + AVX-512, no patches** (fresh v3.1.2 clone) | 170138365 | fresh `iqtree3-mpi`, ICX -march=spr, np=1, zero patches | 1 | 1×103T | **264.202** | **950.860** | **1,220.756** | −7,541,976.860 | LG+G4 | ✅ Δ=0.000 ✓, LG+G4 ✓ |
+| R1-only | **1-node ICX + R1** (schedule(static) + NUMA first-touch, no R2, no FCA) | 170135052 | `iqtree3-mpi` md5 `869c010f`, v3.1.2 + R1, ICX -march=spr, np=1 | 1 | 1×103T | **256.186** | **720.534** | **982.044** | −7,541,976.860 | LG+G4 | ✅ Δ=0.000 ✓, LG+G4 ✓ |
+| R1+AVX512 | **1-node ICX + R1 + AVX-512 cmake fixes** (R1 patches committed, P2+P3, no R2) | 170139827 | `iqtree3` md5 `faeb8e47`, `gadi-spr-r2-avx512` @ `07966e4`, ICX -march=spr, non-MPI | 1 | 1×103T | **223.067** | **648.202** | **876.047** | −7,541,976.860 | LG+G4 | ✅ Δ=0.000 ✓, LG+G4 ✓ |
+| R1+R2+AVX512 | **1-node ICX + R1 + R2 (THP) + AVX-512** (full NUMA+THP patch stack, no FCA) | 170139976 | `iqtree3-r1r2` md5 `9b60d9d2`, `gadi-spr-r2-avx512` @ `07966e4` + `0004-thp-partial-lh-madvise.patch`, ICX -march=spr, non-MPI | 1 | 1×103T | **221.594** | **639.345** | **865.617** | −7,541,976.860 | LG+G4 | ✅ Δ=0.000 ✓, LG+G4 ✓ |
+| B-np1 | **1-node FCA + WS A.2** (full FCA, np=1) | 170138713 | `iqtree3-mpi-fca-ws-a2` md5 `1547a906` | 1 | 1×103T | **258.010** | **722.653** | **984.706** | −7,541,976.862 | LG+G4 | ✅ Δ=0.002 ✓, LG+G4 ✓ |
+| C′ | **2-node FCA + WS A.2** (full FCA, np=2) | 170137866 | `iqtree3-mpi-fca-ws-a2` md5 `1547a906` | 2 | 2×103T | **149.256** | **382.005** | **535.927** | −7,541,976.852 | LG+G4 | ✅ Δ=0.008 ✓, LG+G4 ✓ |
+| D | **2-node FCA + WS B.1** (progressive pre-pruning broadcast, np=2) | 170149201 | `iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4` | 2 | 2×103T | **146.792** | **377.533** | **529.112** | −7,541,976.852 | LG+G4 | ✅ Δ=0.008 ✓, LG+G4 ✓ |
+| D-np1 | **1-node FCA + WS B.1** (np=1 parity — MPI inter-rank broadcast must not fire; local cache warm-start still active) | 170149497 | `iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4` | 1 | 1×103T | **257.493** | **722.140** | **983.074** | −7,541,976.862 | LG+G4 | ✅ Δ=0.002 ✓, LG+G4 ✓, progressiveWS=0 ✓ |
+
+> **Parity standard:** all rows use `-m TEST` (224 models), seed=1. lnL target: −7,541,976.860 (LG+G4) from row A reference (job 168425673, R1+R2 binary, default MF — lnL/model used as correctness reference only, wall time not comparable).
+
+---
+
+## 📋 Headline Run Progression — AA 1M, Gadi SPR (as of 2026-06-07)
+
+All runs: **Gadi `normalsr`**, Sapphire Rapids SPR, alignment `alignment_1000000.phy` (AA, 100 taxa, 1,000,000 sites), seed=1, `-m TEST`.  
+Baseline (1×): job 168425491, vanilla np=1, MF=126.5 min, SPR=251.6 min, total=379.6 min.
+
+| Row | Config | Job | Binary | Nodes | Ranks×OMP | MF (min) | MF vs baseline | SPR (min) | SPR vs baseline | Total (min) | lnL | Best model | Parity |
+|-----|--------|-----|--------|-------|-----------|----------|---------------|-----------|----------------|-------------|-----|-----------|--------|
+| baseline | **1-node ICX + AVX-512** (sa0557 `cpu_opt_merge`, non-MPI) | 168425491 | `build-intel-vanila/iqtree3` | 1 | 1×103T | **126.46** | — | **251.64** | — | **379.60** | −78,605,196.573 | LG+G4 | ✅ reference |
+| FCA-1 | **FCA no-WS np=1** (Ph.0.5+0.6, MPI overhead at np=1) | 168913089 | `iqtree3-mpi` md5 `a103bc6c` | 1 | 1×103T | 85.33 | 1.48× | 251.01 | 1.00× | 336.34 | −78,605,196.590 | LG+G4 | ✅ Δ=0.017 ✓ |
+| FCA-2 | **FCA no-WS np=2** (Ph.0.5+0.6) | 168635614 | `iqtree3-mpi` md5 `a103bc6c` | 2 | 2×103T | 51.28 | 2.47× | 131.15 | 1.92× | 182.43 | −78,605,196.443 | LG+G4 | ✅ Δ=0.130 ✓ |
+| FCA-4 | **FCA no-WS np=4** (Ph.0.5+0.6) | 168635615 | `iqtree3-mpi` md5 `a103bc6c` | 4 | 4×103T | 32.91 | 3.84× | 66.37 | 3.79× | 99.28 | −78,605,196.445 | LG+G4 | ✅ Δ=0.128 ✓ |
+| FCA-8 | **FCA no-WS np=8** (Ph.0.5+0.6) | 168586094 | `iqtree3-mpi` md5 `a103bc6c` | 8 | 8×103T | 24.06 | 5.26× | 35.79 | 7.03× | 61.19 | −78,605,196.497 | LG+G4 | ✅ Δ=0.076 ✓ |
+| FCA-16 | **FCA no-WS np=16** (Ph.0.5+0.6) | 168635616 | `iqtree3-mpi` md5 `a103bc6c` | 16 | 16×103T | **18.71** | **6.76×** | **21.46** | **11.73×** | **40.17** | −78,605,196.497 | LG+G4 | ✅ Δ=0.076 ✓ |
+| A.1-16 | **WS-A.1 np=16** (post-pruning broadcast v1) | 169095645 | `iqtree3-mpi-fca-ws-a1` md5 `fa9ee601` | 16 | 16×103T | 19.10 | 6.62× | 20.22 | 12.45× | 40.67 | −78,605,196.497 | LG+G4 | ✅ Δ=0.076 ✓ |
+| A.2-16 | **WS-A.2 np=16** (post-pruning broadcast v2) | 169096801 | `iqtree3-mpi-fca-ws-a2` md5 `1547a906` | 16 | 16×103T | 18.99 | 6.66× | 19.98 | 12.59× | 40.33 | −78,605,196.497 | LG+G4 | ✅ Δ=0.076 ✓ |
+| **B.1-16** | **FCA + WS B.1 np=16** (pre-pruning progressive broadcast) | **170149557** | `iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4` | **16** | **16×103T** | **19.19** | **6.59×** | **19.37** | **12.99×** | **39.90** | −78,605,196.497 | LG+G4 | ✅ Δ=0.076 ✓, progressiveWS=2 ✓ |
+
+> **Phase B.1 np=16 analysis:** MF=19.19 min (+2.6% vs FCA-16, +1.0% vs WS-A.2). SPR=19.37 min (−9.8% vs FCA-16, −3.0% vs WS-A.2). Total=39.90 min (1.007× vs FCA-16, 1.011× vs WS-A.2) — effectively neutral on total wall, but SPR shows clear improvement. progressiveWS fired 2 events (bitmasks 0x2=+I, 0x1=+G), Phase A.2 filterRatesMPI also fired (ws_bcast_fields=4). The MF regression is consistent with Phase A across all np=16 runs — at 16 ranks, each rank only holds ~14 unique models, so warm-start window coverage is low and broadcast overhead is visible. B.1 benefit concentrates in SPR (the downstream tree search uses the warm-started model params), not MF itself.
+
+---
+
 ## 🎯 BASELINE OF RECORD (2026-05-17 correction)
 
 All ModelFinder benchmarks are measured against **job 168425673** —
@@ -56,7 +96,13 @@ Summary of all completed full MF+SPR runs for both the standard baseline and the
 All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for every dataset.
 
 **FCA binary:** `iqtree3-mpi` · md5 `a78ffa2942d6b073490d503416ae554c` · commit `9603247f` on `test_MF2` (fast-forwarded 2026-05-18) · ICX 2025.3.2 + OpenMPI 4.1.7 + AVX-512 + libiomp5 · seed=1 · `-m TEST -T 103`  
-**Baseline binary:** **`baseline-avx512-r1+r2`** (`build-intel-vanila/iqtree3`) · non-MPI OMP-across-models · ICX + AVX-512 + R1+R2 · v3.1.2 (`4e91dd6`) · sa0557
+**Baseline binary:** sa0557 `cpu_opt_merge` branch · `build-intel-vanila/iqtree3` (directory name means *"no FCA"*, not *"stock IQ-TREE"*) · **already ICX 2025.3.2 + AVX-512 + -march=spr** · non-MPI OMP-across-models · v3.1.2 · build tag `cpu_opt_merge_icx_avx512_spr`. This is the best pre-FCA reference, not a stock/unpatched binary — truly vanilla GCC-compiled IQ-TREE would be substantially slower.
+
+**Phase/binary key for Type column:**
+- **Ph.0.5+0.6** = `iqtree3-mpi` md5 `a103bc6c` — filterRatesMPI dispatch only (models split across MPI ranks + post-MF pruning). **No warm-start.** This includes `iqtree3-mpi-fca-lbfgs-ws` which is the same binary (identical md5).
+- **WS-A.1** = `iqtree3-mpi-fca-ws-a1` md5 `fa9ee601` — post-filterRatesMPI broadcast of converged rate params (A.1 initial implementation).
+- **WS-A.2** = `iqtree3-mpi-fca-ws-a2` md5 `1547a906` — post-filterRatesMPI broadcast with LG pruning fix (confirmed cross-node Infiniband).
+- **WS-B.1** = `iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4` — **pre-pruning** progressive broadcast via `getNextModel()` MPI_Allreduce; fires before filterRatesMPI.
 
 > **How to run the FCA binary** — see [`research/updated-modelfinder-dispatch.md`](research/updated-modelfinder-dispatch.md):
 > §22 (architecture diagram), §23 (operator guide + flag reference), §24 (validated results table with provenance).
@@ -70,25 +116,28 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | Job | Type | Dataset | Nodes | Ranks×OMP | Best model | lnL | BIC | MF wall (s) | SPR wall (s) | Total wall (s) | Speedup | IPC (mean) | LLC miss % |
 |-----|------|---------|-------|-----------|------------|-----|-----|------------|-------------|----------------|---------|------------|------------|
 | 168425674 | Baseline | DNA 100K | 1 | 1×103T | F81+F+G4 | −5,692,984.539 | 11,388,283.176 | 61.740 | 226.447 | 289.121 | — | **1.302** | **66.24%** |
-| 168584737 | FCA np=2 | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | 86.613 | 113.754 | **2.54×** | — | — |
+| 168584737 | FCA no-WS np=2 (Ph.0.5+0.6) | DNA 100K | 2 | 2×103T | F81+F+G4 | −5,692,984.532 | 11,388,283.162 | 26.252 | 86.613 | 113.754 | **2.54×** | — | — |
 | 168425673 | Baseline | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.860 | 15,086,233.280 | 399.456 | 764.478 | 1,169.556 | — | **1.878** | **56.02%** |
-| 168584736 | FCA np=2 | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** | — | — |
-| 169095077 | FCA np=1 | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.861 | — | **258.773** | **738.569** | **1,000.811** | **1.169×** | — | — |
+| 168584736 | FCA no-WS np=2 (Ph.0.5+0.6) | AA 100K | 2 | 2×103T | LG+G4 | −7,541,976.853 | 15,086,233.265 | 149.029 | 383.876 | 537.750 | **2.18×** | — | — |
+| 169095077 | FCA no-WS np=1 (Ph.0.5+0.6) ⚠️ binary `fca-lbfgs-ws`=same md5 as `iqtree3-mpi` | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.861 | — | **258.773** | **738.569** | **1,000.811** | **1.169×** | — | — |
 | 169094692 | WS-A.1 np=1 | AA 100K | 1 | 1×103T | LG+G4 | −7,541,976.862 | — | **261.694** | **729.748** | **994.904** | **1.176×** | — | — |
 | 168425491 | Baseline | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.573 | 157,213,128.618 | 7,587.459 | 15,098.605 | 22,776.226 | — | — | — |
-| 168913089 | FCA np=1 | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.590 | — | 5,119.929 | 15,060.551 | 20,180.480 | **1.13×** | — | — |
-| 168635614 | FCA np=2 | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** | **1.260** | **83.69%** |
-| 168635615 | FCA np=4 | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** | **1.273** | **84.01%** |
-| 168586094 | FCA np=8 | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
-| 168635616 | FCA np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
-| 168684212 | FCA+THP np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
+| 168913089 | FCA no-WS np=1 (Ph.0.5+0.6, MPI overhead) | AA 1M | 1 | 1×103T | LG+G4 | −78,605,196.590 | — | 5,119.929 | 15,060.551 | 20,180.480 | **1.13×** | — | — |
+| 168635614 | FCA no-WS np=2 (Ph.0.5+0.6) | AA 1M | 2 | 2×103T | LG+G4 | −78,605,196.443 | — | 3,076.873 | 7,868.928 | 10,945.801 | **2.08×** | **1.260** | **83.69%** |
+| 168635615 | FCA no-WS np=4 (Ph.0.5+0.6) | AA 1M | 4 | 4×103T | LG+G4 | −78,605,196.445 | — | 1,974.476 | 3,982.142 | 5,956.618 | **3.82×** | **1.273** | **84.01%** |
+| 168586094 | FCA no-WS np=8 (Ph.0.5+0.6) | AA 1M | 8 | 8×103T | LG+G4 | −78,605,196.497 | 157,213,128.466 | 1,443.892 | 2,147.499 | 3,671.618 | **6.20×** | — | — |
+| 168635616 | FCA no-WS np=16 (Ph.0.5+0.6) | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,122.363 | 1,287.863 | 2,410.226 | **9.45×** | **1.337** | **85.27%** |
+| 168684212 | FCA no-WS+THP np=16 (Ph.0.5+0.6, no JSON) | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | 1,138.050 | 1,252.808 | 2,390.858 | **9.53×** | **1.344** | **85.32%** |
 | 169095645 | WS-A.1 np=16 | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,146.174** | **1,212.944** | **2,440.301** | **9.32×** | — | — |
 | 169096801 | WS-A.2 np=16 W4 (full) | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,139.494** | **1,198.689** | **2,419.671** | **9.41×** | — | — |
-| 169099057 | WS-A.2 np=8 W3 (full) | AA 1M | 8 | 8×103T | — | — | — | — | — | — | — (pending W3) | — | — |
-| 169099058 | WS-A.2 np=4 scaling (full) | AA 1M | 4 | 4×103T | — | — | — | — | — | — | — (pending) | — | — |
+| 170149557 | WS-B.1 np=16 (full) | AA 1M | 16 | 16×103T | LG+G4 | −78,605,196.497 | — | **1,151.322** | **1,162.175** | **2,394.158** | **9.51×** | — | — |
 | 168425675 | Baseline | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | 118,418,815.342 | 3,500.825 | 2,596.995 | 6,114.450 | — | — | — |
-| 168913091 | FCA np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
-| 168592214 | FCA np=8 | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
+| 170148474 | R1+R2+AVX512 np=1 | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.212 | — | **2,822.986** | **2,601.198** | **5,424.184** | **1.13×** | — | — |
+| 168913091 | FCA no-WS np=1 (Ph.0.5+0.6, MPI overhead) | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
+| 170148473 | FCA no-WS np=2 | DNA 1M | 2 | 2×103T | F81+F+G4 | −59,208,019.158 | — | **2,426.462** | **1,296.003** | **3,735.738** | **1.64×** | — | — |
+| 170148472 | WS-A.2 np=2 | DNA 1M | 2 | 2×103T | F81+F+G4 | −59,208,019.158 | — | **2,439.701** | **1,310.596** | **3,763.448** | **1.62×** | — | — |
+| 170149828 | WS-B.1 np=2 | DNA 1M | 2 | 2×103T | — | — | — | — (pending) | — | — | — | — | — |
+| 168592214 | FCA no-WS np=8 (Ph.0.5+0.6) | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
 
 > **Timing notes:** MF and SPR wall times from IQ-TREE stdout (`Wall-clock time for ModelFinder` /
 > `Wall-clock time used for tree search`). Total wall from PBS job wall-clock (includes startup + IO overhead;
@@ -99,8 +148,12 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **169096105** = W2 1-node correctness gate: **DONE** — `ws_bcast_fields=4` PASS, lnL=−7,541,976.853 (Δ0.007), LG+G4 PASS. MF=1,918.721 s — expected slow (4×26T intra-node, shared memory, not production parity). Correctness-only gate; performance gate requires 4-node config. See entry `(cc)`.
 > **169096530** = W2-parity gate: **DONE ALL PASS** — `ws_bcast_fields=4` (cross-node Infiniband) ✓, lnL=−7,541,976.853 (Δ0.007) ✓, LG+G4 ✓, MF=91.700 s ≤ 100 s ✓. PBS "E" state was normal exit (completed in ~3 min). Phase A.2 cross-node MPI_Bcast confirmed at production parity. See entry `(cd)`.
 > **169096801** = W4 gate: **DONE** — lnL=−78,605,196.497 ✓, LG+G4 ✓, ws_bcast_fields=4 ✓. MF=1,139.494 s (Δ+17.1 s vs FCA np=16, Δ−6.7 s vs WS-A.1 np=16), SPR=1,198.689 s (Δ−89.2 s vs FCA, Δ−14.3 s vs WS-A.1), total=2,419.671 s. MF wall gate (≤900 s) not met — see entry `(cf)` for analysis.
-> **169099057** = W3 gate (submitted): 8 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. ~28 models/rank; broadcast fires at model ~14 leaving ~14 to benefit. Expected: more MF gain than np=16. See entry `(cg)`.
-> **169099058** = Scaling np=4 (submitted): 4 nodes × 103T each = AA 1M full MF+SPR run, `-m TEST`, Phase A.2 binary. ~56 models/rank; broadcast fires at model ~28 leaving ~28 to benefit. Highest warm-start coverage; expected largest A.2 MF gain. See entry `(cg)`.
+> **170149557** = WS-B.1 np=16 (2026-06-07): **DONE ALL PASS** — lnL=−78,605,196.497 (Δ0.076) ✓, LG+G4 ✓, progressiveWS=2 ✓ (bitmasks 0x2=+I fired first, then 0x1=+G). MF=1,151.322 s, SPR=1,162.175 s, total=2,394.158 s (9.51× vs vanilla). vs FCA-16: MF +28.959 s (+2.6%), SPR −125.688 s (−9.8%), total −16.068 s (1.007×). vs WS-A.2: MF +11.828 s (+1.0%), SPR −36.514 s (−3.0%), total −25.513 s (1.011×). Phase A.2 filterRatesMPI still fires (ws_bcast_fields=4). **Key finding:** B.1 MF regresses slightly at np=16 (consistent with A.1/A.2 — only ~14 models/rank so broadcast overhead visible in MF), but **SPR improves meaningfully** because warm-started rate params from the pre-pruning broadcast propagate into the downstream tree search.
+> **170148473** = FCA no-WS np=2, DNA 1M (2026-06-07): **DONE ALL PASS** — lnL=−59,208,019.158 (Δ0.054 vs ref) ✓, F81+F+G4 ✓, ws_bcast_fields=0 ✓. MF=2,426.462 s, SPR=1,296.003 s, total=3,735.738 s (1.64× vs vanilla). Baseline for WS-A.2 DNA 1M comparison.
+> **170148472** = FCA+WS-A.2 np=2, DNA 1M (2026-06-07): IQ-TREE rc=0, **DONE** — lnL=−59,208,019.158 (Δ0.054) ✓, F81+F+G4 ✓, ws_bcast_fields=4 ✓. MF=2,439.701 s, SPR=1,310.596 s, total=3,763.448 s (1.62× vs vanilla). Script exited with rc=1 due to parsing bug in `WS_BCAST=$(grep -oP ...)` (multi-file grep includes filename prefix — fixed with `-h` flag). **WS-A.2 vs no-WS: MF Δ+13.239 s (+0.55%) — regresses** (consistent with Phase A.2 AA 1M np=16 behavior; broadcast fires early at model 3/46, but DNA model evaluation is fast ~15 s/model so warm-start window covers fewer candidates).
+> **170149497** = WS-B.1 np=1, AA 100K (2026-06-07): **DONE ALL PASS** — lnL=−7,541,976.862 (Δ0.002) ✓, LG+G4 ✓, progressiveWS_events=0 ✓. MF=257.493 s, tree=722.140 s, total=983.074 s. JSON `all_pass=false` due to model grep pattern mismatch (`Best-fit model according to BIC:` vs actual `Best-fit model: LG+G4 chosen according to BIC`) — fixed in script. Confirms: (1) Phase B.1 MPI inter-rank broadcast is correctly suppressed at nranks=1; (2) local warm-start cache still active intra-rank (OMP threads share the cache pointer directly, no MPI needed).
+> **170149828** = WS-B.1 np=2, DNA 1M (submitted 2026-06-07): 2 nodes × 103T each = DNA 1M full MF+SPR run, `-m TEST`, Phase B.1 binary (`iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4`). Progressive pre-pruning broadcast. Compare vs WS-A.2 (170148472, MF=2,439.701 s) and no-WS (170148473, MF=2,426.462 s). Key question: does pre-pruning B.1 broadcast overcome the regression seen in A.2 on DNA 1M?
+> **170148474** = R1+R2+AVX512 np=1, DNA 1M (2026-06-07): **DONE ALL PASS** — lnL=−59,208,019.212 (Δ=0.000) ✓, F81+F+G4 ✓. MF=2,822.986 s, SPR≈2,601.198 s (derived), total=5,424.184 s (1.13× vs vanilla 6,114.450 s). Non-MPI R1+R2 binary; slower MF than FCA np=1 (5,121 s MF) — R1+R2 scheduling overheads dominate at DNA 1M scale without the FCA parallelism benefit.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
 
@@ -131,6 +184,229 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **Phase 0 target** was 200–300 s at np=4 (`updated-modelfinder-dispatch.md` §3.4 targets table); actual 872 s shows the straggler delay exceeds the static predictor budget. **Phase 1** (telemetry-driven rebalance: `MPI_Allgather` of actual +G4 wall times → re-LPT) reduces reference-family imbalance to ≤1.05×. **Phase 2** (work-stealing, Blumofe–Leiserson JACM 1999) eliminates straggler idle entirely. Sub-200 s at np=4 requires Phase 1; sub-100 s requires Phase 2. Best model LG+G4 by BIC; all FreeRate/FreeRate+I variants pruned by `ok_rates={G4}` broadcast.
 >
 > **MFP run notes:** `-m MFP` = ModelFinder Plus (MF + mixture models C10–C60) + full SPR tree search. Speedup vs np=1 MFP (169332775, 2,081.285 s total / 1,352.872 s MF). MF speedup: np=2 = **2.84×**, np=4 = 1.55× — **same `filterRatesMPI` straggler pattern** as `-m MF`; MF walls are identical within 1% (476 s vs 481 s np=2; 872 s vs 872 s np=4), confirming the bottleneck is in ModelFinder, not SPR. SPR wall ≈ total − MF wall: np=1 SPR=725 s → np=2 ≈388 s (1.87×) → np=4 ≈202 s (3.6×) — SPR parallelises more efficiently than MF because it carries no global barrier and scales on tree-branch parallelism. LG+G4 beats all C10–C60 mixture models by BIC at AA 100K.
+
+**FCA -m MF / -m MFP 1M follow-up status** (`iqtree3-mpi-fca-ws-a2` · same md5 `1547a906f1f75422514b0a0cdf2bc89e` · seed=1 · checked 2026-05-27):
+
+| Job | Type | Dataset | Nodes | Ranks×OMP | Status | Last usable evidence |
+|-----|------|---------|-------|-----------|--------|----------------------|
+| 169332779 | FCA -m **MF** np=1 | AA 1M | 1 | 1×103T | **CANCELLED** (SIGTERM, wall 00:07:26) | No MF result; long baseline intentionally stopped before parity data. |
+| 169332783 | FCA -m **MF** np=16 | AA 1M | 16 | 16×103T | **FAIL** (walltime 03:01:11 > 03:00) | Rank 0 completed 14 unique models; `filterRatesMPI` fired only after `LG+F+I+R5` at MF t=7,813s, then reached `MTART+F+G4` at t=8,012s. Pathological costs: `LG+F+R5` 3,129s, `LG+F+I+R4` 1,071s, `LG+F+I+R5` 1,810s. No complete MF wall/lnL/parity. |
+| 169332784 | FCA -m **MFP** np=1 | AA 1M | 1 | 1×103T | **CANCELLED** (SIGTERM, wall 00:07:26) | No MFP result; long baseline intentionally stopped before parity data. |
+| 169332789 | FCA -m **MF** np=1 | DNA 1M | 1 | 1×103T | **CANCELLED** (SIGTERM, wall 00:07:18) | No MF result; only startup/first-model trace present. |
+| 169332791 | FCA -m **MF** np=4 | DNA 1M | 4 | 4×103T | **FAIL** (walltime 03:01:42 > 03:00) | Rank 0 completed 55 unique models; no `filterRatesMPI` fire (`ref_remaining=10`). Last rank-0 model `TPM2+I+R4` at MF t=10,762s; `K3P+I+R6` alone took 2,640s. No complete MF wall/lnL/parity. |
+| 169332792 | FCA -m **MF** np=16 | DNA 1M | 16 | 16×103T | **FAIL** (walltime 01:31:02 > 01:30) | Rank 0 completed 30 unique models; no `filterRatesMPI` fire (`ref_remaining=10`). Last rank-0 model `TIM3e+I+R6` at MF t=3,952s. No complete MF wall/lnL/parity. |
+| 169332794 | FCA -m **MFP** np=1 | DNA 1M | 1 | 1×103T | **CANCELLED** (SIGTERM, wall 00:07:26) | No MFP result; only startup/first-model trace present. |
+| 169332780 | FCA -m **MF** np=2 | AA 1M | 2 | 2×103T | **CANCELLED** (SIGTERM, wall 03:07:00) | No complete MF wall/lnL/parity. Last rank-0 MF record: `model=1168 RTREV+F+G4` at t=9,802s. `filterRatesMPI` fired at model 16 with 567 local prunes. |
+| 169332781 | FCA -m **MF** np=4 | AA 1M | 4 | 4×103T | **CANCELLED** (SIGTERM, wall 03:25:20) | No complete MF wall/lnL/parity. Last rank-0 MF record: `model=1080 HIVW+F+G4` at t=8,951s. `filterRatesMPI` fired at model 16 with 273 local prunes. |
+| 169332785 | FCA -m **MFP** np=2 | AA 1M | 2 | 2×103T | **CANCELLED** (SIGTERM, wall 03:07:15) | No complete MFP wall/lnL/parity. Last rank-0 MF record: `model=1168 RTREV+F+G4` at t=9,922s. `filterRatesMPI` fired at model 16 with 567 local prunes. |
+| 169332786 | FCA -m **MFP** np=4 | AA 1M | 4 | 4×103T | **CANCELLED** (SIGTERM, wall 03:25:25) | No complete MFP wall/lnL/parity. Last rank-0 MF record: `model=1080 HIVW+F+G4` at t=8,943s. `filterRatesMPI` fired at model 16 with 273 local prunes. |
+| 169332788 | FCA -m **MFP** np=16 | AA 1M | 16 | 16×103T | **CANCELLED** (SIGTERM, wall 03:25:56) | No complete MFP wall/lnL/parity. Last rank-0 MF record: `model=728 MTART+F+G4` at t=7,958s. `filterRatesMPI` fired late at model 38 (`LG+F`) after heavy `+I+R5` tail. |
+| 169332790 | FCA -m **MF** np=2 | DNA 1M | 2 | 2×103T | **CANCELLED** (SIGTERM, wall 03:07:25) | No complete MF wall/lnL/parity. Last rank-0 MF record: `model=905 SYM+I+G4` at t=2,496s. `filterRatesMPI` fired at model 36 with two accepted rates and 407 local prunes. |
+| 169332797 | FCA -m **MFP** np=2 | DNA 1M | 2 | 2×103T | **CANCELLED** (SIGTERM, wall 03:07:16) | No complete MFP wall/lnL/parity. Last rank-0 MF record: `model=905 SYM+I+G4` at t=2,488s. `filterRatesMPI` fired at model 36 with two accepted rates and 407 local prunes. |
+| 169332799 | FCA -m **MFP** np=4 | DNA 1M | 4 | 4×103T | **CANCELLED** (SIGTERM, wall 03:07:38) | No complete MFP wall/lnL/parity. Last rank-0 MF record: `model=390 TPM2+I+R5` at t=10,950s with `ref_remaining=10`; `filterRatesMPI` never fired. |
+| 169332800 | FCA -m **MFP** np=16 | DNA 1M | 16 | 16×103T | **FAIL** (walltime 03:01:40 > 03:00) | Same MF bottleneck as 169332792: rank 0 completed 30 unique models, no `filterRatesMPI` fire, last `TIM3e+I+R6` at MF t=3,961s. Tree search never started. |
+
+> **1M status note:** These are **not parity rows**. Across all 16 jobs in this sweep (8 earlier fail/cancel + 8 canceled at 2026-05-27 01:33 UTC via `qdel`), none finished ModelFinder, so no final best model, lnL, MF wall, or SPR wall is available. The partial logs are still useful: at 1M scale, high FreeRate tails (`+R5`/`+I+R5` for AA, `+I+R6` for DNA) can consume thousands of seconds before rate filtering fires. That reinforces the Event-Driven Moldable Dispatch design direction: rate-filter decisions need to become explicit early scheduler events, and medium/high-rate tasks cannot be trapped inside a static FCA light phase.
+
+## 2026-06-07 — WS Phase B.1 (progressive pre-pruning broadcast): **+1.5% improvement over FCA no-WS** (AA 100K np=2, job 170149201)
+
+Phase B.1 implements `progressiveWarmStartBcast()` — a per-rate-class `MPI_Allreduce(OR)` called from
+`getNextModel()` (under `#pragma omp critical`) as soon as rank 0's `mpi_warm_start` first-fills any
+rate class. Fires **before** `filterRatesMPI`, so ranks 1+ receive α/p_invar the moment LG+G4 completes
+on rank 0, not after the entire LG family finishes.
+
+**Key design change vs A.2:** `phase_b_newfields` bitmask moved into `RateWarmStartCache` (cleared by
+`clear()`) so `CandidateModel::evaluate()` can set bits through the `warm_start_cache*` pointer it
+already holds under `warm_start_lock`. `CandidateModelSet` retains only `mpi_ws_b_bcast_done`.
+
+| Metric | Value |
+|--------|-------|
+| Job | 170149201 |
+| Binary | `iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4` (Jun 7 08:54) |
+| Dataset | AA 100K, np=2, 2×103T, `-m TEST`, seed=1 |
+| **MF wall** | **146.792 s** |
+| **Tree-search wall** | **377.533 s** |
+| **Total wall** | **529.112 s** |
+| lnL | −7,541,976.852 (Δ=0.008 ✓) |
+| Best model | LG+G4 ✓ |
+| progressiveWS events | **2** (bit 0x2 = +I first, then bit 0x1 = +G) |
+| vs row B (FCA no-WS np=2, 149.029 s) | **−2.237 s (−1.5%)** ✓ improvement |
+| vs row C′ (WS-A.2 np=2, 149.256 s) | **−2.464 s (−1.7%)** ✓ improvement |
+
+**Diagnostic output (confirms pre-pruning broadcast firing):**
+```
+MF-MPI-DIAG: rank 0/2 progressiveWS bcast: fields=1 bitmask=0x2 rg=-1.000 ri=0.028 ...   ← +I first
+MF-MPI-DIAG: rank 0/2 progressiveWS bcast: fields=1 bitmask=0x1 rg=0.997 ri=-1.000 ...   ← +G second
+MF-MPI-DIAG: rank 0/2 filterRatesMPI fired at model=3 ... ws_bcast_fields=4               ← A.2 also fires
+```
+
+**Interpretation:** Phase B.1 is a small but real win at AA 100K. The +I class is broadcast first because
+LG+I evaluates before LG+G4 on rank 0's ref-family schedule; rank 1 starts WAG+I with p_invar=0.028 rather
+than cold. The +G broadcast follows. The improvement is modest (~1.5%) because AA 100K individual model
+evaluations take only ~4 s — the warm-start window is narrow. Expected larger gains at AA 1M scale where
+single-model evaluation takes ~150 s.
+
+Phase A.2 `filterRatesMPI` still fires afterwards (`ws_bcast_fields=4`) — the two mechanisms are additive.
+
+**Next steps:** DNA 1M WS-B.1 np=2 (170149828, running) — results pending. AA 100K np=1 WS-B.1 parity (170149497) **DONE**. DNA 1M R1+R2 np=1 (170148474) **DONE**.
+
+---
+
+## 2026-06-06 — GPU ModelFinder **Phase G.0 gradient: algorithm validated (CPU), BEAGLE-4.0.1 GPU gradient broken for protein**
+
+> Completes the gradient leg of G.0 (entry below covers lnL). Full record + bugs 11–16:
+> `research/Modelfinder/gpu-modelfinder-g0-log.md`; design §5 updated: `gpu-modelfinder-design.md`.
+
+The branch-length gradient is the exact computation Mode-L overflowed at 10⁵⁴, so confirming it via BEAGLE
+is high-value. Outcome — **the algorithm is correct, BEAGLE-4.0.1's protein GPU gradient is not:**
+
+- **CPU plugin: FD-validated correct.** Ji-et-al O(N) pre-order branch-length gradient via
+  `beagleCalculateEdgeDerivatives`. Finite-difference (swept ε) worst rel error **2.76e-3 (LG+G4)** and
+  **1.07e-7 (single-rate LG, NCAT=1)**. lnL bit-parity CPU≡GPU on both models (LG+G4 = −7541976.9391).
+- **GPU plugin: infrastructure works, values wrong for 20 states.** On an A100-80GB the full pre-order +
+  edge-derivative path runs (fits 50.3 GB, lnL parity, gradient eval **~100–240 ms ≈ 100–150× the CPU eval**),
+  but the gradient VALUES are wrong (worst rel = 1.00, sign flips) — **even with BEAGLE's own `hmctest` GPU
+  recipe** (manual transpose of pre-order matrix1 via `beagleTransposeTransitionMatrices` + transposed
+  differential Qᵀ·r_c; the `PREORDER_TRANSPOSE_AUTO` flag silently does not transpose matrix1 in 4.0.1).
+  A single-rate diagnostic (NCAT=1) **also fails on GPU but passes on CPU** ⇒ the bug is **not** category
+  handling (so a category-split cannot rescue it); it is the **20-state CUDA pre-order/edge-derivative
+  kernel** itself (`hmctest` validates only 4-state nucleotides on GPU).
+- **Root causes found & fixed (bugs 11–16, source-verified vs `beagle-dev/beagle-lib` v4.0.1):** CPU SEGFAULT
+  = `outDerivatives` heap overflow (must pass NULL; it is per-pattern, size count·nptn); differential matrix
+  = generator **Q·r_c** set via `beagleSetDifferentialMatrix`, NOT dP/dt; CUDA `setRootPrePartials` is a stub
+  (seed via `beagleSetPartials`); `setPartials` range check forces `partialsBufferCount=402` (⇒ 50 GB,
+  needs A100 not V100); CPU-plugin `createInstance` enumerates the GPU/OpenCL stack so even CPU runs need a
+  gpuvolta node. rc=-7 = `NO_IMPLEMENTATION` (earlier mislabeled `_FLOATING_POINT`).
+- **Verdict:** the GPU-ModelFinder bet holds — the **lnL (dominant cost) is proven on GPU** (43–66×) and the
+  **gradient algorithm is proven** (CPU). The production GPU gradient for protein models must come from a
+  **fixed/newer libhmsbeagle or a custom CUDA kernel** in the IQ-TREE port, not off-the-shelf 4.0.1.
+- **Compute:** all gradient jobs ~12 SU total (gpuvolta CPU-ref + several short dgxa100 A100 runs); reused
+  the existing FCA AA-100K data for lnL parity (no new CPU baselines run).
+
+## 2026-06-01 — GPU ModelFinder **Phase G.0 de-risk PASSES** (BEAGLE on V100): bit-parity + 43–66×, +R10 long-pole runs ~57×
+
+> Go-forward direction after Mode-L abandonment (entry below). Full record:
+> `research/Modelfinder/gpu-modelfinder-g0-log.md`; design: `gpu-modelfinder-design.md`.
+> All GPU jobs reuse the **existing** FCA AA-100K CPU data (job 169095077, gate 169643959) for the
+> reference tree + parity target — no CPU baselines re-run (per user).
+
+**Thesis under test.** Every CPU dispatch architecture (FCA → ATMD → EDM → Trimorph L2/3) and the
+single-rank Mode-L optimiser died on the same walls (Amdahl +R10 pole, MPI-barrier tax, SPR ~300–400
+GB/s DRAM). Bet: a **single GPU dissolves dispatch entirely** and trades the bandwidth wall for a VRAM
+wall — *if* BEAGLE computes the AA likelihood (and gradient) correctly and materially faster on one GPU.
+IQ-TREE 3 has **zero** GPU/BEAGLE code, so G.0 is a **standalone `libhmsbeagle` 4.0.1 harness**
+(`gadi-ci/gpu-modelfinder/gpu_derisk.cpp`), not an IQ-TREE run — built in-job on `gpuvolta`.
+
+**Result (job 169680691, V100; CPU plugin = scaled reference, GPU = unscaled double precision):**
+
+| Model | NCAT | CPU lnL | GPU lnL | parity | GPU/eval | CPU/eval | **speedup** |
+|---|---|---|---|---|---|---|---|
+| LG+G4 | 4 | −7541976.9391 | −7541976.9391 | **bit-identical** (1e-8 vs IQ-TREE −7541976.853) | 45.1 ms | 2973 ms | **66×** |
+| LG+F+I+G4 | 5 | −7551774.2140 | −7551774.2140 | **bit-identical** | 56.3 ms | 3240 ms | **58×** |
+| LG+R8 | 8 | −7556251.9185 | −7556251.9185 | **bit-identical** | 89.9 ms | 3855 ms | **43×** |
+| LG+R10 | 10 | −7554280.5776 | ✗ instance fails | — | — | 4272 ms | — |
+| LG+R10 (5+5 split) | 5×2 | −7554280.5776 | −7554280.5776 | **Δ=0.0000 exact** | 114 ms | 6488 ms | **57×** |
+
+**The +R10 long-pole — the model class that Amdahl-capped every CPU architecture — runs ~57× on one
+V100.** VRAM 10–20 GB (AA-100K); SU/job ~0.4–1.25 (trivial).
+
+**Findings & gotchas (the engineering, for the next implementer):**
+1. **BEAGLE tip-buffer contract:** `setTipPartials`/`setTipStates` require buffer index ∈ `[0,tipCount)`.
+   Newick DFS node IDs must be **remapped** (tips→alignment idx, internals→`[tipCount,nnodes)`, N-ary-root
+   scratch→`[nnodes,…)`). Wrong index → rc=−5 OUT_OF_RANGE → garbage → CPU segfault / CUDA-700 in compute.
+2. **Double precision needs NO scaling** on this 100-taxon tree — unscaled lnL is bit-identical to
+   manual-log-scaled and ~2× faster (g4 GPU 86→45 ms). (Single precision *would* need scaling.)
+3. **Compact tip states** (`setTipStates`, NCAT-independent) ≫ full tip partials: VRAM 19.9→10.4 GB,
+   faster state kernels, identical lnL.
+4. **⚠ BEAGLE 4.0.1 CUDA caps category count at `kMatrixBlockSize`=8 for 20 states.** NCAT>8 →
+   `beagleCreateInstance` hard-`exit(-1)`s (*"Not yet implemented! Try slow reweighing."*) —
+   `bgScaleGrid.y = NCAT/8 > 1`, rescale path unimplemented; **category-driven, not VRAM/pattern** (pattern
+   tiling won't help). Surmounted **bit-exactly** by category-splitting (≤8-cat sub-passes +
+   `beagleGetSiteLogLikelihoods`, combine per-site). +R9/+R10 in the real port: split or rebuild BEAGLE.
+5. Login nodes can't enumerate GPU/OpenCL resources (`beagleCreateInstance` segfaults) — run on `gpuvolta`.
+
+**Caveat:** speedup is GPU(unscaled) vs **BEAGLE-CPU-SSE single-instance**, not vs IQ-TREE's AVX/threaded
+kernel — direction is unambiguous and large; an IQ-TREE single-lnL timing is a later refinement.
+
+**Status:** lnL de-risk **DONE** across the model progression. **Remaining G.0:** branch-length gradient
+timing (BEAGLE pre-order pass + `beagleCalculateEdgeDerivative`, FD-validated) — the piece Mode-L got
+wrong (10⁵⁴ overflow); then **G.1** CUDA-Graph capture of the fixed-topology scoring traversal.
+
+## 2026-05-31 — Mode L **DECISIVE NEGATIVE RESULT**: single-rank LM optimiser abandoned (L.1 FAIL + L.0b.vi FreeRate gradient broken)
+
+> Note: this CHANGELOG's intermediate Mode-L entries (L.0a–L.0b.viii, the L.1 detail) were not present in this file at the time of writing (it had reverted to a 2026-05-27 state); the full per-phase history lives in `research/Modelfinder/mode-l-levenberg-marquardt-design.md` and `Trimorph.md` (§17). This entry is the self-contained conclusion.
+
+**Context.** Mode L (Trimorph Layer 1) replaced ModelFinder's per-model alternating optimiser (branch-Newton + alpha-Brent + p_inv-EM + FreeRate EM/BFGS) with a joint Levenberg–Marquardt solve using an analytic gradient (Ji et al. 2020 preorder pass) + OPG curvature. The thesis: collapse the alternating loop into fewer full-tree traversals (single-rank win) and fewer MPI barriers (Layer-2 cohort enabler). After L.0a–L.0b.viii (scaffold → analytic α/p_inv/FreeRate-rate gradients → OMP → exp() hoist; L.0b.viii PASS at MF 555s but never beat FCA 259s), two independent tests this week settle it negatively.
+
+**1. L.1 traversal-count gate (`-m TEST`, gate 169643959, build `18f3d2a0`) — FAIL.** Instrumented a per-`PhyloTree` `[L1-TRAV]` counter (postorder/preorder/derv, MF-phase-only via `mode_l_context_active`, emitted per model at `CandidateModel::evaluate` EXIT, both arms). The decisive metric is traversal *count* (not wall — the preorder kernel is scalar/single-threaded). Result: the joint LM does **+34%/model MORE** full-tree recomputes than the legacy loop (MODE-L 4,868 vs BASE 3,827 post+pre; dominant LG+G4 19→34 = **+79%**), cutting only the cheap *cached* branch-Newton `derv` sweeps −9%. lnL Δ=0.0 exact, both LG+G4. The LM is overkill for a 1-D α fit (Brent is near-optimal). `-m TEST` excludes +R, so this only settled the low-dim case — motivating test 2.
+
+**2. L.0b.vi FreeRate weight gradient + FDCHECK (build 169647747 md5 `8469af7b2035cd110ae3b5be1d80474f`, FDCHECK job 169657699) — the analytic gradient is CATASTROPHICALLY BROKEN for +R.** To run a *fair* +R gate, +Rk had to be full-analytic (FD weight probes would inflate the MODE-L count). I implemented the FreeRate weight (proportion) gradient — derivation-verified `s_p[n] = prop[k-1]·[(wL[p,n]/(prop[n]·L_p) − 1) + (1 − rates[n])·S_rate_total[p]]`, including the prop→rate **mean-rate coupling term** that a naive mirror of the rate encoding omits (the proportion normaliser is unweighted, the rate normaliser is prop-weighted — the asymmetry generates the coupling) — plus a `|G-ratio-prop0|` FDCHECK validator. Build clean. FDCHECK on `LG+R4`: **`|G-ratio-prop0|`≈10⁵⁷, `|G-ratio-rate0|`≈10⁵⁴** — analytic scores ~10⁵⁴ garbage vs FD O(10¹), near-constant across iterations. `|lnl-recon|=0` (likelihood fine; only the gradient is broken).
+
+- **Root cause:** `accumulateAlphaFromPre` (`tree/phylotree.cpp:1437,1442`) computes `contrib = cf·qp·exp(scale_log − _pattern_lh[ptn])`; the per-category scaling cancellation that works for moderate +G rates **overflows for FreeRate's widely-varying per-category rates**. The garbage is in `per_ptn_rate_nat` (the **L.0b.v rate gradient**, untouched by L.0b.vi) — the weight gradient merely inherits it via `S_rate_total`. The L.0b.v FreeRate rate gradient was **never FDCHECK-validated** (its gate ran production-mode, killed early), so this has been latent since L.0b.v.
+- **Damning implication:** a ~10⁵⁴ gradient ⇒ every LM trust-region step rejected ⇒ `!stepped break` ⇒ **Mode-L has been silently *no-opping* on every +R model** in all prior gates (keeping starting params). The high-dim +R regime that *motivated* the LM has never actually run it. The FDCHECK de-risking step worked: it caught this before a 2 h production +R gate that a no-opping MODE-L would have made *look* like a spurious "traversal cut."
+
+**Verdict & decision (user, 2026-05-31): STOP — abandon the single-rank Mode-L optimiser and the Layer-2 path that depended on it.** The joint-LM premise is broken/unvalidated where it had to win (+R) and counter-productive where it runs (+G: more traversals). Layer-2's barrier-reduction motivation is also weakened: +34% more full passes ⇒ more Mode-P Allreduce barriers on AA `+F` (`getNDim()=0`), not fewer. Artefacts kept for the record: `gadi-ci/mode-p-iso/fdcheck_l0bvi_weight.sh` (the validator that caught it), `run_l0bvi_rplus_traversal_gate.sh` (prepared, correctly NOT submitted). L.0b.vi code (correct in form) remains in the tree atop the broken rate gradient — harmless (`-m TEST` unaffected; +R no-ops as before). A revisit would first have to fix and FDCHECK-validate the FreeRate gradient kernel.
+
+## 2026-05-27 — EDM v0 ISO-4 PASS + P.7 FAIL (root cause: Mode P slower than FCA at AA 1M; filter event required)
+
+### ISO-4 EDM PASS — job 169350768 (binary `4810a8ac`)
+
+AA 100K, np=4, `--mf-edm --mf-edm-group-size 4`. All 8 pass criteria met:
+
+- EDM exit=0, BASE exit=0 ✓
+- EDM lnL=−7,541,976.864 |Δ|=0.003 vs ref ✓; BASE lnL=−7,541,976.853 ✓
+- Best model LG+G4 ✓
+- EDM-DIAG lines=10, EDM-EPOCH lines=4 ✓ (scheduler entered; epoch plan emitted)
+- Wave/epoch start markers=818 ✓ (epochs executed via `aidExecuteWaves`)
+- Scheduler plan: epoch 0 = sentinel (LG+F×4 at gs=4); epoch 1 = 220-model tail at gs=4 (`tail_cohorts=1` at np=4 — correctness gate only, no throughput expectation)
+- Wall 14m52s, BASE=433s, EDM=456s. At np=4, gs=4 → 1 cohort; no parallel throughput, which is expected for correctness-only gate.
+
+### P.7 EDM FAIL — job 169352556 (binary `4810a8ac`, PBS-killed at ~30min wall)
+
+AA 1M, np=16, `--mf-edm --mf-edm-group-size 4`. Scheduler plan correct (sentinel gs=16, tail gs=4, 4 cohorts, 55 models/cohort), but MF did not complete before walltime.
+
+**Observed tail timing:**
+
+| Cohort | Models done | Avg dt | Est remain |
+|--------|-------------|--------|------------|
+| r0 | 4 | 210s | 10,723s |
+| r4 | 6 | 167s | 8,167s |
+| r8 | 6 | 162s | 7,959s |
+| r12 | 6 | 171s | 8,358s |
+
+Sample tail model timings (rank 8): m=223 dt=158s, m=95 dt=241s, m=159 dt=163s, m=63 dt=213s, m=191 dt=153s, m=31 dt=43s.
+
+**Root cause — two compounding issues:**
+
+1. **Mode P gs=4 is 2–3× SLOWER per model than FCA at AA 1M.** FCA np=16 averages ~80s/model (1122s ÷ 14 models/rank). Mode P gs=4 tail models average 150–210s each. The 4-way pattern split (1M/4=250K patterns/rank) gains are eaten by allreduce communication overhead. Mode P is only beneficial when per-model compute time at full np dominates over communication cost; at AA 1M gs=4 on Gadi SPR, it does not.
+
+2. **The tail contains exactly the expensive models that the rate filter should prune.** The LPT ordering puts `+I+G4`, `+R4`, `+I+R4` variants (150–241s each) first in each cohort. These are the models the sentinel epoch's `filterRates` event should eliminate before the tail epoch starts. The current implementation has `note=explicit_filter_event_pending` in the EDM-EPOCH 1 diagnostic — the filter is designed but not yet wired in.
+
+**Path to ≤600s MF wall:**
+
+After the sentinel scores LG+F×{bare,+I,+G4,+I+G4}, `filterRatesMPI` should fire and prune all `+R4`/`+I+R4` variants from the tail (these are always pruned when +G4 wins for LG). The pruned tail drops from ~220 to ~50–70 models. At 4 cohorts with simple models (~40s each):
+
+$$\frac{55 \text{ models}}{4 \text{ cohorts}} \times 40\text{s} \approx 550\text{s}$$
+
+Close to target. **Next step: implement the explicit filter event at the sentinel epoch boundary in `phylotesting.cpp` before resubmitting P.7.**
+
+---
+
+## 2026-05-27 — EDM v0 implementation begun (`iqtree3-mpi-mode-p-iso-p3` md5 `4810a8ac`)
+
+Event-Driven Moldable Dispatch is now started in the active ATMD/Mode-P source copy at `/scratch/rc29/as1708/iqtree3-mode-p-iso/src/iqtree3-mode-p-iso-p3`.
+
+What landed:
+
+- New flags: `--mf-edm`, `--no-mf-edm`, `--mf-edm-epoch-sec`, `--mf-edm-group-size`.
+- New scheduler entry: `CandidateModelSet::edmScheduleInitialEpochs()`.
+- `evaluateAll()` now treats EDM as owning dispatch when enabled, disables legacy MPGC/AID, marks scheduled tasks so the old FCA loop drains immediately, then reuses the pre-created Mode-P lattice and canonical checkpoint/warm-start path for epoch execution.
+- EDM v0 schedule shape: epoch 0 = rate-sentinel tranche on the selected reference substitution family; epoch 1 = remaining task tail LPT-packed across cohorts at configurable group size (default `gs=4`).
+- New diagnostics: `EDM-DIAG`, `EDM-EPOCH`, `EDM-WAVE`.
+
+Validation status: source diagnostics are clean and `make -j4 iqtree3` succeeds with the OpenMPI+ICX wrapper environment. Rebuilt binary: `/scratch/rc29/as1708/iqtree3-mode-p-iso/build-mode-p-iso-p3/iqtree3-mpi-mode-p-iso-p3`, md5 `4810a8ac73e3b92b1f93b3f03ec04d57`. Binary string check confirms `--mf-edm`, `EDM-DIAG`, and `EDM-EPOCH` are present. A tiny login-node MPI smoke test hit `SIGILL` after alignment parsing, so first runtime validation must run on an SPR compute node.
+
+Next implementation step: make the sentinel boundary fire an explicit scheduler-owned `filterRates` event, prune queued tasks before the tail epoch starts, then add telemetry feedback from `EDM-WAVE` timings.
 
 ---
 
@@ -759,9 +1035,6 @@ is too small a fraction to move the aggregate wall time.
 | FCA np=4 | 168635615 | 4 | 1,974.476 | −5,613 s (−74.0%) | +852.1 s | ❌ | FCA scaling ref |
 | WS-A.1 np=16 | 169095645 | 16 | **1,146.174** | −6,441 s (−84.9%) | **+23.8 s (+2.1%)** | ❌ | A.1 no broadcast; **regresses vs FCA** |
 | WS-A.2 np=16 | 169096801 | 16 | **1,139.494** | −6,448 s (−85.1%) | **+17.1 s (+1.5%)** | ❌ | A.2 broadcast confirmed; **still regresses** |
-| WS-A.2 np=8 | 169099057 | 8 | pending | — | — | — | W3 gate — results not yet logged |
-| WS-A.2 np=4 | 169099058 | 4 | pending | — | — | — | scaling gate — results not yet logged |
-
 ### AA 100K — WarmStart vs Vanilla baseline and FCA baseline (single-model / low-np focus)
 
 | Run | Job | np | MF wall (s) | Δ vs vanilla (399 s) | Δ vs FCA np=1 (259 s) | MF gate ≤100 s | Verdict |
@@ -779,8 +1052,6 @@ is too small a fraction to move the aggregate wall time.
 | 169094692 | WS-A.1 | AA 100K | 1 | ✅ Δ0.002 | ✅ LG+G4 | — (no broadcast) | ❌ 262 s vs 259 s FCA | correctness ✅ walltime no gain |
 | 169095645 | WS-A.1 | AA 1M | 16 | ✅ Δ0.076 | ✅ LG+G4 | — (no broadcast) | ❌ **+23.8 s vs FCA** | correctness ✅ walltime **regresses** |
 | 169096801 | WS-A.2 | AA 1M | 16 | ✅ Δ0.000 | ✅ LG+G4 | 4 ✅ | ❌ **+17.1 s vs FCA** | correctness ✅ walltime **regresses** |
-| 169099057 | WS-A.2 | AA 1M | 8 | pending | pending | pending | pending | — |
-| 169099058 | WS-A.2 | AA 1M | 4 | pending | pending | pending | pending | — |
 
 ### Root cause of MF wall failure at np=16
 

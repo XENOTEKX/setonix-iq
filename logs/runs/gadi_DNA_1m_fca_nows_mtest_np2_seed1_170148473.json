@@ -1,0 +1,61 @@
+{
+  "run_id": "gadi_DNA_1m_fca_nows_mtest_np2_seed1_170148473",
+  "label": "DNA_1m_fca_nows_mtest_np2_seed1",
+  "platform": "gadi",
+  "run_type": "fca_nows_mtest",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy",
+  "dataset_short": "complex_dna_1m",
+  "data_type": "DNA",
+  "seq_len": 1000000,
+  "n_taxa": 100,
+  "np": 2,
+  "threads": 103,
+  "seed": 1,
+  "mf_mode": "-m TEST",
+  "binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-phase0506",
+  "binary_md5": "a103bc6c97860145033206c47b184367",
+  "binary_note": "FCA Phase 0.5+0.6 (iqtree3-mpi-fca-phase0506 \u2192 iqtree3-mpi-fca-lbfgs-ws) NO warm-start, ICX 2025.3.2 + OpenMPI 4.1.7",
+  "warm_start": false,
+  "summary": {
+    "pass": 1,
+    "all_pass": true,
+    "lnL": -59208019.158,
+    "model": "F81+F+G4",
+    "mf_wall_s": 2426.462,
+    "total_wall_s": 3735.738,
+    "ws_bcast_fields": 0,
+    "lnL_delta_vs_ref": 0.054,
+    "parity_checks": {
+      "exit_0": true,
+      "lnL_parity": true,
+      "model_F81+G4": true
+    }
+  },
+  "mf_time_summary": {
+    "rank_0": {
+      "n_models": 46,
+      "total_s": 729.57,
+      "mean_s": 15.86,
+      "max_s": 114.61
+    }
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "pbs": {
+      "job_id": "170148473.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "208",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "mf_iso_phase0.5_0.6_icx_avx512",
+  "headline_table_row": "FCA no-WS DNA-1M np=2",
+  "compares_to": {
+    "dna_1m_fca_np1_nows": "168913091 (DNA 1M FCA no-WS np=1, MF=5121.153s, same binary)",
+    "dna_1m_fca_np8_nows": "168592214 (DNA 1M FCA no-WS np=8, MF=1274.686s)",
+    "dna_1m_ws_a2_np2": "run_cpu_bench_dna_1m_spr_ws_a2_mtest_np2.sh (A/B warm-start pair)",
+    "aa_1m_fca_np2_nows": "168635614 (AA 1M FCA no-WS np=2, MF=3076.9s \u2014 different dataset)"
+  }
+}

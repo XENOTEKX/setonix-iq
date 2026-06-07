@@ -1,0 +1,51 @@
+{
+  "run_id": "gadi_AA_100k_r1r2avx512_seed1_170139976",
+  "label": "AA_100k_r1r2avx512_seed1",
+  "platform": "gadi",
+  "run_type": "r1_avx512_mtest_np1",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_aa_100k",
+  "data_type": "AA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "np": 1,
+  "threads": 103,
+  "seed": 1,
+  "mf_mode": "-m TEST",
+  "binary": "/scratch/rc29/as1708/iqtree3-r1r2/build-icx-r1r2-avx512/iqtree3-r1r2",
+  "binary_md5": "9b60d9d24c27d44fa001acc90e300284",
+  "binary_note": "R1+R2+AVX-512 (gadi-spr-r2-avx512 @ 07966e4 + 0004-thp patch): schedule(static)+NUMA first-touch+cmake P2+P3+THP madvise(MADV_HUGEPAGE), non-MPI, ICX 2025.3.2",
+  "source_commit": "07966e40623f8607734edfcd88132efa0beae356",
+  "source_branch": "gadi-spr-r2-avx512",
+  "summary": {
+    "pass": 1,
+    "all_pass": false,
+    "lnL": -7541976.86,
+    "model": null,
+    "mf_wall_s": 221.594,
+    "lnL_delta_vs_ref": 0.0,
+    "parity_checks": {
+      "exit_0": true,
+      "lnL_parity": true,
+      "model_LG+G4": false
+    }
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "pbs": {
+      "job_id": "170139976.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "104",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "r1_avx512_icx_spr_nonmpi",
+  "headline_table_row": "R1+R2+AVX512",
+  "compares_to": {
+    "vanilla": "170138365 (no patches, -m TEST, np=1)",
+    "R1-only": "170135052 (R1 dirty build, -m TEST, np=1, MF=256.186s)",
+    "R1+AVX512": "170139827 (R1+cmake fixes, -m TEST, np=1, pending)"
+  }
+}

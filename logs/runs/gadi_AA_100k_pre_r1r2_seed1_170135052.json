@@ -1,0 +1,51 @@
+{
+  "run_id": "gadi_AA_100k_pre_r1r2_seed1_170135052",
+  "label": "AA_100k_pre_r1r2_seed1",
+  "platform": "gadi",
+  "run_type": "cpu_bench_pre_r1r2",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_aa_100k",
+  "data_type": "AA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "threads": 103,
+  "seed": 1,
+  "mf_mode": "-m TEST",
+  "binary": "/scratch/rc29/as1708/iqtree3-3.1.2/build-profiling-mpi/iqtree3-mpi",
+  "binary_md5": "869c010f23754e95f0805fa475eb9807",
+  "binary_note": "v3.1.2 tag (4e91dd61), no patches, ICX -march=sapphirerapids, MPI np=1",
+  "summary": {
+    "pass": 1,
+    "all_pass": false,
+    "lnL": -7541976.86,
+    "model": null,
+    "mf_wall_s": 256.186,
+    "lnL_delta_vs_ref": 0.0,
+    "parity_checks": {
+      "exit_0": true,
+      "lnL_parity": true,
+      "model_LG+G4": false
+    }
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "cores": 0,
+    "pbs": {
+      "job_id": "170135052.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "104",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "v3.1.2_icx_avx512_spr_no_patches",
+  "headline_table_row": "pre-R1R2 (new)",
+  "compares_to": "168425673 (row A, ICX+R1+R2, 399.456 s MF)",
+  "profile": {
+    "metrics": {
+      "IPC": 1.9585,
+      "cache-miss-rate": 53.4564
+    }
+  }
+}

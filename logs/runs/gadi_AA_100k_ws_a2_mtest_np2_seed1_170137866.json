@@ -1,0 +1,53 @@
+{
+  "run_id": "gadi_AA_100k_ws_a2_mtest_np2_seed1_170137866",
+  "label": "AA_100k_ws_a2_mtest_np2_seed1",
+  "platform": "gadi",
+  "run_type": "fca_ws_a2_mtest",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy",
+  "dataset_short": "complex_aa_100k",
+  "data_type": "AA",
+  "seq_len": 100000,
+  "n_taxa": 100,
+  "np": 2,
+  "threads": 103,
+  "seed": 1,
+  "mf_mode": "-m TEST",
+  "binary": "/scratch/rc29/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-a2",
+  "binary_md5": "1547a906f1f75422514b0a0cdf2bc89e",
+  "binary_note": "FCA Phase A.2 warm-start broadcast, ICX 2025.3.2 + OpenMPI 4.1.7",
+  "summary": {
+    "pass": 1,
+    "all_pass": false,
+    "lnL": -7541976.852,
+    "model": null,
+    "mf_wall_s": 149.256,
+    "ws_bcast_fields": 4,
+    "lnL_delta_vs_ref": 0.008,
+    "speedup_vs_row_a": 2.676,
+    "speedup_vs_row_b": 0.998,
+    "parity_checks": {
+      "exit_0": true,
+      "lnL_parity": true,
+      "model_LG+G4": false,
+      "ws_bcast_fired": true
+    }
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "pbs": {
+      "job_id": "170137866.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "208",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "fca_ws_a2_icx_avx512_spr",
+  "headline_table_row": "C-rerun",
+  "compares_to": {
+    "row_A": "168425673 (ICX+R1+R2 baseline, 399.456 s MF, -m TEST)",
+    "row_B": "168584736 (FCA no-WS np=2, 149.029 s MF, -m TEST)",
+    "row_C_orig": "169332772 (FCA+WS np=2, 481.295 s MF, -m MF \u2014 NOT COMPARABLE)"
+  }
+}

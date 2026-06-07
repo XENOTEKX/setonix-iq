@@ -1,0 +1,141 @@
+{
+  "run_id": "gadi_AA_1m_ws_b1_np16_full_seed1_170149557",
+  "label": "AA_1m_ws_b1_np16_full_seed1",
+  "platform": "gadi",
+  "run_type": "mf_iso",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy",
+  "dataset_short": "complex_aa_1m",
+  "data_type": "AA",
+  "seq_len": 1000000,
+  "n_taxa": 100,
+  "threads": 1648,
+  "seed": 1,
+  "model_finder_only": false,
+  "timing": [
+    {
+      "command": "mpirun -np 16 -rf rankfile --output-filename rank_logs numactl --localalloc iqtree3-mpi-fca-ws-b1 -s alignment_1000000.phy -m TEST -T 103 -seed 1",
+      "time_s": 2394.158
+    }
+  ],
+  "verify": [
+    {
+      "check": "lnL",
+      "status": "pass",
+      "expected": -78605196.573,
+      "reported": -78605196.497,
+      "diff": 0.076,
+      "note": "Full-run SPR lnL vs vanilla ref 168425491 (AA 1M); tol=1.0"
+    },
+    {
+      "check": "best_model",
+      "status": "pass",
+      "expected": "LG+G4",
+      "reported": "LG+G4"
+    },
+    {
+      "check": "progressiveWS_fired_B1",
+      "status": "pass",
+      "prog_ws_events": 2,
+      "bitmasks": [
+        "0x2",
+        "0x1"
+      ],
+      "note": "Phase B.1 getNextModel() MPI_Allreduce broadcast must fire before filterRatesMPI"
+    },
+    {
+      "check": "mf_wall_reported",
+      "status": "pass",
+      "actual_s": 1151.322,
+      "note": "MF wall recorded for comparison (no hard gate at np=16)"
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 0,
+    "total_time": 2394.158,
+    "mf_wall_s": 1151.322,
+    "spr_wall_s": 1162.175,
+    "lnL": -78605196.497,
+    "best_model": "LG+G4",
+    "all_pass": true,
+    "lnl_pass": true,
+    "model_pass": true,
+    "ws_bcast_pass": true,
+    "prog_ws_pass": true,
+    "mf_wall_s_record": 1151.322,
+    "vs_fca_np16_baseline": {
+      "mf_speedup": 0.975,
+      "spr_speedup": 1.108,
+      "total_speedup": 1.007
+    },
+    "vs_ws_a2_np16": {
+      "mf_speedup": 0.99,
+      "spr_speedup": 1.031,
+      "total_speedup": 1.011
+    },
+    "vs_ws_a1_np16": {
+      "mf_speedup": 0.996,
+      "spr_speedup": 1.044,
+      "total_speedup": 1.019
+    },
+    "vs_vanilla_baseline": {
+      "mf_speedup": 6.59,
+      "spr_speedup": 12.992,
+      "total_speedup": 9.513
+    }
+  },
+  "warm_start": {
+    "phase": "B.1",
+    "prog_ws_events": 2,
+    "prog_ws_bitmasks": [
+      "0x2",
+      "0x1"
+    ],
+    "ws_bcast_fields_max_A2": 4,
+    "ws_bcast_count_A2": 1,
+    "broadcast_fired_A0_5": true,
+    "bcast_ok_rates_size": 1
+  },
+  "mf_time_summary": {
+    "rank_0": {
+      "n_models": 6,
+      "total_eval_s": 664.546,
+      "mean_s": 110.758,
+      "max_s": 330.46
+    }
+  },
+  "env": {
+    "hostname": "gadi-cpu-spr-0115.gadi.nci.org.au",
+    "date": "2026-06-07T10:00:44+10:00",
+    "cpu": "Intel(R) Xeon(R) Platinum 8470Q",
+    "cores": 1,
+    "kernel": "4.18.0-553.117.1.el8.nci.x86_64",
+    "omp": {
+      "proc_bind": "close",
+      "places": "cores",
+      "kmp_blocktime": 200,
+      "wait_policy": "PASSIVE",
+      "numactl": "--localalloc"
+    },
+    "iqtree_binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-b1",
+    "iqtree_md5": "5aaf6da444252642b7b744d0696ec9fb",
+    "iqtree_version": "IQ-TREE MPI version 3.1.2 for Linux x86 64-bit built Jun  7 2026",
+    "mpi_nranks": 16,
+    "pbs": {
+      "job_id": "170149557.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "1664",
+      "project": "dx61"
+    }
+  },
+  "profile": {
+    "nranks": 16,
+    "omp_per_rank": 103,
+    "placement": "mpi_16node_full_perrank_logs"
+  },
+  "build_tag": "fca_ws_b1_icx_avx512",
+  "branch": "fca-lbfgs-ws",
+  "non_canonical": true,
+  "non_canonical_label": "FCA-WS Phase B.1 (progressive pre-pruning broadcast) \u00b7 ICX+MPI \u00b7 AVX-512 \u00b7 full MF+SPR \u00b7 AA 1M \u00b7 np=16",
+  "group": "fca_ws_b1"
+}
