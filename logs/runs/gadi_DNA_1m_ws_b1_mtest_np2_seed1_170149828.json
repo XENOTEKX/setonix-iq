@@ -1,0 +1,67 @@
+{
+  "run_id": "gadi_DNA_1m_ws_b1_mtest_np2_seed1_170149828",
+  "label": "DNA_1m_ws_b1_mtest_np2_seed1",
+  "platform": "gadi",
+  "run_type": "fca_ws_b1_mtest",
+  "dataset": "/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/DNA/GTR+I+G4/taxa_100/len_1000000/tree_1/alignment_1000000.phy",
+  "dataset_short": "complex_dna_1m",
+  "data_type": "DNA",
+  "seq_len": 1000000,
+  "n_taxa": 100,
+  "np": 2,
+  "threads": 103,
+  "seed": 1,
+  "mf_mode": "-m TEST",
+  "binary": "/scratch/dx61/as1708/iqtree3-mf-iso/build-mpi-iso/iqtree3-mpi-fca-ws-b1",
+  "binary_md5": "5aaf6da444252642b7b744d0696ec9fb",
+  "binary_note": "FCA Phase B.1 progressive pre-pruning warm-start broadcast, ICX 2025.3.2 + OpenMPI 4.1.7",
+  "warm_start": {
+    "phase": "B.1"
+  },
+  "summary": {
+    "pass": 1,
+    "all_pass": true,
+    "lnL": -59208019.158,
+    "model": "F81+F+G4",
+    "mf_wall_s": 2442.829,
+    "spr_wall_s": 1302.925,
+    "total_wall_s": 3758.082,
+    "progressiveWS_events": 2,
+    "ws_bcast_fields_A2": 4,
+    "lnL_delta_vs_ref": 0.054,
+    "delta_mf_vs_nows_s": 16.367,
+    "delta_mf_vs_wsa2_s": 3.128,
+    "parity_checks": {
+      "exit_0": true,
+      "lnL_parity": true,
+      "model_F81+G4": true,
+      "progressiveWS_fired_B1": true
+    }
+  },
+  "mf_time_summary": {
+    "rank_0": {
+      "n_models": 46,
+      "total_s": 856.817,
+      "mean_s": 18.626,
+      "max_s": 136.035
+    }
+  },
+  "env": {
+    "hostname": "",
+    "date": "",
+    "cpu": "",
+    "pbs": {
+      "job_id": "170149828.gadi-pbs",
+      "queue": "normalsr-exec",
+      "ncpus": "208",
+      "project": "dx61"
+    }
+  },
+  "build_tag": "fca_ws_b1_icx_avx512_spr",
+  "headline_table_row": "DNA-1M WS-B.1 np=2",
+  "compares_to": {
+    "dna_1m_ws_a2_np2": "170148472 (FCA+WS-A.2 np=2, MF=2,439.701 s \u2014 A.2 regresses)",
+    "dna_1m_nows_np2": "170148473 (FCA no-WS np=2, MF=2,426.462 s \u2014 baseline)",
+    "aa_100k_ws_b1_np2": "170149201 (AA 100K WS-B.1 np=2, MF=146.792 s \u2014 Phase B reference)"
+  }
+}

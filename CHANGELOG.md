@@ -136,7 +136,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 | 168913091 | FCA no-WS np=1 (Ph.0.5+0.6, MPI overhead) | DNA 1M | 1 | 1×103T | F81+F+G4 | −59,208,019.158 | — | 5,121.153 | 2,528.861 | 7,650.014 | **0.80×** | — | — |
 | 170148473 | FCA no-WS np=2 | DNA 1M | 2 | 2×103T | F81+F+G4 | −59,208,019.158 | — | **2,426.462** | **1,296.003** | **3,735.738** | **1.64×** | — | — |
 | 170148472 | WS-A.2 np=2 | DNA 1M | 2 | 2×103T | F81+F+G4 | −59,208,019.158 | — | **2,439.701** | **1,310.596** | **3,763.448** | **1.62×** | — | — |
-| 170149828 | WS-B.1 np=2 | DNA 1M | 2 | 2×103T | — | — | — | — (pending) | — | — | — | — | — |
+| 170149828 | WS-B.1 np=2 | DNA 1M | 2 | 2×103T | F81+F+G4 | −59,208,019.158 | — | **2,442.829** | **1,302.925** | **3,758.082** | **1.63×** | — | — |
 | 168592214 | FCA no-WS np=8 (Ph.0.5+0.6) | DNA 1M | 8 | 8×103T | F81+F+G4 | −59,208,019.103 | 118,418,815.123 | 1,274.686 | 349.904 | 1,640.846 | **3.73×** | — | — |
 
 > **Timing notes:** MF and SPR wall times from IQ-TREE stdout (`Wall-clock time for ModelFinder` /
@@ -152,7 +152,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 > **170148473** = FCA no-WS np=2, DNA 1M (2026-06-07): **DONE ALL PASS** — lnL=−59,208,019.158 (Δ0.054 vs ref) ✓, F81+F+G4 ✓, ws_bcast_fields=0 ✓. MF=2,426.462 s, SPR=1,296.003 s, total=3,735.738 s (1.64× vs vanilla). Baseline for WS-A.2 DNA 1M comparison.
 > **170148472** = FCA+WS-A.2 np=2, DNA 1M (2026-06-07): IQ-TREE rc=0, **DONE** — lnL=−59,208,019.158 (Δ0.054) ✓, F81+F+G4 ✓, ws_bcast_fields=4 ✓. MF=2,439.701 s, SPR=1,310.596 s, total=3,763.448 s (1.62× vs vanilla). Script exited with rc=1 due to parsing bug in `WS_BCAST=$(grep -oP ...)` (multi-file grep includes filename prefix — fixed with `-h` flag). **WS-A.2 vs no-WS: MF Δ+13.239 s (+0.55%) — regresses** (consistent with Phase A.2 AA 1M np=16 behavior; broadcast fires early at model 3/46, but DNA model evaluation is fast ~15 s/model so warm-start window covers fewer candidates).
 > **170149497** = WS-B.1 np=1, AA 100K (2026-06-07): **DONE ALL PASS** — lnL=−7,541,976.862 (Δ0.002) ✓, LG+G4 ✓, progressiveWS_events=0 ✓. MF=257.493 s, tree=722.140 s, total=983.074 s. JSON `all_pass=false` due to model grep pattern mismatch (`Best-fit model according to BIC:` vs actual `Best-fit model: LG+G4 chosen according to BIC`) — fixed in script. Confirms: (1) Phase B.1 MPI inter-rank broadcast is correctly suppressed at nranks=1; (2) local warm-start cache still active intra-rank (OMP threads share the cache pointer directly, no MPI needed).
-> **170149828** = WS-B.1 np=2, DNA 1M (submitted 2026-06-07): 2 nodes × 103T each = DNA 1M full MF+SPR run, `-m TEST`, Phase B.1 binary (`iqtree3-mpi-fca-ws-b1` md5 `5aaf6da4`). Progressive pre-pruning broadcast. Compare vs WS-A.2 (170148472, MF=2,439.701 s) and no-WS (170148473, MF=2,426.462 s). Key question: does pre-pruning B.1 broadcast overcome the regression seen in A.2 on DNA 1M?
+> **170149828** = WS-B.1 np=2, DNA 1M (2026-06-07): **DONE ALL PASS** — lnL=−59,208,019.158 (Δ0.054) ✓, F81+F+G4 ✓, progressiveWS_events=2 ✓. MF=2,442.829 s, SPR=1,302.925 s, total=3,758.082 s (1.63× vs vanilla). vs no-WS (170148473): MF Δ+16.367 s (+0.67%), SPR Δ+6.922 s, total Δ+22.344 s. vs WS-A.2 (170148472): MF Δ+3.128 s (+0.13%), SPR Δ−7.671 s (−0.59%), total Δ−5.366 s. **Key finding: B.1 pre-pruning broadcast also regresses slightly on DNA 1M MF at np=2**, consistent with A.1/A.2 behaviour (DNA model evaluation ~15 s/model, warm-start window covers few candidates, broadcast overhead visible). SPR marginally improved over A.2 (−0.59%) but not vs no-WS. Phase A.2 filterRatesMPI still fires additively (ws_bcast_fields=4). DNA 1M WS regression is dataset-specific: AA 1M shows opposite trend (B.1 SPR −9.8% at np=16).
 > **170148474** = R1+R2+AVX512 np=1, DNA 1M (2026-06-07): **DONE ALL PASS** — lnL=−59,208,019.212 (Δ=0.000) ✓, F81+F+G4 ✓. MF=2,822.986 s, SPR≈2,601.198 s (derived), total=5,424.184 s (1.13× vs vanilla 6,114.450 s). Non-MPI R1+R2 binary; slower MF than FCA np=1 (5,121 s MF) — R1+R2 scheduling overheads dominate at DNA 1M scale without the FCA parallelism benefit.
 > IPC and LLC miss %: user-space `perf stat` (`cycles:u`, `instructions:u`, `cache-references:u`, `cache-misses:u`).
 > `cache-references/misses:u` map to LLC-level hardware counters on Intel SPR. `—` = no perf stat collected for that run.
@@ -248,7 +248,7 @@ single-model evaluation takes ~150 s.
 
 Phase A.2 `filterRatesMPI` still fires afterwards (`ws_bcast_fields=4`) — the two mechanisms are additive.
 
-**Next steps:** DNA 1M WS-B.1 np=2 (170149828, running) — results pending. AA 100K np=1 WS-B.1 parity (170149497) **DONE**. DNA 1M R1+R2 np=1 (170148474) **DONE**.
+**Next steps:** DNA 1M WS-B.1 np=2 (170149828) **DONE** (MF=2,442.829 s, +0.67% vs no-WS — B.1 also regresses on DNA 1M; see footnote). AA 100K np=1 WS-B.1 parity (170149497) **DONE**. DNA 1M R1+R2 np=1 (170148474) **DONE**. All Phase B.1 planned runs complete.
 
 ---
 
