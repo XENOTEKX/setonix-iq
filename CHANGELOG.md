@@ -208,6 +208,141 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **1M status note:** These are **not parity rows**. Across all 16 jobs in this sweep (8 earlier fail/cancel + 8 canceled at 2026-05-27 01:33 UTC via `qdel`), none finished ModelFinder, so no final best model, lnL, MF wall, or SPR wall is available. The partial logs are still useful: at 1M scale, high FreeRate tails (`+R5`/`+I+R5` for AA, `+I+R6` for DNA) can consume thousands of seconds before rate filtering fires. That reinforces the Event-Driven Moldable Dispatch design direction: rate-filter decisions need to become explicit early scheduler events, and medium/high-rate tasks cannot be trapped inside a static FCA light phase.
 
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.1.3 CUDA-graph K3 ALL PASS** (custom CUDA, V100, job 170189528)
+
+Third CUDA kernel milestone: **CUDA-graph capture** of the 98-launch postorder sweep + **on-device `build_echild`**
+so branch lengths can change without host involvement. Standalone harness `gadi-ci/gpu-modelfinder/gpu_k3_graph.cu`
+(~520 lines; extends K1 scaffolding). Full V0–V7 validation ladder. Wall=6:53, SU=4.13, GPU util=97%.
+
+**Full gate results (g4 + V6 multi-branch; V0–V5 on r8/r10/g1):**
+
+| Gate | Result |
+|------|--------|
+| V0 `build_echild` vs host | ✅ PASS — not bit-identical (FP mul grouping by design), maxrel ≤ 4.1e-16 (machine-ε neighborhood) |
+| V1 lnL vs G.0 oracle | ✅ PASS — rel ≤ 6.1e-12 (g4/r8/r10/g1); graph vs naive \|dlnL\|=0 to 9.3e-10 |
+| V2 patlh bit-identity (graph vs naive-device) | ✅ PASS — ndiff=0/nptn all 4 models (compute path bit-identical) |
+| V3 determinism (two replays) | ✅ PASS — bit-identical all 4 models |
+| V4 perturbed brlen | ✅ PASS — \|dlnL\| ≤ 9.3e-10 all 4 |
+| V5 single-branch opt t* | ✅ PASS — \|dt\|=0 vs naive all 4 |
+| **V6** multi-branch Gauss-Seidel sweep (g4, 197 edges) | ✅ **PASS** — graph-final lnL=−7,546,671.8370 ≡ naive-final; max \|dt\|=0.000e+00; naive re-eval of graph branch-vector = same lnL |
+| Graph capture+instantiate | ✅ OK — replay path active all 4 models |
+
+**Timing:** AA-100K V100 compute-saturated ⇒ 1.00× at nptn=100K (expected — 98×5µs API overhead = 1.3% of 38ms sweep).
+At launch-bound scales (1K/10K patterns) the 104→1 launch collapse yields 1.01×. The **capability** is device-resident
+branch lengths + single `cudaGraphLaunch` per lnL, enabling the K2 dirty-path hot loop.
+
+| Model | Graph (ms) | Naive (ms) | VRAM |
+|-------|-----------|------------|------|
+| g1 (NCAT=1) | 10.4 | 10.5 | 1.78 GB |
+| g4 (NCAT=4) | 37.8 | 37.9 | 6.16 GB |
+| r8 (NCAT=8) | 73.9 | 74.0 | 12.01 GB |
+| r10 (NCAT=10) | 93.0 | 93.2 | 14.93 GB |
+
+Next: **G.2** in-tree integration — wire K3 graph behind `computeLikelihood*Pointer` seam under `--gpu`; K2 dirty-path
+per-edge hot loop (avoids full 98-node sweep); target MF wall < 221.6 s.
+
+---
+
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.1.2 single-edge derivative kernel (K2) PASSES** (custom CUDA, V100, job 170188743)
+
+Second NUMERICAL GPU kernel and the **branch-NR primitive** (75–85 % of per-model wall): a **custom
+eigen-space single-edge derivative kernel** (the `computeLikelihoodDervSIMD` analog, NOT BEAGLE) returning
+lnL, df=∂lnL/∂t, ddf=∂²lnL/∂t² for one branch. Standalone harness
+`gadi-ci/gpu-modelfinder/gpu_k2_derv.cu` (reuses all K1 scaffolding + the K1 postorder kernel; nvcc, no
+IQ-TREE rebuild). Algorithm + exact derivation in `gpu-modelfinder-g1-log.md` (G.1.2 section).
+
+**Key idea:** `theta = node_eig ⊙ dad_eig` (the K1 partials of the edge's two endpoints) is **t-independent**
+→ computed once on the GPU and reused; each NR step only uploads `val0/val1/val2 = exp(eval·r·t)·prop·{1,
+r·eval, (r·eval)²}` (`NCAT·NS` doubles) and runs a triple-dot. So one `evalAt(t)` is **~1.1–1.3 ms** vs the
+~38–93 ms one-shot K1 lnL — exactly the cost structure branch re-optimization needs.
+
+**Result — 3 independent gates, all 4 models PASS, wall 22 s, SU ~0.22:**
+
+| model | lnL(t0) cross-check vs K1/G.0 | df rel (FD) | ddf rel (FD) | bisection t* | \|t*−t0\| | evalAt |
+|-------|------------------------------|-------------|--------------|--------------|-----------|--------|
+| g4  | −7541976.9391 (5.8e-12) | 2.50e-9 | 3.29e-6 | 0.014217 | 0.00000 | **1.21 ms** |
+| g1  | −7974816.4323 (5.2e-12) | 2.38e-9 | 4.99e-6 | 0.014160 | 0.00006 | 1.10 ms |
+| r8  | −7556251.9185 (3.8e-12) | 2.19e-9 | 3.51e-6 | 0.014009 | 0.00021 | 1.24 ms |
+| r10 | −7554280.5776 (6.1e-12) | 2.30e-9 | 3.73e-6 | 0.014195 | 0.00002 | 1.26 ms |
+
+**Headlines:** (1) **FD-validation (the non-negotiable gate) PASSES** — analytic df rel ~2e-9 (meets even
+g1's tight <1e-6 by 3 orders), ddf rel ~4e-6, vs swept-ε central differences. (2) **lnL(t0) cross-check** —
+the derivative kernel's likelihood path reproduces the K1/G.0 oracle to rel ~1e-12, confirming the
+eigen-space **freq-fold identity** (`freq_a·U[a][x]=U⁻¹[x][a]` → no explicit freq needed). (3) **Bisection-
+on-df independently rediscovers IQ-TREE's optimized edge length** (bracket df(1e-6)≈+4.4e6 → df(5.0)≈−1.3e4,
+unique interior root → t* within 2e-4 of t0, ddf<0, lnL(t*)≥lnL(t0)) — the GPU derivatives genuinely
+*locate* the optimum end-to-end. **Note:** prior run (170188563) drove naive Newton from t=0.5 which
+diverged (convex region, ddf>0) — an optimizer-driver artifact, NOT a derivative error (FD passed there
+too); replaced with bisection for a clean record; real integration uses IQ-TREE's safeguarded
+`minimizeNewton`.
+
+Next: **G.1.3** CUDA-graph capture of the 98-launch postorder sweep + on-device `echild`/theta rebuild when
+branch lengths change during a full-tree NR sweep; then **G.2** in-tree integration behind the
+`computeLikelihood*Pointer` seam under `--gpu`, target MF wall < 221.6 s.
+
+---
+
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.1.1 postorder lnL kernel (K1) PASSES** (custom CUDA, V100, job 170188276)
+
+First NUMERICAL GPU kernel: a **custom eigen-space postorder partial-likelihood kernel** (NOT BEAGLE),
+reproducing IQ-TREE's `computePartialLikelihoodSIMD` exactly. Standalone harness
+`gadi-ci/gpu-modelfinder/gpu_k1_lnl.cu` (reuses the G.0 BEAGLE-free scaffolding; built with nvcc, no
+IQ-TREE rebuild). Algorithm + exact source-line derivation in `gpu-modelfinder-g1-log.md` (G.1.1 section).
+
+**Result — all 4 models match the G.0 oracle to rel ~1e-12 (FP64 reduction-noise floor), wall 26 s, SU 0.26:**
+
+| model | NCAT | lnL (K1) | oracle | rel err | eval (V100) | VRAM |
+|-------|------|----------|--------|---------|-------------|------|
+| g4  | 4  | −7541976.9391 | −7541976.9391 | 5.8e-12 | **37.8 ms** | 6.16 GB |
+| r8  | 8  | −7556251.9185 | −7556251.9185 | 3.8e-12 | 74.0 ms | 12.0 GB |
+| **r10** | **10** | **−7554280.5776** | −7554280.5776 | 6.1e-12 | 93.0 ms | 14.9 GB |
+| g1  | 1  | −7974816.4323 | −7974816.4323 | 5.2e-12 | 10.4 ms | 1.78 GB |
+
+**Headlines:** (1) custom from-scratch eigen-space kernel is correct (g4 rel 5.8e-12 vs the IQ-TREE/BEAGLE
+oracle). (2) **+R10 runs in ONE pass** (NCAT=10, single kernel) = −7554280.5776 exactly — the long-pole that
+killed every CPU dispatch architecture (Amdahl) and that stock BEAGLE-CUDA could not run (kMatrixBlockSize≤8
+cap); the §II.6 "NCAT≤8 cap gone in a custom kernel" claim is now demonstrated. (3) **K1 already beats
+BEAGLE** unoptimised: g4 37.8 ms vs BEAGLE 45 ms on the same V100; native-20 (no 20→32 pad) keeps r10 at
+14.9 GB, fitting a V100. No shared-mem staging / launch batching / CUDA graph yet — headroom for G.1.3.
+**Honest note:** "bit-parity" = parity to the FP64 summation-noise floor (rel ~1e-12, |Δ|~4e-5 on −7.5e6),
+NOT bit-identical (GPU reduction order ≠ CPU SIMD/FMA order). Nsight HBM%/coalescing profiling deferred.
+
+Next: **G.1.2** single-edge derivative kernel (K2) — FD-validated df/ddf (g4<3e-3, g1<1e-6), the branch-NR
+hot path (75–85 % of per-model wall).
+
+---
+
+## 2026-06-07 (gpu) — GPU ModelFinder **Phase G.1.0 build scaffold PASSES** (in-tree CUDA, V100, job 170176864)
+
+First implementation milestone of the custom in-tree CUDA kernel (design `gpu-modelfinder-design.md` PART II;
+log `gpu-modelfinder-g1-log.md`). Dev clone `/scratch/rc29/as1708/iqtree3-gpu` (branch `gpu-kernel`).
+
+**Deliverable:** `option(IQTREE_GPU)` (OFF default) + gated `enable_language(CUDA)` + a `tree/gpu/gpu_diag.cu`
+static lib (`iqtree_gpu`) linked into `iqtree3` + `#cmakedefine IQTREE_GPU` + `--gpu`/`-gpu` flag + a
+hello-world kernel launched from a diagnostic hook in `main()`. Pure plumbing, no numerics.
+
+**Result (8/8 PASS, wall 5:50, SU 3.50, all-GCC host gcc/12.2.0 + cuda/12.5.1 + cmake/3.24.2):**
+- ON configure finds nvcc + CUDAToolkit 12.5.82, `CUDA_ARCHITECTURES 70;80;90`; ON build links `libcudart.so.12`.
+- OFF build links **no** cudart (the macro/lib/flag are fully inert when OFF).
+- `--gpu` (ON) launches the kernel on the V100 (31.7 GB / 80 SMs / ~898 GB/s), `marker=0xC0DE`,
+  `cudaGetLastError=cudaSuccess`, "diagnostic PASSED", **then completes the normal CPU run**.
+- `--gpu` (OFF) prints "built WITHOUT GPU support" + completes the CPU run.
+- **Behavioural identity:** OFF lnL == ON-no-gpu lnL == ON-`--gpu` lnL = −21152.524 (example.phy) — the GPU
+  scaffold does not perturb the CPU likelihood path.
+
+**Findings:** (1) `cmake_minimum_required(3.5)` < 3.18 needed for `CUDA_ARCHITECTURES` → set `CMP0104 NEW` +
+`CMAKE_CUDA_ARCHITECTURES` **before** `enable_language(CUDA)` (cmake/3.24 honours it; min-version untouched).
+(2) **Clone gotcha:** `git clone` left the `cmaple`/`lsd2` submodules empty → first job (170176345, 31 s)
+failed at `set_target_properties ... maple/lsd2`; fixed by rsyncing them from the FCA source (also keeps
+config parity with the FCA binary). (3) Explicit `CUDA::cudart` PUBLIC link (not implicit propagation).
+(4) gpuvolta = Cascade Lake ⇒ NO `-march=sapphirerapids` (SIGILL); generic build + runtime ISA dispatch.
+(5) Seam correction: `computeLikelihoodDervPointer` is at `phylotree.h:1346`, not in the 902-1004 block.
+
+Next: **G.1.1** — custom postorder lnL kernel (K1), gate = full-tree lnL bit-parity vs the G.0 CPU oracle
+(−7541976.9391 for LG+G4) and NCAT=10 single-pass == r10split −7554280.5776 (Δ=0).
+
+---
+
 ## 2026-06-07 — WS Phase B.1 (progressive pre-pruning broadcast): **+1.5% improvement over FCA no-WS** (AA 100K np=2, job 170149201)
 
 Phase B.1 implements `progressiveWarmStartBcast()` — a per-rate-class `MPI_Allreduce(OR)` called from
