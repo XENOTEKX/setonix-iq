@@ -24,6 +24,10 @@
 
 #include <iqtree_config.h>
 
+#ifdef IQTREE_GPU
+#include "tree/gpu/gpu_iqtree.h"   // C-linkage decl of iqtree_gpu_diag()
+#endif
+
 #if defined WIN32 || defined _WIN32 || defined __WIN32__ || defined WIN64
 #include <winsock2.h>
 //#include <windows.h>
@@ -2277,6 +2281,22 @@ int main(int argc, char *argv[]) {
     /*************************/
 
     parseArg(argc, argv, Params::getInstance());
+
+    // --- GPU diagnostic hook (Phase G.1.0) -----------------------------------
+    // Runs only with --gpu. Launches a hello-world CUDA kernel, prints device
+    // info + a success banner, and checks cudaGetLastError(). It then RETURNS so
+    // the normal CPU analysis continues undisturbed (no GPU kernels are wired
+    // into the likelihood path yet). Built without -DIQTREE_GPU=ON, it prints a
+    // clear "built without GPU support" message instead — so --gpu never errors.
+    if (Params::getInstance().gpu) {
+#ifdef IQTREE_GPU
+        iqtree_gpu_diag();
+#else
+        cout << "GPU: this binary was built WITHOUT GPU support "
+                "(reconfigure with -DIQTREE_GPU=ON)." << endl;
+#endif
+    }
+    // -------------------------------------------------------------------------
 
     // 2015-12-05
     Checkpoint *checkpoint = new Checkpoint;

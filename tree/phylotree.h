@@ -2083,7 +2083,61 @@ public:
     void setLikelihoodKernelAVX512();
 #endif
     virtual void setLikelihoodKernelSSE();
-    
+
+    /** Phase G.2.0a: one-shot (per process) GPU log-likelihood cross-check. Rebuilds the validated K1
+        eigen-space postorder sweep clean-room from the live model/tree/alignment, runs it on the GPU, and
+        compares the total lnL against `cpu_lnL` (= curScore). Defined only in tree/phylotreegpu.cpp under
+        #ifdef IQTREE_GPU; the call site (PhyloTree::computeLikelihood) is likewise guarded, so a CPU-only
+        build never odr-uses this declaration. Pure read-only diagnostic. */
+    void gpuLnLCrossCheckOnce(double cpu_lnL);
+
+    /** Phase G.2.0b: reusable clean-room GPU whole-tree log-likelihood. Rebuilds the validated K1 eigen-space
+        postorder sweep from the LIVE model/site_rate/tree/alignment and returns the ptn_freq-weighted total
+        log-likelihood. If out_patlh != nullptr it is filled with the per-pattern log|lh_ptn| (aln->size()
+        entries, pattern order). Returns NaN if the regime is unsupported (non-reversible / mixture /
+        site-specific / num_states∉{4,20}) or a CUDA error occurs — callers fall back to CPU. Defined only in
+        tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
+    double gpuComputeTreeLnLCleanRoom(double *out_patlh);
+
+    /** Phase G.2.0b: GPU override for computeLikelihoodBranchPointer (byte-matches ComputeLikelihoodBranchType).
+        Returns the whole-tree lnL via gpuComputeTreeLnLCleanRoom (reversible ⇒ branch-independent), mirrors the
+        per-pattern values into _pattern_lh[] and zeroes the branch lh_scale_factor (NORM_LH) so the downstream
+        computeLogLVariance/computePatternLikelihood produce the correct s.e.; delegates to the saved CPU Branch
+        pointer if the per-call gate fails. Installed only under the narrow -blfix lnL-only gate. */
+    double computeLikelihoodBranchGPU(PhyloNeighbor *dad_branch, PhyloNode *dad, bool save_log_value);
+
+    /** Phase G.2.0b: gated hook called LAST in setLikelihoodKernel. Saves the ISA-set CPU Branch pointer and
+        overrides computeLikelihoodBranchPointer with the GPU version (idempotent; re-applied on every funnel
+        re-invocation). No-op unless the narrow lnL-only gate holds (gpu && fixed_branch_length==BRLEN_FIX &&
+        num_states∈{4,20} && !supertree && no -wsl/-wpl/-alrt/-abayes/-b/-bb/-asr/dating/pll). */
+    void setLikelihoodKernelGPU();
+
+    /** Phase G.2.0b: saved CPU Branch pointer for fallback (set by setLikelihoodKernelGPU; nulled in init()). */
+    ComputeLikelihoodBranchType cpuComputeLikelihoodBranchPointer;
+
+    /** Phase G.2.1a: clean-room single-edge branch-length derivative for edge (dad_branch->node, dad). Builds two
+        directed sub-sweeps split by the central edge (stateless), returns df = d(lnL)/dt (un-negated), *out_ddf
+        the 2nd derivative, *out_lnL the tree lnL at the central length. NaN if unsupported (leaf endpoint /
+        non-reversible / mixture / num_states∉{4,20}). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
+    double gpuComputeEdgeDervCleanRoom(PhyloNeighbor *dad_branch, PhyloNode *dad, double *out_ddf, double *out_lnL);
+
+    /** Phase G.2.1a: one-shot (per process) GPU single-edge derivative cross-check. Picks an internal-internal
+        edge and compares GPU df/ddf against IQ-TREE's own computeLikelihoodDerv. Pure read-only diagnostic;
+        defined only under #ifdef IQTREE_GPU, call site guarded. */
+    void gpuDervCrossCheckOnce();
+
+    /** Phase G.2.1b: GPU override for computeLikelihoodDervPointer (byte-matches ComputeLikelihoodDervType).
+        Stateless clean-room single-edge df/ddf via gpuComputeEdgeDervCleanRoom; un-negated; CPU fallback on NaN. */
+    void computeLikelihoodDervGPU(PhyloNeighbor *dad_branch, PhyloNode *dad, double *df, double *ddf);
+
+    /** Phase G.2.1b: GPU override for computeLikelihoodFromBufferPointer (byte-matches the no-arg typedef).
+        Stateless clean-room whole-tree lnL at the current branch lengths; CPU fallback on NaN. */
+    double computeLikelihoodFromBufferGPU();
+
+    /** Phase G.2.1b: saved CPU Derv / FromBuffer pointers for fallback (set by setLikelihoodKernelGPU; nulled in init()). */
+    ComputeLikelihoodDervType       cpuComputeLikelihoodDervPointer;
+    ComputeLikelihoodFromBufferType cpuComputeLikelihoodFromBufferPointer;
+
     /****************************************************************************
             Public variables
      ****************************************************************************/
