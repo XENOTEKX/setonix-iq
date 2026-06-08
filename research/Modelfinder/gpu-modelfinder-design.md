@@ -28,6 +28,19 @@ the bet holds; proceed toward G.1 using the lnL path. Full record:
 > broken-BEAGLE pre-order kernel and O(depth) pre-order buffer recycling are an OPTIONAL advanced track,
 > not the critical path. GPU dev tree: `/scratch/rc29/as1708/iqtree3-gpu` (branch `gpu-kernel`, cloned
 > from the FCA source HEAD `5604606d`).**
+>
+> **Progress (2026-06-08): G.1.0 build scaffold ✅, G.1.1 lnL kernel K1 ✅, G.1.2 derivative kernel K2 ✅,
+> G.1.3 CUDA-graph + on-device echild K3 ✅ (correctness/capability)** — the two custom CUDA kernels at the
+> heart of the bet (postorder lnL + single-edge df/ddf) are validated standalone on a V100: lnL parity to
+> the G.0 oracle at rel ~1e-12 (incl. **+R10 in one pass**), FD-validated df/ddf that **rediscover
+> IQ-TREE's optimized branch length**, and the full sweep now **captured as a replayable CUDA graph fed by
+> a device-resident branch-length buffer** — a 197-edge optimizeAllBranches-shaped sweep converges
+> **bit-identically** under graph replay (clearing the "same converged branch lengths" gate). **Honest
+> caveat:** graph wall-clock is *parity* (1.00–1.01×) — the 98-dependent-kernel chain is GPU-scheduling-
+> latency-bound, so the graph's win is **structural** (104→1 host API calls + no per-iteration host
+> re-feed), and a wall-clock speedup needs same-depth kernel fusion (a perf pass). Critical-path numerics
+> + the device-resident replay capability proven; remaining work is the perf pass + in-tree integration
+> (G.2). See the [G.1 execution log](gpu-modelfinder-g1-log.md).
 New go-forward direction after the **Mode-L** single-rank optimiser was abandoned (broken FreeRate
 gradient ~10⁵⁴ on +R; +34% traversals on +G) and the entire CPU-dispatch line (Mode-F → MPGC → ATMD →
 EDM → Trimorph L2/3) was exhausted on the same walls.
@@ -216,6 +229,32 @@ Tensor-Cores 2025 syag017, BEAGLE 3/4, PhyloGrad, AD-no-Panacea), the BEAGLE Git
 CPU-failure post-mortems (Trimorph, Mode-L, CHANGELOG). Every claim below is grounded in a `file:line` or
 a cited source; full findings are archived in the run transcript. Setonix-IQ branch: `gpu-modelfinder`.
 
+**Implementation status:** **G.1.0 (build scaffold) ✅ PASS** (2026-06-07, job 170176864) — in-tree CUDA
+toolchain proven end-to-end. **G.1.1 (postorder lnL kernel K1) ✅ PASS** (2026-06-08, job 170188276 on a
+V100) — custom **eigen-space** CUDA kernel matches the G.0 oracle to rel ~1e-12 for g4/r8/r10/g1; **+R10
+runs in ONE pass** (−7554280.5776, the NCAT>8 capability stock BEAGLE lacked); native-20 VRAM r10 14.9 GB;
+g4 37.8 ms already beats BEAGLE 45 ms (all unoptimised, standalone harness `gpu_k1_lnl.cu`). **G.1.2
+(single-edge derivative kernel K2) ✅ PASS** (2026-06-08, job 170188743 on a V100) — custom eigen-space
+df/ddf kernel, **FD-validated** (df rel ~2e-9, ddf rel ~4e-6, all 4 models), lnL(t0) cross-check rel
+~1e-12, and **bisection-on-df independently rediscovers IQ-TREE's optimized edge length** (|t*−t0|≤2e-4,
+ddf<0) for g4/g1/r8/r10; each NR `evalAt` is **~1.1–1.3 ms** (theta cached). **G.1.3 (CUDA-graph capture +
+on-device echild rebuild K3) ✅ PASS (correctness/capability)** (2026-06-08, job 170189528 on a V100) —
+on-device `build_echild` from a device-resident `d_brlen` (ULP-clean vs host), full sweep captured as a
+CUDA graph and replayed without re-capture; graph lnL = G.0 oracle, **patlh bit-identical** to the naive
+path, deterministic replay, and a **197-edge optimizeAllBranches-shaped sweep converges bit-identically**
+(graph vs naive, |dt|=0) — clearing the literal "same converged branch lengths" gate. **⚠ Speed reframed:
+wall-clock is parity (1.00–1.01×) at every pattern count** — the 98-dependent-kernel chain is bound by
+GPU-side per-kernel scheduling latency the graph cannot remove; the graph's win is **structural** (104→1
+host API calls + device-resident brlen, the integration unblock), not a speedup. **Perf pass (same-depth
+kernel fusion K4, job 170194367)** done — bit-identical to oracle, and it **wins in the launch-bound regime
+(1.79× at nptn=1000)** but is a **wash-to-slight-loss at the compute-bound production count** (g4 1.05×, g1
+1.14×, r8 0.96×, r10 0.94×). The decisive finding: the real ML tree is a **deep height-42 ladder** (only ~8
+shallow levels batch; a 33-deep serial tail can't), and at 100K patterns the V100 is already SM-saturated,
+so **the production bottleneck is intra-kernel compute/bandwidth, not launch overhead** — relocating the
+speedup lever to coalescing/shared-mem/register opts (K1 headroom; K1 already beats BEAGLE 37.8 vs 45 ms),
+*not* launch batching. ⇒ G.2 uses the **per-node K3 graph** (not fusion) as the production sweep. Running
+execution log: [gpu-modelfinder-g1-log.md](gpu-modelfinder-g1-log.md). Next: **G.2 in-tree integration**.
+
 ## II.0 The decisive reframe (read this first)
 
 The standalone G.0 harness explored the **Ji-et-al O(N) all-branch pre-order gradient** because it was
@@ -275,8 +314,10 @@ unscaled) so the custom kernel inherits the proven bit-parity.
 
 ## II.2 The integration seam (surgical, no call-site churn)
 
-IQ-TREE dispatches the kernel through **four `PhyloTree` member function pointers** (`tree/phylotree.h:902-904,950-951,1002-1004`),
-assigned per state-count/ISA in `setLikelihoodKernel*` (`tree/phylotreeavx.cpp:63-160`) and invoked through
+IQ-TREE dispatches the kernel through **four `PhyloTree` member function pointers** (`tree/phylotree.h:904,
+951,1004` and — corrected G.1.0 — **`computeLikelihoodDervPointer` at 1346**, sibling
+`computeLikelihoodDervMixlenPointer` at 1349; NOT all in the 902-1004 block),
+assigned per state-count/ISA in `setLikelihoodKernel*` (`tree/phylotreeavx.cpp:50-145`) and invoked through
 thin virtual wrappers (`tree/phylotreesse.cpp:212-236`):
 
 ```
@@ -396,10 +437,10 @@ fires before the +R long-pole. Strip the entire `_IQTREE_MPI` LPT dispatch block
 
 | Phase | Deliverable | Independent test | Validates against |
 |---|---|---|---|
-| **G.1.0 Build scaffold** | `option(IQTREE_GPU)` + gated `enable_language(CUDA)` + `iqtree_gpu` .cu static lib linked into `iqtree3` (mirror `kernelavx` at CMakeLists.txt:903-977,1022) + `#cmakedefine IQTREE_GPU` + `--gpu` flag + a hello-world `.cu` launched from a diag path. In-job build (pin `cuda/12.5.1 + gcc/12.2.0 + cmake/3.24.2`). | `-DIQTREE_GPU=OFF` build byte-identical to today; `-DIQTREE_GPU=ON` w/o `--gpu` runs CPU path; `--gpu` launches the kernel + clean `cudaGetLastError` on gpuvolta. | Pure plumbing (no numerics). |
-| **G.1.1 Postorder lnL kernel (K1)** | Custom CUDA postorder partial-LH, eigen-coords `[ptn][cat][state]`, compact tips, FP64 unscaled, NCAT≤10 single-pass, native-20. Wire `computePartialLikelihoodPointer`+`computeLikelihoodBranchPointer`. | Per-node `partial_lh` device==host bit-parity on a toy AA aln; full-tree lnL bit-parity vs CPU; **NCAT=10 in ONE pass = r10split −7554280.5776 (Δ=0)**. Nsight: >80 % HBM peak, ~100 % coalescing. | G.0 lnL: −7541976.9391 (g4), bit-parity all models; the NCAT>8 single-pass claim. |
-| **G.1.2 Single-edge derivative kernel (K2)** | `computeLikelihoodDervSIMD` analog: `theta` cache + `val0/val1/val2` + `dotProductTriple` df/ddf. Wire `computeLikelihoodDervPointer`+`computeLikelihoodFromBufferPointer`. | df/ddf vs CPU `computeLikelihoodDerv` to FD/bit parity; drive `minimizeNewton` on one branch → converged length matches CPU (Δ<branch-tol). | The branch-NR primitive (75–85 % of wall); CPU FD oracle (g4 2.8e-3, g1 1.1e-7). |
-| **G.1.3 CUDA-Graph capture** | Capture `optimizeAllBranches` sweep; branch lengths in device buffers; replay per NR step; rollback→non-graph fallback. | Graph-replayed sweep → same converged branch lengths + lnL as per-call (Δlnl<1e-4); CPU-submission time/replay measured vs naive per-call. | G.1 gate: replay correct AND materially faster. |
+| **G.1.0 Build scaffold ✅ PASS** (job 170176864) | `option(IQTREE_GPU)` + gated `enable_language(CUDA)` + `iqtree_gpu` .cu static lib linked into `iqtree3` (mirror `kernelavx`; option ~297, CUDA block before `add_subdirectory(main)` ~913, link after 1023) + `#cmakedefine IQTREE_GPU` + `--gpu`/`-gpu` flag + a hello-world `.cu` launched from the diag hook (`main.cpp` after `parseArg`). In-job build (`cuda/12.5.1 + gcc/12.2.0 + cmake/3.24.2`, all-GCC host). | `-DIQTREE_GPU=OFF` build behaviourally identical; `-DIQTREE_GPU=ON` w/o `--gpu` runs CPU path; `--gpu` launches the kernel + clean `cudaGetLastError` on gpuvolta. | Pure plumbing (no numerics). **✅ 8/8: ON+OFF build; V100 kernel launch (marker 0xC0DE, `cudaGetLastError=cudaSuccess`); `libcudart` linked ON only; OFF==ON-no-gpu==ON-`--gpu` lnL −21152.524 (example.phy). Cost: clone submodules `cmaple`/`lsd2` had to be populated from the FCA source first.** |
+| **G.1.1 Postorder lnL kernel (K1) ✅ PASS** (job 170188276) | Custom CUDA **eigen-space** postorder partial-LH, layout `[slot][cat·NS+state][ptn]` (pattern-contiguous, coalesced), compact tips, FP64 unscaled, NCAT≤10 single-pass, native-20. Standalone harness `gpu_k1_lnl.cu` (validated before the in-tree wiring, which becomes part of G.2). | full-tree lnL parity vs G.0 oracle; **NCAT=10 in ONE pass = r10split −7554280.5776**. (Nsight HBM% deferred.) | G.0 lnL: −7541976.9391 (g4). **✅ 4/4 models rel ~1e-12 to oracle (g4/r8/r10/g1); r10 ONE-PASS exact (NCAT>8 cap GONE); native-20 VRAM r10 14.9 GB < V100; K1 g4 37.8 ms BEATS BEAGLE 45 ms — all unoptimised. g1-log.** |
+| **G.1.2 Single-edge derivative kernel (K2) ✅ PASS** (job 170188743) | `computeLikelihoodDervSIMD` analog: t-independent `theta = node_eig ⊙ dad_eig` cache (computed once on GPU) + `val0/val1/val2 = exp(eval·r·t)·prop·{1,r·eval,(r·eval)²}` uploaded per-step + `k2_derv` triple-dot → lh/df/ddf. Standalone harness `gpu_k2_derv.cu` (in-tree `computeLikelihoodDervPointer` wiring deferred to G.2). | df/ddf vs CPU FD oracle (swept-ε); lnL(t0) cross-check vs K1/G.0; bisection-on-df → converged length matches IQ-TREE's. | **✅ 4/4 models: FD df rel ~2e-9 (meets g1<1e-6 by 3 orders), ddf rel ~4e-6; lnL(t0) cross-check rel ~1e-12 (freq-fold identity OK); bisection rediscovers t0 (\|t*−t0\|≤2e-4, ddf<0). evalAt ~1.1–1.3 ms (theta cached). g1-log.** |
+| **G.1.3 CUDA-Graph capture ✅ PASS (correctness/capability; speed reframed)** (job 170189528) | On-device `build_echild` rebuilds echild from a device-resident `d_brlen`; full sweep `[brlen H2D→build_echild→memset→98×k1_node→reduce→lnL D2H]` captured on a non-default stream (Global mode), replayed per brlen change with one `cudaGraphLaunch` (Pattern-A pinned-buffer brlen node; no re-capture/SetParams); deterministic block-local pairwise reduction; fallback→naive on capture error. Standalone `gpu_k3_graph.cu`. | Graph lnL == naive == G.0 oracle; **patlh bit-identical** graph-vs-naive (pre-reduction); deterministic replay; **197-edge optimizeAllBranches-shaped sweep converges bit-identically** to naive (|dt|=0, ΔlnL=0); timing curve graph-vs-naive across nptn. | **✅ 4/4 models: V0 echild ULP-clean (≤4e-16); V1 oracle rel ~1e-12; V2 patlh 0/100000 diff; V3 deterministic; V4 perturb Δ≤9e-10; V5/V6 graph≡naive convergence (|dt|=0). ⚠ wall-clock PARITY 1.00–1.01× (98-kernel-chain scheduling-latency-bound, not host-submission-bound) → win is STRUCTURAL: 104→1 API calls + device-resident brlen, NOT a speedup. Speedup needs same-depth kernel batching (perf pass). g1-log.** |
 | **G.2 ModelFinder scoring integration** | Full `-m TEST` AA-100K on GPU, models sequential, keep CPU `filterRates`; strip MPI dispatch. | Best model = **LG+G4**; per-model lnL parity; `filterRates` prunes the same models (`MF_IGNORED` table matches CPU). | lnL −7,541,976.86; **MF wall < 221.6 s** (R1+R2+AVX512, honest single-node floor; vanilla 264 s / FCA-np1 258 s are the easy bar; FCA-np2 149 s on 2 nodes is the stretch). |
 | **G.3 Heavy regime** | `-m MF` AA-100K, +R2..+R10 single-pass, +R warm-start chain order preserved. | No +R10 pole; r10 one-pass. | **MF wall < FCA np=1 1341 s**, ideally < np=2 481 s (CHANGELOG:136-137). |
 | **G.4 AA-1M tiling** | Pattern tiling (stream blocks; same graph per tile); native-20 to fit ~63 GB on A100. | Tiled lnL == untiled (bit-parity where untiled fits); AA-1M finishes. | The regime where **FCA np=16 timed out at 3 h** (CHANGELOG:158) — any correct finite result is a win. |

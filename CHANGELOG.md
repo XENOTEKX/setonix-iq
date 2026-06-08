@@ -208,6 +208,266 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **1M status note:** These are **not parity rows**. Across all 16 jobs in this sweep (8 earlier fail/cancel + 8 canceled at 2026-05-27 01:33 UTC via `qdel`), none finished ModelFinder, so no final best model, lnL, MF wall, or SPR wall is available. The partial logs are still useful: at 1M scale, high FreeRate tails (`+R5`/`+I+R5` for AA, `+I+R6` for DNA) can consume thousands of seconds before rate filtering fires. That reinforces the Event-Driven Moldable Dispatch design direction: rate-filter decisions need to become explicit early scheduler events, and medium/high-rate tasks cannot be trapped inside a static FCA light phase.
 
+## 2026-06-09 (gpu) — JOLT **G.4.0 PASS: preorder ALL-BRANCH gradient kernel (K7) validated** (V100, job 170279700)
+
+The first JOLT (PART IV) phase, and the make-or-break for the whole new direction: the **Ji-2020 linear-time
+all-branch gradient on the GPU**. New standalone harness `gadi-ci/gpu-modelfinder/gpu_k7_grad.cu` — the
+validated K1/K2 scaffolding byte-for-byte + ONE new kernel `k7_pre` (top-down preorder sweep yielding the
+eigen-space "rest of tree" partial `pre_v` for every node). Per-edge gradient = `theta_e = pre_v ⊙ pl_v` fed
+through the **bit-validated `k2_derv` reduction**, so all 2N-3 branch derivatives come from ONE postorder +
+ONE preorder sweep. **GATES (g4 + g1):** (1) lnL edge-invariance vs K1 oracle rel **5.8e-12 / 5.2e-12 PASS**
+(a wrong `pre_v` cannot reproduce the oracle from every edge — this validates the new kernel), (2) all-branch
+df FD-validated rel **2.5e-8 / 2.0e-8 PASS** (swept-eps, off-optimum), (3) central edge reproduces the
+G.1.2/G.2.1a-validated K2 df. ⇒ **JOLT's one genuinely new kernel is proven against our own validated
+single-edge path.**
+**Honest debugging record (3 iterations, each gate localized one issue):** build passed first try (nvcc exit 0);
+bug#1 = transcribed step-1 from the Mode-L DOC pseudocode (`inv_evec`) but the actual post-fix source uses
+`evec` (the doc predates the §17.10-17.13 audit fixes) → lnL-invariance 1.57→1.1e-3; bug#2 = branch
+double-count (`k7_pre` baked `exp(b_v)` into `pre_v` AND `val0` reapplied it) — caught because the seeded
+central edge stayed correct while deep edges blew up → fixed by storing `pre_v` WITHOUT its own branch
+(matching the validated seeded convention) + applying the PARENT branch in step 1 → invariance 1.1e-3→5.8e-12;
+the residual FD "fail" was a harness artifact (FD at the optimized lengths where df~0 is ill-conditioned) →
+swept-eps off-optimum (the K2 discipline) → clean PASS. **r8/r10 SKIPPED:** the naive one-preorder-buffer-per-node
+arena OOMs the 32GB V100 (35-45GB) — needs Ji O(depth) recycling, deferred to G.4.0b. Dev: NOTHING committed.
+**Next: G.4.0b (+R gradient overflow kill-switch on the unscaled path + O(depth) recycling) → G.4.1 (joint LM/L-BFGS driver: converge to the same MLE in fewer GPU critical-path steps).**
+
+## 2026-06-08 (gpu) — GPU ModelFinder **PART IV: JOLT — first-principles GPU-native joint-gradient optimizer** (new research direction; literature-grounded)
+
+A first-principles redesign of the OPTIMIZER (not the substrate), written to
+`research/Modelfinder/gpu-modelfinder-part4-jolt-optimizer.md`. **Thesis:** IQ-TREE's per-edge Gauss-Seidel
+NR + alpha-Brent + EM is a CPU-shaped algorithm (low-memory, few-traversal, SEQUENTIAL) and the
+sequentiality is what starves the GPU (25% occ, latency-bound, 50–100× on -m TEST). The GPU-optimal algorithm
+is the opposite: the **Ji-2020 / Gangavarapu-2024 linear-time all-branch + all-param analytic gradient in 2
+fully-parallel traversals** (postorder + preorder) feeding a **joint Levenberg–Marquardt / L-BFGS step** over
+the whole ~200-dim θ vector — trading "+1 traversal + more FLOPs" (free on a bandwidth-rich GPU) for removing
+the 197-edge sequential chain + the 10–20-traversal alpha-Brent line search (the entire wall).
+**JOLT = Mode-L reborn where its three CPU failure modes INVERT:** (1) Mode-L's L.1 "+34% more traversals"
+loss → the GPU metric is critical-path length, not traversal count, which JOLT slashes (197+Brent dependent
+steps → 2 parallel sweeps); (2) the FreeRate gradient overflow (~10⁵⁴) that KILLED Mode-L was a CPU
+`exp(scale_log−_pattern_lh)` per-category-scaling artifact — **our GPU path is FP64-UNSCALED in the validated
+eigen-space (no scale_log), so the overflow mode may be structurally absent** (the make-or-break hypothesis,
+gated at G.4.0b); (3) Mode-L's 1-thread/model limit → GPU runs the whole device + grid.z batch.
+**Composes with PHALANX-BMF** (PART III): JOLT = the per-model algorithm (2 sweeps + solve), PHALANX = the
+batching/kernel substrate (B models via grid.z). JOLT promotes the design-doc's "optional G.5 Ji pre-order
+gradient" to the CRITICAL PATH for GPU. Lit: Ji 2020 MBE 37:3047 (126–234× ML-opt); Gangavarapu 2024
+btae030 (many-core all-branch gradient); torchimize/GPU-LMFit (batched LM on GPU prior art); Fourment 2023
+(hand-code gradients, don't autodiff). Correctness contract = **same MLE, not same trajectory** (gate lnL
+rel≤1e-9 + best-model + AIC/BIC ranking, FD-validate every gradient component — the non-negotiable Mode-L
+lesson). Phased G.4.0 (preorder gradient K7 FD-validated all-branch) → **G.4.0b (the cheap kill-switch:
+re-test the exact +R gradient that overflowed at 10⁵⁴ on CPU, on the unscaled GPU path)** → G.4.1 joint LM
+driver → G.4.2 in-tree → G.4.3 grid.z + tiling. ⚠ The unscaled-avoids-overflow claim is a HYPOTHESIS,
+flagged. Research done inline (the prior workflow's 8 research agents died on the session limit; inline web
+research was the reliable path). NOTHING committed.
+
+## 2026-06-08 (gpu) — GPU ModelFinder **multi-model gate COMPLETE + G.2.2a wall verdict + PHALANX-BMF architecture** (V100, jobs 170260083/84 + 170265539 + 170265661)
+
+Closes G.2 correctness and pivots to the performance architecture. **Multi-model gate (all bit-identical):**
+WAG+G4 (20-state) GPU=CPU −7602067.4273 rel 0.0; **DNA GTR+G4 (first 4-state in-tree test) GPU=CPU −5692973.0874
+rel 0.0** (`num_states=4` through the seam); **+I fallback fires correctly** — WAG+I+G4 shows `[GPU-KERNEL]`
+install + `[GPU-BRANCH] → CPU fallback`, NO `[GPU-DERV]/[GPU-FROMBUF] active`, lnL=CPU rel 0.0 (control WAG+G4
+on the same small aln runs fully on GPU, rel 0.0).
+
+**G.2.2a wall verdict (job 170265661, `--gpu -m TESTONLY -mrate G`, all-GPU +G4):** scored **6 models in 2.5 h
+before timeout (~25 min/model)** — the 6 are **bit-identical to the CPU baseline** (LG+G4 7541976.853 = baseline,
+#1 by BIC; LG+F+G4/WAG+G4/JTT+F+G4 match), so **MF selection is correct; the stateless wall is ~50–100×**
+(full 224-model ≈ tens of hours vs CPU 221.6 s). The entire remaining problem is THROUGHPUT.
+
+**Architecture decided (user): cross-model batching centerpiece + regime-aware routing.** A 15-agent
+research→design→review→synthesis workflow produced **PHALANX-BMF** (`research/Modelfinder/gpu-modelfinder-part3-architecture.md`):
+5 composable layers — (1) warp-cooperative state-distributed kernels K1c/K2c to break the 128-reg/25%-occupancy
+ceiling; (2) cross-model `grid.z=model` batch (the novel centerpiece — FCA model-dispatch as on-device DATA
+parallelism, B candidates co-resident sharing topology/tips/ptn_freq); (3) intra-NR-burst device-resident theta
+cache (restores K2's 1.21 ms evalAt vs 38 ms stateless) keyed by a per-tree `clearAllPartialLH` generation
+counter; (4) decoupled batched optimiser driver + retire-and-compact + filterRates batch pruning; (5)
+regime-aware GPU/CPU router + pattern tiling. Honest verdict baked in: 100K −m TEST gap-closing is a **coin-flip
+gated on the K1c occupancy restructure** (grid.z alone can't lift occupancy — the grid is already
+block-saturated; the naive register knob already backfired in the K5 sweep); the **+R long-pole is the
+least-batchable** (sequentially dependent ladder, filterRates can't prune pre-eval); the **decisive single-GPU
+win is the 1M/10M HBM-bandwidth regime** (the "1 GPU beats 16 CPU nodes" target). Phased plan G.3.0–G.3.5 with
+**G.3.0 = standalone occupancy kill-switch** (Nsight warps/SM gate) BEFORE any phylotesting.cpp restructure.
+⚠ The 8 deep-research sub-agents failed on a session limit, so §III.5 library/literature is reasoned-from-principles
+(flagged for enrichment); the architecture is profiling-driven so unaffected. NOTHING committed (all local).
+
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.2.1b full GPU branch optimisation: end-to-end, GPU≡CPU bit-identical** (real iqtree3 binary, V100, jobs 170259046 + 170259325)
+
+The whole Newton-Raphson branch-length optimisation now runs **entirely on the GPU**. `-blfix` is dropped;
+`setLikelihoodKernelGPU()` installs all three overrides (`computeLikelihoodBranchGPU` + `computeLikelihoodDervGPU`
++ `computeLikelihoodFromBufferGPU`), each a stateless clean-room sweep, backed by a persistent device-buffer pool
+(alloc-once/reuse the ~6 GB partial arena; contents recomputed each call ⇒ statelessness preserved). Full record:
+`gpu-modelfinder-g1-log.md` (✅ G.2.1b).
+
+```
+[GPU-KERNEL]  Branch+Derv+FromBuffer -> GPU (stateless clean-room); fixed_branch_length=0
+[GPU-BRANCH]/[GPU-DERV]/[GPU-FROMBUF]  all active
+[GPU-DERV-XCHECK] INT-INT df rel 3.99e-12 / ddf 4.54e-15   LEAF df rel 5.93e-13 / ddf 9.85e-16   -> PASS
+GPU lnL = CPU lnL = -7541976.8530   rel=0.000e+00          -> PASS (gate 1e-9)
+197 optimised branch lengths        worst_rel=0.000e+00     -> PASS (gate 1e-6)
+[GPU wall] 1063 s    [CPU wall] 225 s
+```
+
+- **Bit-identical** final lnL **and** all 197 optimised branch lengths (rel = 0.0 to the .treefile's ~6–7 written
+  digits; underlying gradient agrees ~1e-12/1e-15 and NR lands on the same optimum within ε) — stronger than the
+  rel≤1e-9 / rel≤1e-6 gates. Convergence path matched round-by-round. CPU run byte-unchanged.
+- The LEAF-edge regression validates `k_leaf_eig` (tip eigen partial `Uinv[·][s]` / `UinvRowSum`), so every edge a
+  real `optimizeAllBranches` touches runs on the GPU — no mid-opt CPU fallback.
+- **Wall is the real signal:** GPU **1063 s** vs CPU **225 s** for one model (**4.7× slower**) — exactly the
+  stateless re-sweep cost the G.2.1 contract predicted (~38 ms sweep per NR `evalAt`, no theta cache). ⚠ This is
+  *full -te branch-opt* (197 branches × NR = heaviest per-model workload); ModelFinder per-candidate is lighter, so
+  do **not** extrapolate 4.7× to MF — G.2.2 measures the real `-m TEST` wall. (PBS "GPU Util 0%" is a sampling
+  artifact; 6.05 GB GPU memory confirms kernels ran; the path is latency-bound at ~25 % occupancy.)
+- The device-mirror coherence problem (Risk #2) never materialised — no device-resident state to go stale. theta
+  reuse + `clearAllPartialLH` generation-counter dirty-bitmap remain the gated speedup lever, applied only if G.2.2
+  misses the wall. Code: `gpu_lnl_intree.cu` (`k_leaf_eig` + `DevBuf` pool) + `phylotreegpu.cpp`
+  (`computeLikelihoodDervGPU`/`FromBufferGPU` + leaf endpoints + 3-pointer install + `+I`→CPU gate). Script
+  `run_g2_1b_full_v100.sh`. **Nothing committed (all local).**
+
+Next: multi-model gate (WAG+G4 AA, DNA GTR+G4; confirm WAG+I+G4 → CPU fallback), then **G.2.2** full `-m TEST`
+(persistent GPU instance + per-evaluate CPU fallback) — gate = same best model + displayed lnL rel≤1e-12 +
+identical AIC/BIC ranking + MF wall vs 221.6 s.
+
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.2.1a single-edge derivative cross-check PASSES** (real iqtree3 binary, V100, job 170258836)
+
+De-risks the new G.2.1 branch-optimisation math (read-only) before wiring the Derv/FromBuffer pointers. A
+one-shot `gpuDervCrossCheckOnce` computes the GPU single-edge df/ddf clean-room (`gpuComputeEdgeDervCleanRoom` →
+`gpu_derv_crosscheck`: arbitrary-edge directed partials via TWO sub-root DFS sweeps with the central edge
+excluded from both, + the G.1.2-validated K2 `val0/val1/val2` reduction) and compares to IQ-TREE's own
+`computeLikelihoodDerv`. Full record: `gpu-modelfinder-g1-log.md` (✅ G.2.1a).
+
+```
+[GPU-DERV-XCHECK] edge(R=100,C=101) t=0.0142171
+  df:  GPU=3.323413e+01   CPU=3.323413e+01   rel=3.988e-12
+  ddf: GPU=-5.124683e+06  CPU=-5.124683e+06  rel=4.543e-15   -> PASS (derivative bridge OK)
+```
+
+- df rel **3.99e-12**, ddf rel **4.54e-15** — both far inside the 1e-9 gate. Directed-partial sweep + K2
+  reduction exact; **sign confirmed un-negated** (matches CPU's returned df; computeFuncDerv negates downstream).
+- New code in the existing `iqtree_gpu` lib (no new files): `k2_derv` kernel + `gpu_derv_crosscheck` launcher;
+  `gpuComputeEdgeDervCleanRoom` + `gpuDervCrossCheckOnce`. G.2.0b lnL seam regression stayed green (rel 1.235e-16).
+- Harness gotcha (1st run): the stateless GPU Branch override leaves host partials unpopulated → the
+  cross-check's CPU `computeLikelihoodDerv` underflowed (`!isfinite(df)`); fixed by seeding the edge's host
+  partials via a CPU branch eval first (cross-check artifact only — production GPU Derv is stateless).
+
+Next: **G.2.1b** — wire `computeLikelihoodDervGPU` + `computeLikelihoodFromBufferGPU` (stateless), add
+leaf-endpoint synthesis (`k_leaf_eig`, so all ~100 leaf edges run on GPU, not CPU-fallback), gate out +I
+(clean-room omits `ptn_invar`), drop the `-blfix` gate; validate +G4 models (LG+G4/WAG+G4/DNA GTR+G4) full
+branch-opt lnL rel ≤ 1e-9 + brlen vector rel ≤ 1e-6 vs CPU.
+
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.2.0b seam wired: Branch pointer → GPU, GPU≡CPU bit-identical** (real iqtree3 binary, V100, job 170205301)
+
+IQ-TREE's **own** `computeLikelihood` now routes the whole-tree log-likelihood through the GPU under
+`--gpu … -blfix`. A gated non-virtual `setLikelihoodKernelGPU()` (called LAST in the `setLikelihoodKernel`
+funnel, phylotreesse.cpp, `#ifdef IQTREE_GPU`) saves the ISA-set CPU Branch pointer and overrides
+`computeLikelihoodBranchPointer` with a new `PhyloTree::computeLikelihoodBranchGPU` member (byte-matches the
+typedef). The override calls the reusable `gpuComputeTreeLnLCleanRoom()` helper (G.2.0a sweep, extracted),
+**mirrors the per-pattern `log|lh_ptn|` into host `_pattern_lh[]`** + zeroes the branch `lh_scale_factor`
+(NORM_LH), and delegates to the saved CPU pointer on any unsupported regime. Full record:
+`gpu-modelfinder-g1-log.md` (✅ G.2.0b); plan `gpu-modelfinder-g2-plan.md`.
+
+**Adversarial pre-verification (5-agent workflow) shaped the design AND caught a bug.** Confirmed Derv/FromBuffer
+are unreachable under `-blfix` (branch-NR gated out at modelfactory.cpp:1628; `-te` zeroes min_iterations; +G4
+alpha uses derivative-free Brent) — so a Branch-only override is coherent. But found `computeLogLVariance()`
+(phyloanalysis.cpp:3946) is **unconditional** and re-reads host `_pattern_lh[]` after Branch returns → a
+scalar-only override would give a wrong/NaN s.e. Fix: mirror `_pattern_lh` from the launcher's already-computed
+values (zero phyloanalysis.cpp edits). Gate rejects `-wsl/-wpl/-alrt/-abayes/-b/-bb/-asr/dating/pll` +
+non-FIX/supertree/non-reversible/mixture/site-specific.
+
+**Result — `--gpu -te TREE -m LG+G4 -blfix` on AA-100K vs the same binary without `--gpu`, 5/5 gates:**
+
+```
+[GPU-KERNEL] setLikelihoodKernelGPU: Branch pointer -> GPU (clean-room lnL, -blfix lnL-only); fixed_branch_length=1 num_states=20
+[GPU-BRANCH] computeLikelihoodBranchGPU active (clean-room full sweep; _pattern_lh mirrored)
+[GPU-XCHECK] GPU lnL = -7541977.778778   CPU lnL = -7541977.778778 (CPU-recompute)   rel=1.235e-16   -> PASS
+GPU/CPU  Log-likelihood of the tree: -7541976.8566 (s.e. 15407.1942)   |d|=0.0  rel=0.000e+00  -> PASS
+```
+
+- **Install + active markers fired** (the GPU pointer genuinely computed branch lnLs, not a silent CPU fallback).
+- **In-process self-check:** GPU clean-room sweep == an independent CPU recompute (saved pointer, same process)
+  at **rel 1.235e-16** (machine epsilon).
+- **Final lnL + s.e. bit-identical** GPU vs CPU (rel 0.0) including the s.e. — the `_pattern_lh` mirror is
+  faithful, resolving the adversary's counterexample.
+- **CPU path unperturbed** (no `[GPU-*]` markers without `--gpu`; identical output). Build incremental
+  `make exit=0`, walltime 3:16. Script `run_g2_0b_seam_v100.sh`.
+
+Next: **G.2.1** — GPU branch-length optimisation (override Derv (K2) + FromBuffer co-consistently;
+device-theta rebuilt on host `theta_computed==false`; device-slot dirty bitmap in lockstep with
+`clearReversePartialLh`) to lift `-blfix`. Highest risk = theta/device coherence (stale device state →
+silently wrong) — adversarially verify the invalidation contract first. Gate: ≥3 models converged lnL rel
+≤ 1e-9 + optimised brlen vector rel ≤ 1e-6.
+
+## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.2.0a in-tree clean-room lnL cross-check PASSES** (real iqtree3 binary, V100, job 170203514)
+
+First in-tree GPU code run inside the **real iqtree3 binary** (dev tree `/scratch/rc29/as1708/iqtree3-gpu`,
+branch `gpu-kernel`) — start of **G.2** integration. A gated one-shot `PhyloTree::gpuLnLCrossCheckOnce`
+(new TU `tree/phylotreegpu.cpp`, `#ifdef IQTREE_GPU`; hook at `computeLikelihood` phylotree.cpp:1310, gated
+`params->gpu`) rebuilds the validated K1 eigen-space postorder sweep **clean-room from the LIVE model/tree/
+alignment objects** and compares its GPU total lnL to IQ-TREE's own `curScore`. **Zero coupling** to the
+fn-pointer seam, host partial buffers, or `TraversalInfo` — pure additive read-only diagnostic that de-risks
+the harness↔in-tree **bridge** before the seam is wired (G.2.0b). Full record: `gpu-modelfinder-g1-log.md`
+(✅ G.2.0a); plan `gpu-modelfinder-g2-plan.md`.
+
+**Result — LG+G4 on AA-100K (the standing gate dataset, 100 taxa / 96017 patterns / NCAT=4 / native-20):**
+
+```
+[GPU-XCHECK] ns=20 nptn=96017 ncat=4 ntax=100 nNodes=198 nInternal=98 (root@internal node id=100)
+[GPU-XCHECK] GPU lnL = -7541977.778778   CPU lnL = -7541977.778778   |d|=9.3132e-10   rel=1.235e-16   -> PASS (bridge OK)
+```
+
+- **rel = 1.235e-16** — machine epsilon, ten orders of magnitude tighter than the 1e-12 gate. Bridge proven
+  exact, **no transpose**: eigen layout (`U` row-major, `P=U·exp(Λt)·U⁻¹`), full-ambiguity tip fold,
+  integer `ptn_freq` weighting, π-folded factors consumed directly.
+- **NORM_LH confirmed in vivo** (leafNum=100 < `numseq_safe_scaling`=2000, num_states=20 → unscaled). The
+  earlier "SAFE_LH needed" mis-scope is dead; harness math is the production oracle.
+- **CPU path byte-unchanged:** `--gpu` and CPU runs both report `-7541976.8530 (s.e. 15407.1763)`. The
+  `#ifdef IQTREE_GPU` + `params->gpu` gate keeps the CPU build/run untouched.
+- **Build:** incremental rebuild of `build-gpu-on`, `make exit=0`, 11.36 MB binary; CMake wiring
+  (`gpu_lnl_intree.cu`→`iqtree_gpu`, `phylotreegpu.cpp`→`tree`) clean. Script `run_g2_0a_xcheck_v100.sh`.
+
+Next: **G.2.0b** — override `computeLikelihoodBranchPointer` at the `setLikelihoodKernel` funnel
+(phylotreesse.cpp:173) so IQ-TREE's own `computeLikelihood` routes through the GPU; validate lnL-only under
+`-blfix` (the sole exercised pointer; Derv/FromBuffer never fire), gate `--gpu -te -m LG+G4 -blfix` lnL ==
+CPU rel ≤ 1e-12 + GPU pointer proven fired + CPU byte-unchanged.
+
+## 2026-06-08 (gpu) — GPU ModelFinder **G.1.3 perf pass: kernel fusion (K4) — correct, relocates the bottleneck** (custom CUDA, V100, job 170194367)
+
+Follow-up to G.1.3's finding that the CUDA graph gave wall-clock *parity* (the 98-dependent-kernel chain is
+GPU-scheduling-latency-bound, which a graph can't fix). The fix a graph can't deliver: **fuse** the launches.
+Internal nodes grouped by **tree height** (longest path to a leaf) are independent (children always at lower
+height), so a whole height level runs in ONE `k4_level` launch (2D grid: blockIdx.y=node, blockIdx.x=pattern).
+Harness `gadi-ci/gpu-modelfinder/gpu_k4_fused.cu` (adversarially reviewed; height-leveling proven a valid
+parallel postorder schedule). Wall=1:43, SU~0.4.
+
+**Correctness — bit-identical, all 4 models:** fused lnL ≡ per-node lnL (|ΔlnL|=0), per-pattern patlh
+bit-identical (0/100000), oracle rel ~1e-12, fused-graph deterministic. Fusion changes dispatch, not numerics.
+
+**Decisive finding — real ML trees are DEEP LADDERS, not balanced.** The AA-100K `iqtree_inner.treefile` has
+**height 42** for 100 taxa: only the shallow part batches (L1=22, L2=12, L3=8, L4=8, L5=6, L6=3, L7=3, L8=2 =
+64 nodes → 8 launches), then **L9–L41 are single-node levels** (a 33-deep serial caterpillar tail). Fusion
+collapses 98 → 42 launches (2.3×), nowhere near the ~10× a balanced tree gives; the deep tail is inherently
+serial.
+
+| nptn | per-node | fused | speedup | regime |
+|------|----------|-------|---------|--------|
+| 1000 (g4) | 8.49 ms | 4.74 ms | **1.79×** | launch-bound → fusion wins |
+| 10000 (g4) | 8.35 ms | 6.25 ms | **1.34×** | partial |
+| 100000 (g4) | 37.79 ms | 36.02 ms | 1.05× | compute-bound → wash |
+| 100000 (g1) | 10.41 ms | 9.13 ms | 1.14× | compute-bound |
+| 100000 (r8) | 73.93 ms | 76.94 ms | **0.96×** | **fusion slightly SLOWER** |
+| 100000 (r10) | 92.89 ms | 99.07 ms | **0.94×** | **fusion slightly SLOWER** |
+
+**Conclusions:** (1) fusion **wins launch-bound** (1.79× @1k) — the launch collapse helps where it dominates;
+(2) at the **production 100K count it's a wash-to-slight-loss** (r8/r10 actually slower: the V100's 80 SMs are
+already saturated per-kernel, and high-NCAT register-heavy 2D grids schedule slightly worse than many small
+per-node grids); (3) **⇒ at production scale the bottleneck is intra-kernel compute/bandwidth, not launch
+overhead** — the real speedup lever is coalescing / shared-mem echild staging / `prod[NS]` register pressure
+(K1 headroom, Nsight-guided), NOT launch batching. K1 already beats BEAGLE at this size (g4 37.8 vs 45 ms), so
+it's headroom not a blocker. (4) **G.2 will use the per-node K3 graph as the production sweep**, not fusion;
+the fused machinery is retained/validated for launch-bound + balanced-tree regimes.
+
+Next: **G.2** in-tree integration — wire K1/K2 + the K3 per-node graph behind `computeLikelihood*Pointer` under
+`--gpu`; target MF wall < 221.6 s.
+
+---
+
 ## 2026-06-08 (gpu) — GPU ModelFinder **Phase G.1.3 CUDA-graph K3 ALL PASS** (custom CUDA, V100, job 170189528)
 
 Third CUDA kernel milestone: **CUDA-graph capture** of the 98-launch postorder sweep + **on-device `build_echild`**
@@ -227,9 +487,14 @@ so branch lengths can change without host involvement. Standalone harness `gadi-
 | **V6** multi-branch Gauss-Seidel sweep (g4, 197 edges) | ✅ **PASS** — graph-final lnL=−7,546,671.8370 ≡ naive-final; max \|dt\|=0.000e+00; naive re-eval of graph branch-vector = same lnL |
 | Graph capture+instantiate | ✅ OK — replay path active all 4 models |
 
-**Timing:** AA-100K V100 compute-saturated ⇒ 1.00× at nptn=100K (expected — 98×5µs API overhead = 1.3% of 38ms sweep).
-At launch-bound scales (1K/10K patterns) the 104→1 launch collapse yields 1.01×. The **capability** is device-resident
-branch lengths + single `cudaGraphLaunch` per lnL, enabling the K2 dirty-path hot loop.
+**⚠ Speed reframed by evidence — wall-clock is PARITY (1.00–1.01×) at EVERY pattern count**, not just at
+compute-bound 100K. The predicted small-nptn launch-bound win did NOT materialise: even at nptn=1000 the sweep
+is 8.4 ms (graph 8.37 / naive 8.42), because the 98 *dependent* `k1_node` launches are bound by **GPU-side
+per-kernel scheduling latency** (~85 µs each) that a CUDA graph does **not** remove — it only collapses *host*
+submission, and on the default stream that was already overlapped behind GPU execution. So the graph's win is
+**structural, not a speedup**: 104 host API calls → 1 `cudaGraphLaunch` + device-resident `d_brlen` (no
+per-iteration host re-feed). A *wall-clock* win needs **same-depth kernel batching** (fuse the 98 launches —
+already flagged as K1 headroom), a perf pass — not a correctness blocker.
 
 | Model | Graph (ms) | Naive (ms) | VRAM |
 |-------|-----------|------------|------|
@@ -238,8 +503,10 @@ branch lengths + single `cudaGraphLaunch` per lnL, enabling the K2 dirty-path ho
 | r8 (NCAT=8) | 73.9 | 74.0 | 12.01 GB |
 | r10 (NCAT=10) | 93.0 | 93.2 | 14.93 GB |
 
-Next: **G.2** in-tree integration — wire K3 graph behind `computeLikelihood*Pointer` seam under `--gpu`; K2 dirty-path
-per-edge hot loop (avoids full 98-node sweep); target MF wall < 221.6 s.
+Next: **perf pass** (fuse the 98 same-depth `k1_node` launches → cut the GPU scheduling latency the graph can't
+touch; + deferred Nsight HBM%/gap profiling), then **G.2** in-tree integration — wire K3 graph behind
+`computeLikelihood*Pointer` seam under `--gpu`; K2 dirty-path per-edge hot loop (avoids full 98-node sweep);
+target MF wall < 221.6 s.
 
 ---
 

@@ -33,3 +33,17 @@ logs/archive/
 
 # AI agent session data
 .claude/
+
+# GPU ModelFinder build artifacts (compiled CUDA binaries + Nsight profiles; sources are .cu/.cpp)
+gadi-ci/gpu-modelfinder/gpu_derisk
+gadi-ci/gpu-modelfinder/gpu_derisk_a100
+gadi-ci/gpu-modelfinder/gpu_derisk_cpu
+gadi-ci/gpu-modelfinder/gpu_derisk_diag
+gadi-ci/gpu-modelfinder/gpu_k1_lnl
+gadi-ci/gpu-modelfinder/gpu_k2_derv
+gadi-ci/gpu-modelfinder/gpu_k3_graph
+gadi-ci/gpu-modelfinder/gpu_k4_fused
+gadi-ci/gpu-modelfinder/gpu_k5_occ
+gadi-ci/gpu-modelfinder/gpu_k7_grad
+gadi-ci/gpu-modelfinder/*.nsys-rep
+gadi-ci/gpu-modelfinder/*.sqlite
