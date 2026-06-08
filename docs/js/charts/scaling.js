@@ -3,7 +3,7 @@
 // Canonical series are solid/dashed by platform; non-canonical patch/variant
 // series are shown as lighter named series (initially hidden).
 
-import { platformColour, buildFamily, dimLegendHidden } from '../utils.js?v=615560a84af8';
+import { platformColour, buildFamily, dimLegendHidden } from '../utils.js?v=d3be0c749264';
 // dimLegendHidden: shows ALL series in the legend — canonical bright, hidden NC dimmed.
 
 // Colour overrides for known MF2/patch families so they stand out.
