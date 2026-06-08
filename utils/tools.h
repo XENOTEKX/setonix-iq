@@ -2912,6 +2912,12 @@ public:
      *  input tree string (instead of a file)
      */
     string intree_str;
+
+    /**
+     *  TRUE to run the GPU path / GPU diagnostic (set by --gpu or -gpu).
+     *  Phase G.1+ in-tree CUDA ModelFinder offload; default false.
+     */
+    bool gpu;
 };
 
 /**

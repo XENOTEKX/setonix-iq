@@ -5454,6 +5454,10 @@ void parseArg(int argc, char *argv[], Params &params) {
                 params.mr_bayes_output = true;
                 continue;
             }
+            if (strcmp(argv[cnt], "--gpu") == 0 || strcmp(argv[cnt], "-gpu") == 0) {
+                params.gpu = true;
+                continue;
+            }
             if (argv[cnt][0] == '-') {
                 string err = "Invalid \"";
                 err += argv[cnt];
@@ -7555,6 +7559,7 @@ void Params::setDefault() {
     
     cmaple_use_local_ref = true;
     cmaple_output_MAT = false;
+    gpu = false;
 }
 
 int countPhysicalCPUCores() {

@@ -170,6 +170,12 @@ void PhyloTree::setLikelihoodKernel(LikelihoodKernel lk) {
             // SSE kernel
             setLikelihoodKernelSSE();
         }
+#ifdef IQTREE_GPU
+        // Phase G.2.0b: LAST step of the funnel — override computeLikelihoodBranchPointer with the GPU version
+        // when the narrow -blfix lnL-only gate holds. Re-applied here on every setLikelihoodKernel re-invocation
+        // (the ISA setter above just reset the pointer to CPU), keeping the override idempotent. No-op if gated.
+        if (params && params->gpu) setLikelihoodKernelGPU();
+#endif
         return;
     }
 

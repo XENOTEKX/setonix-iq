@@ -20,6 +20,7 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 #include "phylotree.h"
+#include <iqtree_config.h>   // IQTREE_GPU (Phase G.2.0a cross-check hook guard)
 #include "utils/starttree.h"
 #include "utils/progress.h"  //for progress_display
 //#include "rateheterogeneity.h"
@@ -109,6 +110,9 @@ void PhyloTree::init() {
     dist_matrix = nullptr;
     var_matrix = nullptr;
     params = nullptr;
+    cpuComputeLikelihoodBranchPointer = nullptr;       // G.2.0b: saved CPU Branch ptr (set by setLikelihoodKernelGPU); inert when GPU off
+    cpuComputeLikelihoodDervPointer = nullptr;         // G.2.1b: saved CPU Derv ptr
+    cpuComputeLikelihoodFromBufferPointer = nullptr;   // G.2.1b: saved CPU FromBuffer ptr
     setLikelihoodKernel(LK_SSE2);  // FOR TUNG: you forgot to initialize this variable!
     setNumThreads(1);
     num_threads = 0;
@@ -1303,6 +1307,12 @@ double PhyloTree::computeLikelihood(double *pattern_lh, bool save_log_value) {
          }*/
     }
     curScore = score;
+#ifdef IQTREE_GPU
+    // Phase G.2.0a: one-shot clean-room GPU lnL cross-check (proves the eigen/tip/weights/pi-fold bridge
+    // before the seam is wired in G.2.0b). Phase G.2.1a: one-shot single-edge derivative cross-check (GPU
+    // df/ddf vs IQ-TREE's own computeLikelihoodDerv). Both run once per process; pure read-only diagnostics.
+    if (params && params->gpu) { gpuLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); }
+#endif
     return score;
 }
 
