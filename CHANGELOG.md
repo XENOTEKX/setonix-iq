@@ -208,6 +208,34 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **1M status note:** These are **not parity rows**. Across all 16 jobs in this sweep (8 earlier fail/cancel + 8 canceled at 2026-05-27 01:33 UTC via `qdel`), none finished ModelFinder, so no final best model, lnL, MF wall, or SPR wall is available. The partial logs are still useful: at 1M scale, high FreeRate tails (`+R5`/`+I+R5` for AA, `+I+R6` for DNA) can consume thousands of seconds before rate filtering fires. That reinforces the Event-Driven Moldable Dispatch design direction: rate-filter decisions need to become explicit early scheduler events, and medium/high-rate tasks cannot be trapped inside a static FCA light phase.
 
+## 2026-06-09 (gpu) — JOLT **G.4.0b PASS: +R rate-gradient does NOT overflow on the unscaled GPU path + O(depth) recycling** (V100, job 170281211)
+
+**The JOLT make-or-break, and it PASSED decisively.** This re-tests the EXACT FreeRate gradient that overflowed
+~10⁵⁴ on CPU Mode-L (`contrib = cf·qp·exp(scale_log − _pattern_lh)`), now on the unscaled FP64 eigen path
+(`scale_log≡0`). New harness `gadi-ci/gpu-modelfinder/gpu_k7b_freerate.cu` = the G.4.0 K7 harness byte-for-byte +
+ONE new kernel `k_ratenum` + an **O(depth) pre-slot pool**. Ran g4 (recycling regression) + r4/r8/r10 (+R kill-switch).
+**(A) O(depth) RECYCLING:** a single interleaved preorder DFS recycles `treeHeight+2` slots, consuming each `pre_v`
+immediately (theta → df → rate-numerator) before recursing. **pre-pool peak = 42/44 slots = tree height** (vs 198
+nodes naive) — O(depth) confirmed. **r8 (17 GB) and r10 (22 GB) now FIT the 32 GB V100** (G.4.0 OOM'd at 35–45 GB);
+g4 is **bit-IDENTICAL to G.4.0** (lnL self-invariance rel **0.0**, df FD 2.5e-8) ⇒ recycling is numerically
+identical to the naive buffer; r8/r10 lnL-inv 0.0 + oracle 3.8e-12/6.1e-12 + df FD 2.5e-8 (the all-branch gradient
+on the WIDEST rate spreads, newly runnable). **(B) +R RATE-GRADIENT KILL-SWITCH (r4/r8/r10 all PASS):** built
+`dlnL/dr_k = w_k·Σ_ptn(Σ_e b_e·qp_e[k])/L_ptn` via the new kernel. **(B1)** FINITE & bounded: `max|dlnL/dr_k| ≈
+3–7×10⁴` (≪ 1e8) — NO overflow. **(B2)** the EXACT scaling identity `Σ_k r_k·gr_k == Σ_e b_e·gb_e` held to rel
+**5e-15…2e-13** (machine eps) — ties the +R gradient to the bit-validated branch gradient with no FD needed.
+**(B3)** per-category FD `|G-ratio| = 1.3e-8…5.0e-8 ≪ 0.01` (the Mode-L FDCHECK that read 10⁵⁴), every category of
+every model. **DECISIVE detail:** `1/L_ptn` reaches **1e92** — *larger* than Mode-L's 1e54 overflow — yet the
+gradient is finite, because `qp ∝ L_p` makes `qp/L_p` self-cancel to O(100) (`max|rnum|≈0.8`, `max|rnum/L_ptn|≈
+80–485`); the unscaled path simply has no `scale_log` factor to blow it up. Worst `lnL_ptn ≈ −212` ⇒ `L_p ≈ e⁻²¹²`,
+vast margin to the e⁻⁷⁰⁸ FP64 floor ⇒ NORM_LH (100-taxon/100K) is safe by the same argument that validated the
+likelihood. **HONEST caveat:** validates only the NORM_LH regime — >2000-taxon SAFE_LH reintroduces `scale_log` and
+will need the log-sum-exp-stable per-category reduction (deferred until that regime is needed). Job: 0.45 SU, 45 s,
+22.09 GB peak VRAM, exit 0. Dev: NOTHING committed beyond the backup commit `98b0cd50`.
+**⇒ The hypothesis of the whole JOLT direction (the Mode-L killer is a CPU-scaling artifact our GPU path lacks) is
+CONFIRMED. Next: G.4.1 (joint LM/L-BFGS driver — converge to the same MLE in fewer GPU critical-path steps).**
+
+---
+
 ## 2026-06-09 (gpu) — JOLT **G.4.0 PASS: preorder ALL-BRANCH gradient kernel (K7) validated** (V100, job 170279700)
 
 The first JOLT (PART IV) phase, and the make-or-break for the whole new direction: the **Ji-2020 linear-time

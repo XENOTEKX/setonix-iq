@@ -45,5 +45,6 @@ gadi-ci/gpu-modelfinder/gpu_k3_graph
 gadi-ci/gpu-modelfinder/gpu_k4_fused
 gadi-ci/gpu-modelfinder/gpu_k5_occ
 gadi-ci/gpu-modelfinder/gpu_k7_grad
+gadi-ci/gpu-modelfinder/gpu_k7b_freerate
 gadi-ci/gpu-modelfinder/*.nsys-rep
 gadi-ci/gpu-modelfinder/*.sqlite
