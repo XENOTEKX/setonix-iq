@@ -208,6 +208,43 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **1M status note:** These are **not parity rows**. Across all 16 jobs in this sweep (8 earlier fail/cancel + 8 canceled at 2026-05-27 01:33 UTC via `qdel`), none finished ModelFinder, so no final best model, lnL, MF wall, or SPR wall is available. The partial logs are still useful: at 1M scale, high FreeRate tails (`+R5`/`+I+R5` for AA, `+I+R6` for DNA) can consume thousands of seconds before rate filtering fires. That reinforces the Event-Driven Moldable Dispatch design direction: rate-filter decisions need to become explicit early scheduler events, and medium/high-rate tasks cannot be trapped inside a static FCA light phase.
 
+## 2026-06-09 (gpu) — JOLT **G.4.1b PASS: full +G MLE (197 branches + α) from a cold start in 27 joint iterations — α folded in for FREE, no Brent** (V100, job 170303658)
+
+**The standalone JOLT optimiser for +G is now complete end-to-end.** G.4.1 fixed α at the MLE and optimised
+only branches; G.4.1b adds the **gamma shape α to the joint parameter vector** and cold-starts BOTH far from
+optimal. New harness `gadi-ci/gpu-modelfinder/gpu_k8b_jolt_alpha.cu` = the G.4.1 driver + Yang-1994 mean-rate
+discrete-gamma (IQ-TREE's "MEAN of the portion" variant) on the host + an analytic α-gradient
+`∂lnL/∂α = Σ_c (dr_c/dα)·gradR[c]` — where `gradR[c]` is the **validated G.4.0b per-category rate gradient**
+(`k_ratenum`) and `dr_c/dα` is a host finite-difference of the discretisation. α rides the **same joint
+LM diagonal-Newton step** as the branches (`da = g_α/(|ddf_α|+μ)`, ddf_α a secant estimate); **no α-Brent**.
+- **[gamma] the discretisation reproduces IQ-TREE's printed rates.** At α=0.9963 it yields
+  `{0.1362, 0.4756, 0.9994, 2.3888}` vs the `.iqtree`'s `{0.1362, 0.4756, 0.9994, 2.3887}`, **maxdiff 6.40e-05**
+  — confirming the host gamma matches IQ-TREE's exact mean-rate variant (so the GPU and CPU optimise the *same*
+  objective, not a near-neighbour).
+- **PRE-CHECK: the α-gradient is FD-correct.** analytic `∂lnL/∂α = −9.0859` vs central-difference `−9.0870`,
+  **rel 1.29e-04 ≪ 0.01** — validates the joint α-gradient assembly before the run (the same discipline as the
+  branch-grad FD and the +R scaling identity).
+- **(1) cold == warm (the decisive self-consistency gate):** WARM (.treefile, α=0.9963) → `−7541976.854468`
+  in 7 iters; COLD (b=0.1, **α=3.0** — both deliberately far, start lnL `−8,053,959`, 6.8% off) →
+  **`−7541976.854468` in 27 iters**; the two optima agree to **rel 1.482e-15 (machine zero — the SAME point)**.
+- **(2) cold reaches the full CPU MLE** `−7541976.8529` to **rel 2.079e-10**, α 3.0 → **0.9962** (CPU 0.9963).
+  HONEST: the residual 2e-10 is NOT optimiser error — the CPU's OWN `.treefile`, re-evaluated on the GPU, lands
+  at `−7541976.854971` (rel 2.745e-10 from the printed `.iqtree` value), i.e. the `.treefile` brlen output
+  precision IS the floor; JOLT converges *to* that floor from both starts.
+- **HEADLINE: 27 joint iterations for (197 branches + α)** (27 grad-sweeps + 38 lnL-evals, 10 early
+  backtrack-rejects, no blowup) — **identical to G.4.1's 27 branches-only.** Folding α into the joint vector
+  cost **ZERO extra iterations**, where IQ-TREE runs a *separate* α-Brent line search (~10–20 full-tree
+  traversals) alternating with `optimizeAllBranches`. JOLT absorbs α onto the same parallel sweep — the whole
+  +G parameter set (branch lengths *and* shape) is one joint second-order solve. The cold α trajectory
+  (3.0→2.98→2.86→2.34→1.34→0.97→…→0.9962) overshot once and recovered; ‖g‖ peaked 4.0e9 at the cold branches
+  yet LM damping (μ up to 1.3e5) held it — converged cleanly, no NaN.
+- Job: 0.41 SU, 41 s, 8.97 GB VRAM, 37% GPU util (latency-bound dependent-kernel chain, as expected at
+  100-taxon scale — the win is critical-path/algorithmic, not yet throughput-saturation), exit 0. Dev: NOTHING
+  committed beyond the local backup. **⇒ The standalone JOLT optimiser is validated for +G (branches + α) from
+  a cold start. Next: G.4.2 — the in-tree `--jolt` integration (the invasive optimiser-swap checkpoint).**
+
+---
+
 ## 2026-06-09 (gpu) — JOLT **G.4.1 PASS: the joint parallel optimiser converges to the same MLE from a COLD start in 27 iterations** (V100, job 170302036)
 
 **The core JOLT thesis, validated.** Does updating ALL 197 branches *simultaneously* from a joint analytic
