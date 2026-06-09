@@ -296,6 +296,18 @@ else()
     message("Build IQTREE library: OFF")
 endif()
 
+# B.-1: ATMD (Adaptive Tree-parallel Model Dispatch).
+# Enables HH-NUMA Mode F (B.3, K_outer × M_inner nested OMP) and
+# pattern-parallel Mode P (B.0, Allreduce-based likelihood splitting).
+# Requires _IQTREE_MPI + OpenMP. See research/lbfgs-and-warmstart-implementation.md §14-15.
+option(IQTREE_ATMD "Enable ATMD HH-NUMA and pattern-parallel optimisations" OFF)
+if (IQTREE_ATMD)
+    message("IQTREE_ATMD: ON  (HH-NUMA Mode F + pattern-parallel Mode P)")
+    add_definitions(-D_IQTREE_ATMD)
+else()
+    message("IQTREE_ATMD: OFF")
+endif()
+
 ##################################################################
 # Detect target platforms
 ##################################################################

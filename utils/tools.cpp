@@ -4596,6 +4596,59 @@ void parseArg(int argc, char *argv[], Params &params) {
                 continue;
             }
 
+            // B.5: ATMD Mode F outer K override. -1 = disable Mode F entirely (force
+            // serial-per-rank dispatch); 0 = compute K from memory budget (default);
+            // 1..8 = cap K_outer to this value (useful for K_outer→wall A/B mapping).
+            if (strcmp(argv[cnt], "--atmd-K-outer") == 0 ||
+                strcmp(argv[cnt], "--atmd-k-outer") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --atmd-K-outer <-1|0|1..8>";
+                params.atmd_K_outer = convert_int(argv[cnt]);
+                if (params.atmd_K_outer < -1 || params.atmd_K_outer > 8)
+                    throw "--atmd-K-outer must be in [-1, 8]";
+                continue;
+            }
+
+            // B.5: ATMD Mode F inner M override. 0 = compute M = num_threads/K_outer
+            // (default); >0 = pin M_inner to this value (overrides K-derived M).
+            if (strcmp(argv[cnt], "--atmd-inner-threads") == 0 ||
+                strcmp(argv[cnt], "--atmd-M-inner") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --atmd-inner-threads <N>";
+                params.atmd_inner_threads = convert_int(argv[cnt]);
+                if (params.atmd_inner_threads < 0)
+                    throw "--atmd-inner-threads must be >= 0";
+                continue;
+            }
+
+            // P.1 Mode P (pattern-parallel intra-model MPI_Allreduce). See
+            // research/mode-p-design.md. --mode-p enables auto-selection for
+            // heavy models; --mode-p-all forces Mode P on every model (for
+            // correctness validation); --no-mode-p restores default.
+            if (strcmp(argv[cnt], "--mode-p") == 0) {
+                params.mode_p_enabled = 1;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--mode-p-all") == 0) {
+                params.mode_p_enabled = -1;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--no-mode-p") == 0) {
+                params.mode_p_enabled = 0;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--mode-p-min-cost-mult") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --mode-p-min-cost-mult <multiplier>";
+                params.mode_p_min_cost_mult = convert_double(argv[cnt]);
+                if (params.mode_p_min_cost_mult <= 0.0)
+                    throw "--mode-p-min-cost-mult must be > 0";
+                continue;
+            }
+
             if (strcmp(argv[cnt], "--weighted-perturbation") == 0 || strcmp(argv[cnt], "-weighted-perturbation") == 0) {
                 params.weightedPerturbation = true;
                 continue;

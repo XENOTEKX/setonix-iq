@@ -903,6 +903,127 @@ size_t PhyloTree::getBufferPartialLhSize() {
     return buffer_size;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// P.1 Mode P (pattern-parallel intra-model MPI_Allreduce) helpers.
+// See research/mode-p-design.md.
+
+bool PhyloTree::isModePActive() const {
+    // Mode P is active only when ALL of the following hold:
+    //   1. params is bound and mode_p_enabled is non-zero (user opted in)
+    //   2. F-4: mode_p_active_in_mf is true (we are inside evaluateAll, not in
+    //      SPR tree-search where per-rank call ordering would deadlock Allreduce)
+    //   3. F-5: atmd_K_outer <= 1 — under MPI_THREAD_FUNNELED, only the main
+    //      thread may call MPI. ATMD K_outer > 1 places the kernel inside a
+    //      `#pragma omp parallel` region; concurrent Allreduces from outer
+    //      workers would be undefined behaviour. Reject these combos.
+    //   4. running under MPI with >1 process (single-process degrades to no-op)
+    //   5. _IQTREE_MPI is compiled in (otherwise MPI_Allreduce is unavailable)
+    if (!params || params->mode_p_enabled == 0)
+        return false;
+    if (!params->mode_p_active_in_mf)
+        return false;
+    // K_outer = 0 means "auto" but the natural K=1 path will be taken under
+    // typical AA workloads; we accept 0 here and rely on the K-detection at
+    // dispatch. K_outer = 1 (explicit) is the only fully-safe nested config.
+    if (params->atmd_K_outer > 1)
+        return false;
+#ifdef _IQTREE_MPI
+    return MPIHelper::getInstance().getNumProcesses() > 1;
+#else
+    return false;
+#endif
+}
+
+void PhyloTree::initializePtnPartition() {
+    // Set [ptn_start, ptn_end) based on rank/size when Mode P is active.
+    // Otherwise default to full coverage [0, orig_nptn) — the historical
+    // behaviour with zero Mode P overhead.
+    //
+    // F-6: each rank's slice MUST start on a VectorClass::size() boundary so
+    // the SIMD kernel's `load_a` (aligned-load) intrinsics work. AVX-512 uses
+    // 8 doubles per vector; AVX2 uses 4; SSE uses 2. We align to 8 — safe for
+    // all current SPR/CLX/SSE builds since 8 is a multiple of 4 and 2.
+    // The last rank's ptn_end is clamped to nptn (unaligned tail handled by
+    // the existing `ptn < orig_nptn` branch in the kernel — F-2 finding).
+    size_t nptn = aln ? aln->size() : 0;
+    if (!isModePActive()) {
+        ptn_start = 0;
+        ptn_end   = nptn;
+        return;
+    }
+#ifdef _IQTREE_MPI
+    int rank   = MPIHelper::getInstance().getProcessID();
+    int nranks = MPIHelper::getInstance().getNumProcesses();
+    if (nranks <= 1 || nptn == 0) {
+        ptn_start = 0;
+        ptn_end   = nptn;
+        return;
+    }
+    // F-6 SIMD-aligned partition. We compute the unaligned chunk size and then
+    // align each rank's boundary UP to a VCSIZE multiple, ensuring boundaries
+    // match between adjacent ranks (no gap, no overlap) and each rank's
+    // ptn_start is VCSIZE-aligned.
+    const size_t VCSIZE = 8;  // AVX-512 doubles; safe upper bound for AVX2/SSE
+    auto align_up = [VCSIZE](size_t x) -> size_t {
+        return ((x + VCSIZE - 1) / VCSIZE) * VCSIZE;
+    };
+    size_t chunk = nptn / (size_t)nranks;
+    if (rank == 0) {
+        ptn_start = 0;
+    } else {
+        ptn_start = align_up((size_t)rank * chunk);
+    }
+    if (rank == nranks - 1) {
+        ptn_end = nptn;          // last rank takes the unaligned tail
+    } else {
+        ptn_end = align_up((size_t)(rank + 1) * chunk);
+    }
+    // Defensive clamps
+    if (ptn_start > nptn) ptn_start = nptn;
+    if (ptn_end   > nptn) ptn_end   = nptn;
+    if (ptn_end   < ptn_start) ptn_end = ptn_start;
+#else
+    ptn_start = 0;
+    ptn_end   = nptn;
+#endif
+}
+
+double PhyloTree::modePAllreduceLh(double tree_lh_local) const {
+#ifdef _IQTREE_MPI
+    if (!isModePActive())
+        return tree_lh_local;
+    double tree_lh_global = 0.0;
+    MPI_Allreduce(&tree_lh_local, &tree_lh_global, 1,
+                  MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    return tree_lh_global;
+#else
+    return tree_lh_local;
+#endif
+}
+
+void PhyloTree::modePAllreduceLh(double &tree_lh) const {
+    // By-reference overload — const copy: cannot bind to double& so the
+    // by-value overload is selected unambiguously (F-11 fix).
+    const double tmp = tree_lh;
+    tree_lh = modePAllreduceLh(tmp);
+}
+
+void PhyloTree::modePAllreduceLhDfDdf(double &lh, double &df, double &ddf) const {
+#ifdef _IQTREE_MPI
+    if (!isModePActive())
+        return;
+    double in[3]  = {lh, df, ddf};
+    double out[3] = {0.0, 0.0, 0.0};
+    MPI_Allreduce(in, out, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    lh  = out[0];
+    df  = out[1];
+    ddf = out[2];
+#else
+    (void)lh; (void)df; (void)ddf;
+#endif
+}
+// ─────────────────────────────────────────────────────────────────────
+
 void PhyloTree::initializeAllPartialLh() {
     int index, indexlh;
     int numStates = model->num_states;
@@ -1126,6 +1247,20 @@ void PhyloTree::initializeAllPartialLh(int &index, int &indexlh, PhyloNode *node
             // (AA 1M) → 3,135 2 MB PTEs — fits in STLB. Gain: 8-15% MF wall
             // on AA 1M+ (DRAM-bandwidth + TLB-bound workload). Patch 0004.
             madvise(central_partial_lh, mem_size * sizeof(double), MADV_HUGEPAGE);
+#endif
+#if defined(_IQTREE_ATMD) && defined(_OPENMP)
+            // B.3 NUMA first-touch: touch each OS page of central_partial_lh on
+            // the inner OMP team to distribute pages across NUMA domains.
+            // Without this, the allocating outer-worker thread (e.g. NUMA-0)
+            // owns all pages, forcing all inner workers to cross-NUMA on every read.
+            // Stride = one touch per 4 KB page (double = 8 bytes → stride = 512).
+            if (params && params->atmd_inner_threads > 1) {
+                const int    M      = params->atmd_inner_threads;
+                const size_t stride = (size_t)(4096 / sizeof(double));
+#pragma omp parallel for schedule(static) num_threads(M)
+                for (size_t fi = 0; fi < mem_size; fi += stride)
+                    central_partial_lh[fi] = 0.0;
+            }
 #endif
         }
 

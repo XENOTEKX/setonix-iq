@@ -21,8 +21,17 @@ MPIHelper& MPIHelper::getInstance() {
 void MPIHelper::init(int argc, char *argv[]) {
 #ifdef _IQTREE_MPI
     int n_tasks, task_id;
-    if (MPI_Init(&argc, &argv) != MPI_SUCCESS) {
+    int atmd_mpi_provided;
+    if (MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &atmd_mpi_provided) != MPI_SUCCESS) {
         outError("MPI initialization failed!");
+    }
+    // B.-1: Mode P (pattern-parallel) issues MPI_Allreduce from the master thread of
+    // each outer OMP worker (via #pragma omp master).  MPI_THREAD_FUNNELED is sufficient
+    // for that.  Tail-stealing (B.5) with concurrent sends requires MPI_THREAD_MULTIPLE.
+    if (atmd_mpi_provided < MPI_THREAD_FUNNELED) {
+        cerr << "WARNING: MPI does not provide MPI_THREAD_FUNNELED; "
+             << "ATMD Mode P (pattern-parallel likelihood) will be unsafe "
+             << "if called from non-master OMP threads." << endl;
     }
     MPI_Comm_size(MPI_COMM_WORLD, &n_tasks);
     MPI_Comm_rank(MPI_COMM_WORLD, &task_id);

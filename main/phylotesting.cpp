@@ -14,6 +14,11 @@
 #include <numeric>
 #include <iomanip>     // std::setprecision, std::fixed for MF-TIME markers
 #include <sys/time.h>  // gettimeofday() fallback when not MPI
+#ifdef _IQTREE_ATMD
+#include <unistd.h>    // sysconf(_SC_AVPHYS_PAGES) for B.4 memory-budget K_outer fallback
+#include <cstdio>      // fopen/fscanf/fclose for /proc/meminfo MemAvailable read
+#include <cstring>     // strcmp for /proc/meminfo key matching
+#endif
 #include "tree/phylotree.h"
 #include "tree/iqtree.h"
 #include "tree/phylotreemixlen.h"
@@ -1971,7 +1976,7 @@ string CandidateModel::evaluate(Params &params,
     // the per-thread local_in_info with no concurrent writes possible.
     ModelCheckpoint local_in_info;
 #ifdef _OPENMP
-#pragma omp critical
+#pragma omp critical (model_info_lock)
 #endif
     { local_in_info = in_model_info; }
 
@@ -1982,6 +1987,18 @@ string CandidateModel::evaluate(Params &params,
     if (!iqtree->getModel()->isMixture() || in_aln->seq_type == SEQ_POMO || mixture_action != MA_NONE) {
         subst_name = iqtree->getSubstName();
         rate_name = iqtree->getRateName();
+    }
+
+    // P.2: bind this rank's pattern slice for Mode P. No-op when Mode P is
+    // disabled or MPI ranks == 1 (sets ptn_start=0, ptn_end=aln->size()).
+    // Must run AFTER initializeModel() so aln is finalized for this model.
+    iqtree->initializePtnPartition();
+    if (iqtree->isModePActive()) {
+        cerr << "[Mode P] rank " << MPIHelper::getInstance().getProcessID()
+             << " model=" << getName()
+             << " ptn=[" << iqtree->ptn_start << ", " << iqtree->ptn_end << ")"
+             << " of " << iqtree->aln->size()
+             << endl;
     }
 
     if (restoreCheckpoint(&local_in_info)) {
@@ -2217,7 +2234,7 @@ string CandidateModel::evaluate(Params &params,
         iqtree->getModelFactory()->syncChkPoint = nullptr;
 
 #ifdef _OPENMP
-#pragma omp critical
+#pragma omp critical (model_info_lock)
     {
 #endif
     saveCheckpoint(&in_model_info);
@@ -2279,23 +2296,51 @@ string CandidateModel::evaluate(Params &params,
 #endif
         {
             // First-fit wins. Negative sentinel means "not yet cached".
-            if (cap_rg_alpha  > 0 && warm_start_cache->rg_gamma_shape   < 0)
+            // Phase B: also set the corresponding bit in warm_start_cache->phase_b_newfields
+            // so that getNextModel() can trigger a progressive MPI broadcast of
+            // this rate class to all other ranks before filterRatesMPI fires.
+            // Bit encoding matches progressiveWarmStartBcast() and the header comment.
+            if (cap_rg_alpha  > 0 && warm_start_cache->rg_gamma_shape   < 0) {
                 warm_start_cache->rg_gamma_shape   = cap_rg_alpha;
-            if (cap_ri_pinv   > 0 && warm_start_cache->ri_p_invar       < 0)
+#ifdef _IQTREE_MPI
+                warm_start_cache->phase_b_newfields |= (1u << 0); // bit 0 = +G
+#endif
+            }
+            if (cap_ri_pinv   > 0 && warm_start_cache->ri_p_invar       < 0) {
                 warm_start_cache->ri_p_invar       = cap_ri_pinv;
-            if (cap_rgi_alpha > 0 && warm_start_cache->rgi_gamma_shape  < 0)
+#ifdef _IQTREE_MPI
+                warm_start_cache->phase_b_newfields |= (1u << 1); // bit 1 = +I
+#endif
+            }
+            if (cap_rgi_alpha > 0 && warm_start_cache->rgi_gamma_shape  < 0) {
                 warm_start_cache->rgi_gamma_shape  = cap_rgi_alpha;
-            if (cap_rgi_pinv  > 0 && warm_start_cache->rgi_p_invar      < 0)
+#ifdef _IQTREE_MPI
+                warm_start_cache->phase_b_newfields |= (1u << 2); // bit 2 = +I+G (alpha)
+#endif
+            }
+            if (cap_rgi_pinv  > 0 && warm_start_cache->rgi_p_invar      < 0) {
                 warm_start_cache->rgi_p_invar      = cap_rgi_pinv;
+#ifdef _IQTREE_MPI
+                warm_start_cache->phase_b_newfields |= (1u << 2); // bit 2 = +I+G (pinv shares slot)
+#endif
+            }
             if (cap_rf_k > 0 && warm_start_cache->rf_prop[cap_rf_k].empty()) {
                 warm_start_cache->rf_prop [cap_rf_k] = cap_rf_prop;
                 warm_start_cache->rf_rates[cap_rf_k] = cap_rf_rates;
+#ifdef _IQTREE_MPI
+                if (cap_rf_k >= 2 && cap_rf_k < RateWarmStartCache::MAX_K)
+                    warm_start_cache->phase_b_newfields |= (1u << (cap_rf_k + 1)); // bits 3..13 = +R2..+R12
+#endif
             }
             if (cap_rfi_k > 0 && warm_start_cache->rfi_prop[cap_rfi_k].empty()) {
                 warm_start_cache->rfi_prop [cap_rfi_k] = cap_rfi_prop;
                 warm_start_cache->rfi_rates[cap_rfi_k] = cap_rfi_rates;
                 if (cap_rfi_pinv > 0)
                     warm_start_cache->rfi_p_invar[cap_rfi_k] = cap_rfi_pinv;
+#ifdef _IQTREE_MPI
+                if (cap_rfi_k >= 2 && cap_rfi_k < RateWarmStartCache::MAX_K)
+                    warm_start_cache->phase_b_newfields |= (1u << (cap_rfi_k + 13)); // bits 14..24 = +I+R2..
+#endif
             }
         }
     }
@@ -3100,6 +3145,174 @@ void CandidateModelSet::filterRates(int finished_model) {
 // Caller gates on mpi_filterRatesMPI_enabled (set by the MPI_Allreduce
 // in evaluateAll Step 8); if disabled, falls back to legacy filterRates.
 // ----------------------------------------------------------------------
+
+// ----------------------------------------------------------------------
+// Phase B — progressiveWarmStartBcast
+//
+// Called from getNextModel() (under #pragma omp critical) whenever
+// mpi_warm_start.phase_b_newfields has bits not yet broadcast.
+//
+// Protocol (all-ranks must call MPI_Allreduce together on the next
+// getNextModel() call after any rank sets a bit):
+//
+//   1. MPI_Allreduce(mpi_warm_start.phase_b_newfields, OR) → global_new.
+//      Cheap: 4-byte integer, InfiniBand eager-send, ~1-2 µs.
+//
+//   2. Compute broadcast_needed = global_new & ~mpi_ws_b_bcast_done
+//      (bits newly available on any rank but not yet sent cross-rank).
+//      If zero: nothing to do, return immediately.
+//
+//   3. Pack the relevant fields of mpi_warm_start into a WarmStartPacket
+//      on rank 0. MPI_Bcast the packet (~3.6 KB) from rank 0.
+//
+//   4. Non-root ranks unpack fields they don't already have (first-fit).
+//      Root rank also merges from other ranks if their local_newfields had
+//      bits root didn't — but since rank 0 owns the LG ref family and gets
+//      there first on AA data, this is typically a no-op.
+//
+//   5. Update mpi_ws_b_bcast_done |= broadcast_needed on all ranks.
+//      Clear mpi_warm_start.phase_b_newfields on all ranks.
+//
+// Safety: getNextModel() is called under #pragma omp critical, so this
+// function is never re-entered concurrently. The MPI_Allreduce is a
+// collective on MPI_COMM_WORLD; all ranks reach getNextModel() between
+// model evaluations. Because it fires only when phase_b_newfields != 0 AND
+// filterRatesMPI has not yet fired, at most ~5 collectives fire per
+// evaluateAll() run (one per distinct rate class: +G, +I, +I+G, +R2..+R6).
+// The final filterRatesMPI Bcast fires afterwards as before.
+// ----------------------------------------------------------------------
+void CandidateModelSet::progressiveWarmStartBcast() {
+#ifdef _IQTREE_MPI
+    int nranks = MPIHelper::getInstance().getNumProcesses();
+    if (nranks <= 1) {
+        mpi_warm_start.phase_b_newfields = 0;
+        return;
+    }
+    int my_rank = MPIHelper::getInstance().getProcessID();
+
+    // Step 1: Allreduce to find which rate classes are newly available on ANY rank.
+    uint32_t local_new  = mpi_warm_start.phase_b_newfields;
+    uint32_t global_new = 0;
+    MPI_Allreduce(&local_new, &global_new, 1, MPI_UNSIGNED, MPI_BOR, MPI_COMM_WORLD);
+
+    // Step 2: Filter to only the fields not yet broadcast.
+    uint32_t broadcast_needed = global_new & ~mpi_ws_b_bcast_done;
+    if (broadcast_needed == 0) {
+        mpi_warm_start.phase_b_newfields = 0;
+        return;
+    }
+
+    // Step 3: Pack WarmStartPacket on rank 0 (same struct as filterRatesMPI's A.2).
+    // We reuse the same WarmStartPacket layout from filterRatesMPI for consistency.
+    // Fields not in broadcast_needed are left at sentinel -1; receivers only merge
+    // fields that are both >0 in the packet AND in broadcast_needed.
+    struct WarmStartPacket {
+        double rg_gamma_shape;
+        double ri_p_invar;
+        double rgi_gamma_shape;
+        double rgi_p_invar;
+        double rf_prop [11][10];
+        double rf_rates[11][10];
+        double rfi_p_invar[11];
+        double rfi_prop [11][10];
+        double rfi_rates[11][10];
+    };
+
+    WarmStartPacket pkt;
+    pkt.rg_gamma_shape = pkt.ri_p_invar =
+        pkt.rgi_gamma_shape = pkt.rgi_p_invar = -1.0;
+    for (int k = 0; k < 11; k++) {
+        pkt.rfi_p_invar[k] = -1.0;
+        for (int i = 0; i < 10; i++) {
+            pkt.rf_prop[k][i] = pkt.rf_rates[k][i] = -1.0;
+            pkt.rfi_prop[k][i] = pkt.rfi_rates[k][i] = -1.0;
+        }
+    }
+
+    // Rank 0 packs whichever fields are in broadcast_needed and present locally.
+    if (my_rank == 0) {
+        if ((broadcast_needed & (1u << 0)) && mpi_warm_start.rg_gamma_shape > 0)
+            pkt.rg_gamma_shape  = mpi_warm_start.rg_gamma_shape;
+        if ((broadcast_needed & (1u << 1)) && mpi_warm_start.ri_p_invar > 0)
+            pkt.ri_p_invar      = mpi_warm_start.ri_p_invar;
+        if ((broadcast_needed & (1u << 2))) {
+            if (mpi_warm_start.rgi_gamma_shape > 0)
+                pkt.rgi_gamma_shape = mpi_warm_start.rgi_gamma_shape;
+            if (mpi_warm_start.rgi_p_invar > 0)
+                pkt.rgi_p_invar     = mpi_warm_start.rgi_p_invar;
+        }
+        for (int k = 2; k < 11; k++) {
+            if ((broadcast_needed & (1u << (k + 1)))
+                && (int)mpi_warm_start.rf_prop[k].size() == k) {
+                for (int i = 0; i < k && i < 10; i++) {
+                    pkt.rf_prop[k][i]  = mpi_warm_start.rf_prop[k][i];
+                    pkt.rf_rates[k][i] = mpi_warm_start.rf_rates[k][i];
+                }
+            }
+            if ((broadcast_needed & (1u << (k + 13)))) {
+                if (mpi_warm_start.rfi_p_invar[k] > 0)
+                    pkt.rfi_p_invar[k] = mpi_warm_start.rfi_p_invar[k];
+                if ((int)mpi_warm_start.rfi_prop[k].size() == k)
+                    for (int i = 0; i < k && i < 10; i++) {
+                        pkt.rfi_prop[k][i]  = mpi_warm_start.rfi_prop[k][i];
+                        pkt.rfi_rates[k][i] = mpi_warm_start.rfi_rates[k][i];
+                    }
+            }
+        }
+    }
+
+    // Step 4: Broadcast the packet from rank 0.
+    MPI_Bcast(&pkt, sizeof(pkt), MPI_BYTE, 0, MPI_COMM_WORLD);
+
+    // Step 5: Non-root ranks merge fields they don't already have (first-fit).
+    if (my_rank != 0) {
+        if (pkt.rg_gamma_shape  > 0 && mpi_warm_start.rg_gamma_shape  < 0)
+            mpi_warm_start.rg_gamma_shape  = pkt.rg_gamma_shape;
+        if (pkt.ri_p_invar      > 0 && mpi_warm_start.ri_p_invar      < 0)
+            mpi_warm_start.ri_p_invar      = pkt.ri_p_invar;
+        if (pkt.rgi_gamma_shape > 0 && mpi_warm_start.rgi_gamma_shape < 0)
+            mpi_warm_start.rgi_gamma_shape = pkt.rgi_gamma_shape;
+        if (pkt.rgi_p_invar     > 0 && mpi_warm_start.rgi_p_invar     < 0)
+            mpi_warm_start.rgi_p_invar     = pkt.rgi_p_invar;
+        for (int k = 2; k < 11; k++) {
+            if (pkt.rf_prop[k][0] > 0 && mpi_warm_start.rf_prop[k].empty()) {
+                mpi_warm_start.rf_prop[k].resize(k);
+                mpi_warm_start.rf_rates[k].resize(k);
+                for (int i = 0; i < k && i < 10; i++) {
+                    mpi_warm_start.rf_prop[k][i]  = pkt.rf_prop[k][i];
+                    mpi_warm_start.rf_rates[k][i] = pkt.rf_rates[k][i];
+                }
+            }
+            if (pkt.rfi_p_invar[k] > 0 && mpi_warm_start.rfi_p_invar[k] < 0)
+                mpi_warm_start.rfi_p_invar[k] = pkt.rfi_p_invar[k];
+            if (pkt.rfi_prop[k][0] > 0 && mpi_warm_start.rfi_prop[k].empty()) {
+                mpi_warm_start.rfi_prop[k].resize(k);
+                mpi_warm_start.rfi_rates[k].resize(k);
+                for (int i = 0; i < k && i < 10; i++) {
+                    mpi_warm_start.rfi_prop[k][i]  = pkt.rfi_prop[k][i];
+                    mpi_warm_start.rfi_rates[k][i] = pkt.rfi_rates[k][i];
+                }
+            }
+        }
+    }
+
+    // Mark these fields done on all ranks; clear local pending bits.
+    mpi_ws_b_bcast_done                |= broadcast_needed;
+    mpi_warm_start.phase_b_newfields    = 0;
+
+    // Diagnostic (same verbosity gate as filterRatesMPI).
+    cout << "MF-MPI-DIAG: rank " << my_rank << "/" << nranks
+         << " progressiveWS bcast: fields=" << __builtin_popcount(broadcast_needed)
+         << " bitmask=0x" << hex << broadcast_needed << dec
+         << " rg=" << pkt.rg_gamma_shape
+         << " ri=" << pkt.ri_p_invar
+         << " rgi_a=" << pkt.rgi_gamma_shape
+         << " rgi_p=" << pkt.rgi_p_invar
+         << endl;
+    cout.flush();
+#endif // _IQTREE_MPI
+}
+
 void CandidateModelSet::filterRatesMPI(int finished_model) {
     if (Params::getInstance().score_diff_thres < 0)
         return;
@@ -3788,6 +4001,18 @@ int64_t CandidateModelSet::getNextModel() {
         current_model = next_model;
         at(next_model).setFlag(MF_RUNNING);
     }
+#ifdef _IQTREE_MPI
+    // Phase B: progressive warm-start broadcast.
+    // Poll here (inside the omp critical) — one thread at a time, no extra lock
+    // needed. If this rank has newly filled any rate-class slot since the last
+    // call, trigger a cross-rank Allreduce+Bcast to share with other ranks.
+    // This runs BEFORE filterRatesMPI fires, giving ranks 1+ warm-start params
+    // as soon as rank 0 finishes the very first model of each rate class.
+    if (mpi_filterRatesMPI_enabled && !mpi_filterRatesMPI_fired
+        && mpi_warm_start.phase_b_newfields != 0) {
+        progressiveWarmStartBcast();
+    }
+#endif
     }
     return next_model;
 }
@@ -3799,6 +4024,13 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     //ModelCheckpoint *checkpoint = &model_info;
 
     in_tree->params = &params;
+
+    // F-4 Mode P: gate Mode P to the ModelFinder phase only. SPR tree search
+    // (after evaluateAll returns) uses asymmetric per-rank dispatch where an
+    // MPI_Allreduce inside the kernel would deadlock. Set the flag on entry
+    // and clear on every exit path below (saved here for the early-returns).
+    bool mode_p_active_in_mf_saved = params.mode_p_active_in_mf;
+    params.mode_p_active_in_mf = (params.mode_p_enabled != 0);
     
     Alignment *prot_aln = nullptr;
     Alignment *dna_aln = nullptr;
@@ -3903,6 +4135,8 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     mpi_filterRatesMPI_enabled = false;
     mpi_warm_start.clear();  // Phase A.1 — reset cross-model rate-param cache
                              // per evaluateAll() call (Partition / Mixture safety).
+                             // phase_b_newfields also zeroed by clear().
+    mpi_ws_b_bcast_done        = 0;  // Phase B — progressive broadcast done-mask.
 
     if (MPIHelper::getInstance().getNumProcesses() > 1) {
         int my_rank = MPIHelper::getInstance().getProcessID();
@@ -4085,16 +4319,108 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
     // Parallel outer loop in MPI builds would require num_threads concurrent
     // IQTree instances, each holding full partial-lh buffers (~12 GB for AA 100K
     // on 100 taxa), causing OOM on 512 GB nodes.
+    //
+    // B.3 + B.4 (ATMD Mode F): in _IQTREE_ATMD + _IQTREE_MPI builds, the sequential
+    // outer loop is replaced by a K_outer-wide OMP parallel team (proc_bind(spread)).
+    // K_outer is bounded by both the available physical memory (B.4 budget) and
+    // num_threads; M_inner = num_threads / K_outer inner threads serve the per-pattern
+    // likelihood kernel inside each outer worker's evaluate() call.
+    // REQUIRES: omp_set_max_active_levels(2) from B.-1 (main.cpp startup).
+    int atmd_K_outer = 1;
+    int atmd_M_inner = num_threads;
+#if defined(_IQTREE_ATMD) && defined(_IQTREE_MPI) && defined(_OPENMP)
+    if (params.atmd_K_outer != -1) {
+        // B.5: per-tree byte estimate matched to initializeAllPartialLh() actual
+        // allocation (phylotree.cpp:1086-1184), not the prior conservative-bad
+        // formula (npat * nstates * nrates * 4 * nodeNum) which overestimated by
+        // ~8x and forced K_outer=1 at AA 1M. The real allocation is:
+        //   central_partial_lh = (leafNum-2) * block_size doubles
+        //   nni_partial_lh     = 2          * block_size doubles
+        //   central_scale_num  = (leafNum-2) * scale_block_size bytes
+        // where block_size = npat * nstates * nrates * nmixtures.
+        // We assume nmixtures=1 (typical non-mixture protein/DNA model). Mixture
+        // models (LG4M, LG4X, EHO, EX*) consume up to 4x but trigger bad_alloc
+        // safely at allocation time if memory is exhausted.
+        size_t npat       = (size_t)in_tree->aln->getNPattern();
+        int    nstates    = in_tree->aln->num_states;
+        RateHeterogeneity *_sr = in_tree->getRate();
+        int    nrates_est = max(4, _sr ? _sr->getNRate() : 4);
+        size_t leafN      = (size_t)max(2, (int)in_tree->leafNum);
+        size_t max_lh_slots_est = leafN - 2;
+        size_t block_size_est   = npat * (size_t)nstates * (size_t)nrates_est;
+        // (max_lh_slots + 2) accounts for central_partial_lh (max_lh_slots blocks)
+        // + nni_partial_lh (2 blocks). scale_num is 1 byte per (npat * nrates) entry.
+        size_t per_tree_bytes = (max_lh_slots_est + 2) * block_size_est * sizeof(double)
+                              + max_lh_slots_est * npat * (size_t)nrates_est;
+
+        // Available physical memory — read MemAvailable from /proc/meminfo.
+        // sysconf(_SC_AVPHYS_PAGES) is unreliable on HPC nodes: Linux page-cache
+        // fills "free" pages aggressively, making AVPHYS report near-zero even on
+        // a 500 GB node with no real memory pressure.  MemAvailable (kB) is the
+        // kernel's own estimate of reclaimable memory (free + reclaimable cache),
+        // which is the correct budget for a new large allocation.
+        size_t avail_bytes = (size_t)512 * 1024 * 1024 * 1024;  // default 512 GB
+        {
+            FILE *f = fopen("/proc/meminfo", "r");
+            if (f) {
+                char key[64]; long long val;
+                while (fscanf(f, "%63s %lld kB\n", key, &val) == 2) {
+                    if (strcmp(key, "MemAvailable:") == 0) {
+                        if (val > 0)
+                            avail_bytes = (size_t)val * 1024;
+                        break;
+                    }
+                }
+                fclose(f);
+            } else {
+                // fallback: sysconf if /proc/meminfo unavailable
+                long pg = sysconf(_SC_AVPHYS_PAGES);
+                if (pg > 0)
+                    avail_bytes = (size_t)pg * (size_t)sysconf(_SC_PAGE_SIZE);
+            }
+        }
+
+        // K_mem: how many trees fit in 80% of available RAM.
+        int K_mem  = (per_tree_bytes > 0) ? (int)((avail_bytes * 8 / 10) / per_tree_bytes) : 8;
+        K_mem      = max(1, K_mem);
+        int K_thr  = num_threads;   // need at least 1 inner thread per outer worker
+        int K_cap  = 8;             // cap: 2 NUMA domains x 4 HyperThreads per domain
+        atmd_K_outer = min(min(K_mem, K_thr), K_cap);
+        if (params.atmd_K_outer > 0)
+            atmd_K_outer = min(params.atmd_K_outer, atmd_K_outer);  // user override
+        atmd_K_outer = max(1, atmd_K_outer);
+        atmd_M_inner = max(1, num_threads / atmd_K_outer);
+        if (params.atmd_inner_threads > 0)
+            atmd_M_inner = params.atmd_inner_threads;
+
+        // Production diagnostic: K_outer=1 means serial-per-rank path (Mode F inactive).
+        cout << "[ATMD Mode F] K_outer=" << atmd_K_outer
+             << " M_inner=" << atmd_M_inner
+             << " K_mem=" << K_mem
+             << " per_tree_MB=" << (int)(per_tree_bytes >> 20)
+             << " avail_MB="    << (int)(avail_bytes    >> 20)
+             << endl;
+        cout.flush();
+    }
+#endif
+#if defined(_IQTREE_ATMD)
+    // B.3 writeback: propagate atmd_M_inner → params.atmd_inner_threads so that
+    // initializeAllPartialLh (phylotree.cpp) sees the correct value for NUMA first-touch.
+    // params is shared across outer workers (read-only inside the parallel region).
+    if (params.atmd_inner_threads == 0)
+        params.atmd_inner_threads = atmd_M_inner;
+#endif
     {
 #if defined(_OPENMP) && !defined(_IQTREE_MPI)
     // OMP parallel outer loop across models for non-MPI builds only.
-    // In MPI builds the outer loop is sequential: each rank evaluates its
-    // assigned models one at a time, using num_threads OMP threads inside each
-    // evaluate() call (for the partial-likelihood kernel).  Parallel outer loop
-    // in MPI builds would require num_threads concurrent IQTree instances each
-    // holding full partial-lh buffers (~12 GB for AA 100K), causing OOM.
+    // In MPI builds: sequential (Fix H) or K_outer-wide ATMD Mode F team (B.3).
     // proc_bind(spread): distribute threads evenly across both NUMA domains.
 #pragma omp parallel num_threads(num_threads) proc_bind(spread)
+#elif defined(_IQTREE_ATMD) && defined(_IQTREE_MPI) && defined(_OPENMP)
+    // B.3 Mode F: K_outer outer workers (NUMA-spread), each evaluating models
+    // concurrently with M_inner inner OMP threads (nested level 2).
+    // if(atmd_K_outer > 1): when K_outer==1 no parallel region overhead.
+#pragma omp parallel num_threads(atmd_K_outer) proc_bind(spread) if(atmd_K_outer > 1)
 #endif
     {
     int64_t model;
@@ -4129,7 +4455,7 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         // captured for use by subsequent same-rate-class models. Cache is
         // accessed under #pragma omp critical(warm_start_lock) inside evaluate().
         tree_string = at(model).evaluate(params, model_info, out_model_info,
-                                         models_block, num_threads, brlen_type,
+                                         models_block, atmd_M_inner, brlen_type,
                                          &mpi_warm_start);
         at(model).computeICScores();
         at(model).setFlag(MF_DONE);
@@ -4410,6 +4736,11 @@ CandidateModel CandidateModelSet::evaluateAll(Params &params, PhyloTree* in_tree
         delete dna_aln;
     if (prot_aln)
         delete prot_aln;
+
+    // F-4 Mode P: restore the pre-call value of mode_p_active_in_mf so any
+    // nested evaluateAll callers see the original flag state (defensive —
+    // ModelFinder usually does not nest).
+    params.mode_p_active_in_mf = mode_p_active_in_mf_saved;
 
     return at(best_model);
 }

@@ -2457,7 +2457,14 @@ int main(int argc, char *argv[]) {
         outError("You have specified more threads than CPU cores available");
     }
     // omp_set_nested(false); // don't allow nested OpenMP parallelism
+#ifdef _IQTREE_ATMD
+    // B.-1: ATMD Mode F (HH-NUMA) requires nested OMP level 2 for K_outer x M_inner.
+    // omp_set_dynamic(0) prevents the runtime from shrinking the inner team.
+    omp_set_max_active_levels(2);
+    omp_set_dynamic(0);
+#else
     omp_set_max_active_levels(1);
+#endif
 #else
     if (Params::getInstance().num_threads != 1) {
         cout << endl << endl;
@@ -2466,7 +2473,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifdef _IQTREE_MPI
-    cout << endl << "MPI:     " << MPIHelper::getInstance().getNumProcesses() << " processes";
+    cout << endl << "MPI:     " << MPIHelper::getInstance().getNumProcesses() << " processes";;
 #endif
     
     int num_procs = countPhysicalCPUCores();
@@ -3302,7 +3309,13 @@ extern "C" StringResult simulate_alignment(const char* tree, const char* subst_m
             outError("You have specified more threads than CPU cores available.");
         }
         // omp_set_nested(false); // don't allow nested OpenMP parallelism
+#ifdef _IQTREE_ATMD
+        // B.-1: ATMD Mode F (HH-NUMA) requires nested OMP level 2 for K_outer x M_inner.
+        omp_set_max_active_levels(2);
+        omp_set_dynamic(0);
+#else
         omp_set_max_active_levels(1);
+#endif
     #else
         if (params.num_threads != 1) {
             cout << endl << endl;
@@ -3611,7 +3624,13 @@ char* build_phylogenetic(StringArray& cnames, StringArray& cseqs, const char* cm
         outError("You have specified more threads than CPU cores available");
     }
     // omp_set_nested(false); // don't allow nested OpenMP parallelism
+#ifdef _IQTREE_ATMD
+    // B.-1: ATMD Mode F (HH-NUMA) requires nested OMP level 2 for K_outer x M_inner.
+    omp_set_max_active_levels(2);
+    omp_set_dynamic(0);
+#else
     omp_set_max_active_levels(1);
+#endif
 #else
     if (Params::getInstance().num_threads != 1) {
         cout << endl << endl;

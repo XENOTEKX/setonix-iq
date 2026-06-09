@@ -2372,6 +2372,37 @@ public:
      *  Default 1 (each rank owns the full node — the xlarge 1-rank/node case). */
     int mpi_ranks_per_node;
 
+    /** B.3 ATMD Mode F: outer concurrency (K_outer) for HH-NUMA nested OMP.
+     *  0 = auto-select from memory budget (B.4 semaphore). -1 = disable Mode F.
+     *  Set via --atmd-K (not yet wired to command-line parser; set programmatically). */
+    int atmd_K_outer = 0;
+
+    /** B.3 ATMD Mode F: inner thread count (M_inner) per outer worker.
+     *  0 = auto (num_threads / K_outer). Also used as the NUMA first-touch team size
+     *  in initializeAllPartialLh (phylotree.cpp). */
+    int atmd_inner_threads = 0;
+
+    /** P.1 Mode P (pattern-parallel intra-model MPI_Allreduce).
+     *  0  = disabled (default)
+     *  1  = enabled for "heavy" models above cost threshold (mode_p_min_cost_mult)
+     *  -1 = force enabled for ALL models (debug / correctness validation)
+     *  Mode P partitions a single model's pattern set across all MPI ranks; each
+     *  rank computes its slice and MPI_Allreduce aggregates the log-likelihood.
+     *  See research/mode-p-design.md. */
+    int mode_p_enabled = 0;
+
+    /** P.1 Mode P cost threshold: models with FCA-predicted_cost > avg_cost *
+     *  mode_p_min_cost_mult use Mode P. Default 8.0 catches the top ~3 heaviest
+     *  AA models (LG+F+I+G4, LG+F+G4, …). */
+    double mode_p_min_cost_mult = 8.0;
+
+    /** F-4: Mode P phase-gate. Set true at top of evaluateAll() and false at
+     *  bottom. isModePActive() requires this AND mode_p_enabled. This prevents
+     *  Mode P Allreduces from firing inside SPR tree search (where per-rank
+     *  kernel-call ordering would deadlock). NOT a user-facing flag — set
+     *  programmatically by the ModelFinder dispatcher. */
+    bool mode_p_active_in_mf = false;
+
     /** either MTC_AIC, MTC_AICc, MTC_BIC */
     ModelTestCriterion model_test_criterion;
 

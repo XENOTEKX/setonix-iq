@@ -1535,6 +1535,16 @@ public:
      ****************************************************************************/
 
     bool theta_computed;
+    // ATMD Mode P (Phase B.0): per-pattern-stripe theta state.
+    // In single-stripe operation (Mode F, non-ATMD, or non-MPI) this field is unused
+    // and theta_computed covers the entire alignment as before.
+    // Phase B.0 will replace direct reads/writes of theta_computed with the accessor
+    // pair below, backed by a per-stripe vector.  See §15.2-H2 and §15.8 Patch 4.
+    // Until B.0 lands, atmd_invalidate_theta() is the only call needed for B.3.
+    int atmd_current_stripe_id = 0;  ///< active stripe in [0, K_stripes). Default 0 = whole-aln.
+    inline bool atmd_theta_computed() const { return theta_computed; }
+    inline void atmd_set_theta_computed(bool v) { theta_computed = v; }
+    inline void atmd_invalidate_theta() { theta_computed = false; }
 
     /**
      *	NSTATES x NUMCAT x (number of patterns) array
@@ -2301,7 +2311,44 @@ public:
      */
     const string& getDistanceFileWritten() const;
 
-    
+    // ───────────────────────────────────────────────────────────────
+    // P.1 Mode P (pattern-parallel intra-model MPI_Allreduce) members.
+    // See research/mode-p-design.md.
+
+    /** Per-rank pattern slice [ptn_start, ptn_end). When Mode P is disabled,
+     *  ptn_start=0 and ptn_end=aln->size() (full coverage; default behaviour).
+     *  When Mode P is enabled for a model, set by initializePtnPartition()
+     *  before model evaluation; each rank's likelihood kernel iterates only
+     *  this slice. Unobserved patterns (ascertainment bias correction;
+     *  ptn >= orig_nptn) are computed on ALL ranks regardless. */
+    size_t ptn_start = 0;
+    size_t ptn_end   = 0;
+
+    /** Returns true if Mode P should be active for the current evaluate(). */
+    bool isModePActive() const;
+
+    /** Compute and store [ptn_start, ptn_end) based on MPI rank/size and the
+     *  current alignment size. Called once per evaluate() before optimisation.
+     *  When Mode P is disabled or MPI ranks==1, sets [0, aln->size()). */
+    void initializePtnPartition();
+
+    /** MPI_Allreduce a single log-likelihood across all ranks. No-op when
+     *  Mode P is inactive or MPI ranks==1. Always thread-safe — call from
+     *  the master thread of a parallel region (MPI_THREAD_FUNNELED).
+     *  Two equivalent overloads:
+     *    - value-returning: tree_lh = modePAllreduceLh(tree_lh);
+     *    - by-reference:    modePAllreduceLh(tree_lh);   // mutates in place
+     *  The by-reference variant is preferred at kernel call sites since the
+     *  pattern is "combine my partial sum before returning". */
+    double modePAllreduceLh(double tree_lh_local) const;
+    void   modePAllreduceLh(double &tree_lh) const;
+
+    /** MPI_Allreduce {lh, df, ddf} triple across all ranks. Used by the
+     *  derivative kernel. No-op when Mode P inactive. */
+    void modePAllreduceLhDfDdf(double &lh, double &df, double &ddf) const;
+    // ───────────────────────────────────────────────────────────────
+
+
 protected:
 
     /**

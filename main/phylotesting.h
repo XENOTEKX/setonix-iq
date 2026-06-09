@@ -70,6 +70,12 @@ struct RateWarmStartCache {
     std::vector<std::vector<double> > rfi_prop;
     std::vector<std::vector<double> > rfi_rates;
 
+    // Phase B progressive MPI broadcast bitmask.
+    // Set by CandidateModel::evaluate() (under warm_start_lock) on first-fill
+    // of each rate class. Read and cleared by CandidateModelSet::progressiveWarmStartBcast().
+    // Bit encoding: bit 0=+G, 1=+I, 2=+I+G, 3+k=+Rk (k=2..12), 13+k=+I+Rk (k=2..12).
+    uint32_t phase_b_newfields;
+
     RateWarmStartCache() { clear(); }
 
     bool any() const {
@@ -90,6 +96,7 @@ struct RateWarmStartCache {
         rfi_p_invar.assign(MAX_K, -1.0);
         rfi_prop.assign(MAX_K, std::vector<double>());
         rfi_rates.assign(MAX_K, std::vector<double>());
+        phase_b_newfields = 0;
     }
 };
 
@@ -294,6 +301,9 @@ public:
         mpi_ref_remaining = 0;
         mpi_filterRatesMPI_fired = false;
         mpi_filterRatesMPI_enabled = false;
+        // Phase B progressive warm-start broadcast state.
+        // mpi_warm_start.phase_b_newfields is zeroed by mpi_warm_start.clear() below.
+        mpi_ws_b_bcast_done      = 0;
     }
     
     /** get ID of the best model */
@@ -324,6 +334,18 @@ public:
      updated-modelfinder-dispatch.md §19 for full rationale.
      */
     void filterRatesMPI(int finished_model);
+
+    /**
+     Phase B: progressive per-rate-class warm-start broadcast.
+     Called from getNextModel() (under omp critical) when mpi_warm_start.phase_b_newfields
+     has bits not yet broadcast. Runs MPI_Allreduce(OR) to discover which rate
+     classes are newly available on any rank, then MPI_Bcast the relevant
+     WarmStartPacket fields from rank 0 to all others. Updates mpi_warm_start on
+     receiving ranks and clears mpi_warm_start.phase_b_newfields. Safe to call frequently —
+     the Allreduce is a 4-byte integer operation and the Bcast only fires when
+     new fields appear. No-op if nranks==1 or all fields already broadcast.
+    */
+    void progressiveWarmStartBcast();
 #endif
 
     /**
@@ -447,6 +469,18 @@ public:
      See research/lbfgs-and-warmstart-implementation.md §5.
      */
     RateWarmStartCache mpi_warm_start;
+
+    /**
+     Phase B progressive warm-start broadcast bitmask.
+     mpi_warm_start.phase_b_newfields: set when this rank first-fills a rate-class
+       slot (under warm_start_lock in CandidateModel::evaluate()). Read and cleared
+       by progressiveWarmStartBcast() after the MPI_Allreduce+Bcast.
+     mpi_ws_b_bcast_done: records which rate classes have already been broadcast
+       cross-rank, to avoid duplicate collectives if the same slot fills again.
+     Bit encoding (uint32_t, same in both fields):
+       bit 0=+G, bit 1=+I, bit 2=+I+G, bits 3..13=+Rk (k=2..12), bits 14..24=+I+Rk.
+    */
+    uint32_t mpi_ws_b_bcast_done;
 
 private:
 
