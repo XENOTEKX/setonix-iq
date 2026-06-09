@@ -2034,8 +2034,17 @@ string CandidateModel::evaluate(Params &params,
                         rfi->setProp(i, local_warm_start.rfi_prop[k][i]);
                         rfi->setRate(i, local_warm_start.rfi_rates[k][i]);
                     }
-                    if (local_warm_start.rfi_p_invar[k] > 0)
-                        rfi->setPInvar(local_warm_start.rfi_p_invar[k]);
+                    // NOTE: do NOT call rfi->setPInvar() here.
+                    // initFromCatMinusOne() calls restoreCheckpoint() which reads
+                    // prop[] and p_invar from separate checkpoint keys
+                    // ("RateHeterogeneity/prop" and "RateInvar/p_invar"). With FCA's
+                    // interleaved dispatch those two keys may belong to different
+                    // models, so their sum != 1.  Setting p_invar here before that
+                    // restore fires desynchronises the two values and causes the
+                    // ASSERT(fabs(sum_prop + getPInvar() - 1.0) < 0.01) in
+                    // RateFree::initFromCatMinusOne to abort.  The props/rates above
+                    // are still useful as a starting point; p_invar will be set
+                    // correctly by initFromCatMinusOne via restoreCheckpoint().
                 }
             } else if (RateFree *rf = dynamic_cast<RateFree*>(rate)) {
                 int k = rf->getNRate();
