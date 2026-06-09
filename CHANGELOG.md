@@ -208,6 +208,44 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 > **1M status note:** These are **not parity rows**. Across all 16 jobs in this sweep (8 earlier fail/cancel + 8 canceled at 2026-05-27 01:33 UTC via `qdel`), none finished ModelFinder, so no final best model, lnL, MF wall, or SPR wall is available. The partial logs are still useful: at 1M scale, high FreeRate tails (`+R5`/`+I+R5` for AA, `+I+R6` for DNA) can consume thousands of seconds before rate filtering fires. That reinforces the Event-Driven Moldable Dispatch design direction: rate-filter decisions need to become explicit early scheduler events, and medium/high-rate tasks cannot be trapped inside a static FCA light phase.
 
+## 2026-06-09 (gpu) — JOLT **G.4.1 PASS: the joint parallel optimiser converges to the same MLE from a COLD start in 27 iterations** (V100, job 170302036)
+
+**The core JOLT thesis, validated.** Does updating ALL 197 branches *simultaneously* from a joint analytic
+gradient (ONE postorder + ONE preorder sweep/iter) converge to the same MLE as IQ-TREE's 197 *sequential*
+per-edge Newton sweeps? **Yes — in a modest, non-blowing-up iteration count.** New harness
+`gadi-ci/gpu-modelfinder/gpu_k8_jolt.cu` = the validated K1/K7/k2_derv + O(depth) pool byte-for-byte + a
+**joint LM-damped diagonal-Newton** driver (`b_e += df_e/(|ddf_e|+μ)` for every edge at once — the validated
+per-edge `ddf` is the diagonal preconditioner; accept-if-lnL-increases else grow μ, **no line search to
+balloon**) + the requested **mmap/pinned data load**. α/rates fixed at the MLE (the load-bearing +G case;
+joint-α = G.4.1b). **Advisor-hardened gating** (consulted before the build): the harness runs from a
+**deliberately COLD start (b=0.1)**, because the prior G.4.x harnesses sit on the already-optimised
+`.treefile` where convergence would be trivial and prove nothing.
+- **g4 (LG+G4, the load-bearing gate):** PRE-CHECK at θ* reproduces the oracle (rel 5.8e-12) + calibrates
+  ‖g‖=34.8 (catches assembly/sign bugs before the run). **COLD start lnL −8,008,561 (6.2% off the MLE) →
+  converged in 27 JOINT ITERATIONS**, reaching the WARM (.treefile) optimum to **rel 2.47e-16 (machine zero
+  — the SAME optimum, not just close)**; 91 dependent full-tree traversals on the critical path; **9
+  backtrack-rejects (no iteration blowup)**; ‖g‖ driven 34.8→0.28 (JOLT found the true branch-MLE at the
+  fixed rates, *better* than the .treefile which is MLE at the unrounded α). g1: 21 iters, cold==warm rel 1.2e-16.
+- **HEADLINE (the JOLT thesis verdict): 27 cold-start joint iterations** — each ONE wide parallel preorder
+  sweep updating all 197 branches — vs IQ-TREE `optimizeAllBranches`'s ~197-deep × several-sweeps *sequential*
+  Gauss-Seidel chain (each edge reads the previous edge's freshly-updated partials → **un-parallelisable on
+  GPU**, the latency wall). JOLT converts that long dependent chain into 27 wide parallel sweeps — exactly the
+  structural transformation a latency-bound GPU needs. **The Mode-L L.1 gate that (correctly, for CPU)
+  rejected this idea on "+34% more traversals" is re-stated in the correct GPU metric — critical-path length,
+  not traversal count — and decisively WON.** Honest: vs-IQ-TREE step count is approximate (IQ-TREE
+  warm-starts each candidate from BIONJ, not cold), so the absolute 27 is the headline.
+- **MMAP/pinned (user request, advisor-scoped):** alignment mmap'd (RAM-resident page cache, disk out of the
+  load path) + tip/echild staged through `cudaHostAlloc` pinned buffers (~2-3× H2D). HONEST: this is the
+  one-time-load lever — the hot loop is dependent-kernel-bound (no disk, tiny per-iter H2D); the async
+  double-buffered RAM→GPU streaming win belongs to the 1M/10M **tiling** regime (G.4.3), built on this
+  pinned/mmap foundation.
+- Job: 0.48 SU, 48 s, 8.97 GB VRAM, exit 0. The whole cold optimisation is seconds (vs the 1063 s stateless
+  per-edge GPU `-te` of G.2.1b — the structural removal of the sequential chain, though α-opt is still G.4.1b).
+  Dev: NOTHING committed beyond the local backups. **Next: G.4.1b (joint α → full MLE −7541976.853 cold), then
+  G.4.2 (in-tree `--jolt`, the invasive checkpoint).**
+
+---
+
 ## 2026-06-09 (gpu) — JOLT **G.4.0b PASS: +R rate-gradient does NOT overflow on the unscaled GPU path + O(depth) recycling** (V100, job 170281211)
 
 **The JOLT make-or-break, and it PASSED decisively.** This re-tests the EXACT FreeRate gradient that overflowed
