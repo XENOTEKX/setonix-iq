@@ -2017,8 +2017,15 @@ string CandidateModel::evaluate(Params &params,
                         rfi->setProp(i, local_warm_start.rfi_prop[k][i]);
                         rfi->setRate(i, local_warm_start.rfi_rates[k][i]);
                     }
-                    if (local_warm_start.rfi_p_invar[k] > 0)
-                        rfi->setPInvar(local_warm_start.rfi_p_invar[k]);
+                    // NOTE: do NOT call rfi->setPInvar() here.
+                    // initFromCatMinusOne() calls restoreCheckpoint() which reads
+                    // prop[] and p_invar from separate checkpoint keys
+                    // ("RateHeterogeneity/prop" and "RateInvar/p_invar"). With FCA's
+                    // interleaved LPT dispatch these keys can belong to different
+                    // models, so sum(prop) + p_invar != 1 -> ASSERT abort in
+                    // RateFree::initFromCatMinusOne (ratefree.cpp:177).
+                    // p_invar is left to initFromCatMinusOne/restoreCheckpoint which
+                    // reads a self-consistent (prop[], p_invar) from +I+R(k-1).
                 }
             } else if (RateFree *rf = dynamic_cast<RateFree*>(rate)) {
                 int k = rf->getNRate();
