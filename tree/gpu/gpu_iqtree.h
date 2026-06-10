@@ -84,6 +84,37 @@ double gpu_derv_crosscheck(
     double* out_ddf,             // out: second derivative
     double* out_lnL);            // out: tree lnL at t
 
+// Phase G.4.2 — in-tree JOLT joint-gradient optimiser launcher. Runs the validated G.4.1b standalone driver
+// (gpu_k8b_jolt_alpha.cu) clean-room from host-prepared arrays built from the LIVE model/tree/alignment:
+// a SINGLE joint LM diagonal-Newton loop steps ALL branches AND (if optAlpha) the gamma shape alpha at once,
+// replacing IQ-TREE's per-edge Gauss-Seidel optimizeAllBranches + alpha-Brent. The whole host control loop +
+// the device kernels (k1_node postorder, k7_pre preorder all-branch gradient, k2_theta/k2_derv edge reduction,
+// k_ratenum +R/alpha rate gradient) run inside this one call; only the optimised (brlen, alpha, lnL) come back.
+//
+// Reductions are ptn_freq-WEIGHTED (compressed patterns) — the in-tree analog of the standalone's weight-1 sites.
+// The eigen factors (U=evec, Uinv=inv_evec, eval) come from the LIVE model, so this works for any FIXED-Q
+// reversible model (empirical AA matrix etc.); the caller gates eligibility (ns in {4,20}, no +I, gamma-only or
+// no rate het, model->getNDim()==0). Topology is passed as flat per-node arrays (the launcher rebuilds its own
+// post/preorder DFS); node ids = the caller's DFS index, so out_brlen[v] is the optimised length of edge
+// (v -> its parent) for the caller to write back. NORM_LH / unscaled; FP64. Returns NaN on any CUDA error.
+double gpu_jolt_optimize(
+    int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
+    const double* Uinv,          // nstates*nstates (inverse eigenvectors)
+    const double* UinvRowSum,    // nstates (row sums, for ambiguous tips)
+    const double* U,             // nstates*nstates (eigenvectors; needed by k7_pre step 1)
+    const double* eval,          // nstates (eigenvalues)
+    const double* catProp,       // ncat (category weights, e.g. 1/K for +G)
+    const unsigned char* tip,    // ntax * nptn (compact states; >=nstates means ambiguous)
+    const double* ptn_freq,      // nptn (pattern multiplicities)
+    const int* node_nchild,      // nnodes
+    const int* node_child,       // nnodes*3 (child node ids; -1 = unused)
+    const int* node_leaf,        // nnodes (taxon id if leaf, else -1)
+    const double* node_parentLen,// nnodes (initial edge length to parent; root entry = 0)
+    double alpha0, int optAlpha, int maxiter,
+    double* out_brlen,           // nnodes (out: optimised parentLen per node; root entry untouched)
+    double* out_alpha,           // out: optimised alpha (unchanged if !optAlpha)
+    int* out_iters);             // out: joint-iteration count (the headline)
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

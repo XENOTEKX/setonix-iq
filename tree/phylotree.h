@@ -2099,6 +2099,16 @@ public:
         tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     double gpuComputeTreeLnLCleanRoom(double *out_patlh);
 
+    /** Phase G.4.2: GPU JOLT joint-gradient optimiser entry for ONE candidate model. Replaces IQ-TREE's
+        per-edge Gauss-Seidel optimizeAllBranches + alpha-Brent with a single joint LM diagonal-Newton loop over
+        (all branches + gamma alpha), run on the GPU (gpu_jolt_optimize). Builds the clean-room inputs from the
+        LIVE model/site_rate/tree/alignment, runs the optimiser, writes the optimised branch lengths + alpha back
+        through the cache-invalidating setters (setGammaShape + clearAllPartialLH), and self-checks that a fresh
+        CPU computeLikelihood() reproduces the JOLT lnL (rel <= 1e-9). Returns the optimised lnL, or NaN if the
+        regime is JOLT-ineligible / a CUDA error occurs — the caller (ModelFactory::optimizeParameters) then falls
+        back to the standard CPU/stateless-GPU path. Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
+    double optimizeParametersJOLT(int fixed_len);
+
     /** Phase G.2.0b: GPU override for computeLikelihoodBranchPointer (byte-matches ComputeLikelihoodBranchType).
         Returns the whole-tree lnL via gpuComputeTreeLnLCleanRoom (reversible ⇒ branch-independent), mirrors the
         per-pattern values into _pattern_lh[] and zeroes the branch lh_scale_factor (NORM_LH) so the downstream

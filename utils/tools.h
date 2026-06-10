@@ -2918,6 +2918,14 @@ public:
      *  Phase G.1+ in-tree CUDA ModelFinder offload; default false.
      */
     bool gpu;
+
+    /**
+     *  TRUE to use the GPU JOLT joint-gradient optimiser (set by --jolt; requires --gpu).
+     *  Phase G.4.2: replaces IQ-TREE's per-edge Gauss-Seidel branch-opt + alpha-Brent with a single
+     *  joint LM diagonal-Newton step over (all branches + alpha) for JOLT-eligible candidates
+     *  (fixed-Q reversible model, ns in {4,20}, no +I, gamma-only or no rate het). Default false.
+     */
+    bool jolt;
 };
 
 /**

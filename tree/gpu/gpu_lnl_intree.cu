@@ -22,11 +22,13 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <functional>   // G.4.2: recursive DFS lambdas in the JOLT launcher
 
 #define NS_MAX 20
 
 // ---- device model constants (set per cross-check call; one tree, one model) ----
 __constant__ double g_Uinv[NS_MAX*NS_MAX];
+__constant__ double g_U[NS_MAX*NS_MAX];   // G.4.2: eigenvectors (evec), needed by the JOLT preorder kernel kj_pre
 __constant__ double g_UinvRowSum[NS_MAX];
 __constant__ double g_freq[NS_MAX];
 __constant__ double g_catw[64];
@@ -34,6 +36,7 @@ __constant__ double g_catw[64];
 __constant__ double g_val0[64*NS_MAX];   // exp(eval[x]*rate_c*t) * prop_c
 __constant__ double g_val1[64*NS_MAX];   // (rate_c*eval[x]) * val0
 __constant__ double g_val2[64*NS_MAX];   // (rate_c*eval[x]) * val1
+__constant__ double g_rscale[64];        // G.4.2: per-cat edge scale b_e/(r_k*w_k) for the +R/alpha rate-grad numerator
 
 // per-child probability-space contribution: prod[x] *= sum_i echild[c][x][i] * L_child[c][i]
 __device__ __forceinline__ void accum_child(double* prod, int ns, int c, int ptn, int nptn,
@@ -107,6 +110,55 @@ __global__ void k_leaf_eig(int ns, int nptn, int ncat, const unsigned char* __re
         double Li = (s<ns) ? g_Uinv[i*ns+s] : g_UinvRowSum[i];
         out[(size_t)(c*ns+i)*nptn+ptn] = Li;
     }
+}
+
+// =============================== G.4.2 JOLT kernels (ported from gpu_k8b_jolt_alpha.cu, runtime-ns) ===============================
+// kj_theta — t-independent edge product theta[c*ns+x] = node_eig (.) dad_eig, materialised so kj_derv AND
+// kj_ratenum can both read it (k2_derv above fuses the product; JOLT needs theta cached for the rate gradient).
+__global__ void kj_theta(int ns, int nptn, int blockc,
+        const double* __restrict__ node, const double* __restrict__ dad, double* __restrict__ theta){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    for (int k=0;k<blockc;k++){ size_t o=(size_t)k*nptn+ptn; theta[o]=node[o]*dad[o]; }
+}
+// kj_derv — per-pattern lnL/df/ddf from cached theta and the t-dependent g_val0/1/2 (= k2_derv from theta).
+__global__ void kj_derv(int ns, int nptn, int ncat, const double* __restrict__ theta,
+        double* __restrict__ patlh, double* __restrict__ pdf, double* __restrict__ pddf){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    double lh=0.0,d1=0.0,d2=0.0;
+    for (int c=0;c<ncat;c++) for (int x=0;x<ns;x++){
+        double th=theta[(size_t)(c*ns+x)*nptn+ptn]; int k=c*ns+x;
+        lh+=g_val0[k]*th; d1+=g_val1[k]*th; d2+=g_val2[k]*th; }
+    lh=fabs(lh); double inv=1.0/lh, r=d1*inv;
+    patlh[ptn]=log(lh); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
+}
+// kj_pre — Ji-2020 top-down PREORDER eigen-space partial pre_v ("rest of tree" above edge u->v), WITHOUT v's
+// own branch (the gradient's g_val0/1(b_v) reapply it once). The PARENT branch b_u (expfac_u) is applied here.
+//   pus[t]  = Sum_i U[t][i]*expfac_u[i]*pre_u[c][i]
+//   fsib[t] = Prod_siblings ( Sum_i echild_sib[t][i]*pl_sib[i] )         (via accum_child)
+//   pre_v[c][j] = Sum_t Uinv[j][t]*pus[t]*fsib[t]
+__global__ void kj_pre(int ns, int nptn, int ncat, double* __restrict__ out_pre,
+        const double* __restrict__ pre_u, const double* __restrict__ expfac_u,
+        int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
+                 const double* ec1, const double* sp1, const unsigned char* st1){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    for (int c=0;c<ncat;c++){
+        double fsib[NS_MAX]; for (int t=0;t<ns;t++) fsib[t]=1.0;
+        accum_child(fsib,ns,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child(fsib,ns,c,ptn,nptn,ec1,sp1,st1);
+        const double* puc=pre_u+(size_t)(c*ns)*nptn+ptn; const double* ef=expfac_u+(size_t)c*ns;
+        double pus[NS_MAX];
+        for (int t=0;t<ns;t++){ double v=0.0; for (int i=0;i<ns;i++) v+=g_U[t*ns+i]*ef[i]*puc[(size_t)i*nptn]; pus[t]=v; }
+        double* o=out_pre+(size_t)(c*ns)*nptn+ptn;
+        for (int j=0;j<ns;j++){ double v=0.0; for (int t=0;t<ns;t++) v+=g_Uinv[j*ns+t]*pus[t]*fsib[t]; o[(size_t)j*nptn]=v; }
+    }
+}
+// kj_ratenum — accumulate b_e*qp_e[k] into rnum[k][ptn] per category (the +R/alpha rate-grad numerator).
+// g_rscale[k]=b_e/(r_k*w_k) folds the chain rule; Sum_x g_val1[k,x]*theta = r_k*w_k*qp_e[k].
+__global__ void kj_ratenum(int ns, int nptn, int ncat, const double* __restrict__ theta, double* __restrict__ rnum){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    for (int k=0;k<ncat;k++){ double s=0.0;
+        for (int x=0;x<ns;x++) s+=g_val1[k*ns+x]*theta[(size_t)(k*ns+x)*nptn+ptn];
+        rnum[(size_t)k*nptn+ptn]+=g_rscale[k]*s; }
 }
 
 #define GCK(x) do{ cudaError_t _e=(x); if(_e!=cudaSuccess){ \
@@ -284,4 +336,196 @@ extern "C" double gpu_derv_crosscheck(
     if (out_ddf) *out_ddf=ddf;
     if (out_lnL) *out_lnL=lnL;
     return df;
+}
+
+// =============================== G.4.2 — JOLT joint-gradient optimiser launcher ===============================
+// Mean-rate discrete-Gamma (Yang 1994; IQ-TREE's "MEAN of the portion") — verbatim from the validated
+// standalone gpu_k8b_jolt_alpha.cu (G.4.1b). r_c = K*[P(alpha+1, alpha*b_c) - P(alpha+1, alpha*b_{c-1})].
+static double jolt_gammp_reg(double a, double x){   // regularized lower incomplete gamma P(a,x) (NR gser/gcf)
+    if (x<=0.0) return 0.0; double gln=lgamma(a);
+    if (x<a+1.0){ double ap=a,sum=1.0/a,del=sum; for(int n=1;n<=300;n++){ ap+=1.0; del*=x/ap; sum+=del; if(fabs(del)<fabs(sum)*1e-16) break; }
+        return sum*exp(-x+a*log(x)-gln); }
+    double b=x+1.0-a,c=1e300,d=1.0/b,h=d;
+    for(int i=1;i<=300;i++){ double an=-(double)i*((double)i-a); b+=2.0; d=an*d+b; if(fabs(d)<1e-300)d=1e-300; c=b+an/c; if(fabs(c)<1e-300)c=1e-300; d=1.0/d; double del=d*c; h*=del; if(fabs(del-1.0)<1e-16) break; }
+    return 1.0-exp(-x+a*log(x)-gln)*h;
+}
+static double jolt_gammp_inv(double a, double p){    // inverse: x s.t. P(a,x)=p, by bracketed bisection
+    if (p<=0.0) return 0.0; if (p>=1.0) return 1e300;
+    double lo=0.0,hi=a+10.0*sqrt(a+1.0)+20.0; int guard=0; while(jolt_gammp_reg(a,hi)<p && guard++<200) hi*=2.0;
+    for(int it=0;it<200;it++){ double mid=0.5*(lo+hi); if(jolt_gammp_reg(a,mid)<p) lo=mid; else hi=mid; if(hi-lo<1e-13*(mid+1e-13)) break; }
+    return 0.5*(lo+hi);
+}
+static void jolt_discreteGammaMean(double alpha, int K, double* rates){
+    if (K==1){ rates[0]=1.0; return; }
+    double prev=0.0;
+    for(int c=0;c<K;c++){ double hi;
+        if(c==K-1) hi=1.0;
+        else { double bc=jolt_gammp_inv(alpha,(double)(c+1)/(double)K)/alpha; hi=jolt_gammp_reg(alpha+1.0, alpha*bc); }
+        rates[c]=(double)K*(hi-prev); prev=hi; }
+}
+
+// JOLT-specific persistent device buffers (separate from the lnL/derv pools; same alloc-once / reuse policy).
+static DevBuf gbj_echild, gbj_partial, gbj_theta, gbj_patlh, gbj_pdf, gbj_pddf,
+              gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip;
+
+extern "C" double gpu_jolt_optimize(
+    int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
+    const double* Uinv, const double* UinvRowSum, const double* U, const double* eval,
+    const double* catProp, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
+    double alpha0, int optAlpha, int maxiter,
+    double* out_brlen, double* out_alpha, int* out_iters)
+{
+    int ns = nstates;
+    if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[JOLT] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
+
+    // alpha-independent eigen constants — upload once
+    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
+    GCK(cudaMemcpyToSymbol(g_U,    U,    sizeof(double)*ns*ns));
+    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
+
+    // ---- rebuild topology from flat arrays (node ids = caller's DFS index) ----
+    std::vector<std::vector<int>> child(nnodes);
+    std::vector<int> leaf(nnodes);
+    for (int u=0; u<nnodes; u++){ leaf[u]=node_leaf[u];
+        for (int k=0; k<node_nchild[u] && k<3; k++){ int c=node_child[u*3+k]; if (c>=0) child[u].push_back(c); } }
+    std::vector<double> brlen(node_parentLen, node_parentLen+nnodes);
+
+    std::vector<int> postorder; std::vector<int> slot(nnodes,-1);
+    std::function<void(int)> dfs=[&](int u){ for(int c:child[u]) dfs(c); if(leaf[u]<0){ slot[u]=(int)postorder.size(); postorder.push_back(u);} };
+    dfs(root); int nInternal=(int)postorder.size();
+    int c0=-1; for(int c:child[root]) if(leaf[c]<0){ c0=c; break; } if(c0<0){ fprintf(stderr,"[JOLT] no internal root child\n"); return (double)NAN; }
+    std::vector<int> edgeV; for(int u=0;u<nnodes;u++) for(int v:child[u]) edgeV.push_back(v); int nedge=(int)edgeV.size();
+    int treeH=0; std::function<void(int,int)> ddfs=[&](int u,int d){ if(d>treeH)treeH=d; for(int c:child[u]) ddfs(c,d+1); }; ddfs(root,0); int nPool=treeH+2;
+
+    size_t ecStride=(size_t)ncat*ns*ns, slotSz=(size_t)ncat*ns*nptn;
+    DEVB(gbj_echild, (size_t)nnodes*ecStride*sizeof(double));
+    DEVB(gbj_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
+    DEVB(gbj_theta,  slotSz*sizeof(double));
+    DEVB(gbj_patlh,  (size_t)nptn*sizeof(double)); DEVB(gbj_pdf,(size_t)nptn*sizeof(double)); DEVB(gbj_pddf,(size_t)nptn*sizeof(double));
+    DEVB(gbj_pretmp, slotSz*sizeof(double)); DEVB(gbj_tipeig, slotSz*sizeof(double));
+    DEVB(gbj_prepool,(size_t)nPool*slotSz*sizeof(double));
+    DEVB(gbj_expfac, (size_t)nnodes*ncat*ns*sizeof(double));
+    DEVB(gbj_rnum,   (size_t)ncat*nptn*sizeof(double));
+    DEVB(gbj_tip,    (size_t)ntax*nptn);
+    double *d_echild=(double*)gbj_echild.p,*d_partial=(double*)gbj_partial.p,*d_theta=(double*)gbj_theta.p;
+    double *d_patlh=(double*)gbj_patlh.p,*d_pdf=(double*)gbj_pdf.p,*d_pddf=(double*)gbj_pddf.p;
+    double *d_pretmp=(double*)gbj_pretmp.p,*d_tipeig=(double*)gbj_tipeig.p,*d_prepool=(double*)gbj_prepool.p;
+    double *d_expfac=(double*)gbj_expfac.p,*d_rnum=(double*)gbj_rnum.p;
+    unsigned char* d_tip=(unsigned char*)gbj_tip.p;
+    GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
+
+    int TB=256, GB=(nptn+TB-1)/TB;
+    std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
+    std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
+    std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
+    double curAlpha=alpha0;
+    auto applyAlpha=[&](double a){ double r[64]; jolt_discreteGammaMean(a,ncat,r); for(int c=0;c<ncat;c++) catRate[c]=r[c]; };
+    if (ncat>1) applyAlpha(curAlpha);
+
+    auto childArgs=[&](int u,int excl,int& nch,const double** ec,const double** p,const unsigned char** t){
+        nch=0; for(int k=0;k<3;k++){ec[k]=p[k]=nullptr;t[k]=nullptr;}
+        for(int c:child[u]){ if(c==excl) continue; ec[nch]=d_echild+(size_t)c*ecStride;
+            if(leaf[c]>=0) t[nch]=d_tip+(size_t)leaf[c]*nptn; else p[nch]=d_partial+(size_t)slot[c]*slotSz; nch++; } };
+    auto sibArg=[&](int w,const double*& ec,const double*& sp,const unsigned char*& st){
+        ec=d_echild+(size_t)w*ecStride; sp=nullptr; st=nullptr;
+        if(leaf[w]>=0) st=d_tip+(size_t)leaf[w]*nptn; else sp=d_partial+(size_t)slot[w]*slotSz; };
+    auto rebuildEchild=[&](){
+        for(int c=0;c<nnodes;c++){ if(c==root){ for(size_t z=0;z<ecStride;z++) h_echild[(size_t)c*ecStride+z]=0.0; continue; }
+            for(int cat=0;cat<ncat;cat++){ double len=brlen[c]*catRate[cat]; double ex[NS_MAX]; for(int i=0;i<ns;i++) ex[i]=exp(eval[i]*len);
+                double* e=&h_echild[(size_t)c*ecStride+(size_t)cat*ns*ns]; for(int x=0;x<ns;x++) for(int i=0;i<ns;i++) e[x*ns+i]=U[x*ns+i]*ex[i];
+                for(int i=0;i<ns;i++) h_expfac[(size_t)c*ncat*ns+cat*ns+i]=ex[i]; } }
+        cudaMemcpy(d_echild,h_echild.data(),(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_expfac,h_expfac.data(),(size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice); };
+    auto postorderFill=[&](){
+        for(int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
+            int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; childArgs(u,-1,nch,ec,p,t);
+            k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_partial+(size_t)slot[u]*slotSz,d_patlh,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
+        cudaDeviceSynchronize(); };
+    auto setVal=[&](double t){ std::vector<double> v0(ncat*ns),v1(ncat*ns),v2(ncat*ns);
+        for(int c=0;c<ncat;c++){ double rc=catRate[c],pcw=catProp_v[c]; for(int x=0;x<ns;x++){ double re=rc*eval[x],e=exp(eval[x]*rc*t)*pcw;
+            v0[c*ns+x]=e; v1[c*ns+x]=re*e; v2[c*ns+x]=re*re*e; } }
+        cudaMemcpyToSymbol(g_val0,v0.data(),sizeof(double)*ncat*ns); cudaMemcpyToSymbol(g_val1,v1.data(),sizeof(double)*ncat*ns); cudaMemcpyToSymbol(g_val2,v2.data(),sizeof(double)*ncat*ns); };
+    auto reduceDerv=[&](double& lnL,double& df,double& ddf){
+        cudaMemcpy(patlh.data(),d_patlh,nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        cudaMemcpy(pdf.data(),d_pdf,nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        cudaMemcpy(pddf.data(),d_pddf,nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        double L=0,kc=0,D=0,kd=0,DD=0,kdd=0;
+        for(int p=0;p<nptn;p++){ double f=ptn_freq[p];
+            { double term=f*patlh[p],y=term-kc, s=L +y; kc =(s-L )-y; L =s; }
+            { double term=f*pdf[p],  y=term-kd, s=D +y; kd =(s-D )-y; D =s; }
+            { double term=f*pddf[p], y=term-kdd,s=DD+y; kdd=(s-DD)-y; DD=s; } }
+        lnL=L; df=D; ddf=DD; };
+    auto edgeThetaInto=[&](int v,const double* pre){ const double* pl;
+        if(leaf[v]<0) pl=d_partial+(size_t)slot[v]*slotSz;
+        else { k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); pl=d_tipeig; }
+        kj_theta<<<GB,TB>>>(ns,nptn,ncat*ns,pl,pre,d_theta); };
+
+    long nGradSweeps=0,nLnLEval=0;
+    auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a)->double{
+        if(ncat>1) applyAlpha(cand_a); brlen=cand_b; rebuildEchild(); postorderFill();
+        int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
+        k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
+        edgeThetaInto(c0,d_pretmp); cudaDeviceSynchronize();
+        setVal(brlen[c0]); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
+        double l,d,dd; reduceDerv(l,d,dd); return l; };
+
+    std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0),invL(nptn,0.0),rnumH((size_t)ncat*nptn);
+    auto computeGradient=[&](double& lnLout,double& galphaOut){
+        rebuildEchild(); postorderFill(); nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
+        std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
+        auto acq=[&](){int s=freeSlots.back();freeSlots.pop_back();return s;}; auto rls=[&](int s){freeSlots.push_back(s);};
+        std::vector<double> dfC(nnodes,0.0),ddfC(nnodes,0.0); bool gotL=false; double lnLfirst=0;
+        std::function<void(int,int)> proc=[&](int u,int su){
+            for(int v:child[u]){
+                int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
+                if(u==root){ int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,v,nch,ec,p,tp);
+                    k1_node<<<GB,TB>>>(ns,nptn,ncat,0,pre,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); }
+                else { const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
+                    for(int w:child[u]){ if(w==v||nsb>=2) continue; sibArg(w,ec[nsb],sp[nsb],st[nsb]); nsb++; }
+                    kj_pre<<<GB,TB>>>(ns,nptn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
+                cudaDeviceSynchronize();
+                edgeThetaInto(v,pre); cudaDeviceSynchronize();
+                double bv=brlen[v]; setVal(bv); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
+                std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
+                cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); kj_ratenum<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_rnum); cudaDeviceSynchronize();
+                double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
+                if(!gotL){ lnLfirst=l; for(int p=0;p<nptn;p++) invL[p]=exp(-patlh[p]); gotL=true; }
+                if(leaf[v]<0) proc(v,sv); rls(sv);
+            } };
+        proc(root,-1); cudaDeviceSynchronize();
+        for(int e=0;e<nedge;e++){ g_df[e]=dfC[edgeV[e]]; g_ddf[e]=ddfC[edgeV[e]]; }
+        cudaMemcpy(rnumH.data(),d_rnum,(size_t)ncat*nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        for(int c=0;c<ncat;c++){ long double acc=0; for(int p=0;p<nptn;p++) acc+=(long double)ptn_freq[p]*rnumH[(size_t)c*nptn+p]*invL[p]; gradR[c]=catProp_v[c]*(double)acc; }
+        double ga=0;
+        if(ncat>1){ double rp[64]; jolt_discreteGammaMean(curAlpha+1e-5,ncat,rp); for(int c=0;c<ncat;c++) ga+=((rp[c]-catRate[c])/1e-5)*gradR[c]; }
+        lnLout=lnLfirst; galphaOut=ga; };
+
+    // ---- single joint LM diagonal-Newton optimise from the provided (warm) start ----
+    std::vector<double> cand(nnodes,0.0), base;
+    std::vector<double> startB(node_parentLen, node_parentLen+nnodes);   // distinct from brlen (evalLnL overwrites brlen)
+    curAlpha=alpha0;
+    double lnL=evalLnL(startB,curAlpha); nLnLEval++;
+    double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
+    double aPrev=0,gaPrev=0; bool haveSec=false;
+    for(it=1; it<=maxiter; it++){
+        base=brlen; double baseA=curAlpha; if(ncat>1) applyAlpha(baseA);
+        double lg,ga; computeGradient(lg,ga);
+        double ddA=(haveSec && fabs(baseA-aPrev)>1e-9)?(ga-gaPrev)/(baseA-aPrev):-1e6;
+        aPrev=baseA; gaPrev=ga; haveSec=true;
+        bool acc=false;
+        for(int bt=0; bt<14; bt++){
+            cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
+            double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
+            double ln=evalLnL(cand,ca); nLnLEval++;
+            if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
+            else { mu*=4.0; nRej++; } }
+        if(!acc){ brlen=base; curAlpha=baseA; break; }
+        if(conv) break; }
+
+    if (cudaGetLastError()!=cudaSuccess) return (double)NAN;   // any launch/sync error -> caller falls back to CPU
+    for(int v=0;v<nnodes;v++) out_brlen[v]=brlen[v];
+    if(out_alpha) *out_alpha=curAlpha;
+    if(out_iters) *out_iters=it;
+    return lnL;
 }

@@ -453,4 +453,118 @@ void PhyloTree::setLikelihoodKernelGPU() {
                params->fixed_branch_length == BRLEN_FIX ? "fixed/-blfix" : "GPU"); }
 }
 
+// ============================================================================================================
+// Phase G.4.2 — GPU JOLT joint-gradient optimiser for ONE candidate model. Builds the clean-room inputs from the
+// LIVE objects (mirroring gpuComputeTreeLnLCleanRoom), runs the validated G.4.1b joint LM driver on the GPU,
+// writes the optimised (197 branches + alpha) back through the cache-invalidating setters, and self-checks that a
+// FRESH CPU computeLikelihood() reproduces the JOLT lnL. Returns NaN if JOLT-ineligible / CUDA error -> caller
+// falls back to the standard CPU path.
+// ============================================================================================================
+double PhyloTree::optimizeParametersJOLT(int fixed_len) {
+    // ---- eligibility gate (the validated G.4.1/G.4.1b scope: fixed-Q reversible, ns in {4,20}, no +I, gamma-or-uniform) ----
+    if (!model || !site_rate || !aln) return (double)NAN;
+    if (fixed_len != BRLEN_OPTIMIZE) return (double)NAN;        // JOLT optimises branches; other brlen modes -> CPU
+    int ns = aln->num_states;
+    if (ns != 4 && ns != 20) return (double)NAN;
+    if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) return (double)NAN;
+    if (model->getNDim() != 0) return (double)NAN;              // free substitution params (e.g. GTR/+FO) -> eigen would move -> CPU
+    if (site_rate->getPInvar() > 0.0) return (double)NAN;       // +I not yet supported by JOLT -> CPU
+    int ncat = site_rate->getNRate();
+    if (ncat < 1 || ncat > 64) return (double)NAN;
+    if (ncat > 1 && site_rate->getGammaShape() <= 0.0) return (double)NAN;  // multi-cat but not gamma (+R) -> CPU
+
+    // ---- model eigen factors (alpha-independent; same convention as the clean-room lnL) ----
+    double *eval = model->getEigenvalues();
+    double *U    = model->getEigenvectors();
+    double *Uinv = model->getInverseEigenvectors();
+    if (!eval || !U || !Uinv) return (double)NAN;
+    vector<double> UinvRowSum(ns, 0.0);
+    for (int i = 0; i < ns; i++) { double s = 0; for (int j = 0; j < ns; j++) s += Uinv[i*ns+j]; UinvRowSum[i] = s; }
+    vector<double> catProp(ncat);
+    for (int c = 0; c < ncat; c++) catProp[c] = site_rate->getProp(c);
+
+    // ---- topology rooted at internal node R (IQ-TREE roots at a leaf; lnL is reversible-invariant) ----
+    if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
+    Node *R = root->neighbors[0]->node;
+    if (R->isLeaf()) return (double)NAN;
+
+    map<Node*,int> nid;
+    vector<Node*> nodes, parentNode;
+    vector<double> parentLen;
+    vector<int> leafTax;
+    vector<vector<int>> childList;
+    function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        int myi = (int)nodes.size(); nid[n] = myi; nodes.push_back(n);
+        parentNode.push_back(dad); parentLen.push_back(lenToDad);
+        leafTax.push_back(n->isLeaf() ? aln->getSeqID(n->name) : -1);
+        childList.push_back(vector<int>());
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; indexDfs(nb->node, n, nb->length); }
+    };
+    indexDfs(R, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    // children must be recorded AFTER all indices assigned (a node's child indices are known once its subtree is visited)
+    for (int i = 0; i < nNodes; i++) {
+        Node *n = nodes[i], *dad = parentNode[i];
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; childList[i].push_back(nid[nb->node]); }
+        if ((int)childList[i].size() > 3) return (double)NAN;   // >3 children (only R has 3) -> unsupported
+    }
+
+    // ---- compact tip states + pattern frequencies + flat topology arrays ----
+    int nptn = (int)aln->size(), ntax = (int)aln->getNSeq();
+    vector<unsigned char> tip((size_t)ntax*nptn);
+    for (int i = 0; i < nNodes; i++) {
+        if (leafTax[i] < 0) continue; int tax = leafTax[i];
+        if (tax < 0 || tax >= ntax) return (double)NAN;
+        for (int p = 0; p < nptn; p++) { int st = (int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p] = (unsigned char)((st < ns) ? st : ns); }
+    }
+    vector<double> ptnFreq(nptn);
+    for (int p = 0; p < nptn; p++) ptnFreq[p] = (double)aln->at(p).frequency;
+    vector<int> nodeNch(nNodes), nodeChild(nNodes*3, -1), nodeLeaf(nNodes);
+    vector<double> nodeParentLen(nNodes);
+    for (int i = 0; i < nNodes; i++) {
+        nodeNch[i] = (int)childList[i].size(); nodeLeaf[i] = leafTax[i]; nodeParentLen[i] = parentLen[i];
+        for (int k = 0; k < (int)childList[i].size() && k < 3; k++) nodeChild[i*3+k] = childList[i][k];
+    }
+
+    double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : 1.0;
+    int optAlpha = (ncat > 1 && !site_rate->isFixGammaShape()) ? 1 : 0;
+
+    // ---- run the JOLT optimiser on the GPU ----
+    vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0; int outIters = 0;
+    double joltLnL = gpu_jolt_optimize(ns, nptn, ncat, ntax, nNodes, /*root=*/nid[R],
+        Uinv, UinvRowSum.data(), U, eval, catProp.data(), tip.data(), ptnFreq.data(),
+        nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
+        alpha0, optAlpha, /*maxiter=*/400, outBrlen.data(), &outAlpha, &outIters);
+    if (std::isnan(joltLnL)) {
+        static bool warned = false;
+        if (!warned) { warned = true; printf("[JOLT] gpu_jolt_optimize returned NaN -> CPU fallback (optimizeParameters)\n"); }
+        return (double)NAN;
+    }
+
+    // ---- write the optimised branch lengths back (both directed neighbours of each edge v -> parent) ----
+    for (int v = 0; v < nNodes; v++) {
+        Node *child = nodes[v], *par = parentNode[v];
+        if (!par) continue;                                     // R: no parent edge (covered as some node's child edge)
+        Neighbor *fwd = par->findNeighbor(child); Neighbor *bwd = child->findNeighbor(par);
+        if (fwd) fwd->length = outBrlen[v];
+        if (bwd) bwd->length = outBrlen[v];
+    }
+    // ---- write alpha back through the gamma setter, then invalidate ALL partial-LH + transition caches ----
+    if (optAlpha) site_rate->setGammaShape(outAlpha);           // sets gamma_shape + recomputes the discrete rates
+    clearAllPartialLH();                                        // brlen + alpha changed -> partials & theta stale (advisor: the cache-coherence watch item)
+
+    // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
+    double cpuLnL = computeLikelihood();
+    double rel = (cpuLnL != 0.0) ? fabs((joltLnL - cpuLnL) / cpuLnL) : fabs(joltLnL - cpuLnL);
+    static int report_count = 0;
+    if (report_count < 12) { report_count++;
+        printf("[JOLT] model=%s+%s%d ns=%d ncat=%d: %d joint iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
+               model->name.c_str(), (ncat>1?"G":""), (ncat>1?ncat:0), ns, ncat, outIters,
+               joltLnL, cpuLnL, rel, (rel <= 1e-9 ? "PASS" : (rel <= 1e-6 ? "OK(gamma-resid)" : "MISMATCH")),
+               alpha0, (ncat>1?site_rate->getGammaShape():0.0)); }
+
+    setCurScore(cpuLnL);
+    return cpuLnL;
+}
+
 #endif // IQTREE_GPU

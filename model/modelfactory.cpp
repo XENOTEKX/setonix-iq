@@ -17,6 +17,7 @@
  *   Free Software Foundation, Inc.,                                       *
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
+#include <cmath>          // G.4.2: std::isnan for the JOLT eligibility/fallback check
 #include "rateinvar.h"
 #include "modelfactory.h"
 #include "rategamma.h"
@@ -1566,6 +1567,19 @@ double ModelFactory::optimizeParameters(int fixed_len, bool write_info,
     double cur_lh;
     PhyloTree *tree = site_rate->getTree();
     ASSERT(tree);
+
+#ifdef IQTREE_GPU
+    // Phase G.4.2 — GPU JOLT joint-gradient optimiser. For JOLT-eligible candidates (fixed-Q reversible model,
+    // ns in {4,20}, no +I, gamma-or-uniform) replace the per-edge Gauss-Seidel branch-opt + alpha-Brent loop with
+    // a single joint LM step over (all branches + alpha) on the GPU. optimizeParametersJOLT() writes the result
+    // back through the cache-invalidating setters and self-checks vs a fresh CPU computeLikelihood; it returns NaN
+    // for ineligible regimes / CUDA errors, in which case we fall through to the standard CPU path below.
+    if (tree->params && tree->params->jolt) {
+        double jolt_lh = tree->optimizeParametersJOLT(fixed_len);
+        if (!std::isnan(jolt_lh))
+            return jolt_lh;
+    }
+#endif
 
     stopStoringTransMatrix();
 
