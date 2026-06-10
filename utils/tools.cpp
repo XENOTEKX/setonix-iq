@@ -5458,6 +5458,11 @@ void parseArg(int argc, char *argv[], Params &params) {
                 params.gpu = true;
                 continue;
             }
+            if (strcmp(argv[cnt], "--jolt") == 0 || strcmp(argv[cnt], "-jolt") == 0) {
+                params.jolt = true;   // G.4.2: GPU JOLT joint-gradient optimiser (implies --gpu)
+                params.gpu = true;
+                continue;
+            }
             if (argv[cnt][0] == '-') {
                 string err = "Invalid \"";
                 err += argv[cnt];
@@ -7560,6 +7565,7 @@ void Params::setDefault() {
     cmaple_use_local_ref = true;
     cmaple_output_MAT = false;
     gpu = false;
+    jolt = false;
 }
 
 int countPhysicalCPUCores() {
