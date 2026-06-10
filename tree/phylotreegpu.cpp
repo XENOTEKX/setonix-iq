@@ -422,6 +422,13 @@ double PhyloTree::computeLikelihoodFromBufferGPU() {
 // ============================================================================================================
 void PhyloTree::setLikelihoodKernelGPU() {
     if (!params || !params->gpu) return;
+    // G.4.2: under --jolt, the stateless GPU Branch/Derv/FromBuffer overrides must NOT install. JOLT is the ONLY
+    // GPU path — it replaces ModelFactory::optimizeParameters wholesale for eligible candidates (+G/base), while
+    // INELIGIBLE candidates (+I, +R, +FO, mixture) must fall back to the PURE CPU likelihood (normal speed), NOT
+    // the slow stateless GPU clean-room sweep (G.2.2a measured ~25 min/model = 50-100x). Keeping both active would
+    // (a) make the +I/+R tail run on the slow stateless path (timeout) and (b) reduce optimizeParametersJOLT's
+    // self-check to GPU-vs-GPU; with this no-op the self-check's computeLikelihood() is a genuine CPU recompute.
+    if (params->jolt) return;
     if (!aln || (aln->num_states != 4 && aln->num_states != 20)) return;
     if (isSuperTree()) return;
     // reject regimes whose output reads per-pattern/-category buffers the GPU overrides do not populate

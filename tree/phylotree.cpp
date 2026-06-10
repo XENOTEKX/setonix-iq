@@ -1311,7 +1311,9 @@ double PhyloTree::computeLikelihood(double *pattern_lh, bool save_log_value) {
     // Phase G.2.0a: one-shot clean-room GPU lnL cross-check (proves the eigen/tip/weights/pi-fold bridge
     // before the seam is wired in G.2.0b). Phase G.2.1a: one-shot single-edge derivative cross-check (GPU
     // df/ddf vs IQ-TREE's own computeLikelihoodDerv). Both run once per process; pure read-only diagnostics.
-    if (params && params->gpu) { gpuLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); }
+    // G.4.2: skip the G.2.x one-shot cross-checks under --jolt — ModelFinder is across-model OpenMP-parallel
+    // (phylotesting.cpp:4097), so these GPU-constant-touching diagnostics would race concurrent JOLT calls.
+    if (params && params->gpu && !params->jolt) { gpuLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); }
 #endif
     return score;
 }
