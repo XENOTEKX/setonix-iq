@@ -23,6 +23,7 @@
 #include <cmath>
 #include <vector>
 #include <functional>   // G.4.2: recursive DFS lambdas in the JOLT launcher
+#include <mutex>        // G.4.2: serialize GPU access — ModelFinder is across-model OpenMP-parallel
 
 #define NS_MAX 20
 
@@ -378,6 +379,15 @@ extern "C" double gpu_jolt_optimize(
 {
     int ns = nstates;
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[JOLT] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
+
+    // G.4.2: ModelFinder evaluates candidates ACROSS-MODEL in parallel (phylotesting.cpp:4097 omp parallel),
+    // so optimizeParametersJOLT (hence this launcher) can be entered by many threads at once. The single GPU's
+    // __constant__ symbols (g_Uinv/g_U/g_val*/g_rscale) and the static DevBuf pool (gbj_*) are PROCESS-GLOBAL
+    // device state — concurrent use would clobber. Serialize the whole GPU computation: JOLT models run one at a
+    // time on the GPU while the other threads keep optimising CPU-fallback (+I/+R/+FO) candidates. (Cross-model
+    // GPU batching — running B models concurrently on the device — is the PHALANX grid.z work, G.4.3, not this.)
+    static std::mutex jolt_gpu_mtx;
+    std::lock_guard<std::mutex> jolt_lock(jolt_gpu_mtx);
 
     // alpha-independent eigen constants — upload once
     GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
