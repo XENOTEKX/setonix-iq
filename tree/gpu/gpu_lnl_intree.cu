@@ -441,7 +441,7 @@ static void jolt_discreteGammaMean(double alpha, int K, double* rates){
 }
 
 // JOLT-specific persistent device buffers (separate from the lnL/derv pools; same alloc-once / reuse policy).
-static DevBuf gbj_echild, gbj_partial, gbj_theta, gbj_patlh, gbj_pdf, gbj_pddf,
+static DevBuf gbj_echild, gbj_partial, gbj_patlh, gbj_pdf, gbj_pddf,
               gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip, gbj_baseinvar,
               gbj_ptnfreq, gbj_redpart,   // G.5.0: on-device ptn_freq + per-block reduction partials
               gbj_invlbase, gbj_redR;     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
@@ -489,7 +489,8 @@ extern "C" double gpu_jolt_optimize(
     size_t ecStride=(size_t)ncat*ns*ns, slotSz=(size_t)ncat*ns*nptn;
     DEVB(gbj_echild, (size_t)nnodes*ecStride*sizeof(double));
     DEVB(gbj_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
-    DEVB(gbj_theta,  slotSz*sizeof(double));
+    // part8 #3 cleanup: d_theta (the 601 MB theta arena) is DEAD now that kj_derv_fused computes theta in registers
+    // — no longer allocated (helps the +R10 / A100-80 VRAM margin).
     DEVB(gbj_patlh,  (size_t)nptn*sizeof(double)); DEVB(gbj_pdf,(size_t)nptn*sizeof(double)); DEVB(gbj_pddf,(size_t)nptn*sizeof(double));
     DEVB(gbj_pretmp, slotSz*sizeof(double)); DEVB(gbj_tipeig, slotSz*sizeof(double));
     DEVB(gbj_prepool,(size_t)nPool*slotSz*sizeof(double));
@@ -498,7 +499,7 @@ extern "C" double gpu_jolt_optimize(
     DEVB(gbj_tip,    (size_t)ntax*nptn);
     DEVB(gbj_baseinvar, (size_t)nptn*sizeof(double));   // G.4.3b +I: pinv-independent invariant base per pattern
     DEVB(gbj_ptnfreq,   (size_t)nptn*sizeof(double));   // G.5.0: pattern weights, constant across the optimise call
-    double *d_echild=(double*)gbj_echild.p,*d_partial=(double*)gbj_partial.p,*d_theta=(double*)gbj_theta.p;
+    double *d_echild=(double*)gbj_echild.p,*d_partial=(double*)gbj_partial.p;
     double *d_patlh=(double*)gbj_patlh.p,*d_pdf=(double*)gbj_pdf.p,*d_pddf=(double*)gbj_pddf.p;
     double *d_pretmp=(double*)gbj_pretmp.p,*d_tipeig=(double*)gbj_tipeig.p,*d_prepool=(double*)gbj_prepool.p;
     double *d_expfac=(double*)gbj_expfac.p,*d_rnum=(double*)gbj_rnum.p,*d_baseinvar=(double*)gbj_baseinvar.p;
@@ -573,10 +574,6 @@ extern "C" double gpu_jolt_optimize(
             { double term=h_redpart[(size_t)GB+b], y=term-kd, s=D +y; kd =(s-D )-y; D =s; }
             { double term=h_redpart[(size_t)2*GB+b],y=term-kdd,s=DD+y; kdd=(s-DD)-y; DD=s; } }
         lnL=L; df=D; ddf=DD; };
-    auto edgeThetaInto=[&](int v,const double* pre){ const double* pl;
-        if(leaf[v]<0) pl=d_partial+(size_t)slot[v]*slotSz;
-        else { k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); pl=d_tipeig; }
-        kj_theta<<<GB,TB>>>(ns,nptn,ncat*ns,pl,pre,d_theta); };
     // part8 #3: resolve v's eigen node-partial pointer (synthesising a leaf tip vector into d_tipeig if needed)
     // WITHOUT materialising theta — kj_derv_fused reads node+dad directly. Replaces edgeThetaInto on the fused path.
     auto edgeNodePtr=[&](int v)->const double*{
@@ -584,18 +581,29 @@ extern "C" double gpu_jolt_optimize(
         k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); return d_tipeig; };
 
     long nGradSweeps=0,nLnLEval=0;
+    // part8 #2 base-sweep skip: record the (brlen,alpha,pinv) the device echild/partial were last built for (by
+    // evalLnL) so computeGradient can skip the redundant rebuild+postorder when its base already matches. Values are
+    // COPIES of the same candidate vectors (no recompute) => exact == is reliable; any mismatch falls back to rebuild.
+    std::vector<double> devB; double devA=1e300, devP=1e300; bool devValid=false;
     auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv)->double{
         if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b; rebuildEchild(); postorderFill();
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
         k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
         const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
         setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr); cudaDeviceSynchronize();
-        double l,d,dd; reduceDerv(l,d,dd); return l; };
+        double l,d,dd; reduceDerv(l,d,dd);
+        devB=cand_b; devA=cand_a; devP=cand_pinv; devValid=true;   // part8 #2: device echild/partial now hold this candidate
+        return l; };
 
     std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0);   // G.5.0 Part B: invL/rnumH now on-device
     auto computeGradient=[&](double& lnLout,double& galphaOut){
         applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
-        rebuildEchild(); postorderFill(); nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
+        // part8 #2: skip the redundant base rebuild+postorder when the device already holds EXACTLY this base point
+        // (the immediately-preceding accepted evalLnL built it; bit-exact, falls back to rebuild on any mismatch).
+        bool devMatch = devValid && devA==curAlpha && devP==curPinv && (int)devB.size()==nnodes;
+        if(devMatch) for(int z=0;z<nnodes;z++) if(devB[z]!=brlen[z]){ devMatch=false; break; }
+        if(!devMatch){ rebuildEchild(); postorderFill(); }
+        nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
         std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
         auto acq=[&](){int s=freeSlots.back();freeSlots.pop_back();return s;}; auto rls=[&](int s){freeSlots.push_back(s);};
         std::vector<double> dfC(nnodes,0.0),ddfC(nnodes,0.0); bool gotL=false; double lnLfirst=0;
