@@ -21,6 +21,83 @@ validated G.0→G.2.1b kernels + the abandoned Mode-L CPU optimizer (`mode-l-lev
 
 ---
 
+## IV.0.0 PROGRAM STATUS & ROADMAP TO COMPLETION (living scorecard — last updated 2026-06-10)
+
+**THE GOAL (one sentence).** Run the *entire* ModelFinder candidate set for one alignment **concurrently on a
+single GPU** — every candidate model advancing shoulder-to-shoulder, optimised by the GPU-native joint-gradient
+algorithm — so that one GPU replaces an MPI cluster of CPU nodes, with the **decisive win at 1M/10M patterns
+(one A100 beating ~16 CPU nodes via HBM bandwidth dominance)**. This requires **two orthogonal pieces that
+compose**:
+
+- **JOLT (PART IV) — the per-model ALGORITHM.** Replace IQ-TREE's CPU-shaped sequential coordinate-descent
+  (197-edge Gauss-Seidel Newton + α-Brent) with the GPU-shaped joint O(N)-gradient + second-order step
+  (2 parallel sweeps/iter). **Status: the algorithm is BUILT, CORRECT, and IN-TREE (G.4.0→G.4.2 ✅).**
+- **PHALANX (PART III) — the batching SUBSTRATE.** `grid.z = model` runs **B** candidates co-resident on the
+  device at once + warp-cooperative kernels + theta cache + regime router. **Status: DESIGNED, NOT YET BUILT
+  (G.3.0→G.3.5 all pending).** This is the piece that delivers "all models concurrent on the GPU."
+
+**WHERE WE ARE (milestone ledger, ✅ = validated):**
+
+| Track | Phase | What it proved | Verdict |
+|---|---|---|---|
+| Kernels | G.0–G.1 | lnL/derivative bit-parity CPU≡GPU; K1 lnL **37.8 ms beats BEAGLE 45 ms** (66× vs BEAGLE-CPU-SSE, but only *low-double-digit* vs IQ-TREE AVX-512); VRAM g4 6.16 GB / r10 14.9 GB | ✅ |
+| Stateless GPU | G.2 | Whole branch-opt on GPU, bit-identical lnL — **but 4.7× SLOWER/model, ~25 min/model on TESTONLY (50–100× too slow)** ⇒ throughput is the problem, not correctness | ✅ correctness / ❌ throughput |
+| **JOLT** | G.4.0/0b | Ji O(N) all-branch + the +R rate gradient work on the unscaled GPU path (the Mode-L overflow killer does NOT recur) | ✅ |
+| **JOLT** | G.4.1/1b | Standalone joint optimiser reaches the **same MLE from a cold start in 27 joint iters** (branches + α, no Brent) | ✅ |
+| **JOLT** | G.4.2a/b | In-tree `--jolt`, write-back coherent, thread-safe under `-nt 12`; best==LG+G4; **single-model -te 4.8× FASTER than CPU** | ✅ |
+
+**THE HONEST PERFORMANCE GAP (why we are NOT done):** G.4.2b's full `-m TESTONLY` wall was **3493 s @ -nt 12 —
+NOT yet a win.** Two reasons, both addressable and neither a JOLT bug: **(1) coverage** — `+I`/`+I+G` candidates
+fall to the CPU tail (memory-bandwidth-bound, 2.1×/12 threads). **(2) batching is 0%** — JOLT serialises on the
+single GPU (mutex), so eligible models run one-at-a-time. **The single-model 4.8× speedup is real; the aggregate
+"huge reduction" is still UNREALISED because nothing runs concurrently yet and the heavy `+I+G4` family is CPU-only.**
+
+> **CORRECTION (2026-06-10, G.4.3a diagnostic — honesty update).** An earlier draft of this section said
+> "coverage is 5% — only 12/224 on JOLT, all base-matrix `+G4`." **That was wrong — a double logging artifact,
+> not the real coverage.** (i) The `[JOLT]` success print used `model->name` (matrix only) + a hand-built rate
+> suffix, **dropping `+F`** — so `LG+F+G4` engagements printed as `LG+G4`. The G.4.3a diagnostic proved
+> `LG+F+G4` reaches the hook with `freqtype=3`, `getNDim()==0`, and **engages JOLT** (rel 5.5e-12); matching
+> G.4.2b's `[JOLT]` lnLs to the CPU baseline confirms `WAG+F+G4`/`JTT+F+G4`/`Q.PFAM+F+G4` all engaged (the two
+> `+F+G4` models earlier mislabelled "CPU-fallback at rel 1.18e-9" were in fact JOLT matching the CPU MLE). (ii)
+> The print was **capped at 12** (`report_count < 12`), so "12" was the log cap, not the engagement count.
+> **`+F` is already JOLT-eligible and working — no algorithmic change needed (G.4.3a is a logging fix +
+> re-measure, not new code).** **RE-MEASURED (job 170386010, fixed logging + JOLT_DEBUG): 62 candidates reached
+> the hook, 58 ENGAGED JOLT (incl. 28 `+F`), only 4 declined (`reason=pinvar` = `+I`/`+I+G4`). Coverage ≈ 94%,
+> best==LG+G4, parity worst 1.18e-9, [GPU-BRANCH]=0.** Coverage was never the problem.
+>
+> **DECISIVE empirical confirmation of the N/S diagnosis:** that run was **GPU utilisation 96%, CPU only
+> ~2.05/12 cores busy (≈83% idle — threads blocked on the JOLT mutex). The ~59-min wall is
+> GPU-SERIALIZATION-bound, NOT the CPU tail.** ~58 models serialized through one mutex'd GPU at ~61 s each =
+> the wall; the CPU node runs the equivalent N=103-parallel in ~221 s. ⇒ The lever is **concurrency
+> (batching)**; coverage / `+I` work (G.4.3b) buys nothing while JOLT is serialized. And per the research brief,
+> batching at 100K is itself a coin-flip (block-saturation) unless the kernel occupancy bound is broken first.
+
+Distance to goal ≈ **algorithm 100% done, throughput partway**: correctness fully banked, the performance payoff
+(the `+I`/`+I+G` coverage + batching + scale) is the road ahead.
+
+**ROADMAP TO COMPLETION:**
+
+| Step | Delivers | Unlocks |
+|---|---|---|
+| **G.4.3a** (in flight) | `+F` (counted-freq) coverage — algorithmically free (`getNDim()==0`) | the `+F` half of every family (~½ the candidate set) |
+| **G.4.3b** | `+I` / `+I+G` coverage (p_inv gradient) | the **178-traversal `+I+G4`** family — the per-model long pole |
+| **G.4.3c / G.3.0–G.3.4** | PHALANX `grid.z` — B models concurrent + warp-coop K1c + theta cache + router | **"all models concurrent on the GPU"** → the 100K aggregate win (target: beat CPU TESTONLY; honest stretch < ~221 s AVX-512 floor) |
+| **G.3.5** | native-20 + pattern tiling for 1M/10M | **the decisive headline: one A100 < 16 CPU nodes** (HBM-bandwidth-dominated; the most defensible win) |
+
+**PREDICTION SCORECARD (initial design predictions vs reality):** The original design deliberately predicted
+**no single headline multiplier** — it said "de-risk feasibility, then measure the *honest* margin vs IQ-TREE's
+own AVX-512 kernel, expect low-double-digit at 100K" and reserved the big claim for 1M/10M bandwidth. Against
+that: kernel feasibility ✅ (beats BEAGLE); single-model JOLT speedup ✅ (4.8×, in the predicted low-double-digit
+neighbourhood); 100K aggregate win ⏳ (gated on coverage + the occupancy "coin-flip" the doc always flagged as
+risky); **1M/10M decisive win ⏳ (unbuilt — needs G.3.5 tiling; remains the strongest, least-risky claim).**
+**Baseline-anchor caveat:** the matching CPU TESTONLY wall is not cleanly recorded (the
+`gpumf_cpubase_TESTONLY_169678141` debug run is truncated). Anchored CPU references: standard IQ-TREE AA-100K
+`-m MFP` = **399 s** (job 168425673, 103T 1 node); FCA np=1 site-parallel = **1289 s**; AVX-512 single-model
+floor ≈ **221 s**; AA-1M FCA np=16 = **1122 s** (finishes — so 1M is a wall to *beat on one GPU*, not a CPU
+timeout). The 1M/10M "16-node timeout" framing applies to larger/heavier regimes, not AA-1M TESTONLY.
+
+---
+
 ## IV.0 Why a new direction (and how it relates to PHALANX-BMF)
 
 PART III (PHALANX-BMF) keeps IQ-TREE's **exact** optimizer (for rel-0.0 bit-parity) and attacks the wall by
@@ -223,6 +300,108 @@ with their own μ, step count, and convergence flag; the batch shares only the K
 (grid.z), never an optimization decision. Models retire as they converge (retire-and-compact). This is the
 torchimize/GPU-LMFit "many independent least-squares in parallel" pattern, specialized to phylogenetic ML.
 
+## IV.7.1 The fallback path — JOLT is the ONLY GPU likelihood path under `--jolt` (G.4.2 integration rule)
+
+A subtle but load-bearing integration decision, surfaced empirically at G.4.2b. `--jolt` implies `--gpu`, and
+`--gpu` independently arms the **G.2.x stateless GPU likelihood overrides** (`setLikelihoodKernelGPU` swaps
+`computeLikelihoodBranch/Derv/FromBufferPointer` to the clean-room GPU sweep). If **both** were active, an
+**ineligible** ModelFinder candidate (+I, +R, +FO, mixture) — which `optimizeParametersJOLT` correctly declines
+(returns NaN) — would fall through to the standard `ModelFactory::optimizeParameters` loop, but that loop's
+per-edge Newton would then call the **slow stateless GPU** `computeLikelihoodDerv` (G.2.2a measured **~25 min/
+model**, 50–100×), not fast CPU. On a full `-m TESTONLY` the +I/+R/+FO tail is the bulk of the 224 candidates,
+so the run would **time out**, and the "fallback to CPU" the correctness story assumes would silently be a
+fallback to the slowest path in the program.
+
+**The rule (implemented `tree/phylotreegpu.cpp` `setLikelihoodKernelGPU`):** *under `--jolt`, the stateless GPU
+overrides do NOT install* (the function no-ops when `params->jolt`). JOLT is then the **only** GPU likelihood
+path — it owns the eligible (+G/base) candidates end-to-end (its own kernels + write-back), and **every**
+ineligible candidate falls back to the **pure CPU** optimizer at normal CPU speed. Two consequences, both
+desirable: **(1)** the `-m TESTONLY` wall is a meaningful "JOLT-on-+G + CPU-on-the-rest" measurement (honestly
+~flat vs all-CPU, since the CPU tail dominates — the aggregate win is G.4.3, not G.4.2); **(2)** the
+`optimizeParametersJOLT` self-check `computeLikelihood()` becomes an **unambiguous genuine CPU recompute**
+(GPU-JOLT-vs-CPU), the strongest possible write-back-coherence gate — rather than GPU-vs-GPU-stateless, which
+the co-installed override would have made it. (The stateless GPU path remains available on its own, without
+`--jolt`, for the G.2.x lnL/branch-opt experiments.)
+
+**The second integration rule — JOLT must serialize the single GPU, because ModelFinder is ACROSS-MODEL
+parallel.** `testModelList` (`phylotesting.cpp:4097`) opens `#pragma omp parallel num_threads(N)` and the
+candidate loop (`:4131 at(model).evaluate(...)`) runs **inside** it — i.e. with `-nt N`, **N threads evaluate N
+different candidate models at once**, each calling `ModelFactory::optimizeParameters` → `optimizeParametersJOLT`
+→ `gpu_jolt_optimize` concurrently. But the GPU's `__constant__` symbols (`g_Uinv/g_U/g_val*/g_rscale`) and the
+static `DevBuf` pool (`gbj_*`) are **process-global device state** — concurrent use clobbers them and silently
+corrupts results. So `gpu_jolt_optimize` takes a **process-wide `std::mutex`** around its entire GPU body: JOLT
+candidates run **one at a time on the device**, while the other N−1 threads keep optimising **CPU-fallback**
+(+I/+R/+FO) candidates in parallel. (The one-shot G.2.x cross-check diagnostics, `gpuLnLCrossCheckOnce` /
+`gpuDervCrossCheckOnce` at `phylotree.cpp:1314`, touch the same constants and are likewise gated off under
+`--jolt`.) **Performance note made concrete at G.4.2b:** a `-nt 1` full `-m TESTONLY` is impractical — the
+~200 CPU-fallback candidates run single-threaded on 96 K patterns (≈100× the ~103-thread baseline → multi-hour
+wall, dominated by the +I/+R/+FO tail exactly as predicted). The run must be **`-nt N` (N=cores)** so the CPU
+tail parallelises; the serialized single-GPU JOLT work overlaps with it (true cross-model GPU concurrency — B
+models batched on the device — is the PHALANX `grid.z` work, G.4.3). The correctness gates (best model, lnL
+parity, AIC/BIC ranking) are thread-count-independent; the wall is reported at the N used.
+
+## IV.7.2 G.4.3 reframed by the G.4.2b evidence — COVERAGE before batching (2026-06-10)
+
+The doc's original G.4.3 (line ~323) leads with PHALANX `grid.z` cross-model batching. The G.4.2b run data
+(reused, no re-run) **inverts that ordering for the 100K aggregate-wall goal.** The decisive measurements:
+
+- **GPU coverage — initially MISREAD as 12/224 (5%), CORRECTED at the G.4.3a diagnostic.** The `[JOLT]` print
+  showed 12 lines, but that was a **log cap** (`report_count < 12`) AND the print **dropped the `+F` suffix**
+  (used `model->name`, matrix-only), so `+F+G4` engagements printed as their non-F name. The G.4.3a diagnostic
+  proved `LG+F+G4` reaches the hook (`freqtype=3`, `getNDim()==0`) and **engages JOLT** — `+F` is already
+  eligible. The real ineligible set is **`+I` / `+I+G`** (declined `reason=pinvar`), confirmed by the
+  diagnostic. So the JOLT-eligible fraction is ≈ `{bare, +G4} × {model-freq, +F}` (~half the candidates),
+  NOT 5%; true coverage is being re-measured with the fixed (uncapped, `getName()`-based) logging.
+- **There is NO `+R` in `-m TESTONLY`.** The default AA TESTONLY rate set is `{∅, +I, +G4, +I+G4}` — `+R` is
+  `-m MFP`/`-mrate` territory. So the FreeRate-tail concern (doc §IV.12.4.4; G.4.0b's whole make-or-break) is
+  **moot for the TESTONLY headline** — its risk lives in the `-m MF`/DNA extension, not here.
+- **The CPU tail scales at 2.1×/12 threads** (CPU 7310 s vs wall 3493 s) — the 100K-pattern AA likelihood is
+  memory-bandwidth-bound across cores (the exact wall the FCA/MPI work chased).
+- **Per-model wall (traversal proxy, from the mode_l-debug CPU baseline `[L1-TRAV]` counts):** `+I+G4` =
+  **178 traversals/model** (LG+I+G4 AND LG+F+I+G4 both 178) — the per-model long pole; `+I` ≈ 31–36; `+G4` ≈
+  19–27; bare ≈ 3. Matches the measured `rate_mult` cost model (updated-modelfinder-dispatch.md:381: bare 1,
+  +I 2, +G 4, **+I+G 5**).
+
+**Conclusion — SUPERSEDED (2026-06-10, advisor): BATCHING is the structural gate, not coverage.** The original
+"coverage before batching" framing here was wrong. Hard arithmetic: a mutex-**serialized** single GPU processes
+candidates one at a time at per-model speedup S≈4.8 (G.4.2a -te); CPU ModelFinder runs **N candidates
+concurrently** (N threads). Aggregate ratio = **N/S** → with N=12 (G.4.2b) JOLT-serial is ~2.5× slower, with
+N=103 (full node) ~21× slower — **at ANY coverage.** So more coverage (G.4.3b) moves the heavy `+I+G4` models
+from the N-parallel CPU queue onto the *slower serial GPU mutex queue* → zero wall gain, likely a regression.
+**The wall win requires CONCURRENCY: grid.z runs B models/GPU-pass → throughput ≈ B·S, which beats CPU only when
+B·S > N.** (Honest: even batched, 100K vs a full node is a coin-flip — A100 g4 B≈12 × S≈4.8 ≈ 57 < N=103; the
+decisive win stays 1M/10M, exactly the PHALANX doc's position.) Corroborating signal: G.4.2b ran GPU util 80%
+but CPU only ~2.1/12 thread-equiv busy → threads were already **blocking on the JOLT mutex**, i.e. the serial GPU
+was already the bottleneck, NOT the "memory-bandwidth-bound CPU tail" the bullets below claimed. **⇒ The correct
+next step is the PHALANX `grid.z` batching kill-switch (G.3.0) — the make-or-break the PHALANX plan always
+designated FIRST — tested on the ALREADY-eligible ~half (B copies of `+G4`/`+F+G4`), needing NO new gradient
+code. Extend coverage (G.4.3b `+I`/`+I+G`) only AFTER batching is proven to drop the wall with B>1 on V100.**
+
+*(Historical — the now-superseded "coverage by wall × ease" ordering, kept for the record:)*
+
+- **G.4.3a — `+F` coverage (counted/empirical frequencies).** `getNDim()==0` for `+F` (FREQ_EMPIRICAL;
+  modelmarkov.cpp:964 only `FREQ_ESTIMATE`/`+FO` adds dims) ⇒ **algorithmically free** for JOLT (same fixed-Q
+  kernel, just a different π folded into the eigen). Multiplies coverage across **every** family (the `+F`
+  half of `+G4`, `+I`, `+I+G4`). Cheapest opener; biggest count multiplier; a *prerequisite* for `+F+I+G4`
+  (the 178-traversal heavyweight). **First step is a diagnostic: 0/29 `+F` reached the hook despite
+  `getNDim()==0` — determine whether `+F` is gate-declined (mechanism b) or never dispatched to the hook
+  (mechanism a, staged search) before coding the enablement.**
+- **G.4.3b — `+I` / `+I+G` coverage.** The p_inv gradient (§IV.4: the O(nptn) scalar
+  `(ptn_invar/p_inv − (L−ptn_invar)/(1−p_inv))/L`) on the joint sweep + p_inv write-back. Captures the
+  **178-traversal `+I+G4` family — the single largest per-model wall reduction.** FD-validate the p_inv
+  gradient (the non-negotiable discipline). Moderate effort (new gradient component + write-back).
+- **G.4.3c — `grid.z` cross-model batching.** *Now* meaningful: with most models JOLT-resident, the
+  mutex-serialized single GPU is the bottleneck; `grid.z` (K6b/K7b/K8b model-batch axis) runs B concurrently.
+- **(Deferred:** `+FO` estimated-frequency gradient (getNDim>0, harder); `+R` for `-m MFP`/DNA (gradient
+  already validated G.4.0b); native-20 + pattern tiling for 1M/10M — the separate HBM-bandwidth "decisive
+  single-GPU" win that does NOT depend on TESTONLY coverage.)
+
+**Baseline-gate caveat (advisor flag):** the original G.4.3 gate "−m MF AA-100K < FCA np=1 **1341 s**" is
+**unanchored** — that number is not substantiated in the current dispatch docs (which show AA-100K np=1 ≈ 400 s
+target and np=4 ≈ 2335 s regressed). The honest apples-to-apples gate is the **CPU TESTONLY baseline on the
+same alignment** (`gpumf_cpubase_TESTONLY_169678141`, 103 threads / 1 normalsr node) — its ModelFinder wall is
+the number `--jolt` must beat. Anchor that wall (and re-derive the FCA comparison) before declaring G.4.3.
+
 ---
 
 ## IV.8 Correctness model — same optimum, not same trajectory
@@ -278,8 +457,12 @@ unscaled path, BEFORE any optimizer-driver or integration sunk cost.
 | **G.4.0b — FreeRate (+R) gradient on the unscaled GPU path + O(depth) recycling ✅ PASS (job 170281211, 2026-06-09)** | `gpu_k7b_freerate.cu` = the G.4.0 K7 harness + ONE new kernel `k_ratenum` + an O(depth) pre-slot POOL. (A) Ji recycling: a single interleaved preorder DFS recycles `treeHeight+2` slots — **r8/r10 now FIT the V100** (were OOM in G.4.0). (B) the +R rate gradient `dlnL/dr_k = w_k·Σ_ptn(Σ_e b_e·qp_e[k])/L_ptn`, the exact reduction that overflowed ~10⁵⁴ on CPU, recomputed unscaled. | **✅ ALL PASS r4/r8/r10. (A) pre-pool peak = 42/44 = tree height (vs 198 nodes); g4 regression bit-IDENTICAL to G.4.0 (lnL self-inv rel 0.0, df FD 2.5e-8) ⇒ recycling numerically identical; r8/r10 lnL-inv 0.0 + oracle 3.8e-12/6.1e-12 + df FD 2.5e-8. (B1) `dlnL/dr_k` FINITE & bounded (max 3–7×10⁴, ≪ 1e8) — NO overflow; (B2) the EXACT scaling identity `Σ_k r_k·gr_k == Σ_e b_e·gb_e` to rel 5e-15…2e-13 (machine eps — ties +R grad to the validated branch grad); (B3) FD `|G-ratio|` = 1.3e-8…5.0e-8 ≪ 0.01 (the Mode-L FDCHECK that read 10⁵⁴), every category. **DECISIVE: `1/L_ptn` reaches 1e92 — FAR past Mode-L's 1e54 overflow — yet the gradient is finite because `qp∝L_p` makes `qp/L_p` self-cancel to O(100); the unscaled eigen path has no `scale_log` factor to blow it up.** Worst `lnL_ptn ≈ −212` ⇒ `L_p ≈ e⁻²¹²`, huge margin to the e⁻⁷⁰⁸ floor (confirms NORM_LH safety for 100-taxon/100K). | **WAS HIGHEST (the make-or-break); now RETIRED — the hypothesis of the whole new direction is CONFIRMED on the unscaled GPU path.** |
 | **G.4.1 — Standalone joint optimiser driver ✅ PASS (job 170302036, 2026-06-09)** | `gpu_k8_jolt.cu` = the validated K1/K7/k2_derv + O(depth) pool byte-for-byte + a **joint LM-damped diagonal-Newton** driver (all 197 branches stepped at once: `b_e += df_e/(\|ddf_e\|+μ)`, the validated per-edge `ddf` as the diagonal preconditioner; accept-if-lnL-increases else grow μ — **no line search to balloon**, advisor #3) + mmap/pinned data load. α/rates FIXED at the MLE (the load-bearing +G case; joint-α = G.4.1b). | **✅ PASS g4 + g1, COLD start (b=0.1, deliberately non-optimal — advisor #1). g4: pre-check at θ* reproduces oracle (rel 5.8e-12) + calibrates ‖g‖=34.8; cold start lnL −8,008,561 (6.2% off) → MLE in **27 joint iterations**, reaching the WARM (.treefile) optimum to **rel 2.47e-16** (machine zero — same optimum, not just close); 91 dependent full-tree traversals on the critical path; 9 backtrack-rejects (no blowup); ‖g‖ 34.8→0.28 (found the branch-MLE at the fixed rates, *better* than the .treefile which is MLE at unrounded α). g1: 21 iters, cold==warm rel 1.2e-16. **HEADLINE (the JOLT thesis verdict, advisor #2): 27 cold-start joint iterations** — each ONE parallel preorder sweep updating all 197 branches — vs IQ-TREE's `optimizeAllBranches` ~197-deep × several-sweeps *sequential* Gauss-Seidel chain (un-parallelisable on GPU). The Mode-L L.1 gate, re-stated in the correct GPU metric (critical-path length, not traversal count), is decisively WON. | **WAS MEDIUM-HIGH (convergence robustness); now RETIRED for +G branches — the joint parallel optimiser converges to the same MLE from a cold start in a modest, non-blowing-up iteration count.** |
 | **G.4.1b — joint α (full +G MLE from cold start) ✅ PASS (job 170303658, 2026-06-09)** | `gpu_k8b_jolt_alpha.cu` = the G.4.1 driver + Yang-1994 **mean-rate** discrete-gamma on the host + analytic α-gradient `∂lnL/∂α = Σ_c (dr_c/dα)·gradR[c]` (`gradR[c]` = the validated G.4.0b `k_ratenum` per-category rate grad; `dr_c/dα` = host FD of the discretisation). α rides the SAME joint LM step as the 197 branches (`da=g_α/(\|ddf_α\|+μ)`, ddf_α a secant); **no α-Brent**. Cold-starts BOTH b=0.1 AND α=3.0. | **✅ ALL PASS. [gamma] discretisation @α=0.9963 = `{0.1362,0.4756,0.9994,2.3888}` vs `.iqtree` `{…,2.3887}` maxdiff 6.40e-05 (matches IQ-TREE's exact mean-rate variant). PRE-CHECK α-grad analytic −9.0859 vs FD −9.0870 rel 1.29e-04 ≪ 0.01. (1) cold==warm: both → −7541976.854468, rel 1.482e-15 (machine zero, SAME optimum). (2) cold → full CPU MLE −7541976.8529 rel 2.079e-10, α 3.0→0.9962 (CPU 0.9963); the 2e-10 residual is the `.treefile` brlen-output-precision floor (CPU's own tree re-evals to rel 2.745e-10), NOT optimiser error. (3) HEADLINE: 27 joint iters for (197 branches + α) — IDENTICAL to G.4.1's branches-only 27; α folded in for ZERO extra iters vs IQ-TREE's separate ~10-20-eval α-Brent.** Cold α overshot (3.0→0.97→0.9962) & recovered; ‖g‖ peaked 4e9, LM (μ≤1.3e5) held, no NaN. | **WAS MEDIUM (gamma must match IQ-TREE's mean-rate); now RETIRED — the standalone JOLT optimiser is validated for +G (branches + α) from a cold start, α absorbed onto the joint sweep with no separate line search.** |
-| **G.4.2 — In-tree integration (JOLT behind `--gpu --jolt`)** | Wire JOLT as an alternative `optimizeParameters` for GPU-eligible models; per-candidate fall back to PHALANX-stateless if a ranking would flip; full `-m TESTONLY` AA-100K. | **Best model == LG+G4; per-model lnL rel ≤ 1e-9; identical AIC/BIC top ranking + `MF_IGNORED` table; CPU/OFF byte-unchanged; MF wall reported vs 221.6 s.** | HIGH (optimizer-swap in the real loop). |
-| **G.4.3 — Compose with PHALANX grid.z + scale regimes** | K6b/K7b/K8b (add model batch axis); B-model batched JOLT; native-20 + pattern tiling for 1M/10M. | **(1) batched == single-model per-model lnL.** **(2) −m MF AA-100K < FCA np=1 1341 s. (3) AA-1M −m MF finishes on one A100 (vs SPR FCA-np16 3 h timeout); honest speedup curve published.** | NOVEL tiling; the decisive single-GPU win. |
+| **G.4.2a — In-tree `--jolt` seam, single model ✅ PASS (job 170361630, 2026-06-10)** | `ModelFactory::optimizeParameters` routes JOLT-eligible candidates (fixed-Q reversible `getNDim()==0`, ns∈{4,20}, no +I, gamma-or-uniform) through new `PhyloTree::optimizeParametersJOLT` → `gpu_jolt_optimize` (G.4.1b loop ported: **ptn_freq-weighted** reductions + LIVE eigen + flat-array topology) → **write-back** (197 brlen to both `PhyloNeighbor`s; α via `setGammaShape`+`clearAllPartialLH`) → self-check. NaN→CPU fallback. De-risked single-model LG+G4 `-te` (isolates write-OUT). | **✅ ALL PASS. THE write-back gate: after write-back a fresh clean recompute reproduces the JOLT lnL — GPU −7541976.852146 vs recompute −7541976.852167 rel 2.772e-12 (write-back coherent — the recompute reads the LIVE written-back brlen+α; no stale cache). (2) `--jolt` lnL rel 9.28e-11 vs reused CPU MLE −7541976.8529, α 1.0→0.996214. (3) non-interference: same binary no-`--jolt` = −7541976.8530 (CPU path byte-unchanged). Wall 47 s vs CPU 224 s = 4.8× FASTER (reverses G.2.1b's 4.7× slowdown — JOLT removes the sequential per-edge chain) — single-model `-te` best case, NOT the TESTONLY aggregate.** Backup `1b98061c`. **DESIGN REFINEMENT (post-run, see §IV.7.1):** the first run left the G.2.x stateless GPU Branch/Derv/FromBuffer overrides INSTALLED (under `--gpu`), so the self-check recompute path was ambiguous (the nonzero rel 2.77e-12 indicates it ran on CPU, but the override *could* activate). **Fix: `setLikelihoodKernelGPU` now no-ops under `--jolt`** ⇒ ineligible candidates fall back to PURE CPU (not the ~25 min/model stateless GPU sweep) and the self-check is an unambiguous genuine CPU recompute. Re-validated in G.4.2b. | **WAS HIGH (the invasive optimizer-swap); write-back coherence (the advisor's watch item) now RETIRED — the seam is verified.** |
+| **G.4.2b — In-tree `--jolt`, FULL `-m TESTONLY` ranking gate ✅ PASS (job 170367630, -nt 12, 2026-06-10)** | Run the whole TESTONLY candidate set with `--jolt`: +G/base on the GPU joint path, +I/+R/+FO **pure-CPU** fallback (post-fix; the stateless GPU path is OFF under `--jolt`). Compare vs the EXISTING CPU baseline (reuse, no re-run). First attempt (job 170362411) was KILLED on discovering the stateless override co-install (would run the +I/+R tail on the slow stateless GPU path → timeout); a `-nt 1` re-run (job 170363332) confirmed the fix ([GPU-BRANCH]=0, genuine GPU-vs-CPU self-checks LG 3.86e-15 / LG+G4 2.77e-12) but single-threaded the ~200-model CPU-fallback tail → impractical. This run is `-nt 12` with the **mutex** thread-safety fix (§IV.7.1). | **✅ ALL PASS. (1) best by BIC AND AIC AND AICc == LG+G4 (matches baseline, all three). (2) lnL parity vs CPU baseline: n=11 overlapping models, worst rel **1.185e-09** (WAG+F+G4 — CPU-fallback, brlen-precision floor) ≪ 1e-6. (3) ranking unchanged. (4) **[GPU-BRANCH]=0** — the stateless path is genuinely off under `--jolt`. (5) **12/12 [JOLT] self-checks PASS, worst rel 1.525e-11** (WAG+G4) — every GPU JOLT result reproduced by a fresh CPU recompute. **NO GPU CORRUPTION under concurrency** — the process-wide mutex held across ModelFinder's across-model OpenMP (`-nt 12`); JOLT serialised on the single GPU while the +I/+R/+FO tail ran 12-parallel on CPU. Wall @ -nt 12 = 3541 s (GPU util 80%, 8.63 GB) — the CPU-fallback tail parallelised as designed (vs ~7.5 hr extrapolated at -nt 1). **COVERAGE NOTE: base-matrix `+G4` models get JOLT; `+F+G4` counted-frequency variants currently fall to CPU (eligibility gate excludes the `+F` empirical-count freq path) — correctness-neutral (computed on CPU), a candidate to widen later.** | RETIRED — selection correctness with mixed JOLT/CPU candidates VERIFIED; thread-safety under across-model parallelism VERIFIED. |
+| **G.4.3 — REFRAMED by G.4.2b evidence: COVERAGE before batching (see §IV.7.2)** | The 100K aggregate wall is set by the 95% CPU-fallback tail (12/224 on GPU; no +R in TESTONLY; CPU tail 2.1×/12-thread, memory-bound). grid.z batching of 5% can't move it ⇒ expand JOLT coverage first. | (sub-phased below) | (sub-phased below) |
+| **G.4.3a — `+F` (counted-freq) coverage ✅ ALREADY WORKS (diagnostic jobs 170380392/170384797, 2026-06-10)** | Diagnostic VERDICT: `+F` was never broken — the "0/29" was a logging artifact (capped at 12 + `+F` suffix dropped from the print). `LG+F+G4` reaches the hook (`freqtype=3`, `getNDim()==0`, `pinv=0`, `ncat=4`) and **engages JOLT**, rel 5.5e-12; G.4.2b's `WAG/JTT/Q.PFAM+F+G4` engagements (mislabelled) match the CPU MLE rel ≤1.5e-11. Code change = **logging only** (`[JOLT]` print now uses `model->getName()` incl. `+F`, cap 12→1000). | **✅ (1) `+F` proven JOLT-eligible & engaging; (2) lnL parity vs CPU MLE rel ≤1.5e-11 (the mislabelled `+F+G4` from G.4.2b). Remaining: re-measure true coverage with the fixed logging (run in flight).** | RESOLVED — no algorithmic work; `+F` was already covered. |
+| **G.4.3b — `+I` / `+I+G` coverage** | Add the p_inv gradient (the O(nptn) scalar, §IV.4) to the joint sweep + p_inv write-back. Captures the **178-traversal `+I+G4`** family — the single biggest per-model wall reduction. | **(1) p_inv gradient FD-validated rel≤1e-6; (2) `+I+G4` engages JOLT, lnL parity rel≤1e-9 vs CPU; (3) ranking unchanged; (4) cold-start convergence (joint b+α+p_inv) in a bounded iter count.** | MEDIUM (new gradient component + extra write-back; convergence of the augmented joint step). |
+| **G.4.3c — Compose with PHALANX grid.z + scale regimes** | K6b/K7b/K8b (add model batch axis); B-model batched JOLT relieves the single-GPU mutex serialization (now the bottleneck once coverage is high); native-20 + pattern tiling for 1M/10M. | **(1) batched == single-model per-model lnL. (2) −m TESTONLY AA-100K `--jolt` wall < the apples-to-apples CPU TESTONLY baseline (anchor it — §IV.7.2). (3) AA-1M −m MF finishes on one A100 (vs SPR FCA-np16 3 h timeout); honest speedup curve published.** | NOVEL tiling; the decisive single-GPU win. |
 
 **Dependency:** G.4.0 → G.4.0b are the cheap kill-switches (re-test the Mode-L killer on the unscaled path).
 **If G.4.0b overflows even unscaled and the stable reduction can't fix it, JOLT for +R is cut** and the
