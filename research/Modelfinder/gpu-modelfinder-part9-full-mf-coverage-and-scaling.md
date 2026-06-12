@@ -128,7 +128,12 @@ declines + best-model (LG+G4) **identical** to the pre-change audit. Max rel ros
 FP64 reduce-reorder drift, 5× under gate). **GPU util 61%→96%** on the same subsample (host-reduction stall gone).
 Code: `gpu_lnl_intree.cu` `kj_reduce3` + `gbj_ptnfreq`/`gbj_redpart` + invL base-edge D2H. **Part B** (move the
 once-per-sweep `gradR`/`invL` host loops on-device too — the +R ladder hammers them at ncat≤10) is the remaining
-G.5.0 scope. The A100<np8 WALL is being measured on the full 1M `-m MF` (reported metric, not a gate).
+G.5.0 scope.
+
+**✅ A100<np8 ACHIEVED (job 170636493, the G.5.0 payoff):** A100 1M-AA CTF total **1355 s** (coarse 168 + refine
+1187), down from **1504 s** pre-G.5.0 (~10%, the host-reduction stall removed) → **beats np8 (1443.9 s) at 1.07×**,
+np4 1.46×, np2 2.27× (np16 1122 s still leads). Winner LG+G4 ✓; GPU energy 73.24 Wh (was 81.69). The user's
+"A100 beats 8 nodes" target is met by the on-device reduction alone.
 
 **Next:** A100 1M wall measurement (the A100<np8 lever check), then G.5.0 Part B, then G.5.1a's standalone +R
 convergence harness before any in-tree +R wiring. DNA free-Q is G.6, a separate phase, to keep G.5 (AA-MF) shippable.

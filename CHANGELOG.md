@@ -15,6 +15,7 @@ All runs select the **same best model, LG+G4.**
 | **GPU CTF (10-start +I)** | 1× H200 | LG+G4 ✓ | **1994 s** | n/a (coarse tree) | 1994 s | −78605275.64 † | ⏳ (rerun) | — |
 | **GPU CTF (+I 4-start)** | 1× H200 | LG+G4 ✓ | **893 s** ✓ (job 170581208) | n/a (coarse tree) | 893 s | −78605275.637 | **67.89 Wh** (244 kJ, 280 W mean, 872 s) | ⏳ |
 | **GPU CTF (+I 4-start)** | 1× A100-80 | LG+G4 ✓ | **1504 s** ✓ (job 170581209) | n/a (coarse tree) | 1504 s | −78605275.637 | **81.69 Wh** (294 kJ, 199 W mean, 1478 s) | — |
+| **GPU CTF (+G.5.0 reduction)** | 1× A100-80 | LG+G4 ✓ | **1355 s** ✓ (job 170636493) — **beats np8 1.07×** | n/a (coarse tree) | 1355 s | −78605275.637 | **73.24 Wh** (264 kJ, 198 W mean) | — |
 | CPU `-m TEST` np1 | 1 SPR node | LG+G4 | 5119.9 s | 15060.6 s | 20180.5 s | −78605196.59 | — | **0.79 kWh (MF only)** ‡ |
 | CPU `-m TEST` np2 | 2 SPR nodes | LG+G4 | 3076.9 s | 7868.9 s | 10945.8 s | −78605196.44 | — | ~3.9 kWh (est.) |
 | CPU `-m TEST` np4 | 4 SPR nodes | LG+G4 | 1974.5 s (meas. 1985) | 3982.1 s | 5956.6 s (meas. 5994) | −78605196.45 | — | **4.18 kWh** ✓ (job 170582814) |
