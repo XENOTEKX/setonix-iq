@@ -138,6 +138,30 @@ __global__ void kj_derv(int ns, int nptn, int ncat, const double* __restrict__ t
     double Lp=fabs(lh)+pinv*baseinvar[ptn]; double inv=1.0/Lp, r=d1*inv;
     patlh[ptn]=log(Lp); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
 }
+// part8 #3 — kj_derv_fused: FUSE kj_theta + kj_derv + kj_ratenum. Compute theta = node*dad in REGISTERS (never
+// materialised to the 601 MB d_theta), then emit patlh/pdf/pddf AND (if rnum!=null) accumulate the per-category
+// rate-gradient numerator (rnum[c] += g_rscale[c]*Σ_x g_val1[c,x]*theta) — one pass, node+dad read once each, the
+// theta VRAM round-trip (1 write + 2 reads = 3x slotSz/edge) ELIMINATED. On the bandwidth-bound kernel this is the
+// win. BIT-IDENTICAL to the unfused path: FP64 store/load is lossless, and the per-(c,x) products are evaluated in
+// the same order. rnum==null => derv-only (the evalLnL path, no rate gradient). d1 = Σ_c rc reuses the per-cat sum.
+__global__ void kj_derv_fused(int ns, int nptn, int ncat,
+        const double* __restrict__ node, const double* __restrict__ dad,
+        double pinv, const double* __restrict__ baseinvar,
+        double* __restrict__ patlh, double* __restrict__ pdf, double* __restrict__ pddf,
+        double* __restrict__ rnum){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    double lh=0.0,d1=0.0,d2=0.0;
+    for (int c=0;c<ncat;c++){
+        double rc=0.0;
+        for (int x=0;x<ns;x++){ int k=c*ns+x; size_t o=(size_t)k*nptn+ptn;
+            double th=node[o]*dad[o];
+            lh+=g_val0[k]*th; rc+=g_val1[k]*th; d2+=g_val2[k]*th; }
+        d1+=rc;
+        if (rnum) rnum[(size_t)c*nptn+ptn]+=g_rscale[c]*rc;
+    }
+    double Lp=fabs(lh)+pinv*baseinvar[ptn]; double inv=1.0/Lp, r=d1*inv;
+    patlh[ptn]=log(Lp); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
+}
 // kj_pre — Ji-2020 top-down PREORDER eigen-space partial pre_v ("rest of tree" above edge u->v), WITHOUT v's
 // own branch (the gradient's g_val0/1(b_v) reapply it once). The PARENT branch b_u (expfac_u) is applied here.
 //   pus[t]  = Sum_i U[t][i]*expfac_u[i]*pre_u[c][i]
@@ -189,6 +213,28 @@ __global__ void kj_reduce3(int nptn, const double* __restrict__ patlh, const dou
         __syncthreads();
     }
     if (tid==0){ out3[blockIdx.x]=sL[0]; out3[(size_t)nblk+blockIdx.x]=sD[0]; out3[(size_t)2*nblk+blockIdx.x]=sDD[0]; }
+}
+// G.5.0 Part B — kj_invl: 1/L_p = exp(-patlh[p]) on-device (was a host exp() loop over nptn at the base edge).
+__global__ void kj_invl(int nptn, const double* __restrict__ patlh, double* __restrict__ invl){
+    int p=blockIdx.x*blockDim.x+threadIdx.x; if(p>=nptn) return; invl[p]=exp(-patlh[p]);
+}
+// G.5.0 Part B — kj_reduce_gradnum: per-category deterministic block reduction of ptn_freq[p]*rnum[c][p]*invl[p]
+// (the +R/alpha rate-gradient numerator), replacing the ncat*nptn d_rnum D2H + host long-double loop. The +R ladder
+// hammers this ncat-fold (ncat up to 10), so it must be on-device. out[c*nblk + blockIdx] = per-block partial;
+// the host sums the (small) nblk partials per category, then scales by catProp_v[c]. Deterministic shared-mem tree
+// reduce (no atomicAdd). The common factor ptn_freq*invl is loaded once/thread; ncat passes reuse one shared array.
+__global__ void kj_reduce_gradnum(int nptn, int ncat, const double* __restrict__ rnum,
+        const double* __restrict__ invl, const double* __restrict__ ptnfreq, int nblk, double* __restrict__ out){
+    extern __shared__ double sm[];                  // blockDim doubles
+    int tid=threadIdx.x; int p=blockIdx.x*blockDim.x+tid;
+    double fw = (p<nptn) ? ptnfreq[p]*invl[p] : 0.0;
+    for (int c=0;c<ncat;c++){
+        sm[tid] = (p<nptn) ? fw*rnum[(size_t)c*nptn+p] : 0.0;
+        __syncthreads();
+        for (int s=blockDim.x>>1; s>0; s>>=1){ if (tid<s) sm[tid]+=sm[tid+s]; __syncthreads(); }
+        if (tid==0) out[(size_t)c*nblk+blockIdx.x]=sm[0];
+        __syncthreads();
+    }
 }
 
 #define GCK(x) do{ cudaError_t _e=(x); if(_e!=cudaSuccess){ \
@@ -397,7 +443,8 @@ static void jolt_discreteGammaMean(double alpha, int K, double* rates){
 // JOLT-specific persistent device buffers (separate from the lnL/derv pools; same alloc-once / reuse policy).
 static DevBuf gbj_echild, gbj_partial, gbj_theta, gbj_patlh, gbj_pdf, gbj_pddf,
               gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip, gbj_baseinvar,
-              gbj_ptnfreq, gbj_redpart;   // G.5.0: on-device ptn_freq + per-block reduction partials
+              gbj_ptnfreq, gbj_redpart,   // G.5.0: on-device ptn_freq + per-block reduction partials
+              gbj_invlbase, gbj_redR;     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
 
 extern "C" double gpu_jolt_optimize(
     int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
@@ -469,6 +516,9 @@ extern "C" double gpu_jolt_optimize(
     DEVB(gbj_redpart, (size_t)3*GB*sizeof(double));   // G.5.0: 3 channels x GB per-block partial sums
     double* d_redpart=(double*)gbj_redpart.p;
     std::vector<double> h_redpart((size_t)3*GB);
+    DEVB(gbj_invlbase, (size_t)nptn*sizeof(double)); double* d_invLbase=(double*)gbj_invlbase.p;  // G.5.0 Part B
+    DEVB(gbj_redR,     (size_t)ncat*GB*sizeof(double)); double* d_redR=(double*)gbj_redR.p;
+    std::vector<double> h_redR((size_t)ncat*GB);
     std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
     std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
     std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
@@ -527,17 +577,22 @@ extern "C" double gpu_jolt_optimize(
         if(leaf[v]<0) pl=d_partial+(size_t)slot[v]*slotSz;
         else { k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); pl=d_tipeig; }
         kj_theta<<<GB,TB>>>(ns,nptn,ncat*ns,pl,pre,d_theta); };
+    // part8 #3: resolve v's eigen node-partial pointer (synthesising a leaf tip vector into d_tipeig if needed)
+    // WITHOUT materialising theta — kj_derv_fused reads node+dad directly. Replaces edgeThetaInto on the fused path.
+    auto edgeNodePtr=[&](int v)->const double*{
+        if(leaf[v]<0) return d_partial+(size_t)slot[v]*slotSz;
+        k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); return d_tipeig; };
 
     long nGradSweeps=0,nLnLEval=0;
     auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv)->double{
         if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b; rebuildEchild(); postorderFill();
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
         k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
-        edgeThetaInto(c0,d_pretmp); cudaDeviceSynchronize();
-        setVal(brlen[c0]); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
+        const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
+        setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr); cudaDeviceSynchronize();
         double l,d,dd; reduceDerv(l,d,dd); return l; };
 
-    std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0),invL(nptn,0.0),rnumH((size_t)ncat*nptn);
+    std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0);   // G.5.0 Part B: invL/rnumH now on-device
     auto computeGradient=[&](double& lnLout,double& galphaOut){
         applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
         rebuildEchild(); postorderFill(); nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
@@ -553,21 +608,23 @@ extern "C" double gpu_jolt_optimize(
                     for(int w:child[u]){ if(w==v||nsb>=2) continue; sibArg(w,ec[nsb],sp[nsb],st[nsb]); nsb++; }
                     kj_pre<<<GB,TB>>>(ns,nptn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
                 cudaDeviceSynchronize();
-                edgeThetaInto(v,pre); cudaDeviceSynchronize();
-                double bv=brlen[v]; setVal(bv); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
-                std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
-                cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); kj_ratenum<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_rnum); cudaDeviceSynchronize();
+                const double* plv=edgeNodePtr(v);   // part8 #3: fused theta+derv+ratenum, no d_theta round-trip
+                double bv=brlen[v]; std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
+                cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); setVal(bv); cudaDeviceSynchronize();
+                kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,d_rnum); cudaDeviceSynchronize();
                 double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
                 if(!gotL){ lnLfirst=l;
-                    // G.5.0: reduceDerv no longer D2Hs patlh; invL needs it -> one explicit copy here, once/sweep at the base edge.
-                    cudaMemcpy(patlh.data(),d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost);
-                    for(int p=0;p<nptn;p++) invL[p]=exp(-patlh[p]); gotL=true; }
+                    // G.5.0 Part B: 1/L_p on-device from the base-edge patlh (was a host D2H + exp loop over nptn).
+                    kj_invl<<<GB,TB>>>(nptn,d_patlh,d_invLbase); gotL=true; }
                 if(leaf[v]<0) proc(v,sv); rls(sv);
             } };
         proc(root,-1); cudaDeviceSynchronize();
         for(int e=0;e<nedge;e++){ g_df[e]=dfC[edgeV[e]]; g_ddf[e]=ddfC[edgeV[e]]; }
-        cudaMemcpy(rnumH.data(),d_rnum,(size_t)ncat*nptn*sizeof(double),cudaMemcpyDeviceToHost);
-        for(int c=0;c<ncat;c++){ long double acc=0; for(int p=0;p<nptn;p++) acc+=(long double)ptn_freq[p]*rnumH[(size_t)c*nptn+p]*invL[p]; gradR[c]=catProp_v[c]*(double)acc; }
+        // G.5.0 Part B: gradR on-device — per-category block reduction of ptn_freq*rnum[c]*invL (was a ncat*nptn
+        // d_rnum D2H + host long-double loop); host combines the small GB block-partials per category.
+        kj_reduce_gradnum<<<GB,TB,(size_t)TB*sizeof(double)>>>(nptn,ncat,d_rnum,d_invLbase,d_ptnfreq,GB,d_redR);
+        cudaMemcpy(h_redR.data(),d_redR,(size_t)ncat*GB*sizeof(double),cudaMemcpyDeviceToHost);
+        for(int c=0;c<ncat;c++){ long double acc=0; for(int b=0;b<GB;b++) acc+=(long double)h_redR[(size_t)c*GB+b]; gradR[c]=catProp_v[c]*(double)acc; }
         double ga=0;
         // alpha gradient: ga = Σ_c (d catRate[c]/dα)·gradR[c]; catRate[c]=meanR[c]/f so the perturbed mean-1 rate
         // rp[c] must be scaled by 1/f too (else mixing scaled/unscaled rates -> wrong alpha grad on the +I path).
