@@ -30,6 +30,7 @@
 #include "phylonode.h"
 #include "model/modelsubst.h"
 #include "model/rateheterogeneity.h"
+#include "model/rategamma.h"   // G.4.3b: GAMMA_CUT_MEAN — the robust mean-gamma discriminator (isGammaRate())
 #include "alignment/alignment.h"
 #include "tree/gpu/gpu_iqtree.h"
 #include <vector>
@@ -469,16 +470,51 @@ void PhyloTree::setLikelihoodKernelGPU() {
 // ============================================================================================================
 double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     // ---- eligibility gate (the validated G.4.1/G.4.1b scope: fixed-Q reversible, ns in {4,20}, no +I, gamma-or-uniform) ----
-    if (!model || !site_rate || !aln) return (double)NAN;
-    if (fixed_len != BRLEN_OPTIMIZE) return (double)NAN;        // JOLT optimises branches; other brlen modes -> CPU
+    // G.4.3a diagnostic: JOLT_DEBUG=1 logs the gate decision per candidate (which decline reason, or engage), so we can
+    // tell whether an ineligible family (e.g. +F) REACHES this hook and is declined by a specific gate, vs never arrives
+    // (staged-search dispatches it elsewhere). Env-gated => zero cost in production; touches no CPU-path behaviour.
+    static const bool JOLT_DBG = (getenv("JOLT_DEBUG") != nullptr);
+    if (JOLT_DBG) {
+        string mn = model ? model->getName() : string("(nullmodel)");
+        // freqtype: 1=USER_DEFINED 2=EQUAL 3=EMPIRICAL(+F) 4=ESTIMATE(+FO) (tools.h StateFreqType)
+        fprintf(stderr, "[JOLT-GATE] reached hook model=%s freqtype=%d ns=%d rev=%d nmix=%d ssm=%d ndim=%d pinv=%.4g ncat=%d alpha=%.4g fixedlen=%d\n",
+                mn.c_str(), model ? (int)model->getFreqType() : -1, aln ? aln->num_states : -1,
+                model ? (int)model->isReversible() : -1, model ? model->getNMixtures() : -1,
+                model ? (int)model->isSiteSpecificModel() : -1, model ? model->getNDim() : -999,
+                site_rate ? site_rate->getPInvar() : -1.0, site_rate ? site_rate->getNRate() : -1,
+                (site_rate && site_rate->getNRate() > 1) ? site_rate->getGammaShape() : -1.0, fixed_len);
+        fflush(stderr);
+    }
+    #define JOLT_DECLINE(why) do { if (JOLT_DBG) { fprintf(stderr, "[JOLT-GATE] decline reason=%s\n", why); fflush(stderr); } return (double)NAN; } while (0)
+    if (!model || !site_rate || !aln) JOLT_DECLINE("null-ptr");
+    if (fixed_len != BRLEN_OPTIMIZE) JOLT_DECLINE("brlen-mode");   // JOLT optimises branches; other brlen modes -> CPU
     int ns = aln->num_states;
-    if (ns != 4 && ns != 20) return (double)NAN;
-    if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) return (double)NAN;
-    if (model->getNDim() != 0) return (double)NAN;              // free substitution params (e.g. GTR/+FO) -> eigen would move -> CPU
-    if (site_rate->getPInvar() > 0.0) return (double)NAN;       // +I not yet supported by JOLT -> CPU
+    if (ns != 4 && ns != 20) JOLT_DECLINE("num-states");
+    if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) JOLT_DECLINE("nonrev/mixture/ssm");
+    if (model->getNDim() != 0) JOLT_DECLINE("free-subst-params");  // free substitution params (e.g. GTR/+FO) -> eigen would move -> CPU
     int ncat = site_rate->getNRate();
-    if (ncat < 1 || ncat > 64) return (double)NAN;
-    if (ncat > 1 && site_rate->getGammaShape() <= 0.0) return (double)NAN;  // multi-cat but not gamma (+R) -> CPU
+    if (ncat < 1 || ncat > 64) JOLT_DECLINE("ncat-range");
+    // G.4.3b audit fix: discriminate the rate model by isGammaRate() (robust) NOT getGammaShape() (which is a
+    // POSITIVE inherited value for RateFree/+R -> the old check let +R / +R+I wrongly engage JOLT with uniform
+    // proportions + mean-gamma rates, silently wrong since writeback precedes the self-check). JOLT only implements
+    // the MEAN discrete-gamma (Yang-1994) discretisation, so require exactly GAMMA_CUT_MEAN: this declines +R
+    // (isGammaRate()==0), +R+I, and the MEDIAN gamma variant +Gm/+I+Gm (isGammaRate()==GAMMA_CUT_MEDIAN).
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) JOLT_DECLINE("non-mean-gamma");
+    // G.4.3b — +I (proportion of invariant sites) is now JOINTLY optimised by JOLT, but ONLY for +I+G
+    // (RateGammaInvar: getProp(c)=(1-pinv)/K, standard mean-1 discrete-gamma rates). Pure +I (RateInvar, ncat==1)
+    // rescales getRate=1/(1-pinv) -> out of JOLT scope -> CPU. A user-FIXED pinv, or no constant sites (pinvMax->0
+    // degenerate), also fall to CPU. The invariant term L_p += pinv*base_invar[p] is added in the kernel; the joint
+    // LM step moves pinv alongside the branches + alpha (same machinery that absorbed alpha in G.4.1b).
+    static const double JOLT_MIN_PINVAR = 1e-6;          // == MIN_PINVAR (model/rateinvar.h)
+    double pinv0 = site_rate->getPInvar();
+    int optPinv = 0;
+    if (pinv0 > 0.0) {
+        if (site_rate->isFixPInvar())                                JOLT_DECLINE("fixed-pinvar");
+        if (ncat <= 1)                                               JOLT_DECLINE("pure-pinvar-no-gamma");  // RateInvar getRate=1/(1-pinv) -> CPU (ncat>1 already => mean-gamma per the check above)
+        if (params && params->no_rescale_gamma_invar)                JOLT_DECLINE("no-rescale-gamma-invar"); // GPU unconditionally rescales rates by 1/(1-pinv); this flag disables IQ-TREE's rescale -> mismatch -> CPU
+        if (aln->frac_const_sites <= 2.0*JOLT_MIN_PINVAR)            JOLT_DECLINE("no-const-sites");
+        optPinv = 1;
+    }
 
     // ---- model eigen factors (alpha-independent; same convention as the clean-room lnL) ----
     double *eval = model->getEigenvalues();
@@ -526,6 +562,28 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     }
     vector<double> ptnFreq(nptn);
     for (int p = 0; p < nptn; p++) ptnFreq[p] = (double)aln->at(p).frequency;
+
+    // G.4.3b — pinv-independent invariant base per pattern (== ptn_invar[p]/pinv; replicates the constant-site
+    // logic of PhyloTree::computePtnInvar, phylotreesse.cpp:560). base_invar[p] = Σ_{states s with which EVERY
+    // taxon is compatible as a constant site} freq[s]: const_char==STATE_UNKNOWN -> 1 ; <ns -> freq[const_char] ;
+    // DNA/PROTEIN ambiguous -> sum over compatible states ; >STATE_UNKNOWN -> 0 (a variable pattern). Multiplying
+    // by pinv reproduces IQ-TREE's own ptn_invar exactly, so the final CPU self-check is a genuine parity gate.
+    vector<double> base_invar(nptn, 0.0);
+    double pinvMax = aln->frac_const_sites;
+    if (optPinv) {
+        vector<double> sf(ns, 0.0); model->getStateFrequency(sf.data(), 0);
+        const int ambi_aa[] = {4+8, 32+64, 512+1024};   // B=N|D, Z=Q|E, U=I|L
+        int SU = (int)aln->STATE_UNKNOWN;
+        for (int p = 0; p < nptn; p++) {
+            int cc = (int)aln->at(p).const_char;
+            if (cc > SU)                            base_invar[p] = 0.0;
+            else if (cc == SU)                      base_invar[p] = 1.0;
+            else if (cc < ns)                       base_invar[p] = sf[cc];
+            else if (aln->seq_type == SEQ_DNA)     { double s=0; int cs=cc-ns+1; for (int x=0;x<ns;x++) if (cs & (1<<x)) s+=sf[x]; base_invar[p]=s; }
+            else if (aln->seq_type == SEQ_PROTEIN) { double s=0; int cs=cc-ns;   if (cs>=0 && cs<3) for (int x=0;x<11;x++) if (ambi_aa[cs] & (1<<x)) s+=sf[x]; base_invar[p]=s; }
+        }
+    }
+
     vector<int> nodeNch(nNodes), nodeChild(nNodes*3, -1), nodeLeaf(nNodes);
     vector<double> nodeParentLen(nNodes);
     for (int i = 0; i < nNodes; i++) {
@@ -537,11 +595,13 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     int optAlpha = (ncat > 1 && !site_rate->isFixGammaShape()) ? 1 : 0;
 
     // ---- run the JOLT optimiser on the GPU ----
-    vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0; int outIters = 0;
+    vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0; double outPinv = pinv0; int outIters = 0;
     double joltLnL = gpu_jolt_optimize(ns, nptn, ncat, ntax, nNodes, /*root=*/nid[R],
         Uinv, UinvRowSum.data(), U, eval, catProp.data(), tip.data(), ptnFreq.data(),
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
-        alpha0, optAlpha, /*maxiter=*/400, outBrlen.data(), &outAlpha, &outIters);
+        alpha0, optAlpha, /*maxiter=*/400,
+        base_invar.data(), pinv0, optPinv, JOLT_MIN_PINVAR, pinvMax,
+        outBrlen.data(), &outAlpha, &outPinv, &outIters);
     if (std::isnan(joltLnL)) {
         static bool warned = false;
         if (!warned) { warned = true; printf("[JOLT] gpu_jolt_optimize returned NaN -> CPU fallback (optimizeParameters)\n"); }
@@ -556,19 +616,25 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
         if (fwd) fwd->length = outBrlen[v];
         if (bwd) bwd->length = outBrlen[v];
     }
-    // ---- write alpha back through the gamma setter, then invalidate ALL partial-LH + transition caches ----
+    // ---- write alpha + pinv back through the setters, then invalidate ALL partial-LH + transition caches ----
+    if (optPinv) site_rate->setPInvar(outPinv);                 // G.4.3b: sets p_invar + recomputes rates (RateGammaInvar::setPInvar)
     if (optAlpha) site_rate->setGammaShape(outAlpha);           // sets gamma_shape + recomputes the discrete rates
-    clearAllPartialLH();                                        // brlen + alpha changed -> partials & theta stale (advisor: the cache-coherence watch item)
+    clearAllPartialLH();                                        // brlen + alpha + pinv changed -> partials, theta & ptn_invar stale
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
     double cpuLnL = computeLikelihood();
     double rel = (cpuLnL != 0.0) ? fabs((joltLnL - cpuLnL) / cpuLnL) : fabs(joltLnL - cpuLnL);
     static int report_count = 0;
-    if (report_count < 12) { report_count++;
-        printf("[JOLT] model=%s+%s%d ns=%d ncat=%d: %d joint iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
-               model->name.c_str(), (ncat>1?"G":""), (ncat>1?ncat:0), ns, ncat, outIters,
+    // G.4.3a: use model->getName() (includes the +F/+FO freq suffix) not model->name (matrix only) — the old print
+    // dropped +F, mislabelling LG+F+G4 as "LG+G4" and making +F JOLT-coverage invisible/uncountable. Cap raised so a
+    // full -m TESTONLY logs every engagement (coverage is now measurable).
+    string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
+    if (report_count < 1000) { report_count++;
+        printf("[JOLT] model=%s ns=%d ncat=%d: %d joint iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f | pinv %.6f->%.6f%s\n",
+               joltModelName.c_str(), ns, ncat, outIters,
                joltLnL, cpuLnL, rel, (rel <= 1e-9 ? "PASS" : (rel <= 1e-6 ? "OK(gamma-resid)" : "MISMATCH")),
-               alpha0, (ncat>1?site_rate->getGammaShape():0.0)); }
+               alpha0, (ncat>1?site_rate->getGammaShape():0.0),
+               pinv0, (optPinv?site_rate->getPInvar():0.0), (optPinv?" +I":"")); }
 
     setCurScore(cpuLnL);
     return cpuLnL;

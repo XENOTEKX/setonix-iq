@@ -122,15 +122,21 @@ __global__ void kj_theta(int ns, int nptn, int blockc,
     for (int k=0;k<blockc;k++){ size_t o=(size_t)k*nptn+ptn; theta[o]=node[o]*dad[o]; }
 }
 // kj_derv — per-pattern lnL/df/ddf from cached theta and the t-dependent g_val0/1/2 (= k2_derv from theta).
+// G.4.3b +I: the total pattern likelihood is L_p = (1-pinv)*Vbar_p + pinv*base_invar[p]. Because g_val0 folds in
+// catProp = (1-pinv)/K (RateGammaInvar::getProp), the theta-reduction lh already equals (1-pinv)*Vbar_p, so the
+// total is simply Lp = lh + pinv*baseinvar[ptn]. The invariant term is branch/alpha-INDEPENDENT, so d1=dLp/dt and
+// d2=d2Lp/dt2 are unchanged — only the DENOMINATOR becomes Lp (=> df/ddf are the +I-correct log-derivatives).
+// pinv=0 => Lp==lh, byte-identical to the pre-+I behaviour (baseinvar may be any valid buffer).
 __global__ void kj_derv(int ns, int nptn, int ncat, const double* __restrict__ theta,
+        double pinv, const double* __restrict__ baseinvar,
         double* __restrict__ patlh, double* __restrict__ pdf, double* __restrict__ pddf){
     int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
     double lh=0.0,d1=0.0,d2=0.0;
     for (int c=0;c<ncat;c++) for (int x=0;x<ns;x++){
         double th=theta[(size_t)(c*ns+x)*nptn+ptn]; int k=c*ns+x;
         lh+=g_val0[k]*th; d1+=g_val1[k]*th; d2+=g_val2[k]*th; }
-    lh=fabs(lh); double inv=1.0/lh, r=d1*inv;
-    patlh[ptn]=log(lh); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
+    double Lp=fabs(lh)+pinv*baseinvar[ptn]; double inv=1.0/Lp, r=d1*inv;
+    patlh[ptn]=log(Lp); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
 }
 // kj_pre — Ji-2020 top-down PREORDER eigen-space partial pre_v ("rest of tree" above edge u->v), WITHOUT v's
 // own branch (the gradient's g_val0/1(b_v) reapply it once). The PARENT branch b_u (expfac_u) is applied here.
@@ -160,6 +166,29 @@ __global__ void kj_ratenum(int ns, int nptn, int ncat, const double* __restrict_
     for (int k=0;k<ncat;k++){ double s=0.0;
         for (int x=0;x<ns;x++) s+=g_val1[k*ns+x]*theta[(size_t)(k*ns+x)*nptn+ptn];
         rnum[(size_t)k*nptn+ptn]+=g_rscale[k]*s; }
+}
+// G.5.0 — kj_reduce3: deterministic block-level FP64 reduction of the 3 per-pattern derivative channels
+// {patlh,pdf,pddf}, each weighted by ptn_freq, replacing reduceDerv's 3x nptn D2H + single-threaded host Kahan
+// loop (called ~197x/gradient-sweep + 1x/evalLnL — the measured #1 host-reduction stall, part8 VIII.2 #1).
+// Each block tree-reduces its blockDim patterns into 3 partial sums out3[ch*nblk + blockIdx]; the host then
+// Kahan-combines the (small) nblk per-block partials in the SAME channel order as the old loop. The within-block
+// reduce is a fixed-blockDim shared-memory tree (NOT atomicAdd) => bit-reproducible across launches, so the LM
+// accept/reject trajectory is stable. Requires blockDim a power of two (TB=256). FP64 throughout (parity).
+__global__ void kj_reduce3(int nptn, const double* __restrict__ patlh, const double* __restrict__ pdf,
+        const double* __restrict__ pddf, const double* __restrict__ ptnfreq, int nblk, double* __restrict__ out3){
+    extern __shared__ double sm[];                  // 3*blockDim doubles
+    double* sL=sm; double* sD=sm+blockDim.x; double* sDD=sm+2*blockDim.x;
+    int tid=threadIdx.x; int p=blockIdx.x*blockDim.x+tid;
+    double f = (p<nptn) ? ptnfreq[p] : 0.0;
+    sL[tid]  = (p<nptn) ? f*patlh[p] : 0.0;
+    sD[tid]  = (p<nptn) ? f*pdf[p]   : 0.0;
+    sDD[tid] = (p<nptn) ? f*pddf[p]  : 0.0;
+    __syncthreads();
+    for (int s=blockDim.x>>1; s>0; s>>=1){
+        if (tid<s){ sL[tid]+=sL[tid+s]; sD[tid]+=sD[tid+s]; sDD[tid]+=sDD[tid+s]; }
+        __syncthreads();
+    }
+    if (tid==0){ out3[blockIdx.x]=sL[0]; out3[(size_t)nblk+blockIdx.x]=sD[0]; out3[(size_t)2*nblk+blockIdx.x]=sDD[0]; }
 }
 
 #define GCK(x) do{ cudaError_t _e=(x); if(_e!=cudaSuccess){ \
@@ -367,7 +396,8 @@ static void jolt_discreteGammaMean(double alpha, int K, double* rates){
 
 // JOLT-specific persistent device buffers (separate from the lnL/derv pools; same alloc-once / reuse policy).
 static DevBuf gbj_echild, gbj_partial, gbj_theta, gbj_patlh, gbj_pdf, gbj_pddf,
-              gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip;
+              gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip, gbj_baseinvar,
+              gbj_ptnfreq, gbj_redpart;   // G.5.0: on-device ptn_freq + per-block reduction partials
 
 extern "C" double gpu_jolt_optimize(
     int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
@@ -375,7 +405,8 @@ extern "C" double gpu_jolt_optimize(
     const double* catProp, const unsigned char* tip, const double* ptn_freq,
     const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
     double alpha0, int optAlpha, int maxiter,
-    double* out_brlen, double* out_alpha, int* out_iters)
+    const double* base_invar, double pinv0, int optPinv, double pinvMin, double pinvMax,
+    double* out_brlen, double* out_alpha, double* out_pinv, int* out_iters)
 {
     int ns = nstates;
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[JOLT] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
@@ -418,20 +449,44 @@ extern "C" double gpu_jolt_optimize(
     DEVB(gbj_expfac, (size_t)nnodes*ncat*ns*sizeof(double));
     DEVB(gbj_rnum,   (size_t)ncat*nptn*sizeof(double));
     DEVB(gbj_tip,    (size_t)ntax*nptn);
+    DEVB(gbj_baseinvar, (size_t)nptn*sizeof(double));   // G.4.3b +I: pinv-independent invariant base per pattern
+    DEVB(gbj_ptnfreq,   (size_t)nptn*sizeof(double));   // G.5.0: pattern weights, constant across the optimise call
     double *d_echild=(double*)gbj_echild.p,*d_partial=(double*)gbj_partial.p,*d_theta=(double*)gbj_theta.p;
     double *d_patlh=(double*)gbj_patlh.p,*d_pdf=(double*)gbj_pdf.p,*d_pddf=(double*)gbj_pddf.p;
     double *d_pretmp=(double*)gbj_pretmp.p,*d_tipeig=(double*)gbj_tipeig.p,*d_prepool=(double*)gbj_prepool.p;
-    double *d_expfac=(double*)gbj_expfac.p,*d_rnum=(double*)gbj_rnum.p;
+    double *d_expfac=(double*)gbj_expfac.p,*d_rnum=(double*)gbj_rnum.p,*d_baseinvar=(double*)gbj_baseinvar.p;
+    double *d_ptnfreq=(double*)gbj_ptnfreq.p;
     unsigned char* d_tip=(unsigned char*)gbj_tip.p;
     GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(d_ptnfreq, ptn_freq, (size_t)nptn*sizeof(double), cudaMemcpyHostToDevice));  // G.5.0: once per call
+    {   // base_invar: caller passes a valid nptn buffer (all-zero when not +I); kj_derv reads it as Lp=lh+pinv*bi
+        std::vector<double> bi(nptn, 0.0);
+        if (base_invar) for (int p=0;p<nptn;p++) bi[p]=base_invar[p];
+        GCK(cudaMemcpy(d_baseinvar, bi.data(), (size_t)nptn*sizeof(double), cudaMemcpyHostToDevice));
+    }
 
     int TB=256, GB=(nptn+TB-1)/TB;
+    DEVB(gbj_redpart, (size_t)3*GB*sizeof(double));   // G.5.0: 3 channels x GB per-block partial sums
+    double* d_redpart=(double*)gbj_redpart.p;
+    std::vector<double> h_redpart((size_t)3*GB);
     std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
     std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
     std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
+    std::vector<double> meanR(ncat,1.0);   // G.4.3b: mean-1 discrete-gamma rates (alpha-dependent ONLY)
     double curAlpha=alpha0;
-    auto applyAlpha=[&](double a){ double r[64]; jolt_discreteGammaMean(a,ncat,r); for(int c=0;c<ncat;c++) catRate[c]=r[c]; };
+    auto applyAlpha=[&](double a){ jolt_discreteGammaMean(a,ncat,meanR.data()); };  // -> meanR (mean 1)
     if (ncat>1) applyAlpha(curAlpha);
+    // G.4.3b +I: IQ-TREE's RateGammaInvar uses getProp(c)=(1-pinv)/K AND rescales the gamma rates to meanR[c]/(1-pinv)
+    // (RateGamma::computeRates preserves the pre-set curScale=K/(1-pinv) => mean-1 rates / (1-pinv); so the OVERALL
+    // mean rate incl. invariant sites at rate 0 stays 1). Both the rate (UP by 1/(1-pinv)) and the prop (DOWN by
+    // (1-pinv)) move with pinv. catProp[c] arrives as (1-pinv0)/K, so the pinv-free base prop is bprop=catProp/(1-pinv0).
+    // For non-+I (optPinv=0): f=1 => catRate=meanR, catProp_v=catProp (byte-identical to the pre-+I +G path).
+    std::vector<double> bprop(ncat);
+    for(int c=0;c<ncat;c++) bprop[c] = optPinv ? catProp[c]/(1.0-pinv0) : catProp[c];
+    double curPinv = optPinv ? pinv0 : 0.0;
+    auto applyPinv=[&](double p){ double f = optPinv ? (1.0-p) : 1.0;
+        for(int c=0;c<ncat;c++){ catRate[c]=meanR[c]/f; catProp_v[c]=f*bprop[c]; } };
+    applyPinv(curPinv);
 
     auto childArgs=[&](int u,int excl,int& nch,const double** ec,const double** p,const unsigned char** t){
         nch=0; for(int k=0;k<3;k++){ec[k]=p[k]=nullptr;t[k]=nullptr;}
@@ -457,14 +512,16 @@ extern "C" double gpu_jolt_optimize(
             v0[c*ns+x]=e; v1[c*ns+x]=re*e; v2[c*ns+x]=re*re*e; } }
         cudaMemcpyToSymbol(g_val0,v0.data(),sizeof(double)*ncat*ns); cudaMemcpyToSymbol(g_val1,v1.data(),sizeof(double)*ncat*ns); cudaMemcpyToSymbol(g_val2,v2.data(),sizeof(double)*ncat*ns); };
     auto reduceDerv=[&](double& lnL,double& df,double& ddf){
-        cudaMemcpy(patlh.data(),d_patlh,nptn*sizeof(double),cudaMemcpyDeviceToHost);
-        cudaMemcpy(pdf.data(),d_pdf,nptn*sizeof(double),cudaMemcpyDeviceToHost);
-        cudaMemcpy(pddf.data(),d_pddf,nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        // G.5.0: on-device ptn_freq-weighted block reduction -> 3*GB partials D2H (88 KB), replacing the old
+        // 3x nptn D2H (~22 MB/call x ~197 edges/sweep) + single-thread host Kahan. Final cross-block combine kept
+        // on host in the SAME channel order (Kahan) for bit-reproducibility -> stable LM accept/reject.
+        kj_reduce3<<<GB,TB,(size_t)3*TB*sizeof(double)>>>(nptn,d_patlh,d_pdf,d_pddf,d_ptnfreq,GB,d_redpart);
+        cudaMemcpy(h_redpart.data(),d_redpart,(size_t)3*GB*sizeof(double),cudaMemcpyDeviceToHost);
         double L=0,kc=0,D=0,kd=0,DD=0,kdd=0;
-        for(int p=0;p<nptn;p++){ double f=ptn_freq[p];
-            { double term=f*patlh[p],y=term-kc, s=L +y; kc =(s-L )-y; L =s; }
-            { double term=f*pdf[p],  y=term-kd, s=D +y; kd =(s-D )-y; D =s; }
-            { double term=f*pddf[p], y=term-kdd,s=DD+y; kdd=(s-DD)-y; DD=s; } }
+        for(int b=0;b<GB;b++){
+            { double term=h_redpart[b],            y=term-kc, s=L +y; kc =(s-L )-y; L =s; }
+            { double term=h_redpart[(size_t)GB+b], y=term-kd, s=D +y; kd =(s-D )-y; D =s; }
+            { double term=h_redpart[(size_t)2*GB+b],y=term-kdd,s=DD+y; kdd=(s-DD)-y; DD=s; } }
         lnL=L; df=D; ddf=DD; };
     auto edgeThetaInto=[&](int v,const double* pre){ const double* pl;
         if(leaf[v]<0) pl=d_partial+(size_t)slot[v]*slotSz;
@@ -472,16 +529,17 @@ extern "C" double gpu_jolt_optimize(
         kj_theta<<<GB,TB>>>(ns,nptn,ncat*ns,pl,pre,d_theta); };
 
     long nGradSweeps=0,nLnLEval=0;
-    auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a)->double{
-        if(ncat>1) applyAlpha(cand_a); brlen=cand_b; rebuildEchild(); postorderFill();
+    auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv)->double{
+        if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b; rebuildEchild(); postorderFill();
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
         k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
         edgeThetaInto(c0,d_pretmp); cudaDeviceSynchronize();
-        setVal(brlen[c0]); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
+        setVal(brlen[c0]); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
         double l,d,dd; reduceDerv(l,d,dd); return l; };
 
     std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0),invL(nptn,0.0),rnumH((size_t)ncat*nptn);
     auto computeGradient=[&](double& lnLout,double& galphaOut){
+        applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
         rebuildEchild(); postorderFill(); nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
         std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
         auto acq=[&](){int s=freeSlots.back();freeSlots.pop_back();return s;}; auto rls=[&](int s){freeSlots.push_back(s);};
@@ -496,11 +554,14 @@ extern "C" double gpu_jolt_optimize(
                     kj_pre<<<GB,TB>>>(ns,nptn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
                 cudaDeviceSynchronize();
                 edgeThetaInto(v,pre); cudaDeviceSynchronize();
-                double bv=brlen[v]; setVal(bv); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
+                double bv=brlen[v]; setVal(bv); kj_derv<<<GB,TB>>>(ns,nptn,ncat,d_theta,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf); cudaDeviceSynchronize();
                 std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
                 cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); kj_ratenum<<<GB,TB>>>(ns,nptn,ncat,d_theta,d_rnum); cudaDeviceSynchronize();
                 double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
-                if(!gotL){ lnLfirst=l; for(int p=0;p<nptn;p++) invL[p]=exp(-patlh[p]); gotL=true; }
+                if(!gotL){ lnLfirst=l;
+                    // G.5.0: reduceDerv no longer D2Hs patlh; invL needs it -> one explicit copy here, once/sweep at the base edge.
+                    cudaMemcpy(patlh.data(),d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost);
+                    for(int p=0;p<nptn;p++) invL[p]=exp(-patlh[p]); gotL=true; }
                 if(leaf[v]<0) proc(v,sv); rls(sv);
             } };
         proc(root,-1); cudaDeviceSynchronize();
@@ -508,34 +569,49 @@ extern "C" double gpu_jolt_optimize(
         cudaMemcpy(rnumH.data(),d_rnum,(size_t)ncat*nptn*sizeof(double),cudaMemcpyDeviceToHost);
         for(int c=0;c<ncat;c++){ long double acc=0; for(int p=0;p<nptn;p++) acc+=(long double)ptn_freq[p]*rnumH[(size_t)c*nptn+p]*invL[p]; gradR[c]=catProp_v[c]*(double)acc; }
         double ga=0;
-        if(ncat>1){ double rp[64]; jolt_discreteGammaMean(curAlpha+1e-5,ncat,rp); for(int c=0;c<ncat;c++) ga+=((rp[c]-catRate[c])/1e-5)*gradR[c]; }
+        // alpha gradient: ga = Σ_c (d catRate[c]/dα)·gradR[c]; catRate[c]=meanR[c]/f so the perturbed mean-1 rate
+        // rp[c] must be scaled by 1/f too (else mixing scaled/unscaled rates -> wrong alpha grad on the +I path).
+        if(ncat>1){ double f = optPinv ? (1.0-curPinv) : 1.0; double rp[64]; jolt_discreteGammaMean(curAlpha+1e-5,ncat,rp);
+            for(int c=0;c<ncat;c++) ga+=((rp[c]/f-catRate[c])/1e-5)*gradR[c]; }
         lnLout=lnLfirst; galphaOut=ga; };
 
     // ---- single joint LM diagonal-Newton optimise from the provided (warm) start ----
     std::vector<double> cand(nnodes,0.0), base;
     std::vector<double> startB(node_parentLen, node_parentLen+nnodes);   // distinct from brlen (evalLnL overwrites brlen)
     curAlpha=alpha0;
-    double lnL=evalLnL(startB,curAlpha); nLnLEval++;
+    double lnL=evalLnL(startB,curAlpha,curPinv); nLnLEval++;
     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
     double aPrev=0,gaPrev=0; bool haveSec=false;
+    double pPrev=0,gpPrev=0;   // G.4.3b: pinv secant curvature (mirrors the alpha secant)
     for(it=1; it<=maxiter; it++){
-        base=brlen; double baseA=curAlpha; if(ncat>1) applyAlpha(baseA);
+        base=brlen; double baseA=curAlpha, baseP=curPinv; if(ncat>1) applyAlpha(baseA);
         double lg,ga; computeGradient(lg,ga);
+        // G.4.3b pinv gradient by FORWARD FINITE DIFFERENCE (robust to the rate<->prop<->pinv coupling that the
+        // 1/(1-pinv) rate rescaling introduces; an analytic form would need the rate-derivative term). One extra
+        // postorder lnL eval (cheap vs computeGradient's full preorder). lg = lnL at the base point (from above).
+        double gradPinv=0.0;
+        if(optPinv){ double ep=1e-4, pp=baseP+ep, dep;
+            if(pp>pinvMax){ pp=baseP-ep; if(pp<pinvMin)pp=pinvMin; }   // backward FD at the upper boundary (audit #4: avoid a stuck zero gradient)
+            dep=pp-baseP;
+            if(fabs(dep)>1e-9){ double lpe=evalLnL(base,baseA,pp); nLnLEval++; gradPinv=(lpe-lg)/dep; } }
         double ddA=(haveSec && fabs(baseA-aPrev)>1e-9)?(ga-gaPrev)/(baseA-aPrev):-1e6;
-        aPrev=baseA; gaPrev=ga; haveSec=true;
+        double ddP=(haveSec && fabs(baseP-pPrev)>1e-12)?(gradPinv-gpPrev)/(baseP-pPrev):-1e6;
+        aPrev=baseA; gaPrev=ga; pPrev=baseP; gpPrev=gradPinv; haveSec=true;
         bool acc=false;
         for(int bt=0; bt<14; bt++){
             cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
             double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
-            double ln=evalLnL(cand,ca); nLnLEval++;
-            if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
+            double cp=baseP; if(optPinv){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
+            double ln=evalLnL(cand,ca,cp); nLnLEval++;
+            if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
             else { mu*=4.0; nRej++; } }
-        if(!acc){ brlen=base; curAlpha=baseA; break; }
+        if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP; break; }
         if(conv) break; }
 
     if (cudaGetLastError()!=cudaSuccess) return (double)NAN;   // any launch/sync error -> caller falls back to CPU
     for(int v=0;v<nnodes;v++) out_brlen[v]=brlen[v];
     if(out_alpha) *out_alpha=curAlpha;
+    if(out_pinv)  *out_pinv = optPinv ? curPinv : pinv0;
     if(out_iters) *out_iters=it;
     return lnL;
 }

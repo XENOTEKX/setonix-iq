@@ -111,8 +111,13 @@ double gpu_jolt_optimize(
     const int* node_leaf,        // nnodes (taxon id if leaf, else -1)
     const double* node_parentLen,// nnodes (initial edge length to parent; root entry = 0)
     double alpha0, int optAlpha, int maxiter,
+    // G.4.3b — +I (proportion of invariant sites) joint support (ncat>1 / +I+G only):
+    const double* base_invar,    // nptn (pinv-independent invariant base = ptn_invar/pinv; 0 if not +I)
+    double pinv0, int optPinv,   // initial pinv; optimise it jointly if optPinv (else held at pinv0; 0 => no +I)
+    double pinvMin, double pinvMax, // clamp bounds (MIN_PINVAR, aln->frac_const_sites)
     double* out_brlen,           // nnodes (out: optimised parentLen per node; root entry untouched)
     double* out_alpha,           // out: optimised alpha (unchanged if !optAlpha)
+    double* out_pinv,            // out: optimised pinv (unchanged if !optPinv)
     int* out_iters);             // out: joint-iteration count (the headline)
 
 #ifdef __cplusplus
