@@ -24,6 +24,8 @@
 #include <vector>
 #include <functional>   // G.4.2: recursive DFS lambdas in the JOLT launcher
 #include <mutex>        // G.4.2: serialize GPU access — ModelFinder is across-model OpenMP-parallel
+#include <cstring>      // G.7.1: memcpy for the pattern-tiling tip-slice gather
+#include <cstdlib>      // G.7.1: getenv/atoi for JOLT_NTILE
 
 #define NS_MAX 20
 
@@ -507,40 +509,88 @@ extern "C" double gpu_jolt_optimize(
     std::vector<int> edgeV; for(int u=0;u<nnodes;u++) for(int v:child[u]) edgeV.push_back(v); int nedge=(int)edgeV.size();
     int treeH=0; std::function<void(int,int)> ddfs=[&](int u,int d){ if(d>treeH)treeH=d; for(int c:child[u]) ddfs(c,d+1); }; ddfs(root,0); int nPool=treeH+2;
 
-    size_t ecStride=(size_t)ncat*ns*ns, slotSz=(size_t)ncat*ns*nptn;
+    size_t ecStride=(size_t)ncat*ns*ns;
+    int TB=256;
+
+    // ===== G.7.1 PATTERN TILING — fit the O(nptn) partial arenas on smaller GPUs =====
+    // Every JOLT quantity (lnL, df_e, ddf_e, gradR_c) is a SUM OVER PATTERNS, so partitioning the nptn patterns into
+    // nTile contiguous chunks, running a full postorder+preorder sweep PER CHUNK, and Kahan-accumulating each chunk's
+    // contribution reproduces the one-shot result to rel<=1e-12 (part7 §VII.3 — the same additivity that already
+    // underlies the ptn_freq-weighted reductions). Every O(nptn) device arena (the dominant postorder gbj_partial, the
+    // preorder pool, scratch, tip/patlh/...) shrinks by ~nTile, so a model needing 886 GB one-shot at AA-10M fits an
+    // H200 (141 GB) at nTile>=8 / an A100 (80 GB) at nTile>=12. The chunk-INDEPENDENT echild/expfac/eigen constants are
+    // built once per (brlen,alpha,pinv,Q) point (rebuildEchild), NOT per chunk.
+    int nTile = 1;
+    if (const char* e = getenv("JOLT_NTILE")) { nTile = atoi(e); if (nTile < 1) nTile = 1; }
+    else {
+        // auto-pick from free VRAM: estimate the one-shot footprint, target 80% of free, round up.
+        size_t slot1 = (size_t)ncat*ns*nptn*sizeof(double);
+        size_t foot  = (size_t)(nInternal + nPool + 3) * slot1                 // partial + prepool + (pretmp/tipeig+slack)
+                     + (size_t)ncat*nptn*sizeof(double)                        // rnum
+                     + (size_t)6*nptn*sizeof(double)                           // patlh/pdf/pddf/baseinvar/ptnfreq/invlbase
+                     + (size_t)ntax*nptn                                       // tip
+                     + (size_t)nnodes*ecStride*sizeof(double);                 // echild (chunk-independent; not tiled)
+        size_t freeB=0, totB=0;
+        if (cudaMemGetInfo(&freeB,&totB)==cudaSuccess && freeB>0) {
+            double budget = 0.80 * (double)freeB;
+            int T = (int)ceil((double)foot / budget); if (T<1) T=1;
+            nTile = T;
+        }
+    }
+    if (freeRate) nTile = 1;   // +R declines to CPU before the optimise loop (RGRADCHECK uses full-nptn buffers); no tiling
+    if (getenv("JOLT_DEBUG")) {
+        size_t fB=0,tB=0; cudaMemGetInfo(&fB,&tB);
+        fprintf(stderr,"[JOLT-TILE] nptn=%d ns=%d ncat=%d nInternal=%d nPool=%d -> nTile=%d (chunk~%d ptn); freeVRAM=%.1f GB\n",
+                nptn,ns,ncat,nInternal,nPool,nTile,(nptn+nTile-1)/nTile,(double)fB/1073741824.0); fflush(stderr);
+    }
+
+    int    chunk0    = (nptn + nTile - 1) / nTile;   // max chunk width; all per-pattern buffers are sized to this
+    size_t slotSzMax = (size_t)ncat*ns*chunk0;
+    int    GBmax     = (chunk0 + TB - 1) / TB;
+    // current-chunk state (MUTABLE; set by setChunk; the sweep closures capture these by reference). At nTile==1
+    // chunk0==nptn / Pn==nptn / pOff==0 / slotSz==slotSzMax / GB==GBmax => byte-identical to the pre-tiling path.
+    int    Pn     = nptn;                            // current chunk's pattern count
+    int    pOff   = 0;                               // current chunk's first pattern index (into the host inputs)
+    size_t slotSz = (size_t)ncat*ns*nptn;            // current chunk's [cat][state][ptn] slot stride
+    int    GB     = (nptn + TB - 1) / TB;            // current chunk's grid
+    (void)pOff;
+
     DEVB(gbj_echild, (size_t)nnodes*ecStride*sizeof(double));
-    DEVB(gbj_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
-    // part8 #3 cleanup: d_theta (the 601 MB theta arena) is DEAD now that kj_derv_fused computes theta in registers
-    // — no longer allocated (helps the +R10 / A100-80 VRAM margin).
-    DEVB(gbj_patlh,  (size_t)nptn*sizeof(double)); DEVB(gbj_pdf,(size_t)nptn*sizeof(double)); DEVB(gbj_pddf,(size_t)nptn*sizeof(double));
-    DEVB(gbj_pretmp, slotSz*sizeof(double)); DEVB(gbj_tipeig, slotSz*sizeof(double));
-    DEVB(gbj_prepool,(size_t)nPool*slotSz*sizeof(double));
+    DEVB(gbj_partial,(size_t)(nInternal>0?nInternal:1)*slotSzMax*sizeof(double));
+    // part8 #3 cleanup: d_theta (the 601 MB theta arena) is DEAD now that kj_derv_fused computes theta in registers.
+    DEVB(gbj_patlh,  (size_t)chunk0*sizeof(double)); DEVB(gbj_pdf,(size_t)chunk0*sizeof(double)); DEVB(gbj_pddf,(size_t)chunk0*sizeof(double));
+    DEVB(gbj_pretmp, slotSzMax*sizeof(double)); DEVB(gbj_tipeig, slotSzMax*sizeof(double));
+    DEVB(gbj_prepool,(size_t)nPool*slotSzMax*sizeof(double));
     DEVB(gbj_expfac, (size_t)nnodes*ncat*ns*sizeof(double));
-    DEVB(gbj_rnum,   (size_t)ncat*nptn*sizeof(double));
-    DEVB(gbj_tip,    (size_t)ntax*nptn);
-    DEVB(gbj_baseinvar, (size_t)nptn*sizeof(double));   // G.4.3b +I: pinv-independent invariant base per pattern
-    DEVB(gbj_ptnfreq,   (size_t)nptn*sizeof(double));   // G.5.0: pattern weights, constant across the optimise call
+    DEVB(gbj_rnum,   (size_t)ncat*chunk0*sizeof(double));
+    DEVB(gbj_tip,    (size_t)ntax*chunk0);
+    DEVB(gbj_baseinvar, (size_t)chunk0*sizeof(double));   // G.4.3b +I: pinv-independent invariant base per pattern
+    DEVB(gbj_ptnfreq,   (size_t)chunk0*sizeof(double));   // G.5.0: pattern weights, constant across the optimise call
     double *d_echild=(double*)gbj_echild.p,*d_partial=(double*)gbj_partial.p;
     double *d_patlh=(double*)gbj_patlh.p,*d_pdf=(double*)gbj_pdf.p,*d_pddf=(double*)gbj_pddf.p;
     double *d_pretmp=(double*)gbj_pretmp.p,*d_tipeig=(double*)gbj_tipeig.p,*d_prepool=(double*)gbj_prepool.p;
     double *d_expfac=(double*)gbj_expfac.p,*d_rnum=(double*)gbj_rnum.p,*d_baseinvar=(double*)gbj_baseinvar.p;
     double *d_ptnfreq=(double*)gbj_ptnfreq.p;
     unsigned char* d_tip=(unsigned char*)gbj_tip.p;
-    GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
-    GCK(cudaMemcpy(d_ptnfreq, ptn_freq, (size_t)nptn*sizeof(double), cudaMemcpyHostToDevice));  // G.5.0: once per call
-    {   // base_invar: caller passes a valid nptn buffer (all-zero when not +I); kj_derv reads it as Lp=lh+pinv*bi
-        std::vector<double> bi(nptn, 0.0);
-        if (base_invar) for (int p=0;p<nptn;p++) bi[p]=base_invar[p];
-        GCK(cudaMemcpy(d_baseinvar, bi.data(), (size_t)nptn*sizeof(double), cudaMemcpyHostToDevice));
-    }
+    // tip/ptn_freq/base_invar are CONSTANT across the optimise call; setChunk uploads the current chunk's slice. (At
+    // nTile==1 this uploads the whole arrays once per sweep — byte-identical device state to the old one-time upload.)
+    std::vector<unsigned char> tipChunk((size_t)ntax*chunk0);
+    std::vector<double> biFull(nptn, 0.0); if (base_invar) for (int p=0;p<nptn;p++) biFull[p]=base_invar[p];
+    auto setChunk=[&](int t){
+        int p0=t*chunk0, p1=p0+chunk0; if(p1>nptn)p1=nptn; int cw=p1-p0;
+        Pn=cw; pOff=p0; slotSz=(size_t)ncat*ns*cw; GB=(cw+TB-1)/TB;
+        for(int a=0;a<ntax;a++) memcpy(&tipChunk[(size_t)a*cw], tip+(size_t)a*nptn+p0, (size_t)cw);
+        cudaMemcpy(d_tip, tipChunk.data(), (size_t)ntax*cw, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_ptnfreq, ptn_freq+p0, (size_t)cw*sizeof(double), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_baseinvar, biFull.data()+p0, (size_t)cw*sizeof(double), cudaMemcpyHostToDevice);
+    };
 
-    int TB=256, GB=(nptn+TB-1)/TB;
-    DEVB(gbj_redpart, (size_t)3*GB*sizeof(double));   // G.5.0: 3 channels x GB per-block partial sums
+    DEVB(gbj_redpart, (size_t)3*GBmax*sizeof(double));   // G.5.0: 3 channels x GBmax per-block partial sums
     double* d_redpart=(double*)gbj_redpart.p;
-    std::vector<double> h_redpart((size_t)3*GB);
-    DEVB(gbj_invlbase, (size_t)nptn*sizeof(double)); double* d_invLbase=(double*)gbj_invlbase.p;  // G.5.0 Part B
-    DEVB(gbj_redR,     (size_t)ncat*GB*sizeof(double)); double* d_redR=(double*)gbj_redR.p;
-    std::vector<double> h_redR((size_t)ncat*GB);
+    std::vector<double> h_redpart((size_t)3*GBmax);
+    DEVB(gbj_invlbase, (size_t)chunk0*sizeof(double)); double* d_invLbase=(double*)gbj_invlbase.p;  // G.5.0 Part B
+    DEVB(gbj_redR,     (size_t)ncat*GBmax*sizeof(double)); double* d_redR=(double*)gbj_redR.p;
+    std::vector<double> h_redR((size_t)ncat*GBmax);
     std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
     std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
     std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
@@ -565,10 +615,10 @@ extern "C" double gpu_jolt_optimize(
     auto childArgs=[&](int u,int excl,int& nch,const double** ec,const double** p,const unsigned char** t){
         nch=0; for(int k=0;k<3;k++){ec[k]=p[k]=nullptr;t[k]=nullptr;}
         for(int c:child[u]){ if(c==excl) continue; ec[nch]=d_echild+(size_t)c*ecStride;
-            if(leaf[c]>=0) t[nch]=d_tip+(size_t)leaf[c]*nptn; else p[nch]=d_partial+(size_t)slot[c]*slotSz; nch++; } };
+            if(leaf[c]>=0) t[nch]=d_tip+(size_t)leaf[c]*Pn; else p[nch]=d_partial+(size_t)slot[c]*slotSz; nch++; } };   // G.7.1: tip stride = current chunk width Pn
     auto sibArg=[&](int w,const double*& ec,const double*& sp,const unsigned char*& st){
         ec=d_echild+(size_t)w*ecStride; sp=nullptr; st=nullptr;
-        if(leaf[w]>=0) st=d_tip+(size_t)leaf[w]*nptn; else sp=d_partial+(size_t)slot[w]*slotSz; };
+        if(leaf[w]>=0) st=d_tip+(size_t)leaf[w]*Pn; else sp=d_partial+(size_t)slot[w]*slotSz; };
     auto rebuildEchild=[&](){
         for(int c=0;c<nnodes;c++){ if(c==root){ for(size_t z=0;z<ecStride;z++) h_echild[(size_t)c*ecStride+z]=0.0; continue; }
             for(int cat=0;cat<ncat;cat++){ double len=brlen[c]*catRate[cat]; double ex[NS_MAX]; for(int i=0;i<ns;i++) ex[i]=exp(evalP[i]*len);
@@ -579,7 +629,7 @@ extern "C" double gpu_jolt_optimize(
     auto postorderFill=[&](){
         for(int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; childArgs(u,-1,nch,ec,p,t);
-            k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_partial+(size_t)slot[u]*slotSz,d_patlh,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
+            k1_node<<<GB,TB>>>(ns,Pn,ncat,0,d_partial+(size_t)slot[u]*slotSz,d_patlh,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
         cudaDeviceSynchronize(); };
     auto setVal=[&](double t){ std::vector<double> v0(ncat*ns),v1(ncat*ns),v2(ncat*ns);
         for(int c=0;c<ncat;c++){ double rc=catRate[c],pcw=catProp_v[c]; for(int x=0;x<ns;x++){ double re=rc*evalP[x],e=exp(evalP[x]*rc*t)*pcw;
@@ -589,7 +639,7 @@ extern "C" double gpu_jolt_optimize(
         // G.5.0: on-device ptn_freq-weighted block reduction -> 3*GB partials D2H (88 KB), replacing the old
         // 3x nptn D2H (~22 MB/call x ~197 edges/sweep) + single-thread host Kahan. Final cross-block combine kept
         // on host in the SAME channel order (Kahan) for bit-reproducibility -> stable LM accept/reject.
-        kj_reduce3<<<GB,TB,(size_t)3*TB*sizeof(double)>>>(nptn,d_patlh,d_pdf,d_pddf,d_ptnfreq,GB,d_redpart);
+        kj_reduce3<<<GB,TB,(size_t)3*TB*sizeof(double)>>>(Pn,d_patlh,d_pdf,d_pddf,d_ptnfreq,GB,d_redpart);
         cudaMemcpy(h_redpart.data(),d_redpart,(size_t)3*GB*sizeof(double),cudaMemcpyDeviceToHost);
         double L=0,kc=0,D=0,kd=0,DD=0,kdd=0;
         for(int b=0;b<GB;b++){
@@ -601,7 +651,7 @@ extern "C" double gpu_jolt_optimize(
     // WITHOUT materialising theta — kj_derv_fused reads node+dad directly. Replaces edgeThetaInto on the fused path.
     auto edgeNodePtr=[&](int v)->const double*{
         if(leaf[v]<0) return d_partial+(size_t)slot[v]*slotSz;
-        k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); return d_tipeig; };
+        k_leaf_eig<<<GB,TB>>>(ns,Pn,ncat,d_tip+(size_t)leaf[v]*Pn,d_tipeig); return d_tipeig; };
 
     // ============ G.5.1a — +R weight-gradient FINITE-DIFFERENCE self-check (gated; then declines to CPU) ============
     // Validates gz_c = WN_c − w_c·N (softmax weight gradient, PART IX §IX.8) against central FD on the REAL GPU path,
@@ -611,6 +661,7 @@ extern "C" double gpu_jolt_optimize(
     // (the LM branch is G.5.1b); this hook only runs the check under JOLT_RGRADCHECK.
     if (freeRate) {
         if (getenv("JOLT_RGRADCHECK")) {
+            setChunk(0);   // G.7.1: nTile==1 for +R — upload the (whole) tip/ptn_freq/base_invar slice the old one-time copy used to do
             rebuildEchild(); postorderFill();
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
             k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
@@ -657,61 +708,87 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> devB; double devA=1e300, devP=1e300; bool devValid=false;
     auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv,const double* cand_q)->double{
         if(nFreeQ>0 && cand_q) qApply(cand_q);   // G.6: re-decompose+reupload the trial Q -> rebuildEchild() below uses the new evalP/UP
-        if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b; rebuildEchild(); postorderFill();
-        int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
-        k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
-        const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
-        setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,nullptr); cudaDeviceSynchronize();
-        double l,d,dd; reduceDerv(l,d,dd);
-        devB=cand_b; devA=cand_a; devP=cand_pinv; devValid=true;   // part8 #2: device echild/partial now hold this candidate
-        return l; };
+        if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b;
+        rebuildEchild();   // G.7.1: chunk-INDEPENDENT (echild/expfac carry no nptn) — build once per eval, reused across all chunks
+        double Lacc=0,Lk=0;   // G.7.1: Kahan accumulator of lnL over the pattern chunks (exact additivity, rel<=1e-12 vs one-shot)
+        for(int t=0;t<nTile;t++){
+            setChunk(t); postorderFill();
+            int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
+            k1_node<<<GB,TB>>>(ns,Pn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
+            const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
+            setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,Pn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,nullptr); cudaDeviceSynchronize();
+            double l,d,dd; reduceDerv(l,d,dd);
+            double y=l-Lk, s=Lacc+y; Lk=(s-Lacc)-y; Lacc=s;   // Kahan add this chunk's lnL contribution
+        }
+        devB=cand_b; devA=cand_a; devP=cand_pinv; devValid=true;   // part8 #2: echild matches this base (full postorder present on device only when nTile==1)
+        return Lacc; };
 
     std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0);   // G.5.0 Part B: invL/rnumH now on-device
     auto computeGradient=[&](double& lnLout,double& galphaOut){
         applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
-        // part8 #2: skip the redundant base rebuild+postorder when the device already holds EXACTLY this base point
-        // (the immediately-preceding accepted evalLnL built it; bit-exact, falls back to rebuild on any mismatch).
-        // part8 #2: NB the skip tracks (brlen,alpha,pinv) only — a Q-FD step (G.6) moves the eigensystem WITHOUT
-        // moving those, so for free-Q the skip is unsafe (it would reuse a stale-Q echild). Disable it when nFreeQ>0.
+        // part8 #2 base-sweep skip (tiling-aware): echild/expfac are chunk-INDEPENDENT, so skip the rebuild when the
+        // device echild already matches this base point (built by the immediately-preceding accepted evalLnL). The
+        // POSTORDER partials, however, are present on device for ALL patterns only when nTile==1 (one chunk); with
+        // nTile>1 they hold just the LAST chunk, so postorderFill must rerun per chunk below.
+        // NB the skip tracks (brlen,alpha,pinv) only — a Q-FD step (G.6) moves the eigensystem WITHOUT moving those,
+        // so for free-Q it is unsafe; disabled when nFreeQ>0.
         bool devMatch = (nFreeQ==0) && devValid && devA==curAlpha && devP==curPinv && (int)devB.size()==nnodes;
         if(devMatch) for(int z=0;z<nnodes;z++) if(devB[z]!=brlen[z]){ devMatch=false; break; }
-        if(!devMatch){ rebuildEchild(); postorderFill(); }
-        nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
-        std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
-        auto acq=[&](){int s=freeSlots.back();freeSlots.pop_back();return s;}; auto rls=[&](int s){freeSlots.push_back(s);};
-        std::vector<double> dfC(nnodes,0.0),ddfC(nnodes,0.0); bool gotL=false; double lnLfirst=0;
-        std::function<void(int,int)> proc=[&](int u,int su){
-            for(int v:child[u]){
-                int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
-                if(u==root){ int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,v,nch,ec,p,tp);
-                    k1_node<<<GB,TB>>>(ns,nptn,ncat,0,pre,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); }
-                else { const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
-                    for(int w:child[u]){ if(w==v||nsb>=2) continue; sibArg(w,ec[nsb],sp[nsb],st[nsb]); nsb++; }
-                    kj_pre<<<GB,TB>>>(ns,nptn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
-                cudaDeviceSynchronize();
-                const double* plv=edgeNodePtr(v);   // part8 #3: fused theta+derv+ratenum, no d_theta round-trip
-                double bv=brlen[v]; std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
-                cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); setVal(bv); cudaDeviceSynchronize();
-                kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,d_rnum,nullptr); cudaDeviceSynchronize();
-                double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
-                if(!gotL){ lnLfirst=l;
-                    // G.5.0 Part B: 1/L_p on-device from the base-edge patlh (was a host D2H + exp loop over nptn).
-                    kj_invl<<<GB,TB>>>(nptn,d_patlh,d_invLbase); gotL=true; }
-                if(leaf[v]<0) proc(v,sv); rls(sv);
-            } };
-        proc(root,-1); cudaDeviceSynchronize();
-        for(int e=0;e<nedge;e++){ g_df[e]=dfC[edgeV[e]]; g_ddf[e]=ddfC[edgeV[e]]; }
-        // G.5.0 Part B: gradR on-device — per-category block reduction of ptn_freq*rnum[c]*invL (was a ncat*nptn
-        // d_rnum D2H + host long-double loop); host combines the small GB block-partials per category.
-        kj_reduce_gradnum<<<GB,TB,(size_t)TB*sizeof(double)>>>(nptn,ncat,d_rnum,d_invLbase,d_ptnfreq,GB,d_redR);
-        cudaMemcpy(h_redR.data(),d_redR,(size_t)ncat*GB*sizeof(double),cudaMemcpyDeviceToHost);
-        for(int c=0;c<ncat;c++){ long double acc=0; for(int b=0;b<GB;b++) acc+=(long double)h_redR[(size_t)c*GB+b]; gradR[c]=catProp_v[c]*(double)acc; }
+        if(!devMatch) rebuildEchild();
+        bool postValid = devMatch && (nTile==1);
+        nGradSweeps++;
+        // G.7.1: cross-chunk Kahan accumulators for the per-pattern sums (df_e, ddf_e, lnL, and the raw rate-grad
+        // numerator per category). Deterministic chunk order 0..nTile-1 => reproducible; rel<=1e-12 vs the one-shot sum.
+        std::vector<double> accDf(nedge,0.0),accDfK(nedge,0.0),accDdf(nedge,0.0),accDdfK(nedge,0.0);
+        std::vector<double> accR(ncat,0.0),accRk(ncat,0.0);
+        double Lacc=0,Lk=0;
+        for(int t=0;t<nTile;t++){
+            setChunk(t);
+            if(!postValid) postorderFill();
+            cudaMemset(d_rnum,0,(size_t)ncat*Pn*sizeof(double));
+            std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
+            auto acq=[&](){int s=freeSlots.back();freeSlots.pop_back();return s;}; auto rls=[&](int s){freeSlots.push_back(s);};
+            std::vector<double> dfC(nnodes,0.0),ddfC(nnodes,0.0); bool gotL=false; double lnLfirst=0;
+            std::function<void(int,int)> proc=[&](int u,int su){
+                for(int v:child[u]){
+                    int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
+                    if(u==root){ int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,v,nch,ec,p,tp);
+                        k1_node<<<GB,TB>>>(ns,Pn,ncat,0,pre,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); }
+                    else { const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
+                        for(int w:child[u]){ if(w==v||nsb>=2) continue; sibArg(w,ec[nsb],sp[nsb],st[nsb]); nsb++; }
+                        kj_pre<<<GB,TB>>>(ns,Pn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
+                    cudaDeviceSynchronize();
+                    const double* plv=edgeNodePtr(v);   // part8 #3: fused theta+derv+ratenum, no d_theta round-trip
+                    double bv=brlen[v]; std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
+                    cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); setVal(bv); cudaDeviceSynchronize();
+                    kj_derv_fused<<<GB,TB>>>(ns,Pn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,d_rnum,nullptr); cudaDeviceSynchronize();
+                    double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
+                    if(!gotL){ lnLfirst=l;
+                        // G.5.0 Part B: 1/L_p on-device from the base-edge patlh (was a host D2H + exp loop over nptn).
+                        kj_invl<<<GB,TB>>>(Pn,d_patlh,d_invLbase); gotL=true; }
+                    if(leaf[v]<0) proc(v,sv); rls(sv);
+                } };
+            proc(root,-1); cudaDeviceSynchronize();
+            // accumulate this chunk's per-edge df/ddf and base-edge lnL (Kahan):
+            for(int e=0;e<nedge;e++){
+                double td=dfC[edgeV[e]];  { double y=td-accDfK[e],  s=accDf[e] +y; accDfK[e] =(s-accDf[e]) -y; accDf[e] =s; }
+                double t2=ddfC[edgeV[e]]; { double y=t2-accDdfK[e], s=accDdf[e]+y; accDdfK[e]=(s-accDdf[e])-y; accDdf[e]=s; } }
+            { double y=lnLfirst-Lk, s=Lacc+y; Lk=(s-Lacc)-y; Lacc=s; }
+            // G.5.0 Part B: per-category block reduction of ptn_freq*rnum[c]*invL (on-device); accumulate the RAW
+            // numerator across chunks (the catProp_v[c] factor is applied once after the chunk loop).
+            kj_reduce_gradnum<<<GB,TB,(size_t)TB*sizeof(double)>>>(Pn,ncat,d_rnum,d_invLbase,d_ptnfreq,GB,d_redR);
+            cudaMemcpy(h_redR.data(),d_redR,(size_t)ncat*GB*sizeof(double),cudaMemcpyDeviceToHost);
+            for(int c=0;c<ncat;c++){ long double a=0; for(int b=0;b<GB;b++) a+=(long double)h_redR[(size_t)c*GB+b];
+                double term=(double)a; double y=term-accRk[c], s=accR[c]+y; accRk[c]=(s-accR[c])-y; accR[c]=s; }
+        }
+        for(int e=0;e<nedge;e++){ g_df[e]=accDf[e]; g_ddf[e]=accDdf[e]; }
+        for(int c=0;c<ncat;c++) gradR[c]=catProp_v[c]*accR[c];
         double ga=0;
         // alpha gradient: ga = Σ_c (d catRate[c]/dα)·gradR[c]; catRate[c]=meanR[c]/f so the perturbed mean-1 rate
         // rp[c] must be scaled by 1/f too (else mixing scaled/unscaled rates -> wrong alpha grad on the +I path).
         if(ncat>1){ double f = optPinv ? (1.0-curPinv) : 1.0; double rp[64]; jolt_discreteGammaMean(curAlpha+1e-5,ncat,rp);
             for(int c=0;c<ncat;c++) ga+=((rp[c]/f-catRate[c])/1e-5)*gradR[c]; }
-        lnLout=lnLfirst; galphaOut=ga; };
+        lnLout=Lacc; galphaOut=ga; };
 
     // ---- single joint LM diagonal-Newton optimise from the provided (warm) start ----
     std::vector<double> cand(nnodes,0.0), base;
