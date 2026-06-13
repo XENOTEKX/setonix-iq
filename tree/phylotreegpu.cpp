@@ -580,9 +580,16 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     int nFreeQ = 0;
     {
         int ndim = model->getNDim();
+        // audit RISK-1 hardening: tied-frequency DNA types (+FRY/+F1112/... = FREQ_DNA_*) contribute 1-3 FREE freq
+        // params to getNDim(), which gpuGetFreeParams packs into the Q-vector tail; the launcher then mis-clamps them
+        // as exchangeabilities ([MINQ,MAXQ]=[1e-4,100] vs the correct ~[0,1]) -> a coherent-but-SUBOPTIMAL lnL that
+        // still passes the write-back gate (which checks GPU/CPU coherence, not optimality). Require nFreqParams==0 so
+        // the entire getVariables() tail is exchangeabilities. +FQ/+F (0 freq dims) still engage; tied-freq is not in
+        // the default -m MF DNA set, so this declines such explicit user models to CPU (defensive, no live regression).
         bool freeQok = JOLT_FREEQ_EN && ndim > 0 && ndim <= 5 && ns == 4 &&
-                       model->getFreqType() != FREQ_ESTIMATE && model->isReversible();
-        if (ndim != 0 && !freeQok) JOLT_DECLINE("free-subst-params");  // +FO / AA-GTR / production free-Q -> CPU
+                       model->getFreqType() != FREQ_ESTIMATE && model->isReversible() &&
+                       nFreqParams(model->getFreqType()) == 0;
+        if (ndim != 0 && !freeQok) JOLT_DECLINE("free-subst-params");  // +FO / tied-freq / AA-GTR / production free-Q -> CPU
         nFreeQ = freeQok ? ndim : 0;
     }
     int ncat = site_rate->getNRate();
@@ -748,7 +755,8 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     // more than the gamma-residual band, the GPU result is untrustworthy (a kernel/regime failure, not a convergence
     // gap — write-back coherence is otherwise ~1e-12 universally). Return NaN so the caller re-optimises on the CPU
     // from scratch. (Convergence-to-the-CPU-MLE is validated separately: G.6.0b JOLT>=CPU on HKY..GTR; +G/+I rel ~1e-12.)
-    if (rel > 1e-6) {
+    if (!(rel <= 1e-6)) {   // audit RISK-3: NOT(<=) so a NaN/inf rel (cpuLnL underflowed to NaN) ALSO trips the
+                            // fallback and returns NaN BEFORE the setCurScore(cpuLnL) below could poison _cur_score
         static bool warned_mismatch = false;
         if (!warned_mismatch) { warned_mismatch = true;
             printf("[JOLT] write-back MISMATCH rel=%.3e > 1e-6 -> CPU fallback (model=%s)\n", rel, joltModelName.c_str()); }
