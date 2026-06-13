@@ -3683,6 +3683,20 @@ void trimString(string &str);
 */
 int countPhysicalCPUCores();
 
+/**
+    get the process's EFFECTIVE cgroup memory limit (min over the whole cgroup hierarchy: the
+    PBS/Slurm/container/systemd-slice allocation), in bytes, or UINT64_MAX if there is no limit.
+    May be far below the physical RAM getMemorySize() reports on a shared node or constrained desktop.
+*/
+uint64_t getCgroupMemoryLimit();
+
+/**
+    effective available RAM = min(physical, cgroup/job limit). Use this instead of getMemorySize() at
+    memory-sizing decision sites so IQ-TREE honours a PBS/container/slice allocation. Equals
+    getMemorySize() on unconstrained hardware.
+*/
+uint64_t getAvailableMemory();
+
 void print_stacktrace(ostream &out, unsigned int max_frames = 63);
 
 /**

@@ -1470,8 +1470,10 @@ void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
 
         uint64_t mem_size = iqtree.getMemoryRequiredThreaded(max_cats);
         cout << "NOTE: ModelFinder requires " << (mem_size / 1024) / 1024 << " MB RAM!" << endl;
-        if (mem_size >= getMemorySize()) {
-            outError("Memory required exceeds your computer RAM size!");
+        // honour the cgroup/PBS/container allocation, not just physical RAM (a monolithic -m MF at scale on a
+        // shared node would otherwise pass this check against the node's physical RAM and then get cgroup-killed)
+        if (mem_size >= getAvailableMemory()) {
+            outError("Memory required exceeds your available RAM (cgroup/job allocation)! Use CTF (subsample coarse rank) or -mem.");
         }
     }
 #ifdef BINARY32
@@ -7242,8 +7244,8 @@ CandidateModel findMixtureComponent(Params &params, IQTree &iqtree, ModelCheckpo
     
     uint64_t mem_size = iqtree.getMemoryRequiredThreaded(max_cats);
     cout << "NOTE: MixtureFinder " << n_class << "-class models requires " << (mem_size / 1024) / 1024 << " MB RAM!" << endl;
-    if (mem_size >= getMemorySize()) {
-        outError("Memory required exceeds your computer RAM size!");
+    if (mem_size >= getAvailableMemory()) {   // cgroup/job allocation, not just physical RAM
+        outError("Memory required exceeds your available RAM (cgroup/job allocation)!");
     }
 #ifdef BINARY32
     if (mem_size >= 2000000000) {
