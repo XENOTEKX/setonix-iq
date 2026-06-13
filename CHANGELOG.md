@@ -2,6 +2,31 @@
 
 ---
 
+## ✅ AUDIT HARDENING (G.6) — 2 holes found + fixed before the source release — 2026-06-13 (commit `3ec1b5c8`)
+
+An independent adversarial code audit of the G.5.1a + G.6 changeset (`65e45c4c..d5d69b48`) ran before pushing the GPU
+source to GitHub. **Core machinery verdict: CLEAN** — write-back ordering, process-mutex coverage (whole
+`gpu_jolt_optimize` incl. symbol uploads + DevBuf pool + decompose-callback), base-sweep-skip ↔ Q-FD coherence, FP64
+parity, 1-based variable indexing, and the NaN→CPU fallback were all verified; the safety-gate `rel` is a genuine
+GPU-vs-independent-CPU recompute (not a tautology). **Two real holes, both fixed:**
+
+- **RISK-1** — `phylotreegpu.cpp:583`: the free-Q eligibility gate excluded only `FREQ_ESTIMATE`, not the DNA
+  **tied-frequency** types (`+FRY`/`+F1112`/… = `FREQ_DNA_*`) whose `getNDim()` packs 1–3 *frequency* params into the
+  Q-vector tail — the launcher would mis-clamp them as exchangeabilities (`[1e-4,100]` vs the correct `~[0,1]`),
+  yielding a coherent-but-**suboptimal** lnL that passes the coherence gate and feeds wrong BIC. Not in the default
+  `-m MF` set (no live regression), but a silent-correctness hole for explicit user models. **Fix:** require
+  `nFreqParams(getFreqType()) == 0` (0 for `+FQ`/`+F` → default set unchanged; >0 for tied → decline to CPU).
+- **RISK-3** — `phylotreegpu.cpp:751`: `rel > 1e-6` is *false* for NaN `rel`, so the gate didn't fire and then
+  `setCurScore(NaN)` poisoned `_cur_score`. **Fix:** `if (!(rel <= 1e-6)) return NAN;` (returns before `setCurScore`).
+
+**Validated** (job 170863975, V100, rebuilt binary): `GTR+F+G4` engages rel 5.193e-12 (== pre-fix), `GTR+F+I+G4`
+engages, `JOLT_NO_FREEQ` declines — regression-free. **Next steps (audit-informed):** G.5.1b (+R JOLT) is the critical
+path; fold the CPU-optimum comparison gate into the free-Q path (close RISK-2 coherence-vs-optimality); runtime-confirm
+the tied-freq decline; G.5.2 tiling (pending the AA-10M result); port the native-BIC gate into the production CTF path.
+Full detail + ranked next steps: research/Modelfinder/part9 §IX.10.
+
+---
+
 ## ✅ DNA FREE-Q (G.6) COMPLETE — DNA `-m MF` coverage 8 % → ~89 % on the GPU — 2026-06-13
 
 The free-Q DNA gap (62-of-90 declines = every HKY/TN/…/GTR matrix, the eigensystem MOVES when its exchangeabilities are

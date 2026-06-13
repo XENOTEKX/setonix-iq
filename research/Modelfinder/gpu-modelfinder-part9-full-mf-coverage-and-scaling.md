@@ -373,3 +373,56 @@ making DNA-MF *meaningful* on the GPU. It does **NOT** change the part5 mutex-se
 still lives in the **CTF top-k≤3 refine** (depth), not full-set breadth. Free-Q makes the *refine* model-complete for DNA;
 the throughput verdict (1 GPU beats a small node count / the stock tool, not a large cluster at full-data breadth) is
 unchanged. The clean unconditional GPU win remains 1M/10M scale (bandwidth/efficiency), still gated on the unbuilt tiling.
+
+---
+
+## IX.10 Independent code audit + hardening (2026-06-13, commit `3ec1b5c8`)
+
+An independent adversarial code audit of the G.5.1a + G.6 changeset (commits `65e45c4c..d5d69b48`) was run before the
+GitHub source release. **Verdict: the core machinery is CLEAN** — write-back ordering (Q → pinv → α → `clearAllPartialLH`
+→ fresh `computeLikelihood`), the process-mutex coverage of the *entire* `gpu_jolt_optimize` body (device constant
+symbols + the persistent `DevBuf` pool + the host decompose-callback that mutates the per-thread candidate model),
+the base-sweep-skip ↔ Q-FD state coherence (`qApply(qcur)` restores base Q after the FD block AND on the no-accept
+break; skip disabled for `nFreeQ>0`), FP64 throughout the reduction/gradient paths, the 1-based `getVariables()`
+indexing, and the NaN→CPU fallback wiring (`modelfactory.cpp`) were all verified correct. The safety-gate `rel` was
+confirmed to be a *genuine GPU-vs-independent-CPU recompute* (not a tautology). **Two real holes were found and fixed:**
+
+- **RISK-1 (silent-correctness, non-default exposure) — `phylotreegpu.cpp:583`.** The free-Q eligibility predicate
+  excluded only `FREQ_ESTIMATE` (+FO), **not the DNA tied-frequency types** (`+FRY`/`+F1112`/… = `FREQ_DNA_*`). For
+  those, `getNDim()` includes 1–3 **free frequency** parameters which `gpuGetFreeParams` packs into the tail of the `q`
+  vector; the launcher then treats every entry as an **exchangeability** — FD-stepping it and clamping to `[1e-4,100]`
+  instead of the correct frequency bound `~[0,1]`. The result is a *coherent-but-suboptimal* lnL that **passes the
+  write-back coherence gate** (which checks GPU≡CPU at the written-back point, not optimality) and feeds a wrong value
+  into BIC/AIC ranking. These types are **not in the default `-m MF` DNA freq set** (`{FQ,F}`), so there is no live
+  regression — but the gate was not defensive. **Fix:** add `nFreqParams(model->getFreqType()) == 0` to `freeQok`.
+  `nFreqParams` returns 0 for `+FQ`/`+F` (the default set is unchanged — still 70 engage) and >0 only for tied types
+  (which now correctly decline to the CPU). Statically confirmed against `tools.cpp:8207`.
+
+- **RISK-3 (defensive) — `phylotreegpu.cpp:751`.** `if (rel > 1e-6)` is **false when `rel` is NaN** (e.g. the CPU
+  recompute underflowed), so the safety gate did **not** fire — and worse, it then fell through to
+  `setCurScore(cpuLnL)` = `setCurScore(NaN)`, **poisoning `_cur_score`** before returning. **Fix:**
+  `if (!(rel <= 1e-6)) return NAN;` — a NaN/inf `rel` now trips the CPU fallback and returns **before** `setCurScore`.
+
+**Validation (job 170863975, V100, rebuilt binary md5 `091942126e…`):** `GTR+F+G4 -te` engages at rel **5.193e-12**
+(identical to the pre-fix `170796516` rel 5.19e-12 ⇒ the RISK-1 predicate did not touch the `+F` path),
+`GTR+F+I+G4 -te` engages (free-Q+I jointly), `JOLT_NO_FREEQ` declines. CPU path untouched (all changes inside the
+`params->jolt` GPU path). *NIT acknowledged:* the `kj_derv_fused` `lcc` reassociation (`65e45c4c`) makes the
+post-G.5.1a fixed-Q +G path agree within ~1e-16 (not literally bit-identical); the docs already report it as
+rel ≤ 2.4e-12, so no overclaim.
+
+### IX.10.1 Next steps (ranked, audit-informed)
+1. **G.5.1b — +R / +I+R in-tree JOLT (THE critical path).** The only remaining AA `-m MF` gap (the 8 `+R` declines) and
+   the load-bearing multimodal-convergence piece (standalone cold/warm-vs-CPU-EM harness → gate flip + the CPU-optimum
+   comparison gate). The gradient (`gz_c`) is FD-validated (G.5.1a); the optimiser branch is increment 2.
+2. **Close RISK-2 (coherence-vs-optimality) generally.** The free-Q safety gate currently checks GPU≡CPU *coherence*,
+   relying on G.6.0b's offline JOLT≥CPU validation for *optimality*. Fold the **CPU-optimum comparison gate** (assert
+   JOLT lnL ≥ CPU-refined − `modelfinder_eps`, else NaN→CPU) — designed in IX.8.3 for +R — into the free-Q path too,
+   so a future regime that converges to a worse-than-CPU optimum is caught per-candidate at runtime, not just offline.
+3. **Runtime confirmation of the RISK-1 fix.** A `JOLT_DEBUG=1 -m MF` DNA run to confirm `freeQok` never fires with
+   `nFreqParams>0` on the default set, plus an explicit `GTR+FRY+G4 -te` that must now log `decline reason=free-subst-params`.
+4. **G.5.2 — VRAM tiling of the postorder arena.** Gated on the AA-10M `-m MF` result (job 170856902): if 10M LG+G4/
+   LG+I+G4 fits H200 (~58 GB est.) tiling is deferrable; if it OOMs, tiling moves onto the critical path for scale.
+5. **Port the native-BIC gate + rate-het detector + wall budget into the production CTF path** (IX.7.1 #4) — the §X.5.5
+   fix currently lives only in the benchmark scripts.
+6. **Verify the audit's two static-only items:** `cuobjdump` confirming `kj_derv_fused` stays 32 regs / 100 % occupancy,
+   and a wider fixed-Q self-check sweep confirming the ~1e-16 reassociation bound holds across (ncat, nptn) regimes.
