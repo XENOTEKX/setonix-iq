@@ -189,6 +189,7 @@ All runs select the **same best model, LG+G4.**
 | **GPU CTF (+I 4-start)** | 1× H200 | LG+G4 ✓ | **893 s** ✓ (job 170581208) | n/a (coarse tree) | 893 s | −78605275.637 | **67.89 Wh** (244 kJ, 280 W mean, 872 s) | ⏳ |
 | **GPU CTF (+I 4-start)** | 1× A100-80 | LG+G4 ✓ | **1504 s** ✓ (job 170581209) | n/a (coarse tree) | 1504 s | −78605275.637 | **81.69 Wh** (294 kJ, 199 W mean, 1478 s) | — |
 | **GPU CTF (+G.5.0 reduction)** | 1× A100-80 | LG+G4 ✓ | **1355 s** ✓ (job 170636493) — **beats np8 1.07×** | n/a (coarse tree) | 1355 s | −78605275.637 | **73.24 Wh** (264 kJ, 198 W mean) | — |
+| **GPU CTF (+PartB+fusion, `frozen_ab`)** | 1× A100-80 | LG+G4 ✓ | **1139 s** (job 170861889) — coarse 170 + refine 969; **np16 0.99× → does NOT beat 16 nodes** | n/a (coarse tree) | 1139 s | −78605275.637 | **64.58 Wh** (208 W mean, 1116 s) | — |
 | CPU `-m TEST` np1 | 1 SPR node | LG+G4 | 5119.9 s | 15060.6 s | 20180.5 s | −78605196.59 | — | **0.79 kWh (MF only)** ‡ |
 | CPU `-m TEST` np2 | 2 SPR nodes | LG+G4 | 3076.9 s | 7868.9 s | 10945.8 s | −78605196.44 | — | ~3.9 kWh (est.) |
 | CPU `-m TEST` np4 | 4 SPR nodes | LG+G4 | 1974.5 s (meas. 1985) | 3982.1 s | 5956.6 s (meas. 5994) | −78605196.45 | — | **4.18 kWh** ✓ (job 170582814) |
@@ -208,6 +209,15 @@ the winner's topology (the deferred JOLT tree-search hook — the CPU "tree-sear
 costs the CPU: 1.3–15 k s). **This is why the GPU row's "tree-search wall" is n/a, not 0.**
 
 **Headline (measured, updated 2026-06-12):** **1 H200 GPU ModelFinder (CTF, +I 4-start, 893 s) beats all CPU node counts on MF wall and beats np16 overall**: 3.45× vs np2, 2.21× vs np4, 1.62× vs np8, **1.26× vs np16** — picking the correct model (LG+G4). The 4-start +I fix (G.4.3c, validated job 170580368) cut the wall 1994→893 s by eliminating 6 redundant pinv restart sweeps (10→4; single-start was rejected by the multimodal gate: 39.5-nat loss at pinv≈0.5). GPU energy: **67.89 Wh measured** (67.8 GB peak, 60% utilisation). The GPU does **not** run the tree-search phase at 1M (CTF is MF-equivalent only; deferred GPU tree-search hook is next); against the *full* `-m TEST` wall the CPU's tree search dominates (1.3–15 k s depending on np) and is not yet contested on GPU.
+
+**A100 progression — honest update (2026-06-13, job 170861889):** the `-m TEST` CTF was re-run on A100 with the
+optimisation-frozen `frozen_ab` binary (G.5.0 PartB + kernel-fusion + base-sweep-skip + `d_theta`-reclaim) — the
+same binary as the `-m MF` parity runs. Result: **1139 s** (coarse 170 + refine 969), winner LG+G4 ✓, 64.58 Wh.
+PartB+fusion improved A100 **1355 → 1139 s (~16 %)**, but it is **np16 0.99× — A100 still does NOT beat 16 nodes**
+(it ties/loses by ~1.5 %, while beating np8 1.27×, np4 1.73×). **H200 (893 s) remains the only GPU that beats np16
+(1.26×).** No overclaim: the PartB+fusion lever closed most of the A100↔np16 gap but not all of it. (The `-m TEST`
+refine here is 969 s vs the `-m MF` run's 531 s because the v2 `-m TEST` script refines all 3 top-k models, whereas
+the `-m MF` script's rate-het detector skips the doomed 3rd — a script-design difference, not a binary difference.)
 
 **Energy verdict (measured, 2026-06-12).** The ModelFinder phase: **H200 CTF = 67.89 Wh** vs CPU MF phase — np1 791.8 Wh (**11.7×**), np4 ~1.38 kWh (**~20×**), np8 ~1.97 kWh (**~29×**). The H200 draws ~280 W vs ~600–700 W *per* SPR node, AND finishes the MF faster than even 16 nodes — so there is **no CPU node count that is simultaneously faster and lower-energy** than the GPU. Against the *full* `-m TEST` (MF + tree, CPU-measured): np4 **4.18 kWh**, np8 **4.93 kWh** for one model-selection-plus-tree on 1M AA; the GPU's full-pipeline energy awaits the JOLT tree-search hook, but the MF phase alone already shows a 12–29× per-phase energy advantage. A100 CTF = 1504 s / 81.69 Wh (slower + a touch more energy than H200, as expected). **CPU energy grows ~linearly with node count while wall-time saturates** (np16 is only 2.7× faster than np2 but burns ~1.7× the energy of np4) — the faster you push the CPU cluster, the worse its energy gap vs the single GPU.
 
