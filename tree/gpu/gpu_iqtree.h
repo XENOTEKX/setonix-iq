@@ -115,6 +115,8 @@ double gpu_jolt_optimize(
     const double* base_invar,    // nptn (pinv-independent invariant base = ptn_invar/pinv; 0 if not +I)
     double pinv0, int optPinv,   // initial pinv; optimise it jointly if optPinv (else held at pinv0; 0 => no +I)
     double pinvMin, double pinvMax, // clamp bounds (MIN_PINVAR, aln->frac_const_sites)
+    const double* catRate0,      // G.5.1: ncat FreeRate rates[c] (nullptr unless freeRate); seeds rates directly
+    int freeRate,                // G.5.1: 1 => +R FreeRate mode (catRate=catRate0, catProp=weights, no alpha)
     double* out_brlen,           // nnodes (out: optimised parentLen per node; root entry untouched)
     double* out_alpha,           // out: optimised alpha (unchanged if !optAlpha)
     double* out_pinv,            // out: optimised pinv (unchanged if !optPinv)
