@@ -38,6 +38,7 @@
     #endif
 #endif
 #include <thread>
+#include <fstream>
 
 
 #if defined(Backtrace_FOUND)
@@ -58,6 +59,93 @@ extern void printCopyright(ostream &out);
 #if defined(WIN32)
 #include <sstream>
 #endif
+
+#if defined(__linux__)
+// Read one cgroup memory-limit file (v2 "memory.max" parses "max"=unlimited; v1 reads a uint).
+// Returns the value in bytes, or UINT64_MAX if absent / unlimited / unreadable.
+static uint64_t readCgroupLimitFile(const std::string &full, bool is_v2) {
+    std::ifstream mf(full.c_str());
+    if (!mf.is_open()) return UINT64_MAX;
+    if (is_v2) {
+        std::string val; mf >> val;
+        if (val.empty() || val == "max") return UINT64_MAX;
+        uint64_t x = strtoull(val.c_str(), nullptr, 10);
+        return (x > 0) ? x : UINT64_MAX;
+    } else {
+        uint64_t x = 0;
+        if (!(mf >> x) || x == 0) return UINT64_MAX;
+        return x;
+    }
+}
+// Walk `cgpath` and ALL its ancestors up to the root, reading `file` at each level under `base`,
+// and return the MINIMUM limit found. The kernel enforces the tightest limit anywhere on the path,
+// so a leaf scope that reads "unlimited" can still be capped by a parent slice (proven on Gadi login
+// nodes: session.scope=unlimited but the parent user-NNNN.slice=4 GB). A sentinel (>=1<<62) is "no limit".
+static uint64_t walkCgroupHierarchy(const std::string &base, std::string cgpath, const std::string &file, bool is_v2) {
+    uint64_t limit = UINT64_MAX;
+    for (;;) {
+        uint64_t x = readCgroupLimitFile(base + cgpath + "/" + file, is_v2);
+        if (x < (uint64_t(1) << 62) && x < limit) limit = x;   // ignore the "unlimited" sentinel
+        if (cgpath.empty()) break;                              // just read the root ("") -> done
+        size_t s = cgpath.find_last_of('/');
+        cgpath = (s == std::string::npos) ? std::string() : cgpath.substr(0, s);  // ascend one level
+    }
+    return limit;
+}
+#endif
+
+/**
+ * Read the calling process's EFFECTIVE cgroup memory limit (the PBS/Slurm/container/systemd-slice
+ * allocation), which can be far below the physical RAM that getMemorySize() reports on a shared node
+ * or a constrained desktop. Returns the limit in bytes, or UINT64_MAX if there is no limit / it cannot
+ * be determined. Supports cgroup v2 (memory.max) and v1 (memory.limit_in_bytes), and takes the MINIMUM
+ * over the whole cgroup hierarchy (the kernel enforces the tightest limit on the path -- a leaf that
+ * reads "unlimited" can be capped by a parent slice). Linux only; every failure path returns UINT64_MAX
+ * (never a small bogus value), so on unconstrained hardware this is a no-op (min(physical, MAX)=physical).
+ * Verified on Gadi PBS (cgroup v1): /proc/self/cgroup has "<n>:memory:/pbspro.service/jobid/<id>" and
+ * .../memory.limit_in_bytes is the requested -l mem (e.g. 42949672960 = 40 GB); and on a login node the
+ * parent user-NNNN.slice carries a 4 GB cap a leaf-only read would have missed.
+ */
+uint64_t getCgroupMemoryLimit() {
+#if defined(__linux__)
+    std::ifstream cg("/proc/self/cgroup");
+    if (!cg.is_open()) return UINT64_MAX;
+    std::string line, v2path, v1path;
+    bool have_v2 = false, have_v1 = false;
+    while (std::getline(cg, line)) {
+        // each line: "<hierarchy-id>:<controllers>:<path>"
+        size_t c1 = line.find(':');
+        if (c1 == std::string::npos) continue;
+        size_t c2 = line.find(':', c1 + 1);
+        if (c2 == std::string::npos) continue;
+        std::string controllers = line.substr(c1 + 1, c2 - c1 - 1);
+        std::string path = line.substr(c2 + 1);
+        if (controllers.empty()) { v2path = path; have_v2 = true; }          // "0::<path>" => cgroup v2
+        else if (("," + controllers + ",").find(",memory,") != std::string::npos) {  // exact token match
+            v1path = path; have_v1 = true;                                   // v1 memory controller
+        }
+    }
+    cg.close();
+    uint64_t limit = UINT64_MAX;
+    if (have_v2)                          limit = walkCgroupHierarchy("/sys/fs/cgroup",        v2path, "memory.max",           true);
+    if (limit == UINT64_MAX && have_v1)   limit = walkCgroupHierarchy("/sys/fs/cgroup/memory", v1path, "memory.limit_in_bytes", false);
+    return limit;
+#else
+    return UINT64_MAX;
+#endif
+}
+
+/**
+ * Effective available RAM for sizing likelihood memory: min(physical, cgroup/job limit).
+ * Use this (not getMemorySize()) anywhere IQ-TREE decides whether to switch to memory-saving mode or
+ * errors that "RAM is below requirement", so it honours a PBS/container/slice allocation rather than
+ * the (much larger) physical RAM of a shared node. On unconstrained hardware it equals getMemorySize().
+ */
+uint64_t getAvailableMemory() {
+    uint64_t phys = getMemorySize();
+    uint64_t cg   = getCgroupMemoryLimit();
+    return (cg < phys) ? cg : phys;
+}
 
 /********************************************************
         Miscellaneous
