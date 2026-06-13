@@ -2,6 +2,31 @@
 
 ---
 
+## ⚠️ AA-10M `-m MF` SCALE TEST (H200) — coarse OK, refine OOM'd on **HOST RAM** (not VRAM) — 2026-06-13 (job 170856902)
+
+The AA-**10M**-site `-m MF` CTF was run on 1× H200 (full parity binary `frozen_ab`, 9,251,287 distinct patterns).
+**Honest result: the coarse/selection stage works at 10M, but the full-data refine could not run on a single-GPU
+node's RAM share — and the binding limit is HOST memory, not GPU VRAM.**
+
+- **Coarse `-m MF` (5000-site subsample): worked** — 420 s, **116/122 GPU engagements** (scale-invariant coverage),
+  native-BIC top-3 = **LG+G4, LG+I+G4, LG+R4(skip)** — the **same correct selection as 1M** (RATE_HET_FLAG=False,
+  LG+G4 leads LG+R4 by 43 nat). Validates that selection is scale-stable (supports the subsample-sufficiency thesis).
+- **Full-data refine: KILLED (OOM).** Both LG+G4 and LG+I+G4 refines died with `JOLT_calls=0` — the `iqtree3` process
+  hit **RSS 193 GB > the 180 GB allocation** while **GPU memory was 520 MB and GPU util 0 %**. JOLT *never engaged*;
+  the process was killed during **host-side setup**, before reaching the GPU.
+- **Reframed bottleneck:** the ~58 GB GPU-VRAM estimate was correct — **VRAM was never the limit.** At 10M, IQ-TREE's
+  CPU-side memory (`initializeAllPartialLh` + the post-write-back **self-check's full host `computeLikelihood`**) needs
+  **~560 GB** (the 1M refine used ~57 GB host × ~9.8× patterns) — far beyond a single-GPU node's 180 GB share. So the
+  10M scaling wall is **host RAM / the host self-check**, *not* the GPU arena that G.5.2 (VRAM tiling) was scoped for.
+
+**Consequence for next steps:** the clean 10M GPU win needs either (a) a **fat-RAM allocation** (~600 GB+ host, i.e.
+a multi-GPU node-share just for the RAM) or (b) a **host-memory-lean JOLT refine** — sample/skip the host
+`computeLikelihood` self-check at extreme `nptn` (it is the dominant host cost), keeping only the GPU's ~58 GB VRAM
+need. VRAM tiling alone would NOT fix this. (CPU 10M `-m MTEST` baseline by sa0557 was still running, so no
+GPU-vs-CPU ratio yet.) Detail: part9 §IX.10.1.
+
+---
+
 ## ✅ AUDIT HARDENING (G.6) — 2 holes found + fixed before the source release — 2026-06-13 (commit `3ec1b5c8`)
 
 An independent adversarial code audit of the G.5.1a + G.6 changeset (`65e45c4c..d5d69b48`) ran before pushing the GPU

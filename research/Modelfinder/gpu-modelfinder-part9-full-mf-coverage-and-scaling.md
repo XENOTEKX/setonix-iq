@@ -420,8 +420,16 @@ rel ≤ 2.4e-12, so no overclaim.
    so a future regime that converges to a worse-than-CPU optimum is caught per-candidate at runtime, not just offline.
 3. **Runtime confirmation of the RISK-1 fix.** A `JOLT_DEBUG=1 -m MF` DNA run to confirm `freeQok` never fires with
    `nFreqParams>0` on the default set, plus an explicit `GTR+FRY+G4 -te` that must now log `decline reason=free-subst-params`.
-4. **G.5.2 — VRAM tiling of the postorder arena.** Gated on the AA-10M `-m MF` result (job 170856902): if 10M LG+G4/
-   LG+I+G4 fits H200 (~58 GB est.) tiling is deferrable; if it OOMs, tiling moves onto the critical path for scale.
+4. **Scale (10M) — the bottleneck is HOST RAM, not GPU VRAM (measured, job 170856902).** The AA-10M `-m MF` run
+   settled this: the coarse/selection stage works (420 s, 116/122 engage, LG+G4 #1 — same as 1M), but **both
+   full-data refines OOM'd on HOST memory** (`iqtree3` RSS 193 GB > the 180 GB allocation; **GPU mem 520 MB, util
+   0 % — JOLT never engaged**, killed in host setup). The ~58 GB VRAM estimate held — **VRAM was never the limit.**
+   At 10M, IQ-TREE's CPU-side `initializeAllPartialLh` + the post-write-back **self-check's full host
+   `computeLikelihood`** need **~560 GB** (1M's ~57 GB host × ~9.8× patterns). ⇒ **G.5.2 (VRAM tiling) does NOT address
+   the 10M wall.** The real levers are: (a) a **host-memory-lean JOLT refine** — sample/skip the host self-check at
+   extreme `nptn` (it is the dominant host cost; keep the GPU's ~58 GB VRAM path), and/or (b) a **fat-RAM allocation**
+   (~600 GB+ host = a multi-GPU node-share for the RAM). VRAM tiling stays relevant only for the +R10 ladder on the
+   smaller A100-80 at 1M, not for 10M scale.
 5. **Port the native-BIC gate + rate-het detector + wall budget into the production CTF path** (IX.7.1 #4) — the §X.5.5
    fix currently lives only in the benchmark scripts.
 6. **Verify the audit's two static-only items:** `cuobjdump` confirming `kj_derv_fused` stays 32 regs / 100 % occupancy,
