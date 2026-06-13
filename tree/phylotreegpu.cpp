@@ -571,11 +571,12 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     int ns = aln->num_states;
     if (ns != 4 && ns != 20) JOLT_DECLINE("num-states");
     if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) JOLT_DECLINE("nonrev/mixture/ssm");
-    // G.6.0b: free substitution params (DNA HKY..GTR) — the eigensystem MOVES, so JOLT FD-optimises them via the
-    // decompose callback. Admitted ONLY under JOLT_FREEQ during validation (the production gate flip + the
-    // CPU-optimum safety gate are G.6.1). Restricted to ns==4 reversible, getNDim()<=5, FIXED freqs (exclude +FO,
-    // FREQ_ESTIMATE, whose free freq dims are NOT yet handled). AA fixed-Q (getNDim()==0) is unaffected.
-    static const bool JOLT_FREEQ_EN = (getenv("JOLT_FREEQ") != nullptr);
+    // G.6.1: free substitution params (DNA HKY..GTR) — the eigensystem MOVES, so JOLT FD-optimises them via the
+    // decompose callback. ON BY DEFAULT (validated job 170795329: DNA -m MF 70 engage / 9 decline [8 +R + 1 pure-+I],
+    // best-by-BIC == CPU F81+F+G4, worst write-back rel 6.2e-12, ZERO mismatch). JOLT_NO_FREEQ disables it (debug/A-B).
+    // Restricted to ns==4 reversible, getNDim()<=5, FIXED freqs (exclude +FO, FREQ_ESTIMATE, whose free freq dims are
+    // NOT yet handled). AA fixed-Q (getNDim()==0) is unaffected.
+    static const bool JOLT_FREEQ_EN = (getenv("JOLT_NO_FREEQ") == nullptr);
     int nFreeQ = 0;
     {
         int ndim = model->getNDim();
@@ -742,6 +743,17 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
                joltLnL, cpuLnL, rel, (rel <= 1e-9 ? "PASS" : (rel <= 1e-6 ? "OK(gamma-resid)" : "MISMATCH")),
                alpha0, (ncat>1?site_rate->getGammaShape():0.0),
                pinv0, (optPinv?site_rate->getPInvar():0.0), (optPinv?" +I":"")); }
+
+    // G.6.1 safety gate: if the fresh CPU recompute disagrees with the JOLT lnL at the SAME written-back params by
+    // more than the gamma-residual band, the GPU result is untrustworthy (a kernel/regime failure, not a convergence
+    // gap — write-back coherence is otherwise ~1e-12 universally). Return NaN so the caller re-optimises on the CPU
+    // from scratch. (Convergence-to-the-CPU-MLE is validated separately: G.6.0b JOLT>=CPU on HKY..GTR; +G/+I rel ~1e-12.)
+    if (rel > 1e-6) {
+        static bool warned_mismatch = false;
+        if (!warned_mismatch) { warned_mismatch = true;
+            printf("[JOLT] write-back MISMATCH rel=%.3e > 1e-6 -> CPU fallback (model=%s)\n", rel, joltModelName.c_str()); }
+        return (double)NAN;
+    }
 
     setCurScore(cpuLnL);
     return cpuLnL;
