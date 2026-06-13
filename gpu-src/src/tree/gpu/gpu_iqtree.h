@@ -18,6 +18,12 @@
 extern "C" {
 #endif
 
+// Phase G.6 — host callback that re-decomposes the rate matrix for a trial free-Q parameter vector. The launcher
+// calls it inside the FD/LM loop whenever an exchangeability changes: q[nFreeQ] (the model's free params) -> the
+// fresh eigensystem eval[ns], U[ns*ns] (eigenvectors), Uinv[ns*ns] (inverse eigenvectors), all row-major. ctx is the
+// opaque host context (the live model). Plain C ABI so the nvcc TU and the host C++ agree without mangling.
+typedef void (*jolt_qdecompose_fn)(void* ctx, const double* q, double* eval, double* U, double* Uinv);
+
 // Phase G.1.0 build-scaffold diagnostic. Enumerates the CUDA device(s), prints
 // device name / compute capability / VRAM, launches a trivial kernel, verifies
 // it executed (marker readback) and that cudaGetLastError() == cudaSuccess,
@@ -115,6 +121,16 @@ double gpu_jolt_optimize(
     const double* base_invar,    // nptn (pinv-independent invariant base = ptn_invar/pinv; 0 if not +I)
     double pinv0, int optPinv,   // initial pinv; optimise it jointly if optPinv (else held at pinv0; 0 => no +I)
     double pinvMin, double pinvMax, // clamp bounds (MIN_PINVAR, aln->frac_const_sites)
+    const double* catRate0,      // G.5.1: ncat FreeRate rates[c] (nullptr unless freeRate); seeds rates directly
+    int freeRate,                // G.5.1: 1 => +R FreeRate mode (catRate=catRate0, catProp=weights, no alpha)
+    // G.6 — DNA free-Q (the exchangeabilities are optimised; the eigensystem MOVES). nFreeQ free params q0[0..nFreeQ-1]
+    // (the model's getVariables()[1..nFreeQ], raw rates), perturbed by FD inside the LM loop; each change re-decomposes
+    // the rate matrix via the host callback (which applies param_spec + the gauge) and re-uploads eval/U/Uinv. nFreeQ==0
+    // => fixed-Q (AA / DNA JC,F81), the launcher is byte-unchanged. freeRate and nFreeQ are mutually exclusive.
+    int nFreeQ,                  // number of free exchangeabilities (0 = fixed-Q; 1..5 for DNA HKY..GTR)
+    const double* q0,            // nFreeQ initial free params (nullptr if nFreeQ==0)
+    jolt_qdecompose_fn qdecompose, void* qctx,   // ctx-bound host callback: q[nFreeQ] -> eval[ns],U[ns*ns],Uinv[ns*ns]
+    double* out_q,               // nFreeQ (out: optimised free params; untouched if nFreeQ==0)
     double* out_brlen,           // nnodes (out: optimised parentLen per node; root entry untouched)
     double* out_alpha,           // out: optimised alpha (unchanged if !optAlpha)
     double* out_pinv,            // out: optimised pinv (unchanged if !optPinv)

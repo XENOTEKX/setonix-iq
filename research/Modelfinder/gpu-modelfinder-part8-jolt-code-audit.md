@@ -142,3 +142,55 @@ a 39.5-nat correctness regression a collapsed-only test would have shipped.**
 **Bottom line (measured):** correctness banked; **1 H200 beats 2 nodes (1.54×) today, un-optimized**; the +I
 restart redundancy (#0) and the on-device reduction (#1) are two independent levers that each push past 4 nodes.
 The 2-node bar is met; 4 nodes is one validated optimization away.
+
+---
+
+## VIII.5 SECOND-ROUND AUDIT (2026-06-13) — the fused kernel reviewed honestly, and where the wall actually is
+
+After G.5.0 Part A+B and the gradient-kernel fusion landed, the user asked the right question: *the fusion barely
+moved the wall — is `kj_derv_fused` optimal, or can it be improved?* The honest answer needed hard data, so I read the
+**per-kernel register/occupancy out of the frozen cubin** (`cuobjdump --dump-resource-usage`, sm_80/A100):
+
+| kernel | role | **REG (sm_80)** | spill (STACK) | occupancy implication (256-thr block, A100 64K reg/SM) |
+|---|---|---:|---:|---|
+| **`k1_node`** | postorder lnL (the DOMINANT sweep) | **56** | **160 B** | 65536/(256·56)=**4 blocks/SM = 32/64 warps = 50 %** ← the binding bound |
+| `kj_pre` | preorder gradient partial | 48–56 | 320 B | ~50 % (same ceiling) |
+| **`kj_derv_fused`** | fused theta+derv+ratenum | **32** | 0 | 65536/(256·32)=**8 blocks/SM = 64/64 warps = 100 %** |
+| `kj_derv` / `kj_theta` / `kj_ratenum` (now dead) | the 3 it replaced | 32 each | 0 | 100 % each |
+| `k2_derv`, `k_leaf_eig`, reductions | scaffolding | 31–40 | 0 | ≥80 % |
+
+**Verdict on `kj_derv_fused`: it is essentially optimal for what it is, and the small wall effect is EXPECTED, not a
+defect.**
+1. **Register-neutral (32 = the same as the 3 separate kernels).** My pre-measurement worry — that fusing would raise
+   register pressure and *lower* occupancy (the real bound) — is **refuted by the cubin**: the compiler keeps the fused
+   inner loop at 32 regs (theta lives in one register `th`, consumed immediately into the lh/rc/d2 accumulators). So
+   the fusion bought the bandwidth saving **for free**, no occupancy penalty. At 32 regs it can reach 100 % occupancy.
+2. **Memory access is already ideal:** `node[o]`/`dad[o]` with `o=(c·ns+x)·nptn+ptn` are **coalesced** (adjacent
+   threads → adjacent `ptn` → adjacent addresses); `g_val0/1/2`/`g_rscale` are **constant-cache broadcasts** (loop-
+   uniform); `node`+`dad` are each read **exactly once** per element (the theoretical minimum). There is no further
+   fusion or access-pattern change to *this* kernel that would matter.
+3. **Why it barely moved the wall — the K4 lesson, re-confirmed by measurement.** The fusion attacks **VRAM traffic**
+   (it removed the 601 MB `d_theta` round-trip = 5→2 transactions/element ≈ 2.5×) and **launch count** (3→1 launches/
+   edge). But **P3.0b measured the binding resource as memory *latency* + scheduler starvation on `k1_node`** (DRAM
+   33 %, issue_active 7.8 %, 50 % occ), and **K3 showed launch latency is already hidden**. Fusion saved two
+   non-binding resources. It is a **correct, clean keeper** (real traffic cut + 601 MB VRAM reclaimed + tidier code),
+   **not a wall lever** — exactly as the K4 fusion (98→42 launches) was wash-to-loss at 100K for the same reason.
+
+**Where the wall actually is — `k1_node`'s 56-register / `STACK:160` spill.** The dominant postorder kernel carries a
+per-thread `double prod[NS_MAX]` (`NS_MAX=20` ⇒ 160 B), which **spills to local memory and pushes it to 56 regs ⇒
+4 blocks/SM ⇒ 50 % occupancy** — *precisely* the P3.0b bound (the kernel is latency-bound and the schedulers sit idle
+~92 % of cycles for want of eligible warps). **The only lever on the real bound is the P2∥ occupancy attack:**
+thread-per-(pattern×category×output-state), which collapses `prod[20]` to a scalar accumulator, eliminates the spill,
+and drops registers below the 32-reg / 8-block / 100 %-occupancy line — potentially **doubling** the resident warps
+that hide the memory latency. It is HIGH-effort and an **honest coin-flip** (the NS=20 matvec may be too small to
+amortize the cross-state reduction), but it is the one change that touches what P3.0b proved is binding. **More
+gradient-side fusion cannot help; occupancy can.**
+
+**Two easy wins banked this round (validating, job 170730082):**
+- **part8 #2 base-sweep skip** — `computeGradient` no longer rebuilds echild + re-runs the postorder at the base point
+  when the immediately-preceding accepted `evalLnL` already built exactly that point (guarded by an exact
+  (brlen,α,pinv) comparison; falls back to rebuild on any mismatch). This skips **~98 `k1_node` launches per gradient
+  iteration** — i.e. one full sweep of *the bottleneck kernel* every iter — and is **bit-exact** (it removes a
+  redundant identical computation). This is a *real* wall win, unlike the fusion, because it removes `k1_node` work.
+- **`d_theta` reclaim** — the 601 MB theta arena is dead post-fusion; no longer allocated (VRAM/capability margin for
+  +R10 / A100-80, not wall).

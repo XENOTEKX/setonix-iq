@@ -28,6 +28,7 @@
 
 #include "phylotree.h"
 #include "phylonode.h"
+#include <cstring>   // G.6: memcpy in the free-Q decompose callback
 #include "model/modelsubst.h"
 #include "model/rateheterogeneity.h"
 #include "model/rategamma.h"   // G.4.3b: GAMMA_CUT_MEAN — the robust mean-gamma discriminator (isGammaRate())
@@ -382,6 +383,66 @@ void PhyloTree::gpuDervCrossCheckOnce() {
 }
 
 // ============================================================================================================
+// G.6.0a — one-shot GPU free-Q gradient cross-check (gated by env JOLT_QGRADCHECK). For a reversible DNA free-Q
+// model (HKY..GTR, fixed freqs, no +I), this is the de-risk BEFORE building the G.6.0b free-Q optimiser: it
+// proves the GPU computes lnL CORRECTLY under a MOVING eigensystem (every FD perturbation of a free exchange-
+// ability re-decomposes the 4x4 Q and re-uploads eval/U/Uinv). For each free param (perturbed in rate-class
+// space via the model's param_spec, so HKY's kappa moves A-G and C-T together), we compare GPU clean-room lnL
+// vs CPU computeLikelihood at the perturbed Q, and the FD gradient GPU-vs-CPU. GATE: |GPU-CPU|/|CPU| <= 1e-9 at
+// the base AND every perturbed Q (the FD-grad then matches by construction). Read-only: the model is fully
+// restored. No CPU-path effect (env-gated, --gpu only).
+// ============================================================================================================
+void PhyloTree::gpuFreeQGradCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    if (getenv("JOLT_QGRADCHECK") == nullptr) return;
+    if (!model || !site_rate || !aln) { printf("[QGRADCHECK] skipped (model/tree not ready)\n"); return; }
+    int ns = aln->num_states;
+    if (ns != 4 && ns != 20) { printf("[QGRADCHECK] skipped (ns=%d not in {4,20})\n", ns); return; }
+    if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) {
+        printf("[QGRADCHECK] skipped (nonrev/mixture/ssm)\n"); return; }
+    if (model->getFreqType() == FREQ_ESTIMATE) { printf("[QGRADCHECK] skipped (+FO estimated freqs)\n"); return; }
+    if (site_rate->getPInvar() > 0.0) { printf("[QGRADCHECK] skipped (+I; clean-room omits ptn_invar)\n"); return; }
+    int nQ = model->getNDim();   // == num_params (free exchangeabilities) for fixed-freq models
+    if (nQ < 1) { printf("[QGRADCHECK] skipped (no free Q params, getNDim()=%d)\n", nQ); return; }
+
+    const double QFD_EPS = 1e-4;   // == ERROR_X (the CPU BFGS forward-FD step) for apples-to-apples gradients
+    std::vector<double> q0(nQ);
+    model->gpuGetFreeParams(q0.data());
+
+    double cpu0 = computeLikelihood();
+    double gpu0 = gpuComputeTreeLnLCleanRoom(nullptr);
+    if (std::isnan(gpu0)) { printf("[QGRADCHECK] skipped (clean-room returned NaN)\n"); return; }
+    double rel0 = (cpu0 != 0.0) ? fabs((gpu0 - cpu0) / cpu0) : fabs(gpu0 - cpu0);
+    printf("[QGRADCHECK] nQ=%d ns=%d base lnL: GPU=%.9f CPU=%.9f rel=%.3e\n", nQ, ns, gpu0, cpu0, rel0);
+
+    double maxrel_lnL = rel0, maxrel_grad = 0.0;
+    bool ok = (rel0 <= 1e-9);
+    std::vector<double> q(q0);
+    for (int k = 0; k < nQ; k++) {
+        double save = q[k];
+        double h = QFD_EPS * fabs(save); if (h == 0.0) h = QFD_EPS;
+        q[k] = save + h; double hh = q[k] - save;
+        model->gpuSetFreeParamsDecompose(q.data()); clearAllPartialLH();
+        double cpuk = computeLikelihood();
+        double gpuk = gpuComputeTreeLnLCleanRoom(nullptr);
+        q[k] = save; model->gpuSetFreeParamsDecompose(q.data()); clearAllPartialLH();   // restore param k
+        double relk = (cpuk != 0.0) ? fabs((gpuk - cpuk) / cpuk) : fabs(gpuk - cpuk);
+        double gq_cpu = (cpuk - cpu0) / hh, gq_gpu = (gpuk - gpu0) / hh;
+        double relg = (gq_cpu != 0.0) ? fabs((gq_gpu - gq_cpu) / gq_cpu) : fabs(gq_gpu - gq_cpu);
+        if (relk > maxrel_lnL) maxrel_lnL = relk;
+        if (relg > maxrel_grad) maxrel_grad = relg;
+        if (relk > 1e-9) ok = false;
+        printf("[QGRADCHECK] k=%d q=%.6g h=%.2g  lnL(q+h): GPU=%.6f CPU=%.6f rel=%.3e | dL/dq: GPU=%.6e CPU=%.6e rel=%.3e\n",
+               k, save, h, gpuk, cpuk, relk, gq_gpu, gq_cpu, relg);
+    }
+    computeLikelihood();   // restore curScore/partials at the original Q
+    printf("[QGRADCHECK] nQ=%d maxrel_lnL=%.3e (gate<=1e-9) maxrel_grad=%.3e -> %s\n",
+           nQ, maxrel_lnL, maxrel_grad, ok ? "QGRADCHECK PASS" : "QGRADCHECK FAIL");
+}
+
+// ============================================================================================================
 // G.2.1b — GPU override for computeLikelihoodDervPointer (byte-matches ComputeLikelihoodDervType). STATELESS:
 // the single-edge df/ddf is recomputed clean-room from the live tree each call (no device-resident theta /
 // partials -> no coherence hole, per the verified contract). Writes UN-negated df/ddf (computeFuncDerv negates).
@@ -462,6 +523,25 @@ void PhyloTree::setLikelihoodKernelGPU() {
 }
 
 // ============================================================================================================
+// Phase G.6 — host callback handed to gpu_jolt_optimize for DNA free-Q models (the eigensystem MOVES during the
+// optimise). It applies a trial free-Q vector q[nFreeQ] to the LIVE model (gpuSetFreeParamsDecompose -> param_spec
+// rate-class mapping + the G-T=1 gauge + decomposeRateMatrix), then copies the fresh eigensystem back to the
+// launcher's host buffers. extern "C" to match the jolt_qdecompose_fn C ABI. ctx = the model + ns. The launcher is
+// mutex-serialized and the model is thread-local, so this mutates only the calling thread's own model; the final
+// optimised Q is written back deterministically after gpu_jolt_optimize returns (do NOT rely on the launcher's
+// internal Q thrashing leaving the model in any particular state).
+// ============================================================================================================
+namespace { struct JoltQCtx { ModelSubst* model; int ns; }; }
+extern "C" void jolt_qdecompose_intree(void* vctx, const double* q, double* eval, double* U, double* Uinv) {
+    JoltQCtx* c = reinterpret_cast<JoltQCtx*>(vctx);
+    c->model->gpuSetFreeParamsDecompose(q);
+    int ns = c->ns;
+    memcpy(eval, c->model->getEigenvalues(),         sizeof(double) * ns);
+    memcpy(U,    c->model->getEigenvectors(),         sizeof(double) * (size_t)ns * ns);
+    memcpy(Uinv, c->model->getInverseEigenvectors(),  sizeof(double) * (size_t)ns * ns);
+}
+
+// ============================================================================================================
 // Phase G.4.2 — GPU JOLT joint-gradient optimiser for ONE candidate model. Builds the clean-room inputs from the
 // LIVE objects (mirroring gpuComputeTreeLnLCleanRoom), runs the validated G.4.1b joint LM driver on the GPU,
 // writes the optimised (197 branches + alpha) back through the cache-invalidating setters, and self-checks that a
@@ -491,7 +571,27 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     int ns = aln->num_states;
     if (ns != 4 && ns != 20) JOLT_DECLINE("num-states");
     if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) JOLT_DECLINE("nonrev/mixture/ssm");
-    if (model->getNDim() != 0) JOLT_DECLINE("free-subst-params");  // free substitution params (e.g. GTR/+FO) -> eigen would move -> CPU
+    // G.6.1: free substitution params (DNA HKY..GTR) — the eigensystem MOVES, so JOLT FD-optimises them via the
+    // decompose callback. ON BY DEFAULT (validated job 170795329: DNA -m MF 70 engage / 9 decline [8 +R + 1 pure-+I],
+    // best-by-BIC == CPU F81+F+G4, worst write-back rel 6.2e-12, ZERO mismatch). JOLT_NO_FREEQ disables it (debug/A-B).
+    // Restricted to ns==4 reversible, getNDim()<=5, FIXED freqs (exclude +FO, FREQ_ESTIMATE, whose free freq dims are
+    // NOT yet handled). AA fixed-Q (getNDim()==0) is unaffected.
+    static const bool JOLT_FREEQ_EN = (getenv("JOLT_NO_FREEQ") == nullptr);
+    int nFreeQ = 0;
+    {
+        int ndim = model->getNDim();
+        // audit RISK-1 hardening: tied-frequency DNA types (+FRY/+F1112/... = FREQ_DNA_*) contribute 1-3 FREE freq
+        // params to getNDim(), which gpuGetFreeParams packs into the Q-vector tail; the launcher then mis-clamps them
+        // as exchangeabilities ([MINQ,MAXQ]=[1e-4,100] vs the correct ~[0,1]) -> a coherent-but-SUBOPTIMAL lnL that
+        // still passes the write-back gate (which checks GPU/CPU coherence, not optimality). Require nFreqParams==0 so
+        // the entire getVariables() tail is exchangeabilities. +FQ/+F (0 freq dims) still engage; tied-freq is not in
+        // the default -m MF DNA set, so this declines such explicit user models to CPU (defensive, no live regression).
+        bool freeQok = JOLT_FREEQ_EN && ndim > 0 && ndim <= 5 && ns == 4 &&
+                       model->getFreqType() != FREQ_ESTIMATE && model->isReversible() &&
+                       nFreqParams(model->getFreqType()) == 0;
+        if (ndim != 0 && !freeQok) JOLT_DECLINE("free-subst-params");  // +FO / tied-freq / AA-GTR / production free-Q -> CPU
+        nFreeQ = freeQok ? ndim : 0;
+    }
     int ncat = site_rate->getNRate();
     if (ncat < 1 || ncat > 64) JOLT_DECLINE("ncat-range");
     // G.4.3b audit fix: discriminate the rate model by isGammaRate() (robust) NOT getGammaShape() (which is a
@@ -499,7 +599,10 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     // proportions + mean-gamma rates, silently wrong since writeback precedes the self-check). JOLT only implements
     // the MEAN discrete-gamma (Yang-1994) discretisation, so require exactly GAMMA_CUT_MEAN: this declines +R
     // (isGammaRate()==0), +R+I, and the MEDIAN gamma variant +Gm/+I+Gm (isGammaRate()==GAMMA_CUT_MEDIAN).
-    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) JOLT_DECLINE("non-mean-gamma");
+    // G.5.1a: let PURE +R (FreeRate, no +I) through to the launcher ONLY under JOLT_RGRADCHECK — it runs the
+    // weight-gradient FD self-check then declines to CPU (the +R optimiser branch is G.5.1b, not yet wired).
+    bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !rgcheck) JOLT_DECLINE("non-mean-gamma");
     // G.4.3b — +I (proportion of invariant sites) is now JOINTLY optimised by JOLT, but ONLY for +I+G
     // (RateGammaInvar: getProp(c)=(1-pinv)/K, standard mean-1 discrete-gamma rates). Pure +I (RateInvar, ncat==1)
     // rescales getRate=1/(1-pinv) -> out of JOLT scope -> CPU. A user-FIXED pinv, or no constant sites (pinvMax->0
@@ -523,8 +626,13 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     if (!eval || !U || !Uinv) return (double)NAN;
     vector<double> UinvRowSum(ns, 0.0);
     for (int i = 0; i < ns; i++) { double s = 0; for (int j = 0; j < ns; j++) s += Uinv[i*ns+j]; UinvRowSum[i] = s; }
-    vector<double> catProp(ncat);
-    for (int c = 0; c < ncat; c++) catProp[c] = site_rate->getProp(c);
+    vector<double> catProp(ncat), catRate0(ncat);
+    for (int c = 0; c < ncat; c++) { catProp[c] = site_rate->getProp(c); catRate0[c] = site_rate->getRate(c); }   // G.5.1: +R rates/weights
+    // G.6 free-Q: the initial free exchangeabilities (model->getVariables()[1..nFreeQ], raw rates), the ctx the
+    // decompose callback binds to, and the output Q buffer. All empty/no-op for fixed-Q (nFreeQ==0).
+    vector<double> q0vec(nFreeQ > 0 ? nFreeQ : 0), outQ(nFreeQ > 0 ? nFreeQ : 0);
+    if (nFreeQ > 0) model->gpuGetFreeParams(q0vec.data());
+    JoltQCtx qctx{ model, ns };
 
     // ---- topology rooted at internal node R (IQ-TREE roots at a leaf; lnL is reversible-invariant) ----
     if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
@@ -601,6 +709,9 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
         alpha0, optAlpha, /*maxiter=*/400,
         base_invar.data(), pinv0, optPinv, JOLT_MIN_PINVAR, pinvMax,
+        catRate0.data(), rgcheck ? 1 : 0,   // G.5.1: +R FreeRate seeding + gated FD-check
+        nFreeQ, (nFreeQ > 0 ? q0vec.data() : nullptr), jolt_qdecompose_intree, &qctx,   // G.6: DNA free-Q
+        (nFreeQ > 0 ? outQ.data() : nullptr),
         outBrlen.data(), &outAlpha, &outPinv, &outIters);
     if (std::isnan(joltLnL)) {
         static bool warned = false;
@@ -616,10 +727,14 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
         if (fwd) fwd->length = outBrlen[v];
         if (bwd) bwd->length = outBrlen[v];
     }
-    // ---- write alpha + pinv back through the setters, then invalidate ALL partial-LH + transition caches ----
+    // ---- write Q + alpha + pinv back through the setters, then invalidate ALL partial-LH + transition caches ----
+    // G.6: set the model to the OPTIMISED free-Q deterministically (the launcher's internal Q thrashing leaves the
+    // model in an indeterminate state) — gpuSetFreeParamsDecompose applies param_spec + re-decomposes, so the
+    // self-check below recomputes the CPU lnL at exactly the JOLT optimum (a genuine GPU-vs-CPU write-back gate).
+    if (nFreeQ > 0) model->gpuSetFreeParamsDecompose(outQ.data());
     if (optPinv) site_rate->setPInvar(outPinv);                 // G.4.3b: sets p_invar + recomputes rates (RateGammaInvar::setPInvar)
     if (optAlpha) site_rate->setGammaShape(outAlpha);           // sets gamma_shape + recomputes the discrete rates
-    clearAllPartialLH();                                        // brlen + alpha + pinv changed -> partials, theta & ptn_invar stale
+    clearAllPartialLH();                                        // brlen + alpha + pinv + Q changed -> partials, theta & ptn_invar stale
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
     double cpuLnL = computeLikelihood();
@@ -635,6 +750,18 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
                joltLnL, cpuLnL, rel, (rel <= 1e-9 ? "PASS" : (rel <= 1e-6 ? "OK(gamma-resid)" : "MISMATCH")),
                alpha0, (ncat>1?site_rate->getGammaShape():0.0),
                pinv0, (optPinv?site_rate->getPInvar():0.0), (optPinv?" +I":"")); }
+
+    // G.6.1 safety gate: if the fresh CPU recompute disagrees with the JOLT lnL at the SAME written-back params by
+    // more than the gamma-residual band, the GPU result is untrustworthy (a kernel/regime failure, not a convergence
+    // gap — write-back coherence is otherwise ~1e-12 universally). Return NaN so the caller re-optimises on the CPU
+    // from scratch. (Convergence-to-the-CPU-MLE is validated separately: G.6.0b JOLT>=CPU on HKY..GTR; +G/+I rel ~1e-12.)
+    if (!(rel <= 1e-6)) {   // audit RISK-3: NOT(<=) so a NaN/inf rel (cpuLnL underflowed to NaN) ALSO trips the
+                            // fallback and returns NaN BEFORE the setCurScore(cpuLnL) below could poison _cur_score
+        static bool warned_mismatch = false;
+        if (!warned_mismatch) { warned_mismatch = true;
+            printf("[JOLT] write-back MISMATCH rel=%.3e > 1e-6 -> CPU fallback (model=%s)\n", rel, joltModelName.c_str()); }
+        return (double)NAN;
+    }
 
     setCurScore(cpuLnL);
     return cpuLnL;

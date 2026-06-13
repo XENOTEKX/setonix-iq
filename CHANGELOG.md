@@ -2,6 +2,179 @@
 
 ---
 
+## ✅ AUDIT HARDENING (G.6) — 2 holes found + fixed before the source release — 2026-06-13 (commit `3ec1b5c8`)
+
+An independent adversarial code audit of the G.5.1a + G.6 changeset (`65e45c4c..d5d69b48`) ran before pushing the GPU
+source to GitHub. **Core machinery verdict: CLEAN** — write-back ordering, process-mutex coverage (whole
+`gpu_jolt_optimize` incl. symbol uploads + DevBuf pool + decompose-callback), base-sweep-skip ↔ Q-FD coherence, FP64
+parity, 1-based variable indexing, and the NaN→CPU fallback were all verified; the safety-gate `rel` is a genuine
+GPU-vs-independent-CPU recompute (not a tautology). **Two real holes, both fixed:**
+
+- **RISK-1** — `phylotreegpu.cpp:583`: the free-Q eligibility gate excluded only `FREQ_ESTIMATE`, not the DNA
+  **tied-frequency** types (`+FRY`/`+F1112`/… = `FREQ_DNA_*`) whose `getNDim()` packs 1–3 *frequency* params into the
+  Q-vector tail — the launcher would mis-clamp them as exchangeabilities (`[1e-4,100]` vs the correct `~[0,1]`),
+  yielding a coherent-but-**suboptimal** lnL that passes the coherence gate and feeds wrong BIC. Not in the default
+  `-m MF` set (no live regression), but a silent-correctness hole for explicit user models. **Fix:** require
+  `nFreqParams(getFreqType()) == 0` (0 for `+FQ`/`+F` → default set unchanged; >0 for tied → decline to CPU).
+- **RISK-3** — `phylotreegpu.cpp:751`: `rel > 1e-6` is *false* for NaN `rel`, so the gate didn't fire and then
+  `setCurScore(NaN)` poisoned `_cur_score`. **Fix:** `if (!(rel <= 1e-6)) return NAN;` (returns before `setCurScore`).
+
+**Validated** (job 170863975, V100, rebuilt binary): `GTR+F+G4` engages rel 5.193e-12 (== pre-fix), `GTR+F+I+G4`
+engages, `JOLT_NO_FREEQ` declines — regression-free. **Next steps (audit-informed):** G.5.1b (+R JOLT) is the critical
+path; fold the CPU-optimum comparison gate into the free-Q path (close RISK-2 coherence-vs-optimality); runtime-confirm
+the tied-freq decline; G.5.2 tiling (pending the AA-10M result); port the native-BIC gate into the production CTF path.
+Full detail + ranked next steps: research/Modelfinder/part9 §IX.10.
+
+---
+
+## ✅ DNA FREE-Q (G.6) COMPLETE — DNA `-m MF` coverage 8 % → ~89 % on the GPU — 2026-06-13
+
+The free-Q DNA gap (62-of-90 declines = every HKY/TN/…/GTR matrix, the eigensystem MOVES when its exchangeabilities are
+optimised) is **closed.** Three validated commits (`525c4186`/`a12e6dde`/`d5d69b48`):
+- **G.6.0a** (job 170787044): the free-Q lnL pipeline (eigendecompose→reupload→resweep) is **BIT-IDENTICAL** GPU==CPU
+  (rel 0.000e+00) at every perturbed Q on HKY/TNe/TVM/SYM/GTR (nQ=1/2/4/5, both freq types). Two behaviour-neutral
+  public wrappers `gpuGetFreeParams`/`gpuSetFreeParamsDecompose` (ModelSubst→ModelMarkov) give **one code path for all
+  20 free-Q families** via the model's `param_spec` (G-T fixed gauge). `+FO` is NOT in the default DNA set ⇒ holding
+  freqs fixed covers the entire default space, no gap.
+- **G.6.0b** (job 170792611): the free-Q FD-LM optimiser folds nQ exchangeabilities into `gpu_jolt_optimize`'s joint
+  diagonal-LM via a host decompose-callback. **JOLT ≥ CPU MLE on ALL** (HKY/TN/TVM/GTR/SYM, +0.0006…+0.0029 nat — joint
+  LM marginally beats IQ-TREE's alternating BFGS) ⇒ **no stall, even GTR's 5 COUPLED exchangeabilities** (the
+  pre-committed dense-Q-block fallback is NOT needed); write-back rel ~5e-12; agent-reviewed, no bugs.
+- **G.6.1** (jobs 170795329 + 170796516): gate flipped — free-Q **ON BY DEFAULT** (escape hatch `JOLT_NO_FREEQ`) + a
+  write-back safety gate (rel > 1e-6 → CPU fallback). DNA `-m MF` (5000-site): **JOLT engagements 8 → 70**, every free-Q
+  family × {+G4,+F+G4,+I+G4} (incl. **GTR+F+I+G4**, 5 free-Q + pinv + α jointly), only 9 decline (8 +R/+I+R + 1 pure-+I);
+  worst write-back rel 6.224e-12, ZERO mismatch; **GPU best-by-BIC == CPU (F81+F+G4** on the under-powered subsample).
+
+**Honest scope:** a COVERAGE/capability milestone — DNA `-m MF` is now *meaningful* on the GPU (residual = +R/+I+R [the
+G.5.1 track] + pure-+I). It does NOT change the part5 throughput ceiling; the `-m MF` win still lives in CTF top-k refine.
+The AA-only optimisations (on-device reduction, `kj_derv_fused`, base-sweep skip) are inherited for free; DNA ns=4 ⇒ the
+arena is 5× smaller than AA so no VRAM tiling is needed. Full design + numbers: part9 §IX.9.
+
+### ✅ G.6.2 — DNA-1M `-m MF` CTF payoff (job 170843136, A100, exit 0)
+
+The DNA ultimate test on the **full 1 M-site** GTR+I+G4-generated alignment. **WINNER F81+F+G4** (full BIC 118418931) —
+which is **EXACTLY IQ-TREE's own full `-m MF` BIC winner** (CPU ground-truth `.iqtree`: F81+F+G4, **w-BIC 0.998**), and
+the **native-subsample-BIC top-3 == full-data top-3, in order** (F81+F+G4, HKY+F+G4, F81+F+I+G4).
+
+**The honest surprise — generative ≠ BIC-selected.** I had expected a GTR-family winner (the data is GTR+I+G4-generated).
+Wrong: on this data the GTR exchangeabilities buy only **~3 nat over 1 M sites** (GTR+F+G4 lnL −59208016 vs F81+F+G4
+−59208019), so BIC's parameter penalty correctly demotes **GTR+F+G4 to 18th**. IQ-TREE's own ModelFinder agrees — F81+F+G4
+at 99.8 % BIC weight. **The native-BIC coarse gate is vindicated:** the old projected-BIC ranking (the §X.3.2 bug) would
+have refined GTR+F+G4 / GTR+F+I+G4 / TVM+F+G4 — true-BIC ranks **18 / 20 / 14** — a catastrophic recall miss; native BIC
+recalls the true top-3 exactly. Strong support for the subsample-sufficiency hypothesis (5 k ranking = 1 M ranking).
+
+- **Coverage in production CTF:** 70 GPU engagements / 9 CPU declines on the full set — free-Q genuinely on GPU.
+- **Speed/energy:** wall **152 s** (subsample 0 + coarse `-m MF` 56 + refine 96) vs the **measured single-node DNA CPU
+  baseline** (`-m MTEST`, 176 models, OMP-104: MF wall 1714.9 s / 328.5 Wh) = **11.3× wall / 43.6× energy**; GPU energy
+  **7.53 Wh** (181 W mean, 14.2 GB, GPU 60 %). (The run script's printed "7.4–13×" used the AA baselines as a placeholder
+  — corrected here. Full `-m MF` parity table: §"GPU vs CPU PARITY — full `-m MF`".)
+- **Honest caveat:** CTF refines model params on the **fixed coarse tree**, so the winner's full lnL (−59208077) is ~58 nat
+  below CPU full-MFP tree-search (−59208019) — but model **SELECTION (ModelFinder's actual job) is exact**.
+
+DNA free-Q (G.6) is complete and demonstrated end-to-end. Remaining DNA gap = **+R/+I+R** (the G.5.1 track: weight
+gradient FD-validated, LM branch + cold/warm-vs-CPU-EM convergence gate still to do).
+
+---
+
+## ✅ AA `-m MF` FIX CONFIRMED END-TO-END (H200 170756438) — 2026-06-13
+
+The native-BIC gate fix **completed and is correct.** H200, exit 0, **767 s total** (subsample 0 + coarse `-m MF` 467
++ refine 300), **WINNER = LG+G4** (full BIC 157,213,275.8, beating LG+I+G4 by 14) — matches the CPU oracle. The run
+log self-documents the fix: `[rerank] OLD projected top-5 (the bug): LG+I+G4, LG+R5, LG+I+R5, LG+G4, LG+R4` vs
+`NATIVE BIC top-5 (the gate): LG+G4, LG+I+G4, LG+R4, …`; `[detector] RATE_HET_FLAG=False` (LG+G4 leads LG+R4 by 43
+nat) ⇒ `LG+R4:skip` (no CPU-at-1M landmine). Refine: LG+G4 52 s (1 JOLT call) + LG+I+G4 248 s (4 calls) + LG+R4
+skipped. **Wall 1.46× vs np16 / 1.88× vs np8 / 2.57× vs np4; GPU energy 43.6 Wh** (210 W mean); peak VRAM 67.25 GB
+(fits A100-80), GPU util 82 %. (A100 170756440 still queued = 2nd-device confirm.) The 2 h timeout (170728179/182) is
+fully resolved; both correctness and performance restored. DNA CTF script hardened with the same gate (agent port,
+`bash -n` clean) ahead of any DNA run.
+
+---
+
+## 🚨 AA `-m MF` BENCHMARK TIMED OUT — CTF ranking bug found & fixed; Sonnet's sweep re-verified — 2026-06-13
+
+Both AA-1M `--jolt -m MF` CTF benchmarks (H200 170728179, A100 170728182) **hit the 2 h walltime.** Honest root cause:
+**not the kernel, not correctness — the CTF coarse-rank GATE.** The scale-consistent BIC PROJECTION
+(`−2·(N/m)·logL + p·ln N`) amplifies sub-nat subsample overfit by `2·N/m ≈ 378×`, so on `-m MF` it ranked top-3 =
+**[LG+I+G4, LG+R5, LG+I+R5]** — true winner **LG+G4 dropped to rank 4**, two **+R** models promoted in. +R declines
+JOLT → refined on **CPU at 1M** → both jobs died in refine #2 (GPU 0 % util at kill). **This is the §X.3.2
+projection-amplification risk, empirically confirmed** (PART X §X.5.5 + PART IX §IX.7).
+
+**Fix (landed, re-running 170756438/170756440), red-team-reviewed (Fable agent):**
+- Rank top-k by **NATIVE subsample BIC over all candidates** (penalty `ln m`) — ranks LG+G4 #1 (on 5000 sites the
+  rate-model fits are within <1 nat ⇒ the choice is penalty-dominated; native BIC trusts the penalty, the projection
+  amplifies the noise). + a **rate-heterogeneity detector** (flag if a +R/+I genuinely leads — here LG+G4 leads LG+R4
+  by 43 nat, no flag) + a **per-model refine wall budget** (skip a detector-confirmed-losing +R; cap any CPU-at-1M
+  blow-up). Eligible refine {LG+G4, LG+I+G4} ≈ 610 s ⇒ total ≈ 1150 s, finishes + picks LG+G4.
+- ⇒ **G.5.1 (+R JOLT coverage) is now empirically URGENT** (the +R-on-CPU-at-1M landmine), not just a coverage nicety.
+
+**Sonnet's PART X sweep re-verified (Opus 4.8):** (a) the **native-BIC numbers are CORRECT** (LG+G4 #1 at all 23 runs,
+ΔBIC reproduces); (b) the sweep job's **embedded analysis printed empty tables** (a `+/-`-sign regex bug, also in
+`analyze_subsuff.py`, now fixed); (c) Sonnet's "the §X.3.2 +R risk did NOT trigger" is **wrong for the real pipeline**
+— it tested native BIC on the CPU *proxy* binary, but CTF uses the *projected* BIC on the GPU binary, where it fails.
+**Methodology lesson banked:** validate the EXACT shipped pipeline end-to-end; the CPU run is an oracle, not a stand-in.
+
+**Easy-wins (last round) VALIDATED + committed:** base-sweep skip + `d_theta` reclaim — job 170730082 PASS (116/116,
+rel 2.166e-10, best LG+G4); committed `56d16545`. Binary re-frozen `b85d482f` (`iqtree3.frozen_ab`) for the re-run.
+
+---
+
+## 🔧 SECOND-ROUND CODE AUDIT — optimisations + improvements + remaining work, ranked — 2026-06-13
+
+Triggered by the honest observation that the **gradient-kernel fusion barely moved the wall.** I pulled the
+per-kernel register/occupancy out of the frozen cubin (`cuobjdump`, A100/sm_80) and re-read the JOLT driver against
+what P3.0/P3.0b actually *measured* about the bottleneck. Detail in PART VIII §VIII.5. Headline findings:
+
+- **`kj_derv_fused` is essentially optimal for its scope** (32 regs — *register-neutral* vs the 3 kernels it replaced,
+  so no occupancy penalty; coalesced; `node`+`dad` read once; bit-identical). **Its small wall effect is EXPECTED:**
+  it cut VRAM *traffic* + launch count, but P3.0b proved the binding resource is memory **latency + occupancy** on the
+  *postorder* kernel `k1_node`, not bandwidth/launches. Same lesson as the K4 fusion. It is a correct keeper (601 MB
+  reclaimed, tidier), **not a wall lever.**
+- **The wall lives in `k1_node`: 56 regs + `STACK:160` spill** (the per-thread `double prod[NS_MAX=20]`) ⇒ 4 blocks/SM
+  ⇒ **50 % occupancy** — exactly the P3.0b bound. The only lever on it is the **P2∥ occupancy attack** (HIGH-effort
+  coin-flip), not more fusion.
+
+**Ranked backlog (importance = wall/capability impact × tractability):**
+
+| # | Item | Type | Impact (honest) | Effort / Risk | Status |
+|--:|---|---|---|---|---|
+| **1** | **`k1_node` occupancy — P2∥ thread-per-(ptn×cat×state)**: collapse `prod[20]`→scalar, kill the `STACK:160` spill, 56→≤32 regs ⇒ 4→8 blocks/SM (**50 %→100 % occ**) | perf | **The only lever on the measured bound** (P3.0b: latency/occupancy-bound, schedulers idle ~92 %). Could meaningfully cut the dominant sweep | HIGH; **honest coin-flip** (NS=20 matvec may be too small to amortize the reduction) | ⬜ not started |
+| **2** | **Base-sweep skip (part8 #2)**: don't rebuild echild+postorder at a base point the prior accepted `evalLnL` already built | perf | Skips **~98 `k1_node` launches/gradient-iter** = one full bottleneck-kernel sweep per iter. A *real* wall win | LOW — **bit-exact**, guarded by exact (b,α,pinv) compare | ✅ **done this round** (validating 170730082) |
+| **3** | **+R FreeRate coverage (G.5.1)** | capability | Closes the last AA `-m MF` gap (8 models → ~100 %); the only `-m MF`-vs-`-m TEST` delta | MED — risk is **optimizer convergence** on a multimodal surface, not the gradient; needs the cold/warm harness + CPU-optimum gate | ⬜ designed, not coded |
+| **4** | **Drop per-launch `cudaDeviceSynchronize`** → one stream + events / CUDA-graph capture | perf | Removes ~100 ms/model host↔device serialization at 1M (more at small nptn); lets sibling edges overlap | MED | ⬜ not started |
+| **5** | **VRAM tiling (G.5.2)** of the postorder arena | capability | Fits +R10 / AA-10M on A100-80 / V100 | MED | ⬜ not started (the `d_theta` reclaim bought some margin) |
+| **6** | **`d_theta` reclaim** (601 MB dead post-fusion) | capability | +R10 / A100-80 VRAM margin (not wall) | TRIVIAL | ✅ **done this round** |
+| **7** | **Free-Q DNA (G.6)** — FD-over-Q (κ…GTR) + re-eigendecomp/step | capability | DNA `-m MF` 8 %→meaningful (GTR-family); riskiest, **own phase** | HIGH | ⬜ not started |
+| **8** | **Analytic d lnL/d pinv (part8 #4)** — replace the +I FD `evalLnL`/iter | perf (+I only) | One fewer full sweep per +I iteration | MED | ⬜ low priority |
+| 9 | +I restart sweep 10→4 (G.4.3c) | perf | (banked — the headline +I lever) | — | ✅ shipped |
+
+**Read of the table:** the *correct* mental model after this audit is **(a) the gradient side is done — fusion +
+on-device reductions are optimal and bit-identical; (b) the remaining wall win is concentrated in two places —
+`k1_node` occupancy (#1, the hard coin-flip) and the now-banked base-sweep skip (#2); (c) everything else is
+*capability* (coverage/VRAM), not wall.** This round shipped #2 and #6 (both safe); #1 is the honest frontier and
+#3 (+R) is the next capability milestone.
+
+---
+
+## 🔬 OPEN HYPOTHESIS — subsample sufficiency (the statistical foundation of CTF) — 2026-06-13
+
+Noted + under investigation: **PART X** (`research/Modelfinder/gpu-modelfinder-part10-subsample-sufficiency-hypothesis.md`).
+The whole CTF ModelFinder rests on an *unproven* assumption — that beyond a saturation length L\* (hypothesised ≪ 1M),
+the **identity** of the best model (the BIC winner) stops changing, so a ~5000-site subsample recovers the same winner
+the full data would pick. The scale-consistent BIC rerank (`−2·(N/m)·logl + p·ln N`) **is** this assumption written as
+code. Two forms: **H1** (subsample winner == full winner) and **H2** (full winner ∈ subsample top-3 — the weaker form
+CTF actually needs; the top-k refine is the net). **Theory (BIC scaling `ΔBIC ≈ −2Nδ + Δp·ln N`):** L\* is tiny for
+well-separated models (wrong matrix family) and for dead nested params (+I at pinv→0, the AA case = penalty-dominated,
+stable) — but **unbounded for near-tied competitors**, and **+R's `2k−2` params can overfit a small subsample and rank
+spuriously high** (§X.3.1). So it is plausible *because of why CTF has worked*, but **not safe to assume; evidence so
+far is n = 1** (AA-1M: full top-3 all LG-family ΔBIC≤264 then a 17,618-nat cliff; subsample top-5 recalled 3/3).
+**Investigation in flight:** (a) first-principles derivation [done, §X.3]; (b) literature-grounding agent [running];
+(c) **empirical length sweep** job **170727768** (normalsr, CPU reference binary — BIC is optimiser-invariant, no GPU
+contention): `-m TEST` over L ∈ {1k…100k} × 3 resamples + `-m MF` at 5k/20k to probe the +R twist, reporting
+**recall-vs-length**, exact-winner agreement, ΔBIC-margin growth (the `−2Nδ` check), and winner stability.
+**CTF is licensed at the smallest L where recall(top-3) = 1.0 across resamples.**
+
+---
+
 ## 📊 GPU vs CPU PARITY — AA-1M ModelFinder (seed 1, `-m TEST`/CTF) — 2026-06-11
 
 The correctness + performance + **energy** parity table for 1 GPU vs the CPU cluster on the 1M-AA alignment
@@ -15,6 +188,8 @@ All runs select the **same best model, LG+G4.**
 | **GPU CTF (10-start +I)** | 1× H200 | LG+G4 ✓ | **1994 s** | n/a (coarse tree) | 1994 s | −78605275.64 † | ⏳ (rerun) | — |
 | **GPU CTF (+I 4-start)** | 1× H200 | LG+G4 ✓ | **893 s** ✓ (job 170581208) | n/a (coarse tree) | 893 s | −78605275.637 | **67.89 Wh** (244 kJ, 280 W mean, 872 s) | ⏳ |
 | **GPU CTF (+I 4-start)** | 1× A100-80 | LG+G4 ✓ | **1504 s** ✓ (job 170581209) | n/a (coarse tree) | 1504 s | −78605275.637 | **81.69 Wh** (294 kJ, 199 W mean, 1478 s) | — |
+| **GPU CTF (+G.5.0 reduction)** | 1× A100-80 | LG+G4 ✓ | **1355 s** ✓ (job 170636493) — **beats np8 1.07×** | n/a (coarse tree) | 1355 s | −78605275.637 | **73.24 Wh** (264 kJ, 198 W mean) | — |
+| **GPU CTF (+PartB+fusion, `frozen_ab`)** | 1× A100-80 | LG+G4 ✓ | **1139 s** (job 170861889) — coarse 170 + refine 969; **np16 0.99× → does NOT beat 16 nodes** | n/a (coarse tree) | 1139 s | −78605275.637 | **64.58 Wh** (208 W mean, 1116 s) | — |
 | CPU `-m TEST` np1 | 1 SPR node | LG+G4 | 5119.9 s | 15060.6 s | 20180.5 s | −78605196.59 | — | **0.79 kWh (MF only)** ‡ |
 | CPU `-m TEST` np2 | 2 SPR nodes | LG+G4 | 3076.9 s | 7868.9 s | 10945.8 s | −78605196.44 | — | ~3.9 kWh (est.) |
 | CPU `-m TEST` np4 | 4 SPR nodes | LG+G4 | 1974.5 s (meas. 1985) | 3982.1 s | 5956.6 s (meas. 5994) | −78605196.45 | — | **4.18 kWh** ✓ (job 170582814) |
@@ -35,11 +210,63 @@ costs the CPU: 1.3–15 k s). **This is why the GPU row's "tree-search wall" is 
 
 **Headline (measured, updated 2026-06-12):** **1 H200 GPU ModelFinder (CTF, +I 4-start, 893 s) beats all CPU node counts on MF wall and beats np16 overall**: 3.45× vs np2, 2.21× vs np4, 1.62× vs np8, **1.26× vs np16** — picking the correct model (LG+G4). The 4-start +I fix (G.4.3c, validated job 170580368) cut the wall 1994→893 s by eliminating 6 redundant pinv restart sweeps (10→4; single-start was rejected by the multimodal gate: 39.5-nat loss at pinv≈0.5). GPU energy: **67.89 Wh measured** (67.8 GB peak, 60% utilisation). The GPU does **not** run the tree-search phase at 1M (CTF is MF-equivalent only; deferred GPU tree-search hook is next); against the *full* `-m TEST` wall the CPU's tree search dominates (1.3–15 k s depending on np) and is not yet contested on GPU.
 
+**A100 progression — honest update (2026-06-13, job 170861889):** the `-m TEST` CTF was re-run on A100 with the
+optimisation-frozen `frozen_ab` binary (G.5.0 PartB + kernel-fusion + base-sweep-skip + `d_theta`-reclaim) — the
+same binary as the `-m MF` parity runs. Result: **1139 s** (coarse 170 + refine 969), winner LG+G4 ✓, 64.58 Wh.
+PartB+fusion improved A100 **1355 → 1139 s (~16 %)**, but it is **np16 0.99× — A100 still does NOT beat 16 nodes**
+(it ties/loses by ~1.5 %, while beating np8 1.27×, np4 1.73×). **H200 (893 s) remains the only GPU that beats np16
+(1.26×).** No overclaim: the PartB+fusion lever closed most of the A100↔np16 gap but not all of it. (The `-m TEST`
+refine here is 969 s vs the `-m MF` run's 531 s because the v2 `-m TEST` script refines all 3 top-k models, whereas
+the `-m MF` script's rate-het detector skips the doomed 3rd — a script-design difference, not a binary difference.)
+
 **Energy verdict (measured, 2026-06-12).** The ModelFinder phase: **H200 CTF = 67.89 Wh** vs CPU MF phase — np1 791.8 Wh (**11.7×**), np4 ~1.38 kWh (**~20×**), np8 ~1.97 kWh (**~29×**). The H200 draws ~280 W vs ~600–700 W *per* SPR node, AND finishes the MF faster than even 16 nodes — so there is **no CPU node count that is simultaneously faster and lower-energy** than the GPU. Against the *full* `-m TEST` (MF + tree, CPU-measured): np4 **4.18 kWh**, np8 **4.93 kWh** for one model-selection-plus-tree on 1M AA; the GPU's full-pipeline energy awaits the JOLT tree-search hook, but the MF phase alone already shows a 12–29× per-phase energy advantage. A100 CTF = 1504 s / 81.69 Wh (slower + a touch more energy than H200, as expected). **CPU energy grows ~linearly with node count while wall-time saturates** (np16 is only 2.7× faster than np2 but burns ~1.7× the energy of np4) — the faster you push the CPU cluster, the worse its energy gap vs the single GPU.
 
 **‡ np1 CPU energy is the MF phase only** (the `cpuE1m` run is `-m TESTONLY`, single-rank): **791.8 Wh, mean 701 W/node** over 4068 s — the clean 1-CPU-node vs 1-GPU per-device anchor for the ModelFinder phase. np4/np8 are the **full `-m TEST`** (MF + tree). For the MF-phase apples-to-apples vs GPU CTF, the CPU MF-phase energy (by time-fraction of the measured full-run energy) is ~1.38 kWh (np4) and ~1.97 kWh (np8).
 
 **Energy methodology + a corrected bug.** GPU energy = `nvidia-smi --query-gpu=power.draw` integrated at 2 s cadence (no counter wrap; **measured 67.89 Wh H200 / 81.69 Wh A100**). CPU energy = direct RAPL (`/sys/class/powercap/intel-rapl:*/energy_uj`, packages + DRAM, both sockets) sampled every 5 s, one sampler/node launched via `mpirun -rf rankfile` (Gadi `pbsdsh` has **no `-u`** — use the rankfile). **Full-node exclusive allocation is mandatory** (`-l ncpus=104 -l mem=500GB`/node; `place=excl` is a no-op and `-l select` is rejected on Gadi — request all 104 cores so nothing else lands), because RAPL sums the *whole socket* regardless of tenant — a partially-allocated node is contaminated by co-tenants. **Bug found & fixed:** `energy_uj` wraps independently per domain (package 262.1 kJ, DRAM 65.7 kJ); the first integrator summed all 4 domains into one counter and added back the *combined* 655 kJ range on any negative delta, over-counting ~3× (reported a non-physical ~1900 W/node). Corrected by matching each negative delta to the specific domain range that wrapped → physical **~600–700 W/node**. Energy runs: 170582791 (np1), 170582814 (np4, 4/4 nodes captured), 170582815 (np8, 8/8 nodes captured); multi-node sampler validated by job 170582418.
+
+---
+
+## 📊 GPU vs CPU PARITY — full `-m MF` ModelFinder (CTF, native-BIC gate) — 2026-06-13
+
+The table above is the `-m TEST` subset. **This one is the FULL `-m MF` candidate set** (122 AA / 98 DNA candidates,
+*including* the free-rate `+R`/`+I+R` and — for DNA — the whole free-Q family HKY…GTR). GPU rows = the CTF pipeline:
+coarse-rank the entire `-m MF` set on a 5000-site subsample by **native subsample BIC**, then JOLT-refine the top-3 on
+the fixed coarse tree. The **native-BIC coarse gate** (replacing the projected-BIC bug, §X.3.2) is what makes a full
+`-m MF` sweep tractable on the GPU.
+
+### AA-1M `-m MF` — winner **LG+G4** (matches CPU)
+
+| Run | device | best model | coarse `-m MF` wall | refine wall | total wall | full lnL | GPU energy | vs CPU `-m TEST` MF phase |
+|---|---|---|---:|---:|---:|---|---:|---|
+| **H200** (job 170756438) | 1× H200 | LG+G4 ✓ | 467 s | 300 s | **767 s** | −78605275.637 | **43.61 Wh** (210 W, 748 s) | np4 **2.57×** / np8 **1.88×** / np16 **1.46×** |
+| **A100-80** (job 170756440) | 1× A100-80 | LG+G4 ✓ | 590 s | 531 s | **1122 s** | −78605275.637 | **46.64 Wh** (153 W, 1100 s) | np4 1.76× / np8 1.29× / np16 1.00× |
+
+**Coverage:** 122 candidates → **116 JOLT GPU engagements**, 9 CPU declines (8 `+R`/`+I+R` non-mean-gamma + 1 pure-`+I`).
+Native-BIC top-3 = LG+G4, LG+I+G4, LG+R4 (R4 **skipped** — detector: native BIC behind best eligible ⇒ can't win
+full-data). **The native-BIC fix is load-bearing:** the *pre-fix* runs (170728179 H200 / 170728182 A100) used the OLD
+**projected**-BIC ranking → picked LG+I+G4 / LG+R5 / LG+I+R5 and **TIMED OUT at 7200 s** on the expensive `+R` refines.
+Note the GPU sweeps the *full* `-m MF` set (incl. `+R`) while the CPU baseline is `-m TEST` (a subset) — the GPU is doing
+**more** candidate work for these speedups.
+
+### DNA-1M `-m MF` — winner **F81+F+G4** (matches CPU, G.6.2)
+
+| Run | device | best model | coarse `-m MF` wall | refine wall | total wall | full lnL | GPU energy | vs CPU `-m MTEST` (1 node, **measured, same data**) |
+|---|---|---|---:|---:|---:|---|---:|---|
+| **A100-80** (job 170843136) | 1× A100-80 | F81+F+G4 ✓ | 56 s | 96 s | **152 s** | −59208077.048 | **7.53 Wh** (181 W, 150 s) | MF wall **11.3×** / MF energy **43.6×** |
+
+**CPU DNA baseline (real, measured, same 1M alignment):** 1 SPR node, `-m MTEST` (176 models), OMP-104 — **ModelFinder
+wall 1714.9 s / 328.5 Wh** (1,182,450 J), best **F81+F+G4** (w-BIC 0.998); full pipeline (MF + tree) 3286.9 s. So GPU CTF
+**152 s vs 1714.9 s = 11.3×** wall and **7.53 vs 328.5 Wh = 43.6×** energy. **Coverage:** 98 candidates → **70 JOLT GPU
+engagements** (the free-Q family HKY…GTR now on GPU, G.6), 9 CPU declines (8 `+R`/`+I+R` + 1 pure-`+I`). *Correction:* the
+run script printed "7.4–13×" using the **AA** `-m TEST` baselines as a placeholder — the correct DNA-vs-DNA comparison
+against the measured single-node DNA baseline is **11.3× wall / 43.6× energy.**
+
+**Honest caveat (same as the `-m TEST` table):** CTF refines on the **fixed coarse tree**, so the GPU's absolute lnL sits
+below the CPU's fully-tree-searched lnL (AA ~79 nat: −78605275.6 vs −78605196.4; DNA ~58 nat: −59208077.0 vs
+−59208019.2). The **model SELECTION is exact** in every row (LG+G4 / F81+F+G4 = the CPU `-m MF` BIC winner, and for DNA
+the subsample top-3 == full-data top-3 *in order*); the full SPR/NNI tree-search phase is deferred on GPU (CPU
+tree-search wall: AA 1.3–15 k s by node count, DNA 1559.8 s single-node).
 
 ---
 
