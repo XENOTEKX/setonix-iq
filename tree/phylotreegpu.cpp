@@ -382,6 +382,66 @@ void PhyloTree::gpuDervCrossCheckOnce() {
 }
 
 // ============================================================================================================
+// G.6.0a — one-shot GPU free-Q gradient cross-check (gated by env JOLT_QGRADCHECK). For a reversible DNA free-Q
+// model (HKY..GTR, fixed freqs, no +I), this is the de-risk BEFORE building the G.6.0b free-Q optimiser: it
+// proves the GPU computes lnL CORRECTLY under a MOVING eigensystem (every FD perturbation of a free exchange-
+// ability re-decomposes the 4x4 Q and re-uploads eval/U/Uinv). For each free param (perturbed in rate-class
+// space via the model's param_spec, so HKY's kappa moves A-G and C-T together), we compare GPU clean-room lnL
+// vs CPU computeLikelihood at the perturbed Q, and the FD gradient GPU-vs-CPU. GATE: |GPU-CPU|/|CPU| <= 1e-9 at
+// the base AND every perturbed Q (the FD-grad then matches by construction). Read-only: the model is fully
+// restored. No CPU-path effect (env-gated, --gpu only).
+// ============================================================================================================
+void PhyloTree::gpuFreeQGradCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    if (getenv("JOLT_QGRADCHECK") == nullptr) return;
+    if (!model || !site_rate || !aln) { printf("[QGRADCHECK] skipped (model/tree not ready)\n"); return; }
+    int ns = aln->num_states;
+    if (ns != 4 && ns != 20) { printf("[QGRADCHECK] skipped (ns=%d not in {4,20})\n", ns); return; }
+    if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) {
+        printf("[QGRADCHECK] skipped (nonrev/mixture/ssm)\n"); return; }
+    if (model->getFreqType() == FREQ_ESTIMATE) { printf("[QGRADCHECK] skipped (+FO estimated freqs)\n"); return; }
+    if (site_rate->getPInvar() > 0.0) { printf("[QGRADCHECK] skipped (+I; clean-room omits ptn_invar)\n"); return; }
+    int nQ = model->getNDim();   // == num_params (free exchangeabilities) for fixed-freq models
+    if (nQ < 1) { printf("[QGRADCHECK] skipped (no free Q params, getNDim()=%d)\n", nQ); return; }
+
+    const double QFD_EPS = 1e-4;   // == ERROR_X (the CPU BFGS forward-FD step) for apples-to-apples gradients
+    std::vector<double> q0(nQ);
+    model->gpuGetFreeParams(q0.data());
+
+    double cpu0 = computeLikelihood();
+    double gpu0 = gpuComputeTreeLnLCleanRoom(nullptr);
+    if (std::isnan(gpu0)) { printf("[QGRADCHECK] skipped (clean-room returned NaN)\n"); return; }
+    double rel0 = (cpu0 != 0.0) ? fabs((gpu0 - cpu0) / cpu0) : fabs(gpu0 - cpu0);
+    printf("[QGRADCHECK] nQ=%d ns=%d base lnL: GPU=%.9f CPU=%.9f rel=%.3e\n", nQ, ns, gpu0, cpu0, rel0);
+
+    double maxrel_lnL = rel0, maxrel_grad = 0.0;
+    bool ok = (rel0 <= 1e-9);
+    std::vector<double> q(q0);
+    for (int k = 0; k < nQ; k++) {
+        double save = q[k];
+        double h = QFD_EPS * fabs(save); if (h == 0.0) h = QFD_EPS;
+        q[k] = save + h; double hh = q[k] - save;
+        model->gpuSetFreeParamsDecompose(q.data()); clearAllPartialLH();
+        double cpuk = computeLikelihood();
+        double gpuk = gpuComputeTreeLnLCleanRoom(nullptr);
+        q[k] = save; model->gpuSetFreeParamsDecompose(q.data()); clearAllPartialLH();   // restore param k
+        double relk = (cpuk != 0.0) ? fabs((gpuk - cpuk) / cpuk) : fabs(gpuk - cpuk);
+        double gq_cpu = (cpuk - cpu0) / hh, gq_gpu = (gpuk - gpu0) / hh;
+        double relg = (gq_cpu != 0.0) ? fabs((gq_gpu - gq_cpu) / gq_cpu) : fabs(gq_gpu - gq_cpu);
+        if (relk > maxrel_lnL) maxrel_lnL = relk;
+        if (relg > maxrel_grad) maxrel_grad = relg;
+        if (relk > 1e-9) ok = false;
+        printf("[QGRADCHECK] k=%d q=%.6g h=%.2g  lnL(q+h): GPU=%.6f CPU=%.6f rel=%.3e | dL/dq: GPU=%.6e CPU=%.6e rel=%.3e\n",
+               k, save, h, gpuk, cpuk, relk, gq_gpu, gq_cpu, relg);
+    }
+    computeLikelihood();   // restore curScore/partials at the original Q
+    printf("[QGRADCHECK] nQ=%d maxrel_lnL=%.3e (gate<=1e-9) maxrel_grad=%.3e -> %s\n",
+           nQ, maxrel_lnL, maxrel_grad, ok ? "QGRADCHECK PASS" : "QGRADCHECK FAIL");
+}
+
+// ============================================================================================================
 // G.2.1b — GPU override for computeLikelihoodDervPointer (byte-matches ComputeLikelihoodDervType). STATELESS:
 // the single-edge df/ddf is recomputed clean-room from the live tree each call (no device-resident theta /
 // partials -> no coherence hole, per the verified contract). Writes UN-negated df/ddf (computeFuncDerv negates).

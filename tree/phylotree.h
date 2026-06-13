@@ -2136,6 +2136,13 @@ public:
         defined only under #ifdef IQTREE_GPU, call site guarded. */
     void gpuDervCrossCheckOnce();
 
+    /** Phase G.6.0a: one-shot (per process) GPU free-Q gradient cross-check (env JOLT_QGRADCHECK). For a reversible
+        DNA free-Q model (HKY..GTR, fixed freqs, no +I), perturbs each free exchangeability (in rate-class space via
+        the model's param_spec) and checks GPU clean-room lnL == CPU lnL at every perturbed Q, plus FD-grad agreement.
+        Proves the eigendecompose->reupload->resweep pipeline that the G.6.0b optimiser will drive. Read-only (restores
+        the model); defined only under #ifdef IQTREE_GPU, call site guarded. */
+    void gpuFreeQGradCheckOnce();
+
     /** Phase G.2.1b: GPU override for computeLikelihoodDervPointer (byte-matches ComputeLikelihoodDervType).
         Stateless clean-room single-edge df/ddf via gpuComputeEdgeDervCleanRoom; un-negated; CPU fallback on NaN. */
     void computeLikelihoodDervGPU(PhyloNeighbor *dad_branch, PhyloNode *dad, double *df, double *ddf);
