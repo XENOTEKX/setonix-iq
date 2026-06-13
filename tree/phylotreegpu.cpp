@@ -499,7 +499,10 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     // proportions + mean-gamma rates, silently wrong since writeback precedes the self-check). JOLT only implements
     // the MEAN discrete-gamma (Yang-1994) discretisation, so require exactly GAMMA_CUT_MEAN: this declines +R
     // (isGammaRate()==0), +R+I, and the MEDIAN gamma variant +Gm/+I+Gm (isGammaRate()==GAMMA_CUT_MEDIAN).
-    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) JOLT_DECLINE("non-mean-gamma");
+    // G.5.1a: let PURE +R (FreeRate, no +I) through to the launcher ONLY under JOLT_RGRADCHECK — it runs the
+    // weight-gradient FD self-check then declines to CPU (the +R optimiser branch is G.5.1b, not yet wired).
+    bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !rgcheck) JOLT_DECLINE("non-mean-gamma");
     // G.4.3b — +I (proportion of invariant sites) is now JOINTLY optimised by JOLT, but ONLY for +I+G
     // (RateGammaInvar: getProp(c)=(1-pinv)/K, standard mean-1 discrete-gamma rates). Pure +I (RateInvar, ncat==1)
     // rescales getRate=1/(1-pinv) -> out of JOLT scope -> CPU. A user-FIXED pinv, or no constant sites (pinvMax->0
@@ -523,8 +526,8 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     if (!eval || !U || !Uinv) return (double)NAN;
     vector<double> UinvRowSum(ns, 0.0);
     for (int i = 0; i < ns; i++) { double s = 0; for (int j = 0; j < ns; j++) s += Uinv[i*ns+j]; UinvRowSum[i] = s; }
-    vector<double> catProp(ncat);
-    for (int c = 0; c < ncat; c++) catProp[c] = site_rate->getProp(c);
+    vector<double> catProp(ncat), catRate0(ncat);
+    for (int c = 0; c < ncat; c++) { catProp[c] = site_rate->getProp(c); catRate0[c] = site_rate->getRate(c); }   // G.5.1: +R rates/weights
 
     // ---- topology rooted at internal node R (IQ-TREE roots at a leaf; lnL is reversible-invariant) ----
     if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
@@ -601,6 +604,7 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
         alpha0, optAlpha, /*maxiter=*/400,
         base_invar.data(), pinv0, optPinv, JOLT_MIN_PINVAR, pinvMax,
+        catRate0.data(), rgcheck ? 1 : 0,   // G.5.1: +R FreeRate seeding + gated FD-check
         outBrlen.data(), &outAlpha, &outPinv, &outIters);
     if (std::isnan(joltLnL)) {
         static bool warned = false;

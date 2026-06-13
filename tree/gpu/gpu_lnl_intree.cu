@@ -148,16 +148,17 @@ __global__ void kj_derv_fused(int ns, int nptn, int ncat,
         const double* __restrict__ node, const double* __restrict__ dad,
         double pinv, const double* __restrict__ baseinvar,
         double* __restrict__ patlh, double* __restrict__ pdf, double* __restrict__ pddf,
-        double* __restrict__ rnum){
+        double* __restrict__ rnum, double* __restrict__ wnum){   // G.5.1: wnum[c]=Lc(p) per-category likelihood (weight-grad numerator)
     int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
     double lh=0.0,d1=0.0,d2=0.0;
     for (int c=0;c<ncat;c++){
-        double rc=0.0;
+        double rc=0.0, lcc=0.0;
         for (int x=0;x<ns;x++){ int k=c*ns+x; size_t o=(size_t)k*nptn+ptn;
             double th=node[o]*dad[o];
-            lh+=g_val0[k]*th; rc+=g_val1[k]*th; d2+=g_val2[k]*th; }
-        d1+=rc;
+            lcc+=g_val0[k]*th; rc+=g_val1[k]*th; d2+=g_val2[k]*th; }
+        lh+=lcc; d1+=rc;
         if (rnum) rnum[(size_t)c*nptn+ptn]+=g_rscale[c]*rc;
+        if (wnum) wnum[(size_t)c*nptn+ptn]=lcc;   // G.5.1: Lc(p)=Σ_x g_val0[c,x]·θ (category weight w_c already folded into g_val0)
     }
     double Lp=fabs(lh)+pinv*baseinvar[ptn]; double inv=1.0/Lp, r=d1*inv;
     patlh[ptn]=log(Lp); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
@@ -453,6 +454,7 @@ extern "C" double gpu_jolt_optimize(
     const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
     double alpha0, int optAlpha, int maxiter,
     const double* base_invar, double pinv0, int optPinv, double pinvMin, double pinvMax,
+    const double* catRate0, int freeRate,   // G.5.1: +R FreeRate — catRate0=rates[c] (else nullptr); freeRate=1 seeds rates directly (no alpha)
     double* out_brlen, double* out_alpha, double* out_pinv, int* out_iters)
 {
     int ns = nstates;
@@ -526,7 +528,7 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> meanR(ncat,1.0);   // G.4.3b: mean-1 discrete-gamma rates (alpha-dependent ONLY)
     double curAlpha=alpha0;
     auto applyAlpha=[&](double a){ jolt_discreteGammaMean(a,ncat,meanR.data()); };  // -> meanR (mean 1)
-    if (ncat>1) applyAlpha(curAlpha);
+    if (ncat>1 && !freeRate) applyAlpha(curAlpha);   // G.5.1: +R seeds rates directly (below), not from alpha
     // G.4.3b +I: IQ-TREE's RateGammaInvar uses getProp(c)=(1-pinv)/K AND rescales the gamma rates to meanR[c]/(1-pinv)
     // (RateGamma::computeRates preserves the pre-set curScale=K/(1-pinv) => mean-1 rates / (1-pinv); so the OVERALL
     // mean rate incl. invariant sites at rate 0 stays 1). Both the rate (UP by 1/(1-pinv)) and the prop (DOWN by
@@ -534,6 +536,8 @@ extern "C" double gpu_jolt_optimize(
     // For non-+I (optPinv=0): f=1 => catRate=meanR, catProp_v=catProp (byte-identical to the pre-+I +G path).
     std::vector<double> bprop(ncat);
     for(int c=0;c<ncat;c++) bprop[c] = optPinv ? catProp[c]/(1.0-pinv0) : catProp[c];
+    // G.5.1 +R FreeRate: seed meanR=rates[c], bprop=weights so applyPinv(0) is identity (catRate=rates, catProp_v=weights).
+    if (freeRate) { for(int c=0;c<ncat;c++){ meanR[c]=catRate0[c]; bprop[c]=catProp[c]; } }
     double curPinv = optPinv ? pinv0 : 0.0;
     auto applyPinv=[&](double p){ double f = optPinv ? (1.0-p) : 1.0;
         for(int c=0;c<ncat;c++){ catRate[c]=meanR[c]/f; catProp_v[c]=f*bprop[c]; } };
@@ -580,6 +584,53 @@ extern "C" double gpu_jolt_optimize(
         if(leaf[v]<0) return d_partial+(size_t)slot[v]*slotSz;
         k_leaf_eig<<<GB,TB>>>(ns,nptn,ncat,d_tip+(size_t)leaf[v]*nptn,d_tipeig); return d_tipeig; };
 
+    // ============ G.5.1a — +R weight-gradient FINITE-DIFFERENCE self-check (gated; then declines to CPU) ============
+    // Validates gz_c = WN_c − w_c·N (softmax weight gradient, PART IX §IX.8) against central FD on the REAL GPU path,
+    // BEFORE any +R optimiser branch is wired (the G.4.0b discipline: prove the new gradient first). Weights enter only
+    // through g_val0 (setVal), not the partials/echild, and Lc(p) is edge-invariant — so WN_c comes from the base edge
+    // and each FD perturbation re-runs only setVal + one base-edge kj_derv_fused (cheap). +R always declines to CPU here
+    // (the LM branch is G.5.1b); this hook only runs the check under JOLT_RGRADCHECK.
+    if (freeRate) {
+        if (getenv("JOLT_RGRADCHECK")) {
+            rebuildEchild(); postorderFill();
+            int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
+            k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
+            const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();
+            cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));   // reuse the rnum buffer as wnum (rnum unused here)
+            setVal(brlen[c0]);
+            kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,0.0,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,d_rnum); cudaDeviceSynchronize();
+            double lnL0,dtmp,ddtmp; reduceDerv(lnL0,dtmp,ddtmp);
+            kj_invl<<<GB,TB>>>(nptn,d_patlh,d_invLbase); cudaDeviceSynchronize();
+            kj_reduce_gradnum<<<GB,TB,(size_t)TB*sizeof(double)>>>(nptn,ncat,d_rnum,d_invLbase,d_ptnfreq,GB,d_redR); cudaDeviceSynchronize();
+            cudaMemcpy(h_redR.data(),d_redR,(size_t)ncat*GB*sizeof(double),cudaMemcpyDeviceToHost);
+            std::vector<double> WN(ncat,0.0); double sumWN=0;
+            for(int c=0;c<ncat;c++){ long double a=0; for(int b=0;b<GB;b++) a+=(long double)h_redR[(size_t)c*GB+b]; WN[c]=(double)a; sumWN+=WN[c]; }
+            double Ntot=0; for(int pp=0;pp<nptn;pp++) Ntot+=ptn_freq[pp];
+            std::vector<double> w(catProp_v), gz(ncat); double sumgz=0;
+            for(int c=0;c<ncat;c++){ gz[c]=WN[c]-w[c]*Ntot; sumgz+=gz[c]; }
+            auto lnlW=[&](const std::vector<double>& wv)->double{   // lnL re-eval at perturbed weights (partials unchanged)
+                std::vector<double> save=catProp_v; catProp_v=wv; setVal(brlen[c0]);
+                kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,0.0,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,nullptr); cudaDeviceSynchronize();
+                double l,a2,b2; reduceDerv(l,a2,b2); catProp_v=save; return l; };
+            auto softmax=[&](const std::vector<double>& z){ double mx=z[0]; for(int c=1;c<ncat;c++) if(z[c]>mx)mx=z[c];
+                std::vector<double> o(ncat); double s=0; for(int c=0;c<ncat;c++){o[c]=exp(z[c]-mx); s+=o[c];} for(int c=0;c<ncat;c++)o[c]/=s; return o; };
+            double eps=1e-4, maxrel=0;
+            for(int d=0; d<ncat; d++){
+                std::vector<double> zp(ncat),zm(ncat); for(int c=0;c<ncat;c++){ zp[c]=log(w[c]); zm[c]=zp[c]; }
+                zp[d]+=eps; zm[d]-=eps;
+                double lp=lnlW(softmax(zp)), lm=lnlW(softmax(zm));
+                double fd=(lp-lm)/(2.0*eps); double rel=fabs(gz[d]-fd)/(fabs(fd)+1e-30);
+                if(rel>maxrel) maxrel=rel;
+                fprintf(stderr,"[RGRADCHECK] c=%d WN=%.6e w=%.6f gz=%.6e FD=%.6e rel=%.3e\n",d,WN[d],w[d],gz[d],fd,rel);
+            }
+            double relWN=fabs(sumWN-Ntot)/Ntot;
+            fprintf(stderr,"[RGRADCHECK] ncat=%d lnL0=%.6f sumWN=%.6f N=%.0f relWN=%.3e sumGz=%.3e maxrel=%.3e -> %s\n",
+                ncat,lnL0,sumWN,Ntot,relWN,sumgz,maxrel,(maxrel<1e-4 && relWN<1e-9)?"RGRADCHECK PASS":"RGRADCHECK FAIL");
+            fflush(stderr);
+        }
+        return (double)NAN;   // G.5.1a: +R optimiser branch not yet wired -> decline to CPU after the (optional) check
+    }
+
     long nGradSweeps=0,nLnLEval=0;
     // part8 #2 base-sweep skip: record the (brlen,alpha,pinv) the device echild/partial were last built for (by
     // evalLnL) so computeGradient can skip the redundant rebuild+postorder when its base already matches. Values are
@@ -590,7 +641,7 @@ extern "C" double gpu_jolt_optimize(
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
         k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
         const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
-        setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr); cudaDeviceSynchronize();
+        setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,nullptr); cudaDeviceSynchronize();
         double l,d,dd; reduceDerv(l,d,dd);
         devB=cand_b; devA=cand_a; devP=cand_pinv; devValid=true;   // part8 #2: device echild/partial now hold this candidate
         return l; };
@@ -619,7 +670,7 @@ extern "C" double gpu_jolt_optimize(
                 const double* plv=edgeNodePtr(v);   // part8 #3: fused theta+derv+ratenum, no d_theta round-trip
                 double bv=brlen[v]; std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
                 cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); setVal(bv); cudaDeviceSynchronize();
-                kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,d_rnum); cudaDeviceSynchronize();
+                kj_derv_fused<<<GB,TB>>>(ns,nptn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,d_rnum,nullptr); cudaDeviceSynchronize();
                 double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
                 if(!gotL){ lnLfirst=l;
                     // G.5.0 Part B: 1/L_p on-device from the base-edge patlh (was a host D2H + exp loop over nptn).
