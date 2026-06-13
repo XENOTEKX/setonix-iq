@@ -39,8 +39,10 @@ have refined GTR+F+G4 / GTR+F+I+G4 / TVM+F+G4 — true-BIC ranks **18 / 20 / 14*
 recalls the true top-3 exactly. Strong support for the subsample-sufficiency hypothesis (5 k ranking = 1 M ranking).
 
 - **Coverage in production CTF:** 70 GPU engagements / 9 CPU declines on the full set — free-Q genuinely on GPU.
-- **Speed/energy:** wall **152 s** (subsample 0 + coarse `-m MF` 56 + refine 96) vs CPU `-m MF` 1122–3077 s = **7.4–13×**;
-  GPU energy **7.53 Wh** (181 W mean, 14.2 GB, GPU 60 %).
+- **Speed/energy:** wall **152 s** (subsample 0 + coarse `-m MF` 56 + refine 96) vs the **measured single-node DNA CPU
+  baseline** (`-m MTEST`, 176 models, OMP-104: MF wall 1714.9 s / 328.5 Wh) = **11.3× wall / 43.6× energy**; GPU energy
+  **7.53 Wh** (181 W mean, 14.2 GB, GPU 60 %). (The run script's printed "7.4–13×" used the AA baselines as a placeholder
+  — corrected here. Full `-m MF` parity table: §"GPU vs CPU PARITY — full `-m MF`".)
 - **Honest caveat:** CTF refines model params on the **fixed coarse tree**, so the winner's full lnL (−59208077) is ~58 nat
   below CPU full-MFP tree-search (−59208019) — but model **SELECTION (ModelFinder's actual job) is exact**.
 
@@ -187,6 +189,49 @@ costs the CPU: 1.3–15 k s). **This is why the GPU row's "tree-search wall" is 
 **‡ np1 CPU energy is the MF phase only** (the `cpuE1m` run is `-m TESTONLY`, single-rank): **791.8 Wh, mean 701 W/node** over 4068 s — the clean 1-CPU-node vs 1-GPU per-device anchor for the ModelFinder phase. np4/np8 are the **full `-m TEST`** (MF + tree). For the MF-phase apples-to-apples vs GPU CTF, the CPU MF-phase energy (by time-fraction of the measured full-run energy) is ~1.38 kWh (np4) and ~1.97 kWh (np8).
 
 **Energy methodology + a corrected bug.** GPU energy = `nvidia-smi --query-gpu=power.draw` integrated at 2 s cadence (no counter wrap; **measured 67.89 Wh H200 / 81.69 Wh A100**). CPU energy = direct RAPL (`/sys/class/powercap/intel-rapl:*/energy_uj`, packages + DRAM, both sockets) sampled every 5 s, one sampler/node launched via `mpirun -rf rankfile` (Gadi `pbsdsh` has **no `-u`** — use the rankfile). **Full-node exclusive allocation is mandatory** (`-l ncpus=104 -l mem=500GB`/node; `place=excl` is a no-op and `-l select` is rejected on Gadi — request all 104 cores so nothing else lands), because RAPL sums the *whole socket* regardless of tenant — a partially-allocated node is contaminated by co-tenants. **Bug found & fixed:** `energy_uj` wraps independently per domain (package 262.1 kJ, DRAM 65.7 kJ); the first integrator summed all 4 domains into one counter and added back the *combined* 655 kJ range on any negative delta, over-counting ~3× (reported a non-physical ~1900 W/node). Corrected by matching each negative delta to the specific domain range that wrapped → physical **~600–700 W/node**. Energy runs: 170582791 (np1), 170582814 (np4, 4/4 nodes captured), 170582815 (np8, 8/8 nodes captured); multi-node sampler validated by job 170582418.
+
+---
+
+## 📊 GPU vs CPU PARITY — full `-m MF` ModelFinder (CTF, native-BIC gate) — 2026-06-13
+
+The table above is the `-m TEST` subset. **This one is the FULL `-m MF` candidate set** (122 AA / 98 DNA candidates,
+*including* the free-rate `+R`/`+I+R` and — for DNA — the whole free-Q family HKY…GTR). GPU rows = the CTF pipeline:
+coarse-rank the entire `-m MF` set on a 5000-site subsample by **native subsample BIC**, then JOLT-refine the top-3 on
+the fixed coarse tree. The **native-BIC coarse gate** (replacing the projected-BIC bug, §X.3.2) is what makes a full
+`-m MF` sweep tractable on the GPU.
+
+### AA-1M `-m MF` — winner **LG+G4** (matches CPU)
+
+| Run | device | best model | coarse `-m MF` wall | refine wall | total wall | full lnL | GPU energy | vs CPU `-m TEST` MF phase |
+|---|---|---|---:|---:|---:|---|---:|---|
+| **H200** (job 170756438) | 1× H200 | LG+G4 ✓ | 467 s | 300 s | **767 s** | −78605275.637 | **43.61 Wh** (210 W, 748 s) | np4 **2.57×** / np8 **1.88×** / np16 **1.46×** |
+| **A100-80** (job 170756440) | 1× A100-80 | LG+G4 ✓ | 590 s | 531 s | **1122 s** | −78605275.637 | **46.64 Wh** (153 W, 1100 s) | np4 1.76× / np8 1.29× / np16 1.00× |
+
+**Coverage:** 122 candidates → **116 JOLT GPU engagements**, 9 CPU declines (8 `+R`/`+I+R` non-mean-gamma + 1 pure-`+I`).
+Native-BIC top-3 = LG+G4, LG+I+G4, LG+R4 (R4 **skipped** — detector: native BIC behind best eligible ⇒ can't win
+full-data). **The native-BIC fix is load-bearing:** the *pre-fix* runs (170728179 H200 / 170728182 A100) used the OLD
+**projected**-BIC ranking → picked LG+I+G4 / LG+R5 / LG+I+R5 and **TIMED OUT at 7200 s** on the expensive `+R` refines.
+Note the GPU sweeps the *full* `-m MF` set (incl. `+R`) while the CPU baseline is `-m TEST` (a subset) — the GPU is doing
+**more** candidate work for these speedups.
+
+### DNA-1M `-m MF` — winner **F81+F+G4** (matches CPU, G.6.2)
+
+| Run | device | best model | coarse `-m MF` wall | refine wall | total wall | full lnL | GPU energy | vs CPU `-m MTEST` (1 node, **measured, same data**) |
+|---|---|---|---:|---:|---:|---|---:|---|
+| **A100-80** (job 170843136) | 1× A100-80 | F81+F+G4 ✓ | 56 s | 96 s | **152 s** | −59208077.048 | **7.53 Wh** (181 W, 150 s) | MF wall **11.3×** / MF energy **43.6×** |
+
+**CPU DNA baseline (real, measured, same 1M alignment):** 1 SPR node, `-m MTEST` (176 models), OMP-104 — **ModelFinder
+wall 1714.9 s / 328.5 Wh** (1,182,450 J), best **F81+F+G4** (w-BIC 0.998); full pipeline (MF + tree) 3286.9 s. So GPU CTF
+**152 s vs 1714.9 s = 11.3×** wall and **7.53 vs 328.5 Wh = 43.6×** energy. **Coverage:** 98 candidates → **70 JOLT GPU
+engagements** (the free-Q family HKY…GTR now on GPU, G.6), 9 CPU declines (8 `+R`/`+I+R` + 1 pure-`+I`). *Correction:* the
+run script printed "7.4–13×" using the **AA** `-m TEST` baselines as a placeholder — the correct DNA-vs-DNA comparison
+against the measured single-node DNA baseline is **11.3× wall / 43.6× energy.**
+
+**Honest caveat (same as the `-m TEST` table):** CTF refines on the **fixed coarse tree**, so the GPU's absolute lnL sits
+below the CPU's fully-tree-searched lnL (AA ~79 nat: −78605275.6 vs −78605196.4; DNA ~58 nat: −59208077.0 vs
+−59208019.2). The **model SELECTION is exact** in every row (LG+G4 / F81+F+G4 = the CPU `-m MF` BIC winner, and for DNA
+the subsample top-3 == full-data top-3 *in order*); the full SPR/NNI tree-search phase is deferred on GPU (CPU
+tree-search wall: AA 1.3–15 k s by node count, DNA 1559.8 s single-node).
 
 ---
 
