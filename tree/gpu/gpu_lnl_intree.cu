@@ -455,6 +455,7 @@ extern "C" double gpu_jolt_optimize(
     double alpha0, int optAlpha, int maxiter,
     const double* base_invar, double pinv0, int optPinv, double pinvMin, double pinvMax,
     const double* catRate0, int freeRate,   // G.5.1: +R FreeRate — catRate0=rates[c] (else nullptr); freeRate=1 seeds rates directly (no alpha)
+    int nFreeQ, const double* q0, jolt_qdecompose_fn qdecompose, void* qctx, double* out_q,   // G.6: DNA free-Q (eigensystem moves)
     double* out_brlen, double* out_alpha, double* out_pinv, int* out_iters)
 {
     int ns = nstates;
@@ -469,10 +470,28 @@ extern "C" double gpu_jolt_optimize(
     static std::mutex jolt_gpu_mtx;
     std::lock_guard<std::mutex> jolt_lock(jolt_gpu_mtx);
 
-    // alpha-independent eigen constants — upload once
+    // alpha-independent eigen constants — upload once (the BASE-Q eigensystem). For free-Q (nFreeQ>0) qApply()
+    // re-uploads these whenever an exchangeability changes; for fixed-Q this is the only upload.
     GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
     GCK(cudaMemcpyToSymbol(g_U,    U,    sizeof(double)*ns*ns));
     GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
+
+    // G.6 free-Q: MUTABLE working copies of the eigensystem (refreshed per Q change via qApply). For fixed-Q
+    // (nFreeQ==0) evalP/UP alias the passed-in const arrays (the lambdas below use evalP/UP, so the fixed-Q path is
+    // byte-identical to before). For free-Q they point at the buffers that qApply overwrites in place.
+    std::vector<double> evalB, UB, UinvB;
+    const double *evalP = eval, *UP = U;
+    if (nFreeQ > 0) { evalB.assign(eval, eval+ns); UB.assign(U, U+ns*ns); UinvB.assign(Uinv, Uinv+ns*ns);
+                      evalP = evalB.data(); UP = UB.data(); }
+    auto qApply = [&](const double* q) -> void {   // re-decompose for a trial Q and re-upload eval/U/Uinv; rebuildEchild()/setVal() then use the new evalP/UP
+        // NB: plain cudaMemcpyToSymbol (NOT GCK) — GCK's `return (double)NAN` would return from THIS lambda (void),
+        // swallowing the error + UB. Matches rebuildEchild's plain copies; any failure is caught by the final
+        // cudaGetLastError() backstop (the sticky last-error persists to the end of gpu_jolt_optimize -> NaN -> CPU).
+        qdecompose(qctx, q, evalB.data(), UB.data(), UinvB.data());
+        cudaMemcpyToSymbol(g_Uinv, UinvB.data(), sizeof(double)*ns*ns);
+        cudaMemcpyToSymbol(g_U,    UB.data(),    sizeof(double)*ns*ns);
+        double rs[NS_MAX]; for(int i=0;i<ns;i++){ double s=0; for(int j=0;j<ns;j++) s+=UinvB[i*ns+j]; rs[i]=s; }
+        cudaMemcpyToSymbol(g_UinvRowSum, rs, sizeof(double)*ns); };
 
     // ---- rebuild topology from flat arrays (node ids = caller's DFS index) ----
     std::vector<std::vector<int>> child(nnodes);
@@ -552,8 +571,8 @@ extern "C" double gpu_jolt_optimize(
         if(leaf[w]>=0) st=d_tip+(size_t)leaf[w]*nptn; else sp=d_partial+(size_t)slot[w]*slotSz; };
     auto rebuildEchild=[&](){
         for(int c=0;c<nnodes;c++){ if(c==root){ for(size_t z=0;z<ecStride;z++) h_echild[(size_t)c*ecStride+z]=0.0; continue; }
-            for(int cat=0;cat<ncat;cat++){ double len=brlen[c]*catRate[cat]; double ex[NS_MAX]; for(int i=0;i<ns;i++) ex[i]=exp(eval[i]*len);
-                double* e=&h_echild[(size_t)c*ecStride+(size_t)cat*ns*ns]; for(int x=0;x<ns;x++) for(int i=0;i<ns;i++) e[x*ns+i]=U[x*ns+i]*ex[i];
+            for(int cat=0;cat<ncat;cat++){ double len=brlen[c]*catRate[cat]; double ex[NS_MAX]; for(int i=0;i<ns;i++) ex[i]=exp(evalP[i]*len);
+                double* e=&h_echild[(size_t)c*ecStride+(size_t)cat*ns*ns]; for(int x=0;x<ns;x++) for(int i=0;i<ns;i++) e[x*ns+i]=UP[x*ns+i]*ex[i];
                 for(int i=0;i<ns;i++) h_expfac[(size_t)c*ncat*ns+cat*ns+i]=ex[i]; } }
         cudaMemcpy(d_echild,h_echild.data(),(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice);
         cudaMemcpy(d_expfac,h_expfac.data(),(size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice); };
@@ -563,7 +582,7 @@ extern "C" double gpu_jolt_optimize(
             k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_partial+(size_t)slot[u]*slotSz,d_patlh,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
         cudaDeviceSynchronize(); };
     auto setVal=[&](double t){ std::vector<double> v0(ncat*ns),v1(ncat*ns),v2(ncat*ns);
-        for(int c=0;c<ncat;c++){ double rc=catRate[c],pcw=catProp_v[c]; for(int x=0;x<ns;x++){ double re=rc*eval[x],e=exp(eval[x]*rc*t)*pcw;
+        for(int c=0;c<ncat;c++){ double rc=catRate[c],pcw=catProp_v[c]; for(int x=0;x<ns;x++){ double re=rc*evalP[x],e=exp(evalP[x]*rc*t)*pcw;
             v0[c*ns+x]=e; v1[c*ns+x]=re*e; v2[c*ns+x]=re*re*e; } }
         cudaMemcpyToSymbol(g_val0,v0.data(),sizeof(double)*ncat*ns); cudaMemcpyToSymbol(g_val1,v1.data(),sizeof(double)*ncat*ns); cudaMemcpyToSymbol(g_val2,v2.data(),sizeof(double)*ncat*ns); };
     auto reduceDerv=[&](double& lnL,double& df,double& ddf){
@@ -636,7 +655,8 @@ extern "C" double gpu_jolt_optimize(
     // evalLnL) so computeGradient can skip the redundant rebuild+postorder when its base already matches. Values are
     // COPIES of the same candidate vectors (no recompute) => exact == is reliable; any mismatch falls back to rebuild.
     std::vector<double> devB; double devA=1e300, devP=1e300; bool devValid=false;
-    auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv)->double{
+    auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv,const double* cand_q)->double{
+        if(nFreeQ>0 && cand_q) qApply(cand_q);   // G.6: re-decompose+reupload the trial Q -> rebuildEchild() below uses the new evalP/UP
         if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b; rebuildEchild(); postorderFill();
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
         k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
@@ -651,7 +671,9 @@ extern "C" double gpu_jolt_optimize(
         applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
         // part8 #2: skip the redundant base rebuild+postorder when the device already holds EXACTLY this base point
         // (the immediately-preceding accepted evalLnL built it; bit-exact, falls back to rebuild on any mismatch).
-        bool devMatch = devValid && devA==curAlpha && devP==curPinv && (int)devB.size()==nnodes;
+        // part8 #2: NB the skip tracks (brlen,alpha,pinv) only — a Q-FD step (G.6) moves the eigensystem WITHOUT
+        // moving those, so for free-Q the skip is unsafe (it would reuse a stale-Q echild). Disable it when nFreeQ>0.
+        bool devMatch = (nFreeQ==0) && devValid && devA==curAlpha && devP==curPinv && (int)devB.size()==nnodes;
         if(devMatch) for(int z=0;z<nnodes;z++) if(devB[z]!=brlen[z]){ devMatch=false; break; }
         if(!devMatch){ rebuildEchild(); postorderFill(); }
         nGradSweeps++; cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));
@@ -695,7 +717,12 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> cand(nnodes,0.0), base;
     std::vector<double> startB(node_parentLen, node_parentLen+nnodes);   // distinct from brlen (evalLnL overwrites brlen)
     curAlpha=alpha0;
-    double lnL=evalLnL(startB,curAlpha,curPinv); nLnLEval++;
+    // G.6 free-Q: qcur = running free-Q vector (seeded from q0); set the device to base Q before the first eval so
+    // computeGradient's rebuildEchild (skip disabled for free-Q) reads the correct eigensystem.
+    const double MINQ=1e-4, MAXQ=100.0;   // == MIN_RATE / MAX_RATE (modelmarkov.h)
+    std::vector<double> qcur(nFreeQ>0?nFreeQ:0), qPrev(nFreeQ>0?nFreeQ:0,0.0), gqPrev(nFreeQ>0?nFreeQ:0,0.0);
+    if(nFreeQ>0){ for(int k=0;k<nFreeQ;k++) qcur[k]=q0[k]; qApply(qcur.data()); }
+    double lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
     double aPrev=0,gaPrev=0; bool haveSec=false;
     double pPrev=0,gpPrev=0;   // G.4.3b: pinv secant curvature (mirrors the alpha secant)
@@ -709,25 +736,45 @@ extern "C" double gpu_jolt_optimize(
         if(optPinv){ double ep=1e-4, pp=baseP+ep, dep;
             if(pp>pinvMax){ pp=baseP-ep; if(pp<pinvMin)pp=pinvMin; }   // backward FD at the upper boundary (audit #4: avoid a stuck zero gradient)
             dep=pp-baseP;
-            if(fabs(dep)>1e-9){ double lpe=evalLnL(base,baseA,pp); nLnLEval++; gradPinv=(lpe-lg)/dep; } }
+            if(fabs(dep)>1e-9){ double lpe=evalLnL(base,baseA,pp,nullptr); nLnLEval++; gradPinv=(lpe-lg)/dep; } }
+        // G.6 free-Q gradient by FORWARD FINITE DIFFERENCE (mirrors pinv; the CPU optimises Q by FD too, via BFGS).
+        // Each free exchangeability: perturb in rate-class space (qApply re-decomposes the 4x4 Q + re-uploads), one
+        // extra lnL eval. lg = base lnL. The device is left at base Q afterwards (qApply(qcur)).
+        std::vector<double> gradQ(nFreeQ>0?nFreeQ:0,0.0), ddQ(nFreeQ>0?nFreeQ:0,-1e6);
+        if(nFreeQ>0){
+            std::vector<double> qp(qcur);
+            for(int k=0;k<nFreeQ;k++){
+                double save=qp[k], hq=1e-4*fabs(save); if(hq==0.0)hq=1e-4; double qpk=save+hq;
+                if(qpk>MAXQ){ qpk=save-hq; if(qpk<MINQ)qpk=MINQ; }   // backward FD at the upper bound
+                double dq=qpk-save;
+                if(fabs(dq)>1e-12){ qp[k]=qpk; double lq=evalLnL(base,baseA,baseP,qp.data()); nLnLEval++; gradQ[k]=(lq-lg)/dq; qp[k]=save; }
+            }
+            qApply(qcur.data());   // restore the device eigensystem to base Q (the last FD eval left it at a perturbation)
+        }
         double ddA=(haveSec && fabs(baseA-aPrev)>1e-9)?(ga-gaPrev)/(baseA-aPrev):-1e6;
         double ddP=(haveSec && fabs(baseP-pPrev)>1e-12)?(gradPinv-gpPrev)/(baseP-pPrev):-1e6;
-        aPrev=baseA; gaPrev=ga; pPrev=baseP; gpPrev=gradPinv; haveSec=true;
+        for(int k=0;k<nFreeQ;k++) ddQ[k]=(haveSec && fabs(qcur[k]-qPrev[k])>1e-12)?(gradQ[k]-gqPrev[k])/(qcur[k]-qPrev[k]):-1e6;
+        aPrev=baseA; gaPrev=ga; pPrev=baseP; gpPrev=gradPinv;
+        for(int k=0;k<nFreeQ;k++){ qPrev[k]=qcur[k]; gqPrev[k]=gradQ[k]; }
+        haveSec=true;
         bool acc=false;
         for(int bt=0; bt<14; bt++){
             cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
             double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
             double cp=baseP; if(optPinv){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
-            double ln=evalLnL(cand,ca,cp); nLnLEval++;
-            if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
+            std::vector<double> cq(nFreeQ>0?nFreeQ:0);
+            for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
+            double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
+            if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq; lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
             else { mu*=4.0; nRej++; } }
-        if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP; break; }
+        if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP; if(nFreeQ>0) qApply(qcur.data()); break; }
         if(conv) break; }
 
     if (cudaGetLastError()!=cudaSuccess) return (double)NAN;   // any launch/sync error -> caller falls back to CPU
     for(int v=0;v<nnodes;v++) out_brlen[v]=brlen[v];
     if(out_alpha) *out_alpha=curAlpha;
     if(out_pinv)  *out_pinv = optPinv ? curPinv : pinv0;
+    if(nFreeQ>0 && out_q) for(int k=0;k<nFreeQ;k++) out_q[k]=qcur[k];
     if(out_iters) *out_iters=it;
     return lnL;
 }
