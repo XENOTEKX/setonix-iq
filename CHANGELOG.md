@@ -80,7 +80,7 @@ The shipped **native gate recalls the full-data BIC winner 30/30 with one trivia
 
 ---
 
-## 📊 A100↔H200 device comparison + AA-10M `-m MF` on an 80 GB card + the SM-metric tool fix — 2026-06-15
+## 📊 H200↔A100↔V100 device comparison + AA-10M `-m MF` on an 80 GB card (+ AA-10M fits a 32 GB V100) + the SM-metric tool fix — 2026-06-15
 
 Two DCGM-instrumented AA sweeps (full `-m MF` CTF, 10K/100K/1M/10M) — **job 171175357 on H200** (`gadi-gpu-h200-0009`) and **job 171175084 on A100-80GB** (`gadi-dgx-a100-0002`) — plus a tiny profiling diagnostic (job 171184799). Three outcomes:
 
@@ -88,14 +88,16 @@ Two DCGM-instrumented AA sweeps (full `-m MF` CTF, 10K/100K/1M/10M) — **job 17
 
 All eight cells return winner **LG+G4** with **bit-identical lnL/BIC across both devices** (cross-device determinism). The A100 just tiles more aggressively (nTile 44 vs 28 at 10M) to fit its smaller VRAM. Because DCGM never actually started (see C), these wall/energy numbers carry **no sampler overhead** — H200 1M = 797 s reproduces the frozen headline sweep's 803 s, a clean determinism check.
 
-| Sites | Wall H200 / A100 (s) | Energy H200 / A100 (Wh) | Peak VRAM H200 / A100 | nTile H200 / A100 | Parity (worst) |
+| Sites | Wall H200 / A100 / V100 (s) | Energy H200 / A100 / V100 (Wh) | Peak VRAM H200 / A100 / V100 | nTile H200 / A100 / V100 | Parity (worst) |
 |---|---:|---:|---:|---:|---:|
-| 10K  | 345 / 448   | 12.39 / 12.06  | 1.2 / 1.1 GB    | 1 / 1   | 1.4e-10 |
-| 100K | 505 / 667   | 19.00 / 18.14  | 8.8 / 8.7 GB    | 1 / 1   | 2.0e-10 |
-| 1M   | 797 / 1248  | 46.67 / 51.63  | 67 / 34 GB      | 2 / 2   | 1.8e-10 |
-| 10M  | 3173 / 3558 | 264.7 / 181.5  | 110 / 60 GB     | 28 / 44 | 1.5e-10 |
+| 10K  | 345 / 448 / —    | 12.39 / 12.06 / —  | 1.2 / 1.1 / — GB    | 1 / 1 / —    | 1.4e-10 |
+| 100K | 505 / 667 / —    | 19.00 / 18.14 / —  | 8.8 / 8.7 / — GB    | 1 / 1 / —    | 2.0e-10 |
+| 1M   | 797 / 1248 / —   | 46.67 / 51.63 / —  | 67 / 34 / — GB      | 2 / 2 / —    | 1.8e-10 |
+| 10M  | 3173 / 3558 / **3952\*** | 264.7 / 181.5 / **171\*** | 110 / 60 / **25.3** GB | 28 / 44 / **27** | 1.5e-10 (H200/A100); V100 **9.8e-14\*** |
 
 Notes: H200 ~26–36% faster wall at 1M–10M (bandwidth + clocks). **A100 uses *less* energy at 10M (181.5 vs 264.7 Wh)** — it runs at far lower mean power (187 W vs 308 W), so the 12% longer wall is more than offset. A100 10M peak VRAM (60 GB) < H200 (110 GB) because the 44-way tiling makes smaller chunks. Both fit their cards; engage 116 / decline 9 on every cell. 10M source self-check rel 4.2e-13 (H200) — see the tiling entry below.
+
+**\* V100 10M is NOT the `-m MF` sweep — it is a single-model `-te LG+G4 --jolt` capability + parity run** (job 171187221, `gadi-gpu-v100-0065`; full detail in §D below). The H200/A100 10M cells run full ModelFinder (coarse-rank ~120 candidates + refine top-k); the V100 evaluated **one** fixed model, so its **3952 s / 171 Wh are NOT comparable** to those cells (much *less* compute, yet slower wall on the 6-year-old card — and the wall is dominated by the host-side exact-lnL parity recompute, hence the low 158.6 W mean / 183.7 W peak GPU power over 3882 s). What the V100 cell *does* prove: **AA-10M fits a 32 GB card** — peak VRAM **25.3 GB** via auto **nTile=27** (chunk ~342 641 ptn), 17 joint iters, GPU lnL −782 589 513.2317 vs CPU −782 589 513.2316 = **rel 9.825e-14 (bit-parity on the V100 too)**, exit 0. The `—` cells (10K/100K/1M on V100) were not run (the V100 study targeted only the 10M capability question). So: capability/parity ⇒ directly comparable (✅ fits + bit-identical everywhere); wall/energy ⇒ V100 number is a different, lighter workload and is flagged, not raced.
 
 ### B. The SM metric still came back NA — but for a fixable, non-permission reason
 
