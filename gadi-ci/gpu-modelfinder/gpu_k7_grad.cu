@@ -404,6 +404,28 @@ int main(int argc, char** argv){
     for(int k=0;k<5&&k<(int)grad.size();k++) printf(" b%d=%.3e",gv[k],grad[k]); printf("\n");
     printf("============================================================\n");
 
+    // ---- TIMED all-branch gradient (phase-2b: matched to BEAGLE pre-order sweep + calculateEdgeDerivatives) ----
+    // Reuses the kernels FD-validated above; one postorder (k1_node) + one preorder (k7_pre) sweep + per-edge
+    // theta(k2_theta) + reduce(k2_derv), device-only (no host copy) = the Ji-2020 O(N) all-branch gradient.
+    // Values irrelevant to timing (already validated); setVal once so c_val is populated for k2_derv.
+    setVal(0.1);
+    auto grad_all=[&](){
+        for(int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==T.root) continue;
+            int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; childArgs(u,-1,nch,ec,p,t);
+            k1_node<<<GB,TB>>>(nptn,NCAT,d_partial+(size_t)slot[u]*slotSz,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
+        for(int rc : T.nodes[T.root].child){
+            int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(T.root,rc,nch,ec,p,tp);
+            k1_node<<<GB,TB>>>(nptn,NCAT,d_pre+(size_t)rc*slotSz,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); }
+        pre_dfs(T.root);
+        for(int u=0;u<nnodes;u++) for(int v:T.nodes[u].child){
+            edgeTheta(v); k2_derv<<<GB,TB>>>(nptn,NCAT,d_theta,d_patlh,d_pdf,d_pddf); }
+    };
+    for(int r=0;r<3;r++) grad_all(); CK(cudaDeviceSynchronize()); CK(cudaGetLastError());
+    { auto a=Clock::now(); for(int r=0;r<reps;r++) grad_all(); CK(cudaDeviceSynchronize());
+      double ms=now_ms(a,Clock::now())/reps;
+      printf("[GRAD-TIMING] all-branch gradient (1 postorder + 1 preorder + %zu edge theta+reduce): %.3f ms/eval (%d reps)\n",
+             grad.size(), ms, reps); }
+
     cudaFree(d_echild);cudaFree(d_partial);cudaFree(d_dad);cudaFree(d_theta);cudaFree(d_patlh);cudaFree(d_pdf);cudaFree(d_pddf);cudaFree(d_tip);
     cudaFree(d_pre);cudaFree(d_tipeig);cudaFree(d_expfac);
     return 0;

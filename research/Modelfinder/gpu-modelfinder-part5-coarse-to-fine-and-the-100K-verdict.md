@@ -104,10 +104,15 @@ cheap on the GPU — but it is **not** a GPU-beats-CPU result by itself.
 
 **Mechanism.** Restructure ModelFinder from "fully optimize all ~58 candidates on 96K patterns" into:
 1. **Coarse rank** — optimize *all* candidates on a small frequency-weighted pattern subsample (~480–1000),
-   rank by **scale-consistent BIC**: `BIC' = −2·(96017/m)·lnL'_sub + p·ln(96017)` (rescale the subsample lnL to
-   full magnitude; keep the *unscaled* parameter penalty so cross-param-class calls — `+F`'s ~19 freq params
-   vs `+I`'s 1 — stay commensurable). At subsample scale this is cheap on either device; on the GPU it is the
-   saturation-inversion batched pass.
+   rank by BIC. At subsample scale this is cheap on either device; on the GPU it is the saturation-inversion
+   batched pass.
+   > ⚠️ **SUPERSEDED (see §X.5.5 and §V.14):** this section originally specified the **projected** "scale-consistent
+   > BIC" `BIC' = −2·(N/m)·lnL'_sub + p·ln N`. That gate is **complexity-biased** — the `N/m` factor amplifies a
+   > model's overfitting optimism by ≈`(N/m)·k/2 ∝ k`, and it demonstrably demoted the true winner LG+G4 to rank 4
+   > behind +R5/+I+R5 on the real AA-1M subsample. **The shipped gate is now the NATIVE subsample BIC**
+   > `−2·lnL_sub + p·ln m` (penalty `ln m`, *not* amplified), which restores LG+G4 to rank 1. The final winner is
+   > always the **exact full-data BIC** over the refined top-k, so even the old biased gate could not over-fit the
+   > *output* (it only risked recall). §V.14 is the full treatment of the panel's overfitting concern.
 2. **Fine refine** — fully optimize only the **top-k≤3** on the full 96K patterns (FP64, JOLT for eligible,
    CPU for `+I`), pick the BIC winner.
 
@@ -415,3 +420,221 @@ same counter Forge reads internally, without that artifact.
 **Still honest about scope:** CTF is MF-equivalent only; the GPU does **not** yet run the 1M tree search (deferred
 JOLT tree-search hook), so the *full* `-m TEST` energy (CPU-measured: np4 4.18 kWh, np8 4.93 kWh) is not yet
 contested end-to-end on GPU. The MF-phase win (12–29× energy, faster than 16 nodes) is measured and stands.
+
+---
+
+## §V.14 — DOES CTF FAVOUR OVERFITTING UNDER BIC? — the rigorous answer (the IQ-TREE panel's main concern, 2026-06-15)
+
+**Synthesis of a 2-agent research workflow (statistics/phylo literature sweep + adversarial red-team, both code- and
+literature-grounded) + a first-principles decomposition + a decisive real-data demonstration on the AA-1M coarse
+table. Author as1708; multi-agent synthesis by Claude Opus 4.8.**
+
+> **The panel's concern, verbatim in spirit:** *"Does the coarse-to-fine procedure favour overfitting — selecting
+> models that are too complex — because BIC is being applied to a subsample?"*
+>
+> **The one-paragraph verdict.** The concern is **correct about the coarse RANKING and wrong about the OUTPUT.** A
+> subsample-rescaled fit term genuinely amplifies a model's overfitting "optimism" by ≈(N/m)·(k/2) ∝ k, so a
+> *projected* coarse BIC tilts toward complex models — and ours **once did, demonstrably** (it demoted the true
+> winner LG+G4 to rank 4 behind LG+R5/+I+R5; §X.5.5). **But the CTF output is chosen by EXACT full-data BIC over the
+> fully re-optimised top-k** — the identical number stock ModelFinder computes — so coarse optimism is *discarded*
+> and **cannot make the output over-complex.** A subset-minimisation of an exact criterion can never invert the BIC
+> ordering of two retained candidates. The *only* way CTF can differ from full ModelFinder is by **screening the true
+> winner out of the top-k (a recall miss)** — and the coarse complexity bias pushes that miss toward dropping the
+> *simpler* model (under-fitting), the **opposite** of the panel's fear. We further (i) **replaced the projected gate
+> with the native subsample BIC** (penalty `k·ln m`, un-amplified), which restores LG+G4 to rank 1, and (ii) note the
+> method is algebraically **ModelTamer** (Sharma & Kumar 2022, *MBE*), peer-reviewed with **≥99 % recall and no
+> documented complexity bias**. Net: **no over-fitting bias at the output; manage recall, not overfitting.**
+
+### V.14.1 The two-level decomposition — the whole argument in one move
+
+Let 𝒞 = the ~120-model candidate set; T = the fixed tree (from the subsample); `BIC_full(M)` = the exact full-data
+BIC of model M re-optimised on all N sites (the live pipeline literally computes `bic = -2*lnL + p*ln(N)`,
+`run_ctf_1m_mf_energy.sh:142`, with `lnL` the full-N re-optimised value — bit-for-bit what stock ModelFinder uses).
+CTF outputs `argmin_{M ∈ 𝒮} BIC_full(M)` where 𝒮 ⊆ 𝒞 is the coarse top-k shortlist. Stock ModelFinder outputs
+`W = argmin_{M ∈ 𝒞} BIC_full(M)`. Two exhaustive cases:
+
+- **Case A — W ∈ 𝒮 (true winner shortlisted).** Then `argmin` over 𝒮 ⊇ {W} returns **exactly W**, because
+  `BIC_full(W) ≤ BIC_full(M)` for every M ∈ 𝒮 by definition. **CTF output == stock output, identically.** A complex
+  model can sit in 𝒮 beside W, but the exact full-data BIC rejects it precisely as stock ModelFinder does. *Restricting
+  the candidate set cannot make BIC prefer a complex model it would otherwise reject.*
+- **Case B — W ∉ 𝒮 (true winner screened out).** Then CTF outputs W′ ≠ W with `BIC_full(W′) > BIC_full(W)`. **This is
+  the only way CTF differs from stock**, and whether W′ is more or less complex than W is not decided by BIC here — it
+  is whatever survived the coarse screen.
+
+**Therefore "CTF favours overfitting" requires CTF to *output* an over-complex model when the simpler one was in the
+refine set — impossible by Case A. The entire concern reduces to: *can the coarse screen drop the true winner?* — a
+one-sided RECALL question.** And §V.14.2 shows the coarse bias makes that miss fall toward the *simpler* model, i.e.
+toward **under**-fitting, not over-fitting.
+
+### V.14.2 The coarse ranking IS complexity-biased — the optimism math, and our documented failure
+
+The panel's mechanism is real and classical. A k-parameter model's maximised log-likelihood on its *own* fitting
+sample is upward-biased ("optimism") by ≈ **k/2** in lnL units — **constant in sample size** (Akaike 1973; Efron 2004
+*JASA*; Hastie–Tibshirani–Friedman *ESL* §7.4). The old **projected** coarse criterion
+`BIC' = −2·(N/m)·lnL_sub + k·ln N` multiplies the subsample lnL by N/m — which correctly rescales the *signal*
+(`(N/m)·E[lnL_sub] ≈ E[lnL_full]`) **but also amplifies the optimism to ≈ (N/m)·(k/2)**, ∝ k, while the penalty
+`k·ln N` is not amplified. A parameter is then spuriously favoured in the coarse rank whenever `N/m ≳ ln N` — at our
+operating point `N/m = 10⁶/5000 = 200 ≫ ln N ≈ 14`, so the amplified optimism *dominates* the penalty. **The coarse
+projected ranking is materially over-fitting-prone — established, not speculative.**
+
+**This is not hypothetical — it fired, and we caught it (§X.5.5, jobs 170728179/182).** Re-run *live* on the real
+AA-1M coarse table (122 models, m = 5000 sites, N = 10⁶; k recovered as `AIC/2 + lnL`):
+
+| Rank | **NATIVE gate** `−2·lnL_sub + k·ln m` (CURRENT) | **PROJECTED gate** `−2·(N/m)·lnL_sub + k·ln N` (OLD, superseded) |
+|---:|---|---|
+| 1 | **LG+G4** (k=198) ✅ the true full-data winner | LG+I+G4 (k=199) |
+| 2 | LG+I+G4 (k=199) | LG+R5 (k=205) |
+| 3 | LG+R4 (k=203) | LG+I+R5 (k=206) |
+| 4 | LG+I+R4 (k=204) | **LG+G4 (k=198)** ← true winner DEMOTED |
+
+Under the projected gate the true winner LG+G4 is pushed to **rank 4**, leapfrogged by **+1, +7 and +8-parameter**
+models (LG+I+G4, LG+R5, LG+I+R5) — **3 textbook overfit inversions**, exactly the (N/m)·k/2 amplification. Under the
+**native gate** (which penalises by `ln m`, *not* amplified) LG+G4 returns to **rank 1** and the +R ladder sits
+correctly below. **The fix is shipped:** the coarse gate is the native subsample BIC, in both
+`run_ctf_1m_mf_energy.sh` and the benchmark sweeps (which rank on IQ-TREE's own `n=m` BIC column). *(This corrects
+§V.4, which still printed the projected `BIC'` formula — see the note there.)*
+
+### V.14.2b The n=30 multi-seed confirmation — native gate is robust, projected gate fails *catastrophically* on the DNA ladder (job 171258771, 2026-06-16)
+
+§V.14.2's table is n=1. The decisive precursor experiment proposed in §V.14.7 has now **run to completion** —
+`run_ctf_overfit_recall_sweep.sh` on **real 100K alignments** (AA simulated under LG+I+G4; DNA under GTR+I+G4),
+computing the full-data `-m MF` BIC oracle and then ranking the candidate set under **both** gates across
+**m ∈ {1000, 2000, 5000} × seeds {1…5} = 30 runs** (CPU reference binary, BIC is optimiser-invariant; exit 0, 36 min,
+6.6 GB). For each run we record the oracle winner, each gate's top-1, recall@3 of the oracle winner, and whether the
+gate's top-1 has **more parameters** than the oracle (the "over-fit-top1" flag):
+
+| Dataset (oracle) | gate | **recall@3** | **over-fit-top1** | what the gate's top-1 actually was |
+|---|---|---:|---:|---|
+| **AA** (LG+G4, k=198) | **NATIVE** (shipped) | **15/15** | **0/15** | LG+G4 every time |
+| AA (LG+G4) | projected (old) | 15/15 | 1/15 | LG+G4 ×14, LG+I+G4 ×1 (the lone AA overfit, +1 param) |
+| **DNA** (F81+F+G4, k=201) | **NATIVE** (shipped) | **15/15** | **1/15** | F81+F+G4 ×14; one TPM2u+F+G4 (k=203) at m=5000 — **+2 params, and still recalled F81+F+G4 in top-3** |
+| DNA (F81+F+G4) | projected (old) | **0/15** | **15/15** | **never the true winner** — GTR+F+G4 ×7, GTR+F+I+G4 ×2, TIM/TVM/TIM2/TPM3u/TPM2u-family ×6 |
+
+**Three things this nails down:**
+
+1. **The shipped native gate is robust on both data types:** recall@3 = **30/30**, over-fit-top1 = **1/30** — and that
+   single native "over-fit" (DNA, m=5000) is a **+2-parameter within-family neighbour (TPM2u+F vs F81+F) that *still
+   recalled the true winner into the top-3*** → the exact full-data BIC refine then demotes it and outputs F81+F+G4.
+   The screen-then-clean safety (§V.14.3) is observed working, not just argued.
+
+2. **The projected gate fails exactly where the model family has a complexity ladder — and DNA is the worst case.**
+   On AA fixed-Q matrices (no exchangeability ladder, only +I/+F/+G to bolt on) the projected gate overfits only 1/15.
+   On **DNA it is catastrophic: 0/15 recall, 15/15 over-fit** — the GTR exchangeability ladder
+   (JC→K80→HKY→TN→TIM→TVM→GTR, ±I, ±F) gives the amplified (N/m)·k/2 optimism a continuum of nested richer models to
+   climb, so the gate climbs it *every single time* and never even keeps the true F81+F+G4 in the top-3. This is the
+   live, multi-seed realisation of the §V.14.5 prediction that **exchangeability/+R ladders are the genuine adversarial
+   lever** — measured, not theorised.
+
+3. **The mechanism is doubly illuminating because of *which* model is truth.** The DNA data is *generated* under
+   GTR+I+G4, yet the full-data **BIC** oracle is the *simpler* **F81+F+G4** (GTR's exchangeabilities buy too little lnL
+   to pay their `k·ln N` at this length — the same "generative ≠ BIC-selected" finding as G.6.2). So the projected gate
+   chases the **generative** model (GTR-family) while the actual selection criterion (full-data BIC) wants the simpler
+   one — and **only the native gate agrees with BIC.** The panel's fear ("CTF favours overfit models") is precisely the
+   *projected* gate's behaviour, and precisely *not* the native gate we ship.
+
+This upgrades §V.14.2's single demonstration to a 30-run, two-data-type result with a clean separation
+(native 30/30 vs projected 15/30, dominated by the DNA 0/15). Summary at
+`/scratch/rc29/as1708/iqtree3-gpu/ctf_overfit_recall/RECALL_SUMMARY.tsv`.
+
+### V.14.3 Why the bias does NOT reach the output — screening theory + the exact-BIC finish
+
+This is the architecture the statistics literature calls **screen-then-clean**, and CTF matches its "safe" pattern:
+
+- **Sure Independence Screening (Fan & Lv 2008, *JRSS-B* 70:849)** — a cheap, biased, noisy screen is admissible
+  *provided it does not drop the truth* ("sure screening property"); an exact criterion then finishes on the reduced
+  set. **Over-inclusion is the designed-for, benign direction.**
+- **Screen-and-clean (Wasserman & Roeder 2009, *Ann. Statist.*)** — the screen is allowed to return a *supermodel* of
+  the truth w.p.→1; the clean stage removes the excess.
+- CTF's coarse complexity bias **over-includes complex models** into 𝒮 (the safe direction), and the exact full-data
+  BIC refine **discards all coarse optimism** for shortlisted models — a model that "looked good" coarsely gets its
+  true, un-inflated `BIC_full` and loses if it is genuinely over-parameterised. **BIC is selection-consistent and
+  anti-overfitting at full N** (Schwarz 1978; Haughton 1988); in phylogenetics it is *the* recommended
+  anti-overfitting criterion (Posada & Buckley 2004, *Syst. Biol.*; Luo et al. 2010, *BMC Evol. Biol.*;
+  Kalyaanamoorthy et al. 2017, *Nat. Methods* — "BIC consistently outperformed AIC/AICc in identifying the true
+  model"). **Consistency is preserved at the output as long as recall holds.**
+
+### V.14.4 The decisive prior art — CTF's coarse criterion is published, and validated
+
+**ModelTamer (Sharma & Kumar 2022, *MBE* 39:msac236) is algebraically the same method.** It subsamples site patterns
+then **up-samples** (resamples with replacement back to N sites) and runs standard ModelFinder/BIC — which multiplies
+each pattern's lnL contribution by ≈ N/m and keeps the full-N penalty: **identically** `−2·(N/m)·lnL_sub + k·ln N`,
+reached by data replication instead of an explicit factor. Their empirical findings answer the panel directly:
+**≥99 % recall** of the full-data optimal model at ≥0.5 % subsample, **no systematic complexity bias**, and — the key
+inversion — their dominant failure was **UNDER-fitting** (raw subsampling without upsampling gave 12 % accuracy
+because the substitution signal collapsed); the N/m rescaling is the *cure* for under-fitting. **The practical hazard
+of subsample model selection is under-fitting, and the rescale fixes it — the opposite of the panel's worry.**
+
+### V.14.5 The phylo overfitting traps, and the one place to stay vigilant
+
+- **+I+G near-non-identifiability** (Sullivan & Joyce 2005; Yang 2006; Jia et al. 2014) — p_inv and α are confounded
+  along a flat ridge. **Susko & Roger 2020 (*MBE* 37:549): near boundaries a model "has less freedom than its
+  parameter count suggests" — its *effective* DoF < nominal k.** Since optimism ∝ effective DoF, the +I+G / boundary-+I
+  cases are **partially self-protected** (less amplified than naive k predicts); and the confounding *keeps the simple
+  twin +G in the shortlist*, which *helps* recall. Benign-to-helpful for output correctness.
+- **+R (FreeRate, 2(k−1) params)** is the genuine adversarial lever: near-nominal effective DoF ⇒ **maximal**
+  (N/m)·k/2 amplification, small inter-model BIC gaps. It caused the one documented projected-gate failure (§X.5.5).
+  The native gate contains it on tested data; the residual risk is **data where +R *legitimately* wins** — there a
+  small subsample under-determines the rate categories and could drop a genuine +R winner *toward parsimony*
+  (under-fitting). Again the wrong direction for "overfitting," but the one regime to test.
+- **The 17,618-nat between-family cliff is the structural safety net.** Coarse noise can scramble only the
+  *within-family* near-ties (top-3 within ΔBIC ≤ 264); it cannot promote a wrong-matrix-family model (O(0.2 nat/site)
+  away — signal swamps noise at any m ≥ a few hundred). So the worst realistic native-gate miss is a within-LG-family
+  swap (e.g. output LG+I+G4 instead of LG+G4) — **+14 BIC, a single dead pinv≈0 parameter — cosmetic, not a fit
+  catastrophe.**
+
+### V.14.6 Safeguards — from "cannot over-fit" to "cannot mis-recall"
+
+| # | Safeguard | Status | Closes |
+|---|---|---|---|
+| **S1** | **Native-BIC coarse gate** (`−2·lnL_sub + k·ln m`), never the projected BIC | ✅ **shipped** | the entire (N/m)·k/2 amplification — the only observed overfitting-looking failure (§X.5.5) |
+| **S2** | **Adaptive-k / ΔBIC-band refine** — refine every coarse candidate within a band Δ (≪ the 17,618 cliff) of the coarse leader | ⬜ recommended | Case-B recall miss: guarantees the true winner is refined if it is anywhere near the coarse leader → output reverts to exact-BIC-correct |
+| **S3** | **Force-include the simplest competitive model per rate-class** in the refine set | ⬜ recommended | the "three rich models crowd out the bare winner" miss — the simple model is refined *by construction*, then exact BIC demotes any dead-parameter complex twin |
+| **S4** | **Recall certificate** — certify from the coarse ΔBIC(rank-1→rank-(k+1)) vs a one-sided `z·σ_δ·√(N/m)` bound that no lower candidate can overtake at full N | ⬜ optional | upgrades "recall=1.0 empirically" to "recall=1.0 with certificate, else widen k" |
+| **S5** | **Rate-het detector + per-model wall budget** (never silently exclude an ineligible +R/+I leader; cap each refine) | ✅ shipped | the +R-spurious-promotion **time bomb** (CPU-at-1M timeout) AND the under-fit miss of a genuine +R leader |
+
+**S1 + S3 give a provable-non-overfitting statement:** with the un-amplified native gate *and* the simplest
+competitive model per rate-class force-refined, the output is `argmin BIC_full` over a set guaranteed to contain the
+simplest within-family candidate; since exact full-data BIC demotes any dead-parameter complex model (it did so to +I
+in *every* test), **CTF's output cannot be more complex than full ModelFinder's, except in the cliff-excluded
+measure-zero event of a wrong-family flip.**
+
+### V.14.7 The defensible statement to the panel + the one decisive experiment
+
+**Statement:** *"CTF's coarse ranking can be complexity-biased — and demonstrably was, via the lnL-rescaling
+projection, which we caught (it demoted the true LG+G4 to rank 4 behind +R5/+I+R5) and replaced with the native
+subsample BIC. But that bias cannot make CTF output an over-fit model: the final selection is the exact full-data BIC
+over fully re-optimised candidates — the same number ModelFinder itself uses — which rejects dead parameters
+regardless of how the shortlist was built. The only way CTF can differ from full ModelFinder is by failing to
+shortlist the true winner, and our coarse bias pushes toward dropping the *simpler* model, not selecting a complex
+one. So the concern is a recall question about parsimony, not an overfitting question about fit; we bound it with the
+native gate, the 17,618-nat between-family cliff, top-k ≥ 3, and (recommended) adaptive-k + a forced simplest model
+per rate-class. The algebraically identical published method, ModelTamer, reports ≥99 % recall with no complexity
+bias."*
+
+**The single decisive experiment (the one untested regime):** run CTF end-to-end (native gate) on a **genuinely
+rate-heterogeneous alignment simulated under a true +Rk model where +R legitimately beats +G at full data** — the only
+regime where the coarse stage could either drop a genuine +R winner (under-fit) or be tempted to promote one
+spuriously. Measure top-3 recall of the full-data BIC winner across ≥5 subsample seeds at m=5000, and whether the
+output ever differs from a full `-m MF` reference. **Recall = 1.0 there closes the last honest gap; recall < 1.0
+localises the failure to shortlist construction (fixed by S2/S3), and the output stays non-overfitting by
+construction.** ✅ **The cheap precursor — a multi-seed native-vs-projected recall sweep on the existing AA/DNA data
+(m ∈ {1000, 2000, 5000} × 5 seeds) — has now run (§V.14.2b, job 171258771): the shipped native gate scored 30/30
+recall@3 with 1/30 trivial over-fit, while the old projected gate collapsed to 0/15 recall on the DNA exchangeability
+ladder.** The one regime still untested is genuinely +R-favouring data (a true +Rk generative model where +R beats +G
+at full data) — the under-fit direction; that remains the last open recall check.
+
+### V.14.8 Established vs uncertain (intellectual honesty)
+
+**Established:** optimism ≈ k/2, constant in n (Akaike 1973; ESL §7); rescaling amplifies it to ≈(N/m)·k/2 (direct
+algebra, **and demonstrated live** on the AA-1M table); BIC consistent/anti-overfitting at full N (Schwarz 1978;
+Kalyaanamoorthy 2017); biased screen + exact finish is safe, over-inclusion benign (Fan & Lv 2008; Wasserman & Roeder
+2009); the equivalent method (ModelTamer) gives ≥99 % recall, no complexity bias, under-fitting the real hazard
+(Sharma & Kumar 2022); effective DoF < nominal for +I+G (Susko & Roger 2020); **and — now measured at n=30 (§V.14.2b)
+— the shipped native gate recalls the full-data BIC winner 30/30 with 1/30 trivial over-fit, while the projected gate
+collapses to 0/15 on the DNA exchangeability ladder, confirming both the amplification mechanism and the native fix on
+real data.** **Uncertain:** no paper analyses the explicit `−2(N/m)lnL+k·ln N` estimator's optimism directly (the
+derivation here is sound first-principles, **though the n=30 sweep now empirically matches its prediction**, not a
+cited result for this exact form); worst-case recall for near-degenerate +R ladders under subsampling is not formally
+bounded and **the genuinely-+R-favouring generative regime is the one recall case still untested** (ModelTamer's 99 %
+is empirical, its one miss ΔBIC<10); the fixed-subsample-tree × model-ranking interaction is uncharacterised (a
+separate risk, orthogonal to overfitting).

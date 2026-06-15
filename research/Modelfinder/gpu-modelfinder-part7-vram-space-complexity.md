@@ -3,7 +3,11 @@
 **Author:** as1708 / Claude Fable 5 (xhigh), 2026-06-11. Opened at the user's direction after G.4.3b (+I in JOLT)
 validated: *"most of IQ-TREE's users will not have access to A100/H100 — most use commercial GPUs with less VRAM,
 so space-complexity reduction is necessary... an important feature we will need to implement."* **Status: SCOPED +
-first-principles analysis + recommended direction. The build is FUTURE WORK (not started).**
+first-principles analysis + recommended direction.** **BUILD STARTED 2026-06-14 as G.7.1 — V.A correctness gate
+PASSED (job 170976732, V100): AA-100K LG+G4 -te at nTile∈{1,4,8,40} all give GPU lnL −7541976.852146, chunked==one-shot
+rel 0.000e+00 (bit-identical, stronger than the ≤1e-12 gate), identical 14 iters/α 0.996214, self-check rel ~2.77e-12
+PASS; peak VRAM 8782→2438→1380→532 MiB (~T× shrink, ~300 MiB CUDA-context floor). V.C 10M-on-H200 engage test in
+flight. See §VII.5 status + part9 §IX.10.1 #4.**
 
 ---
 
@@ -143,6 +147,37 @@ T=40 = 22 GB fits a V100; one-shot 886 GB fits nothing).
 | **V.B — tiling overhead** | Per-model JOLT wall vs T∈{1,4,10,40} at AA-1M on V100 (T=10 should fit 32 GB). | wall(T=10)/wall(T=1, on H200) overhead characterized; report the launch+reload cost. |
 | **V.C — capability frontier** | AA-1M `--jolt` refine running on a **V100** (T≈10) and ideally a consumer card; AA-10M on a V100 (T≈40). | correct LG+(I+)G4 MLE produced on 32 GB / consumer VRAM — the accessibility headline. |
 | **V.D (optional)** | FP32-storage coarse phase + tiling, with an error gate; and/or fused post+pre recycling. | coarse BIC ranking unchanged with FP32 partials; recycling correctness vs one-shot. |
+
+### VII.5.1 G.7.1 implementation status (2026-06-14)
+
+The build matches §VII.3's sketch exactly: an outer `for(t=0;t<nTile;t++)` pattern-chunk loop inside
+`gpu_jolt_optimize`'s `evalLnL`/`computeGradient` closures, with a `setChunk(t)` helper that uploads the chunk's
+tip/ptn_freq/base_invar slice and updates the mutable chunk-relative `Pn`/`slotSz`/`GB`. Every O(nptn) device arena
+allocates at `chunk0=ceil(nptn/nTile)`; the chunk-INDEPENDENT echild/expfac/eigen constants build once per point
+(`rebuildEchild` outside the chunk loop). Cross-chunk **Kahan** accumulation of lnL/df_e/ddf_e and the raw per-category
+rate-grad numerator (catProp_v multiply applied once after the loop). `nTile` is `JOLT_NTILE` or auto from
+`cudaMemGetInfo` (80%-of-free budget); `+R` forces `nTile=1` (it declines to CPU anyway). `nTile==1` is byte-identical
+to the pre-tiling path (the part8 #2 base-sweep skip is preserved; postorder reuse is gated on `nTile==1`).
+
+- **V.A — correctness: ✅ PASSED (job 170976732, V100, binary `4f958a57`).** Table above (header). The decisive
+  number: `chunked_vs_oneshot_rel = 0.000e+00` at T=4/8/40 — the tiled lnL is *bit-identical* to one-shot, not merely
+  within 1e-12, and the JOLT MLE (lnL, 14 iters, α) is unchanged across all tiers. Peak VRAM tracks 1/T.
+- **V.B — overhead:** to be read off the V.C run (per-eval wall vs the one-shot reference); the tip re-upload per
+  chunk + the extra kernel launches are the expected cost (modest, launch/reload-bound per §VII.3 — MEASURE).
+- **V.C — capability frontier: ✅ PASSED — AA-10M `--jolt -te` ENGAGES on 1× H200 (job 170977748, binary
+  `8dd57cfb`).** Auto-`nTile=6` (from `cudaMemGetInfo`, 139.5 GB free; `nPool=19` on this coarse tree, so the real
+  footprint was below the height-44 worst case and 6 chunks sufficed), **peak VRAM 112.8 GB fits the 141 GB H200**,
+  **GPU util 100%**, **GPU lnL −782589738.598749 vs CPU −782589738.598400 rel 4.465e-13 PASS**, exit 0, 12m37s. The
+  decisive contrast: before tiling (job 170934922) the 886 GB one-shot arena OOMed → NaN → CPU fallback (GPU util 0%,
+  no `[JOLT]` line); with tiling JOLT runs the whole branch+α optimise on the GPU at 9.25M patterns, lnL-exact. **The
+  two fixes composed exactly:** the G.7.0 cgroup NOTE + lean LM_MEM_SAVE NOTE both fired, so the host self-check ran in
+  **60.5 GB RSS < 180 GB** (no host OOM) while the GPU did the likelihood. **A100 (auto-T~) confirm queued (job
+  170978215, dgxa100).** This is the accessibility headline: AA-10M now runs on one datacenter GPU; the same auto-T
+  mechanism reaches V100/RTX at smaller scales (V.A showed T=40 → 532 MiB at 100K).
+- **Honest caveat banked for V.C:** the per-model wall at 10M will be dominated by the **host self-check
+  `computeLikelihood`** under LM_MEM_SAVE (recompute-on-miss at 9.4M patterns) — a host cost, not a GPU cost. The GATE
+  is *capability* (JOLT engages on the GPU, lnL-exact); wall optimisation (e.g. sampling the host self-check at extreme
+  nptn) is a separate, later lever (part9 §IX.10.1 #4b).
 
 ---
 

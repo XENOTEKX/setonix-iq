@@ -2,6 +2,239 @@
 
 ---
 
+## 🧭 Commercial-card support (FP64) + BEAGLE-4.0 head-to-head (✅ JOLT competitive vs tensor cores, 2.3–2.4× over CUDA-core BEAGLE, runs AA-1M where BEAGLE OOMs; agent-reviewed) + overfitting recall sweep (n=30, ✅ DONE) — 2026-06-15 / 16
+
+Three threads from the panel's questions; status + verdicts below.
+
+### A. Can we run on consumer cards (RTX 5090) by going FP32? — researched, verdict: yes, but via mixed/emulated precision, NOT a wholesale FP32 switch (2-agent workflow)
+
+Question raised by the panel ("impossible without FP64/ECC") and the goal of democratising IQ-TREE ModelFinder to cheap cards. Two findings:
+
+1. **"Unlocking" FP64 on modern consumer GPUs is impossible — it's silicon, not a software lock.** NVIDIA's Ada whitepaper: AD102 has only **2 FP64 cores/SM (1/64 rate) "to ensure FP64 code operates correctly"** — a correctness provision, not throughput. No driver flag/vBIOS/Quadro-crossflash restores it (RTX 4090 and RTX 6000 Ada are the *same die*, both 1/64). The Kepler GTX-Titan toggle worked only because GK110 physically had the units; that era ended ~2014. **AMD is no backdoor** (RDNA FP64 regressed 1/16→1/32→1/64; RX 9070 XT only 0.76 TFLOPS). **Even datacenter FP64 is eroding** (Blackwell B300 dropped to 1/64). BIOS/driver hacks are also a **reproducibility dealbreaker** for a tool under IQ-TREE's name.
+2. **The engineering route-around WINS and is reproducible.** On a 1/64 card, **double-float ("df64", a hi+lo pair of FP32 ≈ 48-bit mantissa) is ~3–6× FASTER than native crippled FP64** (df64 ≈ 10–20 FP32 ops vs native FP64 = 64 FP32-equivalent). And you don't even pay that everywhere — **precision-tier it**: plain FP32 for the partial-likelihood recursion (99% of FLOPs); explicit integer/log **scaling for underflow** (the #1 correctness item — df64 does NOT fix FP32's 8-bit exponent range, ties to G.4.0b's 1e92 dynamic range); a **compensated (Neumaier/Kahan) or df64/long-accumulator reduction** only for the cross-site lnL + gradient sums (naïve FP32 there loses ~4 nats → flips BIC); native FP64 for the ~200 optimiser scalars. Net overhead ≈ a few %, FP64-equivalent BIC. **Speed crossover is clean: emulate on consumer (1/64); keep native FP64 on A100/H200 (1/2) — so our datacenter path is untouched.** Ozaki/tensor-core FP64 emulation is GEMM-only ⇒ a red herring for phylo's small-matvec+reduction shape. Reproducibility (cross-card bit-identical BIC) needs a fixed-order or ExBLAS-style long accumulator. **Recommendation: opt-in `--mixed` mode (FP32 + df64/compensated reductions + scaling), CTF coarse in plain FP32, refine reductions in df64, final winner re-verified in native FP64 and the delta reported — never silent. +R stays FP64.** Full write-up: `research/Modelfinder/gpu-modelfinder-part11-commercial-card-precision.md`.
+
+### B. JOLT+CTF vs BEAGLE 4.0 (tensor-core) ✅ DONE — lnL: A100 tie / H200 −13% vs tensor cores, 2.4× over CUDA-core; gradient ≈ parity vs tensor cores / 2.3× over CUDA-core; JOLT runs AA-1M where the BEAGLE client OOMs (agent-reviewed) (jobs 171210531/171265226/171267592/171269929/171270072)
+
+**Phase 1 (build):** built the tensor-core BEAGLE (github beagle-dev/beagle-lib branch `tensor-cores` @ `dd962d48` — the exact code behind Gangavarapu 2026): cmake/make exit 0, **TensorCoresPlugin compiled**. Two phase-2 facts learned: (i) `--calcderivs` (gradient) needs the `--unrooted` flag; (ii) **tensor cores are selected via the BEAGLE resource flag `BEAGLE_FLAG_VECTOR_TENSOR` (bit 33)** which `synthetictest` does NOT expose — so phase 2 used a small custom client (`bench/beagle_jolt_bench.cpp`) requesting `VECTOR_TENSOR | FRAMEWORK_CUDA | PRECISION_DOUBLE`.
+
+**Phase 2 (head-to-head, the user's actual question — "are we genuinely faster than the optimised BEAGLE?"):** both tools on the **same A100, AA-20 +G4 FP64, 100 taxa, nPat = 100000** (JOLT uses `nptn = nsite`, no pattern compression → BEAGLE matched exactly), matched operation = one post-order partial-likelihood sweep + root lnL:
+
+| tool / kernel | per-eval lnL ms | relative |
+|---|---:|---:|
+| **JOLT `k1_node`** (our custom eigen-space FP64, **plain CUDA cores**) | **26.51** | **1.00×** |
+| **BEAGLE-4.0 tensor-core** (FP64 MMA, `impl=CUDA-Double-Tensor-Core`) | **26.50** | **1.00× — dead heat** |
+| BEAGLE-4.0 standard (`impl=CUDA-Double`, CUDA cores) | 64.52 | 2.43× slower |
+
+**Findings:**
+1. **JOLT ties BEAGLE-4.0's tensor-core kernel (within 0.04%)** — our hand-rolled eigen-space FP64 kernel on *ordinary CUDA cores* matches BEAGLE's *FP64-tensor-core-accelerated* kernel. We do **not** lose to tensor cores (the honest prior was that we might).
+2. **BEAGLE's tensor cores buy it 2.43× over its own CUDA cores** — independently **reproduces the paper's "2–2.3× AA on A100"** claim (we measured marginally higher, 2.43×). Tensor cores bring BEAGLE *up to parity with us*, not past us.
+3. **JOLT is 2.43× faster than standard CUDA-core BEAGLE** — and standard CUDA-core BEAGLE is what most users actually run (Gadi's `/apps/beagle-lib/4.0.1` module has no tensor-core symbols).
+4. **BEAGLE tensor-vs-CUDA lnL bit-identical** (−7118563.1495310133 both) → the FP64 tensor-core path is numerically exact for lnL on this branch (the old 4.0.1 AA-gradient bug, G.0, does not show up in the lnL kernel). JOLT's own lnL is the validated oracle −7541976.9391 (rel 5.8e-12).
+
+**Honest reading + caveats:** (a) the comparison is the **kernel eval layer only** — BEAGLE does no model selection, so JOLT+CTF's actual job (GPU ModelFinder, exact-BIC over ~120 models) has *no* BEAGLE equivalent; this benchmark answers the narrower "is our likelihood kernel competitive," and it is. (b) Conservative-for-JOLT setup: BEAGLE used tip *partials* while JOLT uses tip *states* (BEAGLE did ≥ JOLT's leaf work), and the caterpillar tree (depth ~99) is *deeper* than JOLT's real ML tree (latency-adverse for BEAGLE) — neither flatters BEAGLE.
+
+**Phase 2b — GRADIENT head-to-head + GENOME-SCALE lnL (job 171267592, H200/gpuhopper).** Client extended to the full BEAGLE-4.0 gradient (pre-order sweep + `beagleCalculateEdgeDerivatives` over all edges; **FD self-checked**, worst rel 2.95e-7 PASS, tensor==cuda bit-identical), and `gpu_k7_grad.cu` given a `[GRAD-TIMING]` all-branch loop (1 postorder + 1 preorder + per-edge theta+reduce) matched to it. Per-eval ms, AA-20 +G4 FP64, **H200**:
+
+**Per-eval time — BEAGLE 4.0 vs JOLT, H200, AA-20 +G4 FP64** (lnL = 1 postorder sweep + root; gradient = all-branch, 1 postorder + 1 preorder + edge derivatives):
+
+| nPat | tool / kernel | **lnL ms** | **gradient ms** | VRAM | correctness (independently verified) |
+|---|---|---:|---:|---:|---|
+| 100K | **JOLT** k1 / k7 | 17.51 | **74.54** | 6.4 / 11.8 GB | lnL rel **5.8e-12** vs G.0 oracle; grad FD rel **2.5e-8** |
+| 100K | BEAGLE tensor-core | **15.27** | 82.05 | — | lnL tensor≡CUDA **bit-identical**; grad FD rel **3.0e-7** |
+| 100K | BEAGLE CUDA-core | 37.46 | 170.36 | — | (same lnL as tensor) |
+| **1M** | **JOLT** k1 | **111** | — | **59 GB (runs)** | lnL rel **1.0e-9** vs IQ-TREE CPU oracle (see parity table) |
+| **1M** | BEAGLE tensor & CUDA | **OOM** | OOM | **>141 GB** | n/a — cannot allocate |
+
+**AA-1M lnL PARITY — verified (jobs 171269929 GPU + 171270072 CPU oracle).** The scale benchmark's Point 2 originally reused the 100K-fit tree + the harness's hard-coded 100K oracle (cosmetic "FAIL"). Re-run on the **real 1M simulation tree** (`tree_1.full.treefile`, branch lengths fixed) with an **independent IQ-TREE CPU oracle** (`-te … -blfix`, on normalsr — the `-march=sapphirerapids` binary SIGILLs on the AMD-EPYC dgxa100 nodes, hence a separate CPU job):
+
+| model | JOLT GPU `k1_node` | IQ-TREE CPU oracle | **rel** | verdict |
+|---|---:|---:|---:|---|
+| AA-1M, **g1** (LG, no gamma) | −83 289 639.8478 | −83 289 639.5992 | **2.99e-9** | ✅ tight (no gamma-rounding confound) |
+| AA-1M, **g4** (LG+G4{0.9963}) | −78 605 304.6507 | −78 605 304.5719 | **1.00e-9** | ✅ tight |
+
+So JOLT's genome-scale lnL is **independently correct to ~1e-9** (the residual is FP64 reduction order + 4-dp gamma-rate rounding, ≈0.08 nats at 1M — not GPU error). *(Note the JOLT vs BEAGLE lnL **values** in the timing table are not directly comparable — the BEAGLE client uses a generalized-JC test model + random tip partials for timing, while JOLT runs the real LG model on the real alignment; correctness is therefore verified **per tool** against its own independent reference, and the head-to-head is the per-eval **wall time** at matched dimensions.)*
+
+**The complete, honest picture (A100 + H200):**
+1. **lnL kernel:** A100 = dead heat (26.51 vs 26.50); H200 = **BEAGLE tensor-core slightly ahead** (15.27 vs 17.51, ~13%). BEAGLE's FP64 tensor cores are genuinely strong on the 20×20×4 +G matvec — so **tensor-core MMA is a real, confirmed future lever for our `k1_node`** (it would likely give *us* a similar boost over our CUDA-core kernel). JOLT still beats standard CUDA-core BEAGLE by 2.1–2.4×.
+2. **Gradient kernel: roughly a TIE with BEAGLE tensor-core, decisively over CUDA-core.** JOLT 74.54 vs BEAGLE tensor-core 82.05 (JOLT ~10% lower) and vs BEAGLE CUDA-core 170.36 (**2.29×**). ⚠️ **The ~10% is within the two timers' work asymmetry** (see review note below): JOLT's loop omits the per-edge pattern reduction + device→host copy that BEAGLE's `calculateEdgeDerivatives` performs, while BEAGLE pays an avoidable per-iteration transpose + ~64 MB H2D and JOLT pays an extra 2nd-derivative — these partially offset, but the honest read is **gradient ≈ parity (JOLT mildly favoured), not a clean win**. The robust claim is the **2.29× over BEAGLE CUDA-core** (large enough to survive the asymmetry). (Within BEAGLE, tensor cores buy 2.45× on lnL and 2.08× on gradient — reproduces the paper.)
+3. **Genome scale: JOLT runs where this BEAGLE client OOMs.** At AA-1M, JOLT does the lnL in **111 ms using 59 GB** (**lnL-verified to rel 1.0e-9** vs the independent CPU oracle, table above); the **BEAGLE client OOMs on the 141 GB H200** (both resources). ⚠️ **Honest scope:** this is *BEAGLE as we drove it* — our client uses tip *partials* + all partial buffers resident (the `synthetictest`-style default), so an estimated ~127 GB (lnL) / ~254 GB (gradient) — **estimates, not measured; the driver reported only "Out of memory"**. A hand-tuned BEAGLE client using **compact tip states** (`beagleSetTipStates`, which BEAGLE supports and we did not use) + buffer tiling could plausibly fit 1M lnL. So the win is **JOLT's production memory model** (compact states + O(depth) recycling + pattern tiling) **vs a straightforward BEAGLE client**, *not* a hard BEAGLE ceiling. The same tip-states-vs-partials choice that makes our timing comparison conservative-for-JOLT (BEAGLE does ≥ leaf work) also drives this OOM — disclosed both ways.
+
+**Net (honest):** at the kernel layer JOLT is **competitive**: lnL — lose ~13% to BEAGLE's tensor cores on H200, tie on A100, 2.1–2.4× over standard CUDA-core BEAGLE; gradient — **≈ parity with BEAGLE's tensor cores**, 2.3× over CUDA-core. At genome scale JOLT runs where our BEAGLE client OOMs (a memory-model win, partly client-driven). All of this sits *under* the optimiser + model-selection layers (JOLT joint-LM, CTF) that BEAGLE has no equivalent for. **The one confirmed, unambiguous future lever is adopting FP64 tensor-core MMA in `k1_node`** (BEAGLE's tensor cores beat our CUDA-core lnL by 13% on H200).
+
+**Independently reviewed (2 agents, 2026-06-16).** A methodology reviewer and a CUDA/code reviewer audited the numbers, fairness, and code. Findings folded in above: (i) every CHANGELOG figure matches the raw logs (no transcription error); (ii) timers genuinely force GPU completion (no async-launch artifact), warmups excluded, FD self-check validates the *timed* gradient path; (iii) the gradient timers are **not perfectly work-matched** → the ~10% gradient "win" downgraded to ≈parity (above); (iv) the 1M OOM is partly a client-implementation choice and the GB figures are estimates → scope softened (above); (v) lnL *values* differ between tools by construction (BEAGLE client = generalized-JC + random partials for timing; JOLT = real LG + real alignment) so correctness is verified *per tool* against its own reference and only **wall time** is compared head-to-head. No correctness-invalidating bugs found. A fully work-matched gradient rerun (add a JOLT per-edge reduction; hoist BEAGLE's transpose/H2D out of the loop) is the remaining refinement if an exact gradient ratio is wanted. Client + scripts (version-controlled): `gadi-ci/gpu-modelfinder/{beagle_jolt_bench.cpp, run_beagle_vs_jolt_a100.sh, run_beagle_vs_jolt_scale_h200.sh, run_jolt_1m_parity_a100.sh, run_jolt_1m_cpu_oracle_normalsr.sh}`.
+
+### C. CTF overfitting recall sweep — ✅ DONE (job 171258771, n=30) — the panel's concern, measured
+
+The first attempt (171208914) ran to completion but emitted an **empty** RECALL_SUMMARY: `iqtree3-mpi` launched standalone mis-detected "1 CPU core" and aborted on `-T 104`, so no `oracle.iqtree` was produced (every downstream parse failed). **Fix:** launch each IQ-TREE via `mpirun -np 1 --bind-to none` (OpenMPI binds-to-core by default → 1-core detection). Resubmitted as **171258771** — **exit 0, 36 min, normalsr; n=30** (AA LG+I+G4-gen + DNA GTR+I+G4-gen 100K alignments × m ∈ {1000,2000,5000} × 5 seeds), ranking each candidate set under **both** the shipped native subsample BIC and the old projected BIC′ gate against the full-data `-m MF` oracle.
+
+**Result (the panel's overfitting concern, now quantified):**
+
+| dataset (oracle) | gate | recall@3 | over-fit-top1 |
+|---|---|---:|---:|
+| AA (LG+G4) | **native (shipped)** | **15/15** | **0/15** |
+| AA (LG+G4) | projected (old) | 15/15 | 1/15 |
+| DNA (F81+F+G4) | **native (shipped)** | **15/15** | **1/15** (TPM2u+F+G4, +2 params, still recalled the winner in top-3) |
+| DNA (F81+F+G4) | projected (old) | **0/15** | **15/15** (always a GTR-family / +I model — never the true winner) |
+
+The shipped **native gate recalls the full-data BIC winner 30/30 with one trivial over-fit**; the **projected gate collapses to 0/15 recall on the DNA exchangeability ladder** (the (N/m)·k/2 optimism climbs the GTR ladder every time). Notably the DNA data is *generated* under GTR+I+G4 yet the **BIC** oracle is the simpler F81+F+G4 — so the projected gate chases the generative model while BIC wants the simpler one, and **only the native gate agrees with BIC.** This upgrades part5 §V.14's n=1 demonstration to a two-data-type, 30-run result (full write-up in part5 §V.14.2b; summary `…/iqtree3-gpu/ctf_overfit_recall/RECALL_SUMMARY.tsv`). The one regime still untested is genuinely +R-favouring generative data (the under-fit direction).
+
+---
+
+## 📊 A100↔H200 device comparison + AA-10M `-m MF` on an 80 GB card + the SM-metric tool fix — 2026-06-15
+
+Two DCGM-instrumented AA sweeps (full `-m MF` CTF, 10K/100K/1M/10M) — **job 171175357 on H200** (`gadi-gpu-h200-0009`) and **job 171175084 on A100-80GB** (`gadi-dgx-a100-0002`) — plus a tiny profiling diagnostic (job 171184799). Three outcomes:
+
+### A. Both cards run the full sweep correctly; **AA-10M `-m MF` confirmed on the 80 GB A100 too**
+
+All eight cells return winner **LG+G4** with **bit-identical lnL/BIC across both devices** (cross-device determinism). The A100 just tiles more aggressively (nTile 44 vs 28 at 10M) to fit its smaller VRAM. Because DCGM never actually started (see C), these wall/energy numbers carry **no sampler overhead** — H200 1M = 797 s reproduces the frozen headline sweep's 803 s, a clean determinism check.
+
+| Sites | Wall H200 / A100 (s) | Energy H200 / A100 (Wh) | Peak VRAM H200 / A100 | nTile H200 / A100 | Parity (worst) |
+|---|---:|---:|---:|---:|---:|
+| 10K  | 345 / 448   | 12.39 / 12.06  | 1.2 / 1.1 GB    | 1 / 1   | 1.4e-10 |
+| 100K | 505 / 667   | 19.00 / 18.14  | 8.8 / 8.7 GB    | 1 / 1   | 2.0e-10 |
+| 1M   | 797 / 1248  | 46.67 / 51.63  | 67 / 34 GB      | 2 / 2   | 1.8e-10 |
+| 10M  | 3173 / 3558 | 264.7 / 181.5  | 110 / 60 GB     | 28 / 44 | 1.5e-10 |
+
+Notes: H200 ~26–36% faster wall at 1M–10M (bandwidth + clocks). **A100 uses *less* energy at 10M (181.5 vs 264.7 Wh)** — it runs at far lower mean power (187 W vs 308 W), so the 12% longer wall is more than offset. A100 10M peak VRAM (60 GB) < H200 (110 GB) because the 44-way tiling makes smaller chunks. Both fit their cards; engage 116 / decline 9 on every cell. 10M source self-check rel 4.2e-13 (H200) — see the tiling entry below.
+
+### B. The SM metric still came back NA — but for a fixable, non-permission reason
+
+Both sweeps printed `DCGM available: 0`: the `dcgmi dmon -e 1002` (PROF_SM_ACTIVE) probe failed. The diagnostic (171184799, H200) settled **why**, and it is **not** an admin lockout:
+
+- **`/proc/driver/nvidia/params` → `RmProfilingAdminOnly: 0`** — GPU perf counters are **open** to non-root on `gpuhopper`.
+- **`ncu` works non-root** — it read `sm__throughput` (0.48%) and `sm__warps_active` (12%) on a trivial sm_90 kernel, exit 0.
+- **DCGM failed on a host-engine connection** (`exit 235`, "unable to connect to host engine on localhost"): the non-root `nv-hostengine` started on :5555 but `dcgmi` could not reach it. DCGM plumbing, not a counter restriction.
+
+**Verdict: true SM% IS obtainable here — via `ncu`, not DCGM.** The original sweep simply used the wrong tool.
+
+### C. Real H200 SM% (job 171185225, `ncu`, DONE) — and a finding that *refines* the bound story
+
+`run_ncu_jolt_h200.sh` profiled the **production `k1_node` kernel** (postorder lnL, +G4 4-category, eigen-space — the same role as the V100 §9.1 microbench) on the headline H200. The `--launch-count` window filled with `k1_node` (the dominant kernel; `kj_pre`/`kj_derv` didn't reach the first 48 matches — a follow-up can target them). Real measured numbers:
+
+| Scale | n | **SM throughput %** | DRAM throughput % | Achieved occupancy % | Duration (µs) | Regs/thread |
+|---|---:|---:|---:|---:|---:|---:|
+| AA-100K | 48 | 71.7 | 4.4  | 32.1 | 1040 | 40 |
+| AA-1M   | 48 | 78.1 | 11.3 | 69.8 | 9818 | 40 |
+
+`--set full` on one representative AA-1M `k1_node` launch: **Compute (SM) throughput 95.55%**, Memory throughput 25.81% (L1/TEX 26.3%, L2 11.0%, **DRAM 6.70%** = 329 GB/s), achieved occupancy 69.56%, 40 regs, 8.50 ms. Dominant stall: **MIO instruction-queue, 59.0%** of the 60.3 avg cycles between issues (not long-scoreboard).
+
+**The honest finding:** on the H200 the *production* `k1_node` is **compute / MIO-pipe bound** (SM ~78–96%, DRAM only 4–11%, MIO-queue the top stall), **not memory-latency bound**. That is the *opposite* of the V100 §9.1 microbench (SM 38–56%, occupancy 49%, 56 regs, ~88% long/short-scoreboard = global-memory-latency bound). Two things differ at once — the **device** (H200's ~4.8 TB/s HBM3e makes the same global reads cheap, so DRAM% collapses and the math/transcendental-`exp` MIO pipe becomes the limiter) **and the kernel** (production +G4 does 4× the per-pattern matvec vs the lnL-only microbench; note 40 regs here vs 56 there ⇒ genuinely different code). So the thesis §9.1 "memory-latency-bound" characterisation is **specific to the V100 lnL-only microbenchmark, and does not hold for the production +G4 kernel on the H200.** *What this does NOT change:* the headline conclusion that the win is **algorithmic (JOLT's parallel optimiser + CTF), not raw bandwidth** — a compute-bound kernel running at ~95% SM is the GPU doing real, well-packed work, and JOLT's 14-iter parallel critical path is the lever regardless of which pipe bounds the kernel. **It does mean the "one GPU ≈ one node's bandwidth, latency-bound" framing in §9.1 needs a device/kernel caveat.** The V100 production profile (job 171187221, §D below) **disambiguates this**: it is the **device**, not the kernel version. *(Supersedes the "re-run with DCGM" suggestion in the previous entry — DCGM was tried and is the wrong tool.)*
+
+### D. V100 (32 GB): AA-10M fits via tiling, and the bound question is RESOLVED (job 171187221)
+
+The V100-SXM2 is the smallest card; if 10M fits here it fits anywhere.
+
+**Capability — YES.** AA-10M `LG+G4` runs on a 32 GB V100: auto **nTile=27** (chunk ~342,641 patterns, 31.4 GB free), **peak VRAM 25.3 GB < 32 GB**, 17 joint iters, GPU lnL −782589513.23 vs CPU **rel 9.825e-14 PASS** (bit-parity on the V100 too), exit 0. So tiling makes genome-scale ModelFinder run on a 6-year-old 32 GB card.
+
+**Profile — the *same production +G4 `k1_node`* on a V100 is latency-bound, matching §9.1:**
+
+| Device | SM throughput % | DRAM % | Occupancy % | Regs | Dominant stall | Bound |
+|---|---:|---:|---:|---:|---|---|
+| **V100** (prod. kernel) | 51–53 | 36–39 | 49 | **56** | scoreboard 44.9% + MIO-scoreboard 40.8% (~86%) | **memory-latency** |
+| **V100 §9.1** (lnL microbench) | 38–56 | 32–34 | 49 | 56 | long+short scoreboard ~88% | memory-latency |
+| **H200** (prod. kernel) | 78–96 | 4–11 | 70 | **40** | MIO instruction-queue 59% | compute/MIO |
+
+`ncu` even prints the OPT note on the V100 kernel ("compute and bandwidth both <60% of peak → latency issues"). The V100 production kernel reproduces §9.1 almost exactly (51% SM, 49% occ, 56 regs, ~86% scoreboard).
+
+**Verdict on the bound:** the H200's compute-bound behaviour is a **device effect, not a kernel-version artefact** — the identical kernel is latency-bound on the V100 and compute/MIO-bound on the H200. Mechanism: the H200's ~4.8 TB/s HBM3e collapses the global-read cost (DRAM 36% → 6.7%), and the sm_90 compiler drops the kernel to 40 regs (49% → 70% occupancy), so the bottleneck migrates from memory-latency to the `exp`-heavy MIO pipe. **So §9.1's "memory-latency-bound" is correct *for the V100 it was measured on*, but the *headline H200* runs the same kernel compute-bound — §9.1 needs a one-line device caveat.** The "win is algorithmic" headline is untouched either way.
+
+### E. Run ledger (the jobs behind §A–§D, with measured walltimes)
+
+| Job | What | Device | Walltime | SU | Exit |
+|---|---|---|---:|---:|---:|
+| 171175084 | AA `-m MF` sweep + DCGM (10K/100K/1M/10M) | A100-80GB | **1:39:00** | 118.8 | 0 |
+| 171175357 | AA `-m MF` sweep + DCGM (10K/100K/1M/10M) | H200-141GB | **1:20:36** | 120.9 | 0 |
+| 171184799 | profiling diagnostic (DCGM vs `ncu`, `RmProfilingAdminOnly`) | H200 | **0:03:08** | 4.7 | 0 |
+| 171185225 | `ncu` JOLT-kernel profile (k1_node, AA-100K/1M) | H200 | **0:25:26** | 38.2 | 0 |
+| 171187221 | AA-10M tiling capability + full `ncu` profile | V100-32GB | **3:41:09** | 132.7 | 0 |
+
+Per-cell sweep walltimes are the `wall_total_s` column in §A's table (H200 10M = 3173 s, A100 10M = 3558 s). The V100 capability run alone (PART 1 of 171187221) was **3952 s** for AA-10M warm-start refine + host parity check; the rest of its 3:41 was the two `ncu` profiling passes. All five jobs exited 0.
+
+---
+
+## 📊 GPU METRICS for the cross-scale sweep (job 171012178) + the honest SM story — 2026-06-15
+
+**Direct answer to "what is our SM utilisation on the sweep?": it was *not* measured by the sweep, and the number people usually quote for it (the 99–100% / 72–97% "util" column) is NOT SM utilisation.** The sweep sampled `nvidia-smi --query-gpu=power.draw,memory.used,utilization.gpu` at 2 s. `utilization.gpu` is a coarse **busy/idle flag** — "≥1 kernel was resident in the last sample window" — *not* SM compute throughput and *not* occupancy. nvidia-smi cannot report either; those need Nsight Compute (`ncu`) or DCGM profiling counters (`DCGM_FI_PROF_SM_ACTIVE` / `SM_OCCUPANCY`), which this sweep did not collect.
+
+### A. What the sweep actually measured (per cell, single H200, all real, from `bench_h200_sweep.tsv`)
+
+| Type | Sites | Wall (s) | GPU-busy %¹ | Mean power (W) | Peak VRAM (GB) | Energy (Wh) | nTile | Parity (rel) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| AA  | 10K  | 341  | 99  | 136 | 1.21  | 12.51  | 1  | 1.4e-10 |
+| AA  | 100K | 508  | 99  | 143 | 8.79  | 19.74  | 1  | 2.0e-10 |
+| AA  | 1M   | 803  | 100 | 224 | 67.26 | 48.31  | 2  | 1.8e-10 |
+| AA  | 10M  | 3175 | 100 | 313 | 110.15| 268.73 | 28 | 1.5e-10 |
+| DNA | 10K  | 132  | 72  | 135 | 0.68  | 4.87   | 1  | 3.1e-11 |
+| DNA | 100K | 54   | 72  | 143 | 1.82  | 2.15   | 1  | 2.1e-11 |
+| DNA | 1M   | 103  | 73  | 249 | 14.29 | 7.04   | 1  | 6.2e-12 |
+| DNA | 10M  | 513  | 97  | 282 | 64.98 | 39.39  | 2  | 2.1e-11 |
+
+¹ **`utilization.gpu` (busy-fraction), NOT SM throughput.** AA pins near 100% busy because the JOLT mutex keeps a kernel resident almost continuously; DNA reads lower (72–73% at 10K–1M) because the 5× smaller arena + CPU-fallback gaps leave the device idle between kernels more often. **Busy ≠ saturated** — see B.
+
+### B. The only real SM-throughput data we have (V100 `k1_node` kernel profile, `ncu`, P3.0 job 170398260)
+
+This is a **single-kernel microbenchmark on a V100**, lnL-only, at fixed pattern counts — NOT the H200 sweep and NOT per-data-type, but it is the only place SM throughput/occupancy was actually counted:
+
+| Patterns | DRAM % of peak | Achieved GB/s | **Occupancy (warps/SM %)** | **SM throughput %** |
+|---|---:|---:|---:|---:|
+| 100K | 34.3 | 308 | 48.6 | 37.9 |
+| 200K | 32.6 | 299 | 48.9 | 49.2 |
+| 300K | 34.0 | 308 | 48.7 | 56.3 |
+
+Warp-stall breakdown @100K (P3.0b job 170399634): long-scoreboard 50.1% + short-scoreboard 37.6% (**~88% memory-dependency**), math-pipe 0.08% (compute idle), scheduler issuing on 7.8% of cycles.
+
+**The headline that reconciles A and B:** nvidia-smi says ~100% "utilisation" while the SMs run at **~38–56% throughput and ~49% occupancy**. The 100% is the *resident-kernel* flag; the device is **latency/occupancy-bound, not saturated** — exactly the memory-latency-bound finding the thesis rests on. So our true SM utilisation is **~38–56% (rising with pattern count), occupancy capped at ~49%** by the 56-register / 4-blocks-per-SM ceiling. The high nvidia-smi number is the classic profiling trap.
+
+### C. To get true *per-cell, per-data-type, H200* SM-active % — UPDATE: DCGM tried, ncu is the tool
+
+> **Superseded 2026-06-15 (see the newer entry above).** The DCGM approach proposed here was run on both H200 and A100 and **failed** — not on permissions (`RmProfilingAdminOnly: 0`) but on a host-engine connection error (`dcgmi` could not reach the non-root `nv-hostengine`). The diagnostic proved **`ncu` works non-root on `gpuhopper`**, so the real H200 per-kernel SM% is now being collected with Nsight Compute on the production `k1_node`/`kj_pre`/`kj_derv`/`kj_ratenum` kernels (job 171185225). The original idea below is kept for the record.
+
+~~Re-run the sweep with DCGM profiling alongside the existing power sampler:~~
+~~`dcgmi dmon -e 1002,1003,1004 -d 2000` (SM_ACTIVE, SM_OCCUPANCY, TENSOR_ACTIVE) — DCGM samples at nvidia-smi-like overhead, so it would populate a real SM column without an `ncu` slowdown.~~ **Not fabricating these numbers into the table; flagged as the way to obtain them.**
+
+---
+
+## ✅ G.7.0 HOST-MEM FIX + ✅ G.7.1 PATTERN TILING — AA-10M now runs JOLT on 1 H200 — 2026-06-14
+
+The AA-10M OOM (below) had **two independent walls** — host RAM and GPU VRAM. They are fixed by two composable changes.
+
+**G.7.0 — cgroup-aware host memory (commit `c04a9ce1`), VALIDATED job 170934922 (H200):** IQ-TREE sized its
+likelihood memory against *physical* node RAM, ignoring the PBS/cgroup allocation, so a 558 GB `LM_PER_NODE` arena was
+attempted inside a 180 GB job → host OOM-kill before the GPU engaged. Fix: `getAvailableMemory()=min(physical,cgroup)`
+with a **hierarchy-walking** cgroup reader (takes the MIN over the leaf AND every ancestor slice — correct for Docker
+`--memory`, systemd `MemoryMax`, and any container/desktop cap, and a strict no-op = physical on an uncapped box, so
+*commercial kit behaves exactly like stock IQ-TREE*); plus a `--jolt` lean `LM_MEM_SAVE` tier when the per-node arena
+exceeds 70% of the allocation (the GPU does the likelihood; the host only needs the recompute-exact self-check).
+**Validation:** 1M `--jolt -te` stays `LM_PER_NODE`, GPU≡CPU rel **7.564e-14**, host 57.5 GB (no NOTE — the fix is a
+no-op on the working path); 10M `--jolt -te` printed `[--jolt] host LM_PER_NODE arena 558.314 GB exceeds 70% of the
+180 GB allocation -> memory-saving (50.248 GB)`, host RSS **78.4 GB, exit 0 — no OOM.** The host wall is gone.
+
+**…but that 10M run also EXPOSED the GPU wall:** with the host no longer killing it, the 10M `-te` showed **GPU 533 MiB,
+util 0%, no `[JOLT]` line — JOLT did NOT engage on the GPU.** The 886 GB one-shot partial arena can't fit the H200's
+141 GB → `DEVB`→NaN→CPU fallback. So G.7.0 makes 10M *not crash* (runs on CPU); engaging the GPU needs the VRAM half.
+
+**G.7.1 — PATTERN TILING (commit `6d7f7483`), VALIDATED:** split the `nptn` patterns into `nTile` contiguous chunks,
+run a full postorder+preorder sweep PER CHUNK, Kahan-accumulate each chunk's contribution to lnL/df_e/ddf_e/gradR_c.
+Every JOLT quantity is a SUM OVER PATTERNS, so this is **exact**. Shrinks every O(nptn) arena by ~`nTile`; auto-`nTile`
+from `cudaMemGetInfo`. Contained to `gpu_jolt_optimize` (the 3 sweep closures + the allocation block); the
+chunk-INDEPENDENT echild/expfac/eigen constants build once per point; `nTile==1` is byte-identical to the pre-tiling
+path; +R forces `nTile=1`. CPU path untouched.
+- **V.A correctness (job 170976732, V100):** AA-100K LG+G4 -te at `nTile∈{1,4,8,40}` all give GPU lnL
+  −7541976.852146, **chunked==one-shot rel 0.000e+00 (bit-identical, stronger than the ≤1e-12 gate)**, identical 14
+  iters/α 0.996214, self-check rel ~2.77e-12 PASS; **peak VRAM 8782→2438→1380→532 MiB (~T× shrink)**.
+- **V.C capability (job 170977748, 1× H200): AA-10M `--jolt -te` ENGAGES on the GPU.** Auto-`nTile=6`, **peak VRAM
+  112.8 GB fits the 141 GB H200**, **GPU util 100%**, GPU lnL −782589738.598749 vs CPU −782589738.598400 **rel
+  4.465e-13 PASS**, exit 0, 12m37s. Before tiling (job 170934922) the 886 GB arena OOMed → NaN → CPU fallback (util
+  0%, no `[JOLT]` line). **The two fixes COMPOSE:** tiling shrinks GPU VRAM, G.7.0's lean tier keeps the host
+  self-check at **60.5 GB RSS < 180 GB**. (A100 confirm job 170978215 queued.)
+- Independent code review: **CLEAN** (bounds incl. last smaller chunk, nTile==1 byte-identity, cross-chunk accumulation
+  with catProp_v applied once + per-chunk lnLfirst, +R/free-Q safety, no stride/offset bug).
+- **Honest caveat:** the 10M *wall-time* is dominated by the host LM_MEM_SAVE self-check (lnL-exact recompute at 9.25M
+  patterns — a host cost after the GPU optimise); the V.C gate is *capability* (JOLT engages, lnL-exact), not speed.
+Detail: part7 §VII.5.1, part9 §IX.10.1 #4.
+
+---
+
 ## ⚠️ AA-10M `-m MF` SCALE TEST (H200) — coarse OK, refine OOM'd on **HOST RAM** (not VRAM) — 2026-06-13 (job 170856902)
 
 The AA-**10M**-site `-m MF` CTF was run on 1× H200 (full parity binary `frozen_ab`, 9,251,287 distinct patterns).
@@ -206,7 +439,8 @@ The correctness + performance + **energy** parity table for 1 GPU vs the CPU clu
 (100 taxa, 1,000,000 sites, 946,439 distinct patterns, 2.2 % constant). CPU rows are the measured `mfiso -m TEST`
 runs (seed 1); GPU rows are the CTF pipeline (subsample-rank + JOLT refine of top-3 on a fixed coarse tree). **⏳ =
 in flight (CPU energy via direct RAPL from jobs 170582791/814/815; A100-80 CTF job 170581209 queued).**
-All runs select the **same best model, LG+G4.**
+All 1M runs select the **same best model, LG+G4.** **A 10M-scale H200 row (※) was added 2026-06-14 — it is a
+capability/engage result at a different scale and scope (single-model `--jolt -te`, not full MF); see the ※ footnote.**
 
 | Run | device(s) | best model | MF wall | tree-search wall | total wall | reported lnL | GPU energy | CPU energy |
 |---|---|---|---:|---:|---:|---|---:|---:|
@@ -215,6 +449,7 @@ All runs select the **same best model, LG+G4.**
 | **GPU CTF (+I 4-start)** | 1× A100-80 | LG+G4 ✓ | **1504 s** ✓ (job 170581209) | n/a (coarse tree) | 1504 s | −78605275.637 | **81.69 Wh** (294 kJ, 199 W mean, 1478 s) | — |
 | **GPU CTF (+G.5.0 reduction)** | 1× A100-80 | LG+G4 ✓ | **1355 s** ✓ (job 170636493) — **beats np8 1.07×** | n/a (coarse tree) | 1355 s | −78605275.637 | **73.24 Wh** (264 kJ, 198 W mean) | — |
 | **GPU CTF (+PartB+fusion, `frozen_ab`)** | 1× A100-80 | LG+G4 ✓ | **1139 s** (job 170861889) — coarse 170 + refine 969; **np16 0.99× → does NOT beat 16 nodes** | n/a (coarse tree) | 1139 s | −78605275.637 | **64.58 Wh** (208 W mean, 1116 s) | — |
+| **GPU JOLT 10M ※ (G.7.1 tiling, `--jolt -te` engage)** | 1× H200 | LG+G4 (fixed) | n/a — engage test, not `-m TEST` | n/a (coarse tree) | **639 s** ✓ (job 170977748) | −782589738.60 ※ | (not measured) | — |
 | CPU `-m TEST` np1 | 1 SPR node | LG+G4 | 5119.9 s | 15060.6 s | 20180.5 s | −78605196.59 | — | **0.79 kWh (MF only)** ‡ |
 | CPU `-m TEST` np2 | 2 SPR nodes | LG+G4 | 3076.9 s | 7868.9 s | 10945.8 s | −78605196.44 | — | ~3.9 kWh (est.) |
 | CPU `-m TEST` np4 | 4 SPR nodes | LG+G4 | 1974.5 s (meas. 1985) | 3982.1 s | 5956.6 s (meas. 5994) | −78605196.45 | — | **4.18 kWh** ✓ (job 170582814) |
@@ -232,6 +467,20 @@ sits ~79 nat below the CPU's fully-tree-searched lnL (−78605196.4). The within
 refined on the same coarse tree → LG+G4 wins), and the MODEL choice is correct; a production GPU run would re-refine
 the winner's topology (the deferred JOLT tree-search hook — the CPU "tree-search wall" column shows what that phase
 costs the CPU: 1.3–15 k s). **This is why the GPU row's "tree-search wall" is n/a, not 0.**
+
+**※ The 10M row is a different scale AND a different scope — read it as a CAPABILITY result, not a wall comparison.**
+It is the **AA-10M** alignment (10,000,000 sites, **9,251,287 distinct patterns** — ~9.8× the 1M rows), and it is a
+**single-model `--jolt -te` engage test** (LG+G4 on the fixed coarse tree), **not** a full `-m TEST`/CTF
+model-selection run — so "best model" and "MF wall" are n/a and it is **not comparable** to the 1M MF-wall rows or to
+any CPU node count (no CPU 10M `-m TEST` comparator exists yet). What it proves: with **G.7.1 pattern tiling** (auto
+`nTile=6`) the per-model GPU arena drops 886 GB → **112.8 GB peak, fitting the 141 GB H200**, so **JOLT runs the whole
+branch+α optimise ON the GPU at 9.25M patterns** (GPU util 100%, **lnL rel 4.465e-13** vs the CPU self-check, exit 0) —
+where **before tiling the 886 GB arena OOMed → CPU fallback, GPU util 0%, no `[JOLT]` line** (job 170934922). It
+composes with the **G.7.0** host-mem fix (the host self-check ran under the lean LM_MEM_SAVE tier, 60.5 GB RSS < 180 GB).
+**Honest wall caveat:** the 639 s is **host-self-check-bound** — the LM_MEM_SAVE `computeLikelihood` recompute at 9.25M
+patterns dominates *after* the GPU optimise finishes; it is a HOST cost, the gate here is capability, not speed (the
+throughput lever — sampling the host self-check at extreme nptn — is part9 §IX.10.1 #4b). Energy was not instrumented
+for this engage run. (A100 second-device confirm: job 170978215, dgxa100.) Detail: part7 §VII.5.1, commit `6d7f7483`.
 
 **Headline (measured, updated 2026-06-12):** **1 H200 GPU ModelFinder (CTF, +I 4-start, 893 s) beats all CPU node counts on MF wall and beats np16 overall**: 3.45× vs np2, 2.21× vs np4, 1.62× vs np8, **1.26× vs np16** — picking the correct model (LG+G4). The 4-start +I fix (G.4.3c, validated job 170580368) cut the wall 1994→893 s by eliminating 6 redundant pinv restart sweeps (10→4; single-start was rejected by the multimodal gate: 39.5-nat loss at pinv≈0.5). GPU energy: **67.89 Wh measured** (67.8 GB peak, 60% utilisation). The GPU does **not** run the tree-search phase at 1M (CTF is MF-equivalent only; deferred GPU tree-search hook is next); against the *full* `-m TEST` wall the CPU's tree search dominates (1.3–15 k s depending on np) and is not yet contested on GPU.
 

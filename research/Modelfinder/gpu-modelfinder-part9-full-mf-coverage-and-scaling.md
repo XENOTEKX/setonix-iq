@@ -420,16 +420,28 @@ rel ≤ 2.4e-12, so no overclaim.
    so a future regime that converges to a worse-than-CPU optimum is caught per-candidate at runtime, not just offline.
 3. **Runtime confirmation of the RISK-1 fix.** A `JOLT_DEBUG=1 -m MF` DNA run to confirm `freeQok` never fires with
    `nFreqParams>0` on the default set, plus an explicit `GTR+FRY+G4 -te` that must now log `decline reason=free-subst-params`.
-4. **Scale (10M) — the bottleneck is HOST RAM, not GPU VRAM (measured, job 170856902).** The AA-10M `-m MF` run
-   settled this: the coarse/selection stage works (420 s, 116/122 engage, LG+G4 #1 — same as 1M), but **both
-   full-data refines OOM'd on HOST memory** (`iqtree3` RSS 193 GB > the 180 GB allocation; **GPU mem 520 MB, util
-   0 % — JOLT never engaged**, killed in host setup). The ~58 GB VRAM estimate held — **VRAM was never the limit.**
-   At 10M, IQ-TREE's CPU-side `initializeAllPartialLh` + the post-write-back **self-check's full host
-   `computeLikelihood`** need **~560 GB** (1M's ~57 GB host × ~9.8× patterns). ⇒ **G.5.2 (VRAM tiling) does NOT address
-   the 10M wall.** The real levers are: (a) a **host-memory-lean JOLT refine** — sample/skip the host self-check at
-   extreme `nptn` (it is the dominant host cost; keep the GPU's ~58 GB VRAM path), and/or (b) a **fat-RAM allocation**
-   (~600 GB+ host = a multi-GPU node-share for the RAM). VRAM tiling stays relevant only for the +R10 ladder on the
-   smaller A100-80 at 1M, not for 10M scale.
+4. **Scale (10M) — there are TWO walls (host RAM AND GPU VRAM); both now addressed (G.7.0 + G.7.1).** ⚠️ **Correction
+   to the original job-170856902 reading:** that run (`RSS 193 GB > 180 GB`, GPU 520 MB / util 0 %) was killed in
+   **host setup before reaching the GPU**, so it exposed only the HOST wall — and the earlier "the ~58 GB VRAM estimate
+   held, VRAM was never the limit" claim was **wrong for 10M**: ~58 GB is the *1M* JOLT footprint; the 10M GPU arena is
+   **~886 GB** (part7 §VII.1, the O(nptn) postorder+preorder), which fits NO single GPU. The host wall simply *masked*
+   the GPU wall.
+   - **Wall 1 (HOST) — FIXED, G.7.0 (commit `c04a9ce1`, validated job 170934922).** IQ-TREE sized the `LM_PER_NODE`
+     arena (558 GB at 10M) against *physical* RAM, ignoring the cgroup. cgroup-aware `getAvailableMemory()` + the
+     `--jolt` lean LM_MEM_SAVE tier brought the host to **78 GB RSS, exit 0** (the GPU does the likelihood; the host
+     only needs the recompute-exact self-check). The host no longer kills the run.
+   - **…which EXPOSED Wall 2 (GPU VRAM).** With the host fixed, the 10M `-te` reached the GPU `DEVB` calls — and the
+     886 GB arena failed to allocate on the H200 (141 GB) → NaN → CPU fallback (**GPU 533 MiB, util 0 %, no `[JOLT]`
+     line**, job 170934922). This is the first run that actually saw the GPU wall.
+   - **Wall 2 (GPU VRAM) — FIX = G.7.1 PATTERN TILING (part7 §VII, V.A PASSED job 170976732; V.C 10M-on-H200 in flight
+     job 170977748).** Splitting patterns into `nTile` chunks shrinks the arena ~`nTile`× exactly (886 GB → fits H200
+     at T≥8 / A100 at T≥15), bit-identical to one-shot. **So tiling DOES address the 10M wall — the opposite of the
+     pre-host-fix conclusion**, because removing Wall 1 is what made Wall 2 reachable.
+4b. **The host self-check at extreme nptn is the remaining WALL-TIME lever (not a correctness wall).** Under G.7.0's
+   lean tier the host self-check `computeLikelihood` recomputes on LM_MEM_SAVE slots at 9.4M patterns — lnL-exact but
+   slow, and it will dominate the 10M `--jolt -te` wall (a HOST cost, after the GPU optimise finishes). Sampling/skipping
+   it at extreme nptn (keeping the GPU's tiled VRAM path) is the throughput follow-up; capability (JOLT engages,
+   lnL-exact) is the G.7.1 V.C gate and comes first.
 5. **Port the native-BIC gate + rate-het detector + wall budget into the production CTF path** (IX.7.1 #4) — the §X.5.5
    fix currently lives only in the benchmark scripts.
 6. **Verify the audit's two static-only items:** `cuobjdump` confirming `kj_derv_fused` stays 32 regs / 100 % occupancy,
