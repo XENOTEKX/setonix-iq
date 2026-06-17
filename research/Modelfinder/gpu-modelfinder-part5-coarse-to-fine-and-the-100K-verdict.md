@@ -688,3 +688,45 @@ cited result for this exact form); worst-case recall for near-degenerate +R ladd
 bounded **(though the genuinely-+R-favouring generative regime — once the last untested gap — is now measured at
 45/45 recall@3, §V.14.2c)**; ModelTamer's 99 % is empirical, its one miss ΔBIC<10; the fixed-subsample-tree ×
 model-ranking interaction is uncharacterised (a separate risk, orthogonal to overfitting).
+
+---
+
+## §V.15 — The architectural boundary: multi-locus / partitioned data (where CTF+JOLT is the WRONG tool — said plainly)
+
+**The one-line answer to the panel.** *If the dataset is many small loci (a partitioned / multi-gene analysis), one
+GPU is the wrong tool and a CPU cluster already wins — by design, not by accident. CTF+JOLT is built for the opposite
+shape: one massive single alignment (or a few genome-scale blocks) that a cluster cannot cheaply split.*
+
+**Why — the one reason that matters (it is just our own depth-vs-breadth verdict, applied to loci).** Model selection
+on K loci is K *independent* per-locus selections. A cluster hands one whole locus to each node — embarrassingly
+parallel, ~100 % efficient. One GPU is **mutex-serialized** (per-model speedup S≈4.8), so it does the loci one after
+another. This is the same `N/S ≈ 21×` serialization that makes one GPU lose the 122-model *single-alignment* race
+(§V.2), now multiplied by the number of loci. The GPU's edge is **depth** (a deep per-model optimisation), and
+multi-locus is the purest **breadth** problem there is (§V.11) — the cluster's home turf.
+
+**CTF specifically adds nothing for small loci.** CTF's whole job is to subsample a *huge* N down to ~5000 sites. A
+gene partition is *already* ~500–2000 sites, so there is nothing to subsample — CTF degenerates into ordinary
+ModelFinder plus a redundant re-fit. The value proposition is simply vacuous when N is already small.
+
+**Two tempting arguments to AVOID (they are wrong, and a panel will dismantle them):**
+1. *"~400 s of coarse overhead per partition."* **False.** The measured coarse cost (≈158–467 s) is for a **5000-site,
+   100-taxon, ~122-model** pass — not a small gene. CTF uses `min(5000, L)` sites, so a 500-site locus is far cheaper,
+   and (per above) CTF doesn't even help it. The honest objection is "no benefit," **not** a 400 s-per-gene tax.
+2. *"Blended-signal error if partitions aren't declared."* That is garbage-in/garbage-out — **every** tool, the stock
+   CPU one included, fits one model to an undeclared concatenation. It is user error, not a CTF-specific failure, so it
+   does not define our boundary.
+
+**The boundary is precise: it is *many small loci*, not "partitioning."** A few **large** partitions (e.g. 3–4
+whole-genome blocks of ~1M sites) are just 3–4 single large alignments — each is exactly what CTF+JOLT is for, and the
+cluster has only 3–4 loci to spread, so the GPU's per-locus depth can compete. The failure regime is breadth (many
+tiny loci), not the word "partition."
+
+**The honest non-claim.** There *is* a possible GPU direction for many small loci — batching them concurrently on an
+under-occupied device (the saturation-inversion idea, §V.3). It is **unbuilt**, and it would still have to beat the
+cluster's near-perfect locus parallelism, which is a high bar — so we **do not claim** multi-locus.
+
+**Scope honesty.** No partitioned experiment was run; the project's measured data is all single-alignment. The
+statement above is architectural reasoning grounded in the *measured* `N/S` serialization and depth-vs-breadth physics
+(§V.2/§V.11), not a partition benchmark. A quick empirical confirmation (concatenate K genes; CTF-per-partition vs the
+cluster's locus-parallel run) would make it bulletproof-measured, but the argument already follows from the banked
+physics.
