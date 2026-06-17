@@ -240,12 +240,44 @@ multi-start as a *planned* sub-task — do NOT flip the gate on a stalling optim
 #### IX.8.4 STATUS — G.5.1a increment 1 (the weight gradient) VALIDATED 2026-06-13 (job 170777660)
 The **only NEW quantity** for +R, the softmax weight gradient `gz_c = WN_c − w_c·N`, is **FD-validated on the real GPU
 path** (commit `65e45c4c`). `kj_derv_fused` gained the per-category `Lc(p)` accumulator (+ optional `wnum` output) and
-stays **32 registers** (cuobjdump → 100% occupancy preserved); the gated `JOLT_RGRADCHECK` hook computes `gz_c` and
+stays **32 registers on the production cards (A100 sm_80 / H200 sm_90) → 100% occupancy** (cuobjdump verification,
+IX.10.1 #6 — note V100 sm_70 is 40 regs/~80% occ, acceptable as the dev card; FP64 results are bit-exact regardless);
+the gated `JOLT_RGRADCHECK` hook computes `gz_c` and
 central-FD-checks it. **LG+R4 (5000-site AA subsample):** `gz_c == FD` maxrel **1.03e-8** (cold) / **4.87e-6** (non-uniform
 weights), `Σ_c WN_c = N` **exact** (relWN 0), `Σ_c gz_c ≈ 0` (≤6e-12, the gauge null direction). `g50val` (170777846)
 confirms the `lcc` reassociation did NOT regress the gamma `-m MF` path: best = **LG+G4**, all `[JOLT]` self-checks rel
 ≤ **2.4e-12**. **This validates the gradient math only** — the +R LM optimiser branch + the cold/warm-vs-CPU-EM
 convergence gate (IX.8.3, the multimodal risk) is increment 2 and the eligibility gate stays unflipped until it passes.
+
+#### IX.8.5 STATUS — G.5.1a increment 2a (the standalone convergence harness) 2026-06-17
+The standalone +R **optimiser-convergence** harness (`gpu_k8c_jolt_freerate.cu`, the make-or-break IX.8.3 gate that must
+pass *before* any in-tree eligibility flip — IX.3 #1) is built and run on the LG+I+G4 1M-AA alignment (100K patterns,
+fixed `-te` topology), with the **CPU-EM MLE** (IQ-TREE's own RateFree EM on the same topology, GPU-fork CPU path) as
+the gold reference. The harness does a joint diagonal-LM over (branches + log-rates + softmax-weights), gauge-fixed
+(`rescaleRates`-equivalent Σw·r=1) after every accepted step, from **4 starts** {warm-cpuem, cold-geomA, cold-geomB,
+cold-linC}; **PASS = reproducible (≥2 starts agree on the best within rel 1e-9) AND optimal (best ≥ CPU−eps) AND the WN
+identity Σ_c WN_c = N exact**. The single-start gate (`cold==warm`) was corrected to this multi-start best-of after run
+171515819 showed it was conflating "the optimiser is a *better* optimiser than CPU-EM" (it is, it beats CPU) with a
+convergence failure.
+
+| model | best lnL | starts agreeing | spread (nats) | JOLT − CPU-EM | WN identity | verdict |
+|---|---|---:|---:|---:|---|---|
+| **LG+R4** | −7541972.2410 | **4 / 4** | 0.0000 | **+0.2289** | relWN 0 | **PASS** (reproducible + beats CPU) |
+| **LG+R6** | −7541971.7262 | 1 / 4 | 0.5022 | +2.7631 | relWN 0 | **CHECK** (distinct local optima; best still beats CPU) |
+
+**Honest read (job 171516319):** the **gradient is exact** at every ncat (WN identity bit-exact, FD informational on the
+full-data lnL), and JOLT **beats CPU-EM at every ncat** (CPU-EM itself gets stuck on local optima at high ncat — JOLT's
+best is +0.23/+2.76 nats *above* it). The OPEN issue is purely **reproducibility at high ncat**: at 6 categories the +R
+surface has genuinely distinct local optima (the classic near-degenerate-category / label-switching multimodality — R6's
+cold solution shows near-duplicate rate pairs), and 4 *spread cold* starts do not all funnel to one global. So per the
+pre-commitment (IX.3 #1, *do NOT flip the gate on a non-robust optimiser*), the in-tree scope is the open decision:
+**(a) EM-warm-start** seeding (CPU-EM → JOLT-polish; guaranteed ≥ CPU and reproducible-from-the-deterministic-seed for
+*all* ncat, but pays the CPU-EM cost and only *polishes* rather than replaces it); **(b) scope in-tree +R to the
+reproducible low-ncat range** (R2–R4 confirmed pure-GPU multi-start, beats CPU) with **high-ncat declining to CPU** (as
++I+R already does); or **(c)** more/better-spread cold starts (cheap on GPU) to try to make high-ncat reproducible. In
+all cases the **runtime CPU-optimum comparison gate** (assert JOLT lnL ≥ CPU−eps, else NaN→CPU fallback — IX.8.3) is the
+correctness backstop: we can never ship a +R model *worse* than the CPU baseline. **The eligibility gate (`:502`) stays
+unflipped pending this scope decision.**
 
 ---
 
@@ -444,5 +476,39 @@ rel ≤ 2.4e-12, so no overclaim.
    lnL-exact) is the G.7.1 V.C gate and comes first.
 5. **Port the native-BIC gate + rate-het detector + wall budget into the production CTF path** (IX.7.1 #4) — the §X.5.5
    fix currently lives only in the benchmark scripts.
+
+   **🟡 IN PROGRESS 2026-06-17 — single tested helper extracted: `gadi-ci/gpu-modelfinder/ctf_rerank.py`.** The
+   native-subsample-BIC rerank + rate-het detector + refine/skip action (the §X.5.5 fix) was re-implemented inline as a
+   ~30-line Python heredoc in ≥4 shipping CTF scripts (`run_ctf_1m_mf_energy.sh`, `_dna_energy.sh`,
+   `run_ctf_10m_mf_aa_h200.sh`, `run_ctf_freerate_recall_sweep.sh`). It is now lifted **verbatim** into one
+   parameterized module with the **same CLI** (`ctf_rerank.py <coarse.iqtree> <m> <N> <K>` → `MODEL:<name>:<action>`
+   on stdout, `[rerank]`/`[detector]` diagnostics on stderr) so each script's heredoc collapses to a one-line call.
+   **Proven a faithful drop-in:** on the real `ctf1mmfd_a100dnamf/coarse.iqtree` (DNA G.6.2) and `ctf1mmf_a100mf3/`
+   (AA-1M) coarse tables, its stdout **and** stderr are **byte-identical** to the live heredoc; native#1 = `F81+F+G4`
+   (DNA, G.6.2 winner in order) and `LG+G4` (AA) while the projected diagnostic reproduces the rank-18 / rank-4 bug.
+   Carries a `--selftest` (4 fixtures: the §X.5.5 ranking flip, both detector branches, exact integer-p recovery, the
+   DNA free-Q case) — ALL PASS. **Remaining:** rewire the bench scripts to call it (one-line replacement each;
+   reviewable, no GPU needed) once a CTF run can re-validate end-to-end.
 6. **Verify the audit's two static-only items:** `cuobjdump` confirming `kj_derv_fused` stays 32 regs / 100 % occupancy,
    and a wider fixed-Q self-check sweep confirming the ~1e-16 reassociation bound holds across (ncat, nptn) regimes.
+
+   **✅ ITEM-6a — `cuobjdump` register/occupancy DONE 2026-06-17** (production binary `build-gpu-on/iqtree3`,
+   md5 `8dd57cfb…`, Jun-14, free-Q + RISK-1/3 fixes; per-arch cubins extracted with `cuobjdump -xelf`):
+
+   | kernel | sm_70 (V100) | sm_80 (A100) | sm_90 (H200) | occupancy verdict |
+   |---|---:|---:|---:|---|
+   | `kj_derv_fused` | **40** | **32** | **32** | 100% on **A100/H200** (production); ~80% on V100 (dev) |
+   | `kj_ratenum` | 31 | 32 | 32 | ≤32 → 100% all arch |
+   | `kj_reduce3` | 23 | 22 | 24 | ≤32 → 100% all arch |
+   | `kj_reduce_gradnum` | 22 | 18 | 20 | ≤32 → 100% all arch |
+   | `kj_invl` | 16 | 16 | 14 | ≤32 → 100% all arch |
+   | `k1_node` / `kj_pre` | 56 (+160/320 B stack) | 56 | 40–56 | ~57% — latency-bound by design, never claimed 100% |
+
+   **Honest correction to IX.8.4:** the "32 regs / 100% occupancy" claim holds on the **production cards (A100 sm_80,
+   H200 sm_90)** but `kj_derv_fused` is **40 regs / ~80% occ on V100 sm_70** (sm_70 needs 32 regs/thread for full
+   occupancy: 65536/2048; the fused `Lc`/`wnum` accumulators push V100 to 40). This is **not a correctness issue**
+   (FP64 results are bit-exact on every arch) and V100 is the dev/test card, not a deploy target. Chasing 100% on V100
+   via `__launch_bounds__` is **declined** — prior occupancy sweeps (MEMORY: project_gpu_modelfinder) showed reg caps
+   regress these kernels via spilling, and the kernel already beats BEAGLE (37.8 vs 45 ms). The all-≤32 reduction
+   kernels and the latency-bound `k1_node`/`kj_pre` (never a 100%-occ target) are unchanged. **ITEM-6b** (the wider
+   fixed-Q self-check sweep across (ncat, nptn)) needs a GPU run and is queued behind the live G.5.1b +R job.

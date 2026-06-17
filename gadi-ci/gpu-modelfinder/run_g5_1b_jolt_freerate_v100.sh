@@ -71,7 +71,7 @@ for K in 4 6; do
   extract_ref "$WB/cpu_r${K}.iqtree" "$K" "$REF"
   echo "  cpu_r${K}_ref.txt:"; sed 's/^/    /' "$REF"
   echo "──── harness LG+R${K} ────"
-  "$BIN" "$ALN" "$TREE" "r${K}" "$REF" 400
+  "$BIN" "$ALN" "$TREE" "r${K}" "$REF" 1500   # bumped 400->1500: R6 (6 cats) needs more iters for cold==warm to converge tightly
   echo "  (harness exit=$?)"
 done
 echo; echo "════════ DONE $(date -Iseconds) ════════"
