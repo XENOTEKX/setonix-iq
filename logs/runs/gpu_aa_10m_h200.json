@@ -1,0 +1,42 @@
+{
+ "run_id": "gpu_aa_10m_h200",
+ "pbs_id": null,
+ "platform": "gadi",
+ "run_type": "gpu_baseline",
+ "label": "GPU JOLT AA-10M -m MF (H200)",
+ "description": "CTF -m MF (all models) AA 10M sites on 1x H200 (G.7.2 tiling binary, parity-matched).",
+ "timing": [
+  {
+   "command": "iqtree3 --jolt --gpu -m MF (CTF) -s AA_10M.phy",
+   "time_s": 3175.0
+  }
+ ],
+ "verify": [
+  {
+   "file": "AA_10M",
+   "status": "pass",
+   "expected": -782589738.5655,
+   "reported": -782589738.5655,
+   "diff": 1.526e-10
+  }
+ ],
+ "env": {
+  "date": "2026-06-14T13:28:42.344565+10:00",
+  "hostname": "gadi-gpu-h200-0009.gadi.nci.org.au",
+  "cpu": "\u2014",
+  "iqtree_version": "IQ-TREE3-GPU JOLT (bin 8dd57cfb)"
+ },
+ "dataset_info": {
+  "taxa": 100,
+  "sites": 10000000,
+  "sequence_type": "AA",
+  "dataset_short": "AA-10M"
+ },
+ "modelfinder": {
+  "model_selected": "LG+G4",
+  "best_model_bic": "LG+G4",
+  "log_likelihood": -782589738.5655,
+  "bic": 1565182668.5139,
+  "candidates": []
+ }
+}

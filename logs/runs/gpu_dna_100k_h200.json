@@ -1,0 +1,42 @@
+{
+ "run_id": "gpu_dna_100k_h200",
+ "pbs_id": null,
+ "platform": "gadi",
+ "run_type": "gpu_baseline",
+ "label": "GPU JOLT DNA-100K -m MF (H200)",
+ "description": "CTF -m MF (all models) DNA 100K sites on 1x H200 (G.7.2 tiling binary, parity-matched).",
+ "timing": [
+  {
+   "command": "iqtree3 --jolt --gpu -m MF (CTF) -s DNA_100K.phy",
+   "time_s": 54.0
+  }
+ ],
+ "verify": [
+  {
+   "file": "DNA_100K",
+   "status": "pass",
+   "expected": -5692984.5261,
+   "reported": -5692984.5261,
+   "diff": 2.109e-11
+  }
+ ],
+ "env": {
+  "date": "2026-06-14T13:28:42.351730+10:00",
+  "hostname": "gadi-gpu-h200-0009.gadi.nci.org.au",
+  "cpu": "\u2014",
+  "iqtree_version": "IQ-TREE3-GPU JOLT (bin 8dd57cfb)"
+ },
+ "dataset_info": {
+  "taxa": 100,
+  "sites": 100000,
+  "sequence_type": "DNA",
+  "dataset_short": "DNA-100K"
+ },
+ "modelfinder": {
+  "model_selected": "F81+F+G4",
+  "best_model_bic": "F81+F+G4",
+  "log_likelihood": -5692984.5261,
+  "bic": 11388283.1503,
+  "candidates": []
+ }
+}

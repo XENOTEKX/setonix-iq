@@ -1,0 +1,10 @@
+PENDING — job 171175357 (bench-h200-dcgm) on gpuhopper (H200, 141 GB), queued 2026-06-15.
+Script: gadi-ci/gpu-modelfinder/run_bench_sweep_h200_dcgm.sh
+Goal: AA full -m MF CTF sweep 10K/100K/1M/10M on the HEADLINE H200 with TRUE SM metrics (DCGM):
+      SM_ACTIVE (1002), SM_OCCUPANCY (1003), DRAM_ACTIVE (1005), PIPE_FP64_ACTIVE (1006).
+      10M AA is the genome-scale headline cell (the thing the user asked for explicitly).
+Twin of A100 run 171175084 (bench_a100_dcgm/) — SM_SUMMARY.tsv schemas match for a clean A100↔H200 compare.
+Output: /scratch/rc29/as1708/iqtree3-gpu/bench_h200_dcgm/{SUMMARY.tsv,SM_SUMMARY.tsv}
+On completion: drop real per-cell H200 SM-active%/occupancy/DRAM%/FP64% into CHANGELOG "GPU METRICS" table;
+confirm AA-10M -m MF ran on H200 (winner LG+G4, parity, nTile). Caveat: DCGM adds small overhead → this run's
+wall/energy are NOT the frozen-sweep headline (171012178 stays the headline wall/energy); deliverable = SM metrics.
