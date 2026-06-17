@@ -536,6 +536,53 @@ This upgrades §V.14.2's single demonstration to a 30-run, two-data-type result 
 (native 30/30 vs projected 15/30, dominated by the DNA 0/15). Summary at
 `/scratch/rc29/as1708/iqtree3-gpu/ctf_overfit_recall/RECALL_SUMMARY.tsv`.
 
+### V.14.2c — THE +R-FAVOURING regime, the last open gap, now CLOSED (job 171466576, 2026-06-17)
+
+§V.14.2b's data was all **+G-winning** (AA→LG+G4, DNA→F81+F+G4) — the native gate never had to *recall a genuine +R
+winner*, which §V.14.7/8 named as the one untested regime (and the one the panel's fear actually targets:
+under-fitting away from a true +R model). This sweep closes it. We **simulated** (AliSim) 100K alignments under
+strongly **bimodal FreeRate** generative models that unimodal gamma structurally cannot fit, so the full-data BIC
+oracle is a genuine +R-family model:
+
+- **AA** — `LG+R4{0.45,0.1, 0.05,0.4, 0.05,1.6, 0.45,1.9}` (two well-separated rate clusters at 0.1 and 1.9)
+- **AAI** — `LG+I{0.2}+R3{0.5,0.2, 0.1,1.0, 0.4,2.0}` (genuine invariant fraction + bimodal variable rates)
+- **DNA** — `GTR{2,5,1.5,1.2,4.5}+F{...}+R4{…bimodal…}`
+
+**Precondition verified before spending the job (not vacuous):** on the AA bimodal data even at 10K sites, LG+R4
+beats LG+G4 by **2,847 nats (ΔBIC ≈ −5,648)** despite +5 params — and since the lnL-gain/penalty ratio only grows
+with N, +R wins by a landslide at 100K. For each regime, m ∈ {1000,2000,5000} × seeds {1..5} = 15 cells; per cell we
+rank under both gates and compute the **actual CTF output** = `argmin BIC_full` over the coarse top-3 (the exact
+refine, computed from the oracle's own full-data BIC — non-circular, since the coarse top-3 is built independently on
+the subsample), plus an **under-fit** flag (CTF output simpler than oracle), an **over-fit** flag, and a rate-het
+**class-downgrade** flag (oracle +R-family but CTF drops to +G/+I).
+
+| regime | oracle (full-data BIC) | cells | native recall@3 | **CTF output correct** | under-fit | over-fit | class-down |
+|---|---|---:|---:|---:|---:|---:|---:|
+| AA (LG+R4 bimodal) | **LG+I+R2** | 15 | 15/15 | **15/15** | **0** | **0** | **0** |
+| AAI (LG+I+R3 bimodal) | **LG+I+R2** | 15 | 15/15 | **15/15** | **0** | **0** | **0** |
+| DNA (GTR+R4 bimodal) | **GTR+F+I+R2** | 15 | 15/15 | **15/15** | **0** | **0** | **0** |
+
+**45/45 perfect: the shipped native gate recalls the genuine +R winner every time, zero under-fit, zero over-fit,
+zero class-downgrade.** Three honest observations:
+
+1. **The predicted under-fit never materialises.** §V.14.5 warned the one residual risk was data where +R *legitimately*
+   wins, where a small subsample could under-determine the rate categories and drop the genuine +R winner *toward
+   parsimony*. It does not happen even at m=1000 (1% of patterns): recall@3 = 15/15 in every regime.
+2. **Screen-then-clean observed, not just argued.** The oracle is **+I+R2** (not the generated +R4 — "generative ≠
+   BIC-selected" again, cf. G.6.2: the big slow rate-cluster is captured as an invariant + 2 free rates), and in
+   several cells the *coarse* top-1 is the simpler `LG+R2`/`TVM+F+I+R2`, yet the +I+R2 oracle is always in the coarse
+   top-3, so the exact-BIC refine recovers it — the Case-A finish (§V.14.1) working on live +R data.
+3. **The projected gate also scored 45/45 here — and that is consistent, not a contradiction.** The projected gate's
+   *failure* mode is promoting complexity when the truth is **simple** (the DNA 0/15 of §V.14.2b). Here the truth IS
+   the complex +I+R model, so the projected bias is harmless — it cannot over-shoot past the actual winner. So this
+   sweep is *not* a native-vs-projected discriminator (that was §V.14.2b's job on +G data); it is the **under-fit
+   safety proof** for the shipped native gate on the adversarial +R regime — which is exactly what was missing.
+
+Net: the last honest gap in §V.14.7/8 is closed — **on genuinely +R-favouring data CTF neither under-fits nor
+over-fits; recall@3 = 45/45.** Summary at
+`/scratch/rc29/as1708/iqtree3-gpu/ctf_freerate_recall/FREERATE_RECALL_SUMMARY.tsv`; harness
+`gadi-ci/gpu-modelfinder/run_ctf_freerate_recall_sweep.sh`.
+
 ### V.14.3 Why the bias does NOT reach the output — screening theory + the exact-BIC finish
 
 This is the architecture the statistics literature calls **screen-then-clean**, and CTF matches its "safe" pattern:
@@ -620,8 +667,11 @@ localises the failure to shortlist construction (fixed by S2/S3), and the output
 construction.** ✅ **The cheap precursor — a multi-seed native-vs-projected recall sweep on the existing AA/DNA data
 (m ∈ {1000, 2000, 5000} × 5 seeds) — has now run (§V.14.2b, job 171258771): the shipped native gate scored 30/30
 recall@3 with 1/30 trivial over-fit, while the old projected gate collapsed to 0/15 recall on the DNA exchangeability
-ladder.** The one regime still untested is genuinely +R-favouring data (a true +Rk generative model where +R beats +G
-at full data) — the under-fit direction; that remains the last open recall check.
+ladder.** ✅ **The decisive experiment itself has now ALSO run (§V.14.2c, job 171466576): on genuinely +R-favouring
+data — AA `LG+R4`, AAI `LG+I+R3`, DNA `GTR+R4`, all strongly bimodal so the full-data BIC oracle is a true +I+R-family
+model — the shipped native gate scored recall@3 = 45/45 with ZERO under-fit, ZERO over-fit, ZERO class-downgrade, and
+the exact-BIC CTF output matched the +R oracle in all 45 cells. The under-fit direction the panel feared does not
+materialise even at m=1000.** The last open recall check is closed.
 
 ### V.14.8 Established vs uncertain (intellectual honesty)
 
@@ -635,6 +685,6 @@ collapses to 0/15 on the DNA exchangeability ladder, confirming both the amplifi
 real data.** **Uncertain:** no paper analyses the explicit `−2(N/m)lnL+k·ln N` estimator's optimism directly (the
 derivation here is sound first-principles, **though the n=30 sweep now empirically matches its prediction**, not a
 cited result for this exact form); worst-case recall for near-degenerate +R ladders under subsampling is not formally
-bounded and **the genuinely-+R-favouring generative regime is the one recall case still untested** (ModelTamer's 99 %
-is empirical, its one miss ΔBIC<10); the fixed-subsample-tree × model-ranking interaction is uncharacterised (a
-separate risk, orthogonal to overfitting).
+bounded **(though the genuinely-+R-favouring generative regime — once the last untested gap — is now measured at
+45/45 recall@3, §V.14.2c)**; ModelTamer's 99 % is empirical, its one miss ΔBIC<10; the fixed-subsample-tree ×
+model-ranking interaction is uncharacterised (a separate risk, orthogonal to overfitting).

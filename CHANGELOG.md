@@ -76,7 +76,19 @@ The first attempt (171208914) ran to completion but emitted an **empty** RECALL_
 | DNA (F81+F+G4) | **native (shipped)** | **15/15** | **1/15** (TPM2u+F+G4, +2 params, still recalled the winner in top-3) |
 | DNA (F81+F+G4) | projected (old) | **0/15** | **15/15** (always a GTR-family / +I model — never the true winner) |
 
-The shipped **native gate recalls the full-data BIC winner 30/30 with one trivial over-fit**; the **projected gate collapses to 0/15 recall on the DNA exchangeability ladder** (the (N/m)·k/2 optimism climbs the GTR ladder every time). Notably the DNA data is *generated* under GTR+I+G4 yet the **BIC** oracle is the simpler F81+F+G4 — so the projected gate chases the generative model while BIC wants the simpler one, and **only the native gate agrees with BIC.** This upgrades part5 §V.14's n=1 demonstration to a two-data-type, 30-run result (full write-up in part5 §V.14.2b; summary `…/iqtree3-gpu/ctf_overfit_recall/RECALL_SUMMARY.tsv`). The one regime still untested is genuinely +R-favouring generative data (the under-fit direction).
+The shipped **native gate recalls the full-data BIC winner 30/30 with one trivial over-fit**; the **projected gate collapses to 0/15 recall on the DNA exchangeability ladder** (the (N/m)·k/2 optimism climbs the GTR ladder every time). Notably the DNA data is *generated* under GTR+I+G4 yet the **BIC** oracle is the simpler F81+F+G4 — so the projected gate chases the generative model while BIC wants the simpler one, and **only the native gate agrees with BIC.** This upgrades part5 §V.14's n=1 demonstration to a two-data-type, 30-run result (full write-up in part5 §V.14.2b; summary `…/iqtree3-gpu/ctf_overfit_recall/RECALL_SUMMARY.tsv`).
+
+#### C2. The +R-favouring regime — ✅ DONE (job 171466576), the last open gap CLOSED
+
+The n=30 sweep above never tested data where **+R legitimately wins** (its oracles were all +G: LG+G4 / F81+F+G4) — exactly the under-fit direction the panel feared and part5 §V.14.7/8 flagged as the one untested regime. New harness `run_ctf_freerate_recall_sweep.sh` **simulates** (AliSim) 100K alignments under strongly **bimodal FreeRate** generative models that unimodal gamma cannot fit, so the full-data BIC oracle is a genuine +R-family model: AA `LG+R4`, AAI `LG+I+R3`, DNA `GTR+R4` (each m ∈ {1000,2000,5000} × 5 seeds = 45 cells). Precondition verified first (not vacuous): at 10K AA, LG+R4 beats LG+G4 by **2,847 nats / ΔBIC ≈ −5,648**, and the gain/penalty ratio only grows with N. Per cell we compute the **actual CTF output** = `argmin BIC_full` over the coarse top-3 (the exact refine; non-circular) plus under-fit / over-fit / rate-class-downgrade flags.
+
+| regime (oracle) | cells | native recall@3 | CTF output correct | under-fit | over-fit | class-down |
+|---|---:|---:|---:|---:|---:|---:|
+| AA — LG+R4 bimodal (→ **LG+I+R2**) | 15 | 15/15 | **15/15** | **0** | **0** | **0** |
+| AAI — LG+I+R3 bimodal (→ **LG+I+R2**) | 15 | 15/15 | **15/15** | **0** | **0** | **0** |
+| DNA — GTR+R4 bimodal (→ **GTR+F+I+R2**) | 15 | 15/15 | **15/15** | **0** | **0** | **0** |
+
+**45/45 perfect — the shipped native gate recalls the genuine +R winner every time, ZERO under-fit, ZERO over-fit, ZERO class-downgrade.** Honest notes: (1) the oracle is **+I+R2** not the generated +R4 ("generative ≠ BIC-selected", cf. G.6.2 — the slow cluster is captured as invariant+2 rates); in several cells the coarse top-1 is the simpler LG+R2/TVM+F+I+R2 yet the +I+R2 oracle is always in the coarse top-3, so the exact-BIC refine recovers it (screen-then-clean, observed); (2) the projected gate ALSO scored 45/45 here — consistent, because its failure mode is over-shooting when truth is *simple*, and here truth IS the complex +I+R model, so this sweep is the **under-fit safety proof** for the native gate, not a native-vs-projected discriminator (that was C above). Full write-up part5 §V.14.2c; summary `…/iqtree3-gpu/ctf_freerate_recall/FREERATE_RECALL_SUMMARY.tsv`. **The panel's overfitting/underfit concern is now closed in both directions.**
 
 ---
 
