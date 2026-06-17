@@ -48,5 +48,19 @@ gadi-ci/gpu-modelfinder/gpu_k7_grad
 gadi-ci/gpu-modelfinder/gpu_k7b_freerate
 gadi-ci/gpu-modelfinder/gpu_k8_jolt
 gadi-ci/gpu-modelfinder/gpu_k8b_jolt_alpha
+gadi-ci/gpu-modelfinder/gpu_k8c_jolt_freerate
 gadi-ci/gpu-modelfinder/*.nsys-rep
 gadi-ci/gpu-modelfinder/*.sqlite
+
+# Thesis + sensitive documents — NEVER publish to the public remote (XENOTEKX/setonix-iq)
+thesis/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+.env
+.env.*
+*.pat
+*.token
