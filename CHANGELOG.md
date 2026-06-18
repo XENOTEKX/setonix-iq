@@ -2,6 +2,26 @@
 
 ---
 
+## 🧬 G.8.0 / G.8.1a — Profile-mixture (C20/C60/MEOW80) lnL + per-class posterior on GPU — ✅ VALIDATED bit-exact — 2026-06-18
+
+First profile mixtures running on the GPU likelihood path. New clean-room kernel `k1_node_mix` (+ `accum_child_mix`, launcher `gpu_lnl_crosscheck_mix` in `tree/gpu/gpu_lnl_intree.cu`) and host bridge `gpuComputeTreeLnLCleanRoomMix` (`tree/phylotreegpu.cpp`), validated against CPU via the gated one-shot `gpuMixLnLCrossCheckOnce` (mirrors the G.2.0a single-model pattern). **Purely additive; CPU path byte-unchanged.** Commit `2277273d` (iqtree3-gpu, local).
+
+| model | N classes | regimes (N·ncat) | GPU lnL == CPU lnL | rel |
+|---|---|---|---|---|
+| LG+C20+G4 | 20 | 80 | −380523.970000 | **3.06e-16** |
+| LG+C60+G4 | 60 | 240 | −377699.344541 | **1.54e-16** |
+| LG+MEOW80+G4 | 80 | 320 | −373611.897285 | **1.56e-16** |
+
+(job 171604565, A100, 5000-site Williamson euk subsample; gate was rel ≤ 1e-9, got ~machine-eps like G.2.0a.) **The 320-regime MEOW80 case works because the clean-room keeps per-regime arrays (Uinv/freq/wreg/echild) in GLOBAL device memory** — sidestepping the `__constant__` 64-category overflow part9 §IX.11.3 flagged for a production `k1_node`. Regime flattening `r = m·ncat + c`; root fold `L_p = Σ_m w_m Σ_c catProp_c (π_m·prod)`. `+I` / fused (LG4M/LG4X) / PMSF correctly decline to CPU.
+
+**G.8.1a per-class** (the EM weight numerator for G.8.2): GPU self-consistency `Σ_m L_{p,m} = L_p` **1.4e-14** (×3 models); per-class **posterior responsibility** `γ_{p,m}=L_{p,m}/Σ_m' L_{p,m'}` vs CPU `_pattern_lh_cat` **|Δγ| = 5.76e-14** (job 171633391, C20). The posterior is the *correct, scale-invariant* metric — the CPU `_pattern_lh_cat` is per-pattern **scaled** (`scale_num`·`LOG_SCALING_THRESHOLD`) while the GPU clean-room is **unscaled**, so raw per-class values differ by `exp(scale_p)` (which is why the lnL still matches — the factor returns in the log domain); self-normalising each side cancels it, and `γ` is exactly what the EM M-step consumes.
+
+**Process note (a recurring trap, now caught twice):** the cross-check appeared "not to fire" in an earlier run — a **double-logging artifact**: the run script pointed both IQ-TREE's `-pre <p>.log` and the shell redirect (`> <p>.log 2>&1`) at the SAME file, so IQ-TREE's `cout` logger (its own `FILE*`) clobbered the cross-check's raw `printf`/`fprintf`. Fix = redirect the binary's console to a **separate** `.console` file (`run_g80_*` scripts). Same class of artifact as the G.4.3a "+F never broken" false alarm.
+
+**Next:** G.8.1b (mixture branch gradient `k2_derv_mix` vs CPU `computeLikelihoodDerv`) → G.8.2 (EM weight optimiser) → G.8.3 (seam + gate relax) → G.8.4 (eukaryote payoff).
+
+---
+
 ## 🔬 FP64 tensor-core MMA lever — ✅ TESTED + CLOSED (T.0 kill-switch fired STOP: DMMA 1.6–2.8× SLOWER than JOLT scalar) — 2026-06-18
 
 **T.0 decider result (jobs 171587052 H200 / 171587053 A100, both exit 0).** Built the standalone `tree/gpu/tc_decider.cu` (FP64 `wmma`-double m8n8k4 DMMA matvec vs JOLT's register-resident scalar matvec, 20→32 padded; agent-reviewed before submit — wmma fragment mapping verified element-by-element vs CUDA-12.5 `mma.hpp`, no transpose bug). Measured per-eval matvec, AA-20 ncat=4:

@@ -105,7 +105,9 @@ path); a process-wide `std::mutex` serialises JOLT on the 1 GPU (ModelFinder is 
 | **n=30 recall** | Native **30/30** recall@3; projected DNA **0/15** (overfit) | 171258771 | — |
 | **BEAGLE bench** | JOLT **2.3–2.43×** over CUDA-core BEAGLE, ≈parity vs FP64 tensor-core; runs AA-1M where BEAGLE client OOMs. **Follow-up lever → part12** | 171265226+ | `960121f8` (local; CHANGELOG §A/B) |
 | **FP64-TC lever** | **CLOSED — T.0 kill-switch fired STOP** (part12 §XII.6): DMMA matvec **0.36× @1M H200 / 0.60× A100** = 1.6–2.8× SLOWER than JOLT scalar (parity bit-identical). Gate was ≥1.3×. Confirms JOLT's register-fused scalar already captured the gain; 20→32 pad + latency-bound negate the TC FLOP edge. Cost 0.43 SU vs 6–10 days saved | 171587052/3 | `tc_decider.cu` |
-| **G.8** | **Profile-mixture JOLT (C60/MEOW80) — PLAN** (part9 §IX.11); the eukaryote LG+MEOW80+G4 model; declines to CPU today | — | — |
+| **G.8.0** | **Profile-mixture lnL on GPU bit-exact**: `k1_node_mix` GPU lnL == CPU for LG+**C20**/**C60**/**MEOW80**+G4 rel **3.06e-16 / 1.54e-16 / 1.56e-16** (320-regime MEOW80 via global-mem per-regime arrays, dodges `__constant__` 64-cat limit) | 171604565 | `2277273d` |
+| **G.8.1a** | **Mixture per-class** for EM numerator: GPU self-consistency Σ_m L_{p,m}=L_p **1.4e-14** (×3); posterior γ_{p,m} vs CPU `_pattern_lh_cat` **\|Δγ\|=5.76e-14** (scale-invariant metric: CPU is per-pattern scaled, GPU clean-room unscaled) | 171633391 | `2277273d` |
+| **G.8 →** | next: G.8.1b mixture branch grad → G.8.2 EM weight optimiser → G.8.3 seam+gate relax → G.8.4 eukaryote LG+MEOW80+G4 payoff (part9 §IX.11); production still declines mixtures to CPU | — | — |
 
 ---
 
@@ -211,8 +213,12 @@ comparison gate** (JOLT lnL ≥ CPU−eps else NaN→CPU); deterministic FP64 re
    **DEPTH** case (one heavy model, no breadth competition) — **NOT** an occupancy-ceiling escape and NOT a new grid.z
    breadth win (red-team-corrected; 80× arithmetic = more latency-bound work, not 80× speedup). Real structural wins: fixed
    profiles → cache eigens once; branch gradient linear across classes. Weights by EM (de-risked vs +R multimodality), but
-   CPU default is BFGS ⇒ MLE-equality gate. Phases G.8.0 lnL → G.8.1 grad → G.8.2 weight optimiser → G.8.3 seam → G.8.4
-   real-data payoff. **Watch:** AVX-padded eigen stride, 64-entry `__constant__` cap (320 regimes), low-register class map. ~22 days.
+   CPU default is BFGS ⇒ MLE-equality gate. **✅ G.8.0 (lnL) + G.8.1a (per-class posterior) DONE — bit-exact ×3, commit
+   `2277273d`** (C20/C60/MEOW80 lnL rel ~1e-16; posterior |Δγ| 5.76e-14; 320-regime MEOW80 via global-mem per-regime arrays,
+   so the 64-entry `__constant__` cap was NOT hit by the clean-room path — it WILL bind a production `k1_node`). **NEXT: G.8.1b
+   mixture branch gradient** (`k2_derv_mix` vs CPU `computeLikelihoodDerv`, the G.2.1a gate) → G.8.2 EM weight optimiser →
+   G.8.3 seam + gate relax (`phylotreegpu.cpp:573`) → G.8.4 eukaryote payoff. **Watch (still ahead):** AVX-padded eigen stride
+   (handled in bridge), low-register class map, the `__constant__` cap when the kernel goes in-tree. ~16 days remaining.
 3. **CAT-PMSF** (site-specific `ModelSet`, +R4) — separate later track (per-site π, no class sum).
 4. **10M throughput follow-up** — the host self-check at extreme nptn dominates wall (a HOST cost after GPU optimise);
    sample/skip it. Capability (JOLT engages, lnL-exact) is shipped (G.7.1).
