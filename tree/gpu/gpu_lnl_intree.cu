@@ -86,6 +86,74 @@ __global__ void k1_node(int ns, int nptn, int ncat, int isRoot, double* __restri
     if (isRoot) patlh[ptn] = log(fabs(lh));
 }
 
+// ============================================================================================================
+// G.8.0 — N-class PROFILE-MIXTURE lnL (the "K1-for-mixtures" gate). Each regime r = m*ncat + c is an INDEPENDENT
+// Felsenstein sweep with class m's eigen (echild_m,c, Uinv_m) and gamma cat c; regimes never mix until the ROOT
+// fold  L_p = Σ_r w_r·(π_m · prod_r),  w_r = weight_m · catProp_c.  Per-class Uinv/freq/rowsum live in GLOBAL
+// memory (N·ns·ns overflows the 64KB __constant__ budget at MEOW80's 320 regimes). Separate kernel from k1_node
+// so the validated single-model path is byte-unchanged. One thread/pattern; straightforward r-loop (correctness
+// gate — a low-register class mapping is a later perf optimisation; this is a one-shot diagnostic).
+// ============================================================================================================
+__device__ __forceinline__ void accum_child_mix(double* prod, int ns, int r, int ptn, int nptn,
+        const double* __restrict__ ec, const double* __restrict__ p, const unsigned char* __restrict__ t,
+        const double* __restrict__ Uinv_m, const double* __restrict__ UinvRowSum_m) {
+    const double* ecc = ec + (size_t)r*ns*ns;
+    if (p) {                                   // internal child: its eigen-space partial for regime r
+        const double* pc = p + (size_t)r*ns*nptn + ptn;
+        for (int x=0;x<ns;x++){ double v=0.0;
+            for (int i=0;i<ns;i++) v += ecc[x*ns+i]*pc[(size_t)i*nptn];
+            prod[x]*=v; }
+    } else {                                   // leaf child: L[i] = column s of class-m U^-1 (row-sum if ambiguous)
+        int s = t[ptn];
+        for (int x=0;x<ns;x++){ double v=0.0;
+            for (int i=0;i<ns;i++){ double Li = (s<ns)? Uinv_m[i*ns+s] : UinvRowSum_m[i]; v += ecc[x*ns+i]*Li; }
+            prod[x]*=v; }
+    }
+}
+
+__global__ void k1_node_mix(int ns, int nptn, int ncat, int nmix, int isRoot,
+        double* __restrict__ out, double* __restrict__ patlh,
+        const double* __restrict__ d_Uinv,        // [nmix][ns*ns]
+        const double* __restrict__ d_UinvRowSum,  // [nmix][ns]
+        const double* __restrict__ d_freq,        // [nmix][ns]
+        const double* __restrict__ d_wreg,        // [nmix*ncat]  w_m * catProp_c
+        double* __restrict__ out_lhcat,           // G.8.1: optional per-class L_{p,m}=w_m*Σ_c catProp_c*L_{p,m,c} [nmix][nptn]
+        int nchild,
+        const double* ec0, const double* p0, const unsigned char* t0,
+        const double* ec1, const double* p1, const unsigned char* t1,
+        const double* ec2, const double* p2, const unsigned char* t2) {
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    int R = nmix*ncat;
+    double lh = 0.0, clh = 0.0;   // clh = running per-class accumulator (G.8.1)
+    for (int r=0;r<R;r++){
+        int m = r/ncat;
+        const double* Uinv_m = d_Uinv + (size_t)m*ns*ns;
+        const double* Urs_m  = d_UinvRowSum + (size_t)m*ns;
+        double prod[NS_MAX];
+        for (int x=0;x<ns;x++) prod[x]=1.0;
+        accum_child_mix(prod,ns,r,ptn,nptn,ec0,p0,t0,Uinv_m,Urs_m);
+        if (nchild>1) accum_child_mix(prod,ns,r,ptn,nptn,ec1,p1,t1,Uinv_m,Urs_m);
+        if (nchild>2) accum_child_mix(prod,ns,r,ptn,nptn,ec2,p2,t2,Uinv_m,Urs_m);
+        if (isRoot){
+            const double* freq_m = d_freq + (size_t)m*ns;
+            double s=0.0;
+            for (int x=0;x<ns;x++) s += freq_m[x]*prod[x];
+            double contrib = d_wreg[r]*s;   // w_m*catProp_c*(π_m·prod) = this regime's likelihood contribution
+            lh += contrib;
+            if (out_lhcat){                 // accumulate per class m over its ncat gamma cats, flush at c==ncat-1
+                clh += contrib;
+                if (r - m*ncat == ncat-1){ out_lhcat[(size_t)m*nptn + ptn] = clh; clh = 0.0; }
+            }
+        } else {
+            double* o = out + (size_t)r*ns*nptn + ptn;
+            for (int rr=0; rr<ns; rr++){ double v=0.0;
+                for (int x=0;x<ns;x++) v += Uinv_m[rr*ns+x]*prod[x];
+                o[(size_t)rr*nptn]=v; }
+        }
+    }
+    if (isRoot) patlh[ptn] = log(fabs(lh));
+}
+
 // G.2.1a single-edge derivative (K2): theta = node_eig elementwise* dad_eig (t-independent eigen-space
 // partials at the two edge endpoints); per pattern lh=Σ val0·theta, d1=Σ val1·theta, d2=Σ val2·theta;
 // pdf = d1/lh = d log|lh| / dt, pddf = d2/lh − (d1/lh)^2 = d²log|lh|/dt². One thread/pattern.
@@ -320,6 +388,75 @@ extern "C" double gpu_lnl_crosscheck(
         double y=term-kc, t2=lnL+y; kc=(t2-lnL)-y; lnL=t2; }
 
     // pool buffers persist (no cudaFree) — reused next call
+    return lnL;
+}
+
+// G.8.0 — profile-mixture clean-room lnL launcher. Mirrors gpu_lnl_crosscheck but with R = nmix*ncat regimes;
+// per-class Uinv/UinvRowSum/freq + per-regime weight live in GLOBAL memory (mix_* pools). echild/tip/partial/patlh
+// reuse the single-model pools (resized via DEVB to the larger mixture sizes). NaN on OOM/CUDA error -> CPU fallback.
+static DevBuf gb_mUinv, gb_mUrs, gb_mFreq, gb_mWreg, gb_mLhcat;
+extern "C" double gpu_lnl_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
+    const double* Uinv, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* echild, const unsigned char* tip, const double* ptn_freq,
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    double* out_patlh, double* out_lhcat)   // G.8.1: out_lhcat (optional) = per-class L_{p,m}, [nmix][nptn]
+{
+    int ns = nstates;
+    if (ns > NS_MAX || nmix < 1 || ncat < 1) { fprintf(stderr,"[GPU-XCHECK-MIX] unsupported ns=%d nmix=%d ncat=%d\n",ns,nmix,ncat); return (double)NAN; }
+    int R = nmix*ncat;
+
+    // per-class eigen + per-regime weight -> GLOBAL (overflow __constant__ at 320 regimes)
+    DEVB(gb_mUinv, (size_t)nmix*ns*ns*sizeof(double));
+    DEVB(gb_mUrs,  (size_t)nmix*ns*sizeof(double));
+    DEVB(gb_mFreq, (size_t)nmix*ns*sizeof(double));
+    DEVB(gb_mWreg, (size_t)R*sizeof(double));
+    GCK(cudaMemcpy(gb_mUinv.p, Uinv,       (size_t)nmix*ns*ns*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mUrs.p,  UinvRowSum, (size_t)nmix*ns*sizeof(double),    cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mFreq.p, freq,       (size_t)nmix*ns*sizeof(double),    cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mWreg.p, wreg,       (size_t)R*sizeof(double),          cudaMemcpyHostToDevice));
+    double *d_Uinv=(double*)gb_mUinv.p, *d_Urs=(double*)gb_mUrs.p, *d_Freq=(double*)gb_mFreq.p, *d_Wreg=(double*)gb_mWreg.p;
+
+    size_t ecStride = (size_t)R*ns*ns;        // echild per node, regime-strided
+    size_t slotSz   = (size_t)R*ns*nptn;      // partial per internal slot, regime-strided
+    DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
+    DEVB(gb_tip,    (size_t)ntax*nptn);
+    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
+    DEVB(gb_patlh,  (size_t)nptn*sizeof(double));
+    double *d_echild=(double*)gb_echild.p, *d_partial=(double*)gb_partial.p, *d_patlh=(double*)gb_patlh.p;
+    unsigned char *d_tip=(unsigned char*)gb_tip.p;
+    double *d_lhcat = nullptr;
+    if (out_lhcat) { DEVB(gb_mLhcat, (size_t)nmix*nptn*sizeof(double)); d_lhcat=(double*)gb_mLhcat.p; }   // G.8.1
+    GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
+
+    int TB=256, GB=(nptn+TB-1)/TB;
+    for (int idx=0; idx<nInternal; idx++){
+        int isRoot = desc_isRoot[idx], nchild = desc_nchild[idx];
+        double* out = (desc_outSlot[idx] < 0) ? nullptr : (d_partial + (size_t)desc_outSlot[idx]*slotSz);
+        const double* ec[3]={nullptr,nullptr,nullptr};
+        const double* p[3]={nullptr,nullptr,nullptr};
+        const unsigned char* t[3]={nullptr,nullptr,nullptr};
+        for (int k=0;k<nchild && k<3;k++){
+            int cn = desc_childNode[idx*3+k];
+            if (cn>=0) ec[k] = d_echild + (size_t)cn*ecStride;
+            if (desc_childIsLeaf[idx*3+k]) t[k] = d_tip + (size_t)desc_childLeaf[idx*3+k]*nptn;
+            else                          p[k] = d_partial + (size_t)desc_childSlot[idx*3+k]*slotSz;
+        }
+        k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,isRoot,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,d_lhcat,nchild,
+            ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+    }
+    GCK(cudaDeviceSynchronize());
+    GCK(cudaGetLastError());
+
+    std::vector<double> patlh(nptn);
+    GCK(cudaMemcpy(patlh.data(), d_patlh, (size_t)nptn*sizeof(double), cudaMemcpyDeviceToHost));
+    if (out_patlh) for (int p2=0; p2<nptn; p2++) out_patlh[p2] = patlh[p2];
+    if (out_lhcat) GCK(cudaMemcpy(out_lhcat, d_lhcat, (size_t)nmix*nptn*sizeof(double), cudaMemcpyDeviceToHost));  // G.8.1
+    double lnL=0.0, kc=0.0;
+    for (int p2=0; p2<nptn; p2++){ double term = ptn_freq[p2]*patlh[p2];
+        double y=term-kc, t2=lnL+y; kc=(t2-lnL)-y; lnL=t2; }
     return lnL;
 }
 

@@ -70,6 +70,24 @@ double gpu_lnl_crosscheck(
     const int* desc_childSlot,   // nInternal*3 (partials slot if internal child)
     double* out_patlh);          // nptn (optional; per-pattern log|lh_ptn| if non-NULL) — G.2.0b
 
+// Phase G.8.0 — profile-mixture clean-room lnL (C20/C60/MEOW80). Same descriptor scheme as gpu_lnl_crosscheck but
+// with R = nmix*ncat regimes (r = m*ncat + c): per-class Uinv/UinvRowSum/freq are [nmix][...] arrays (GLOBAL on
+// device), wreg is [nmix*ncat] (= weight_m * catProp_c), echild is [nnodes][R][ns*ns], partial slots index in units
+// of (R*nstates*nptn). Each regime is an independent Felsenstein sweep; combined only at the root fold
+// L_p = Σ_r wreg_r·(freq_m · prod_r). Returns the whole-tree lnL; NaN on OOM/CUDA error.
+double gpu_lnl_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
+    const double* Uinv,          // nmix * nstates*nstates (per-class inverse eigenvectors)
+    const double* UinvRowSum,    // nmix * nstates
+    const double* freq,          // nmix * nstates (per-class state frequencies)
+    const double* wreg,          // nmix*ncat (weight_m * catProp_c)
+    const double* echild,        // nnodes * (nmix*ncat)*nstates*nstates
+    const unsigned char* tip,    // ntax * nptn
+    const double* ptn_freq,      // nptn
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    double* out_patlh, double* out_lhcat);   // out_lhcat (optional, G.8.1): per-class L_{p,m} = w_m*Σ_c catProp_c*L_{p,m,c}, [nmix][nptn]
+
 // Phase G.2.1a — clean-room single-edge branch-length derivative launcher (K2 in-tree). The descriptor list
 // covers BOTH subtrees split by the central edge (two sub-roots = the edge endpoints), all entries isRoot=0 so
 // every internal node (incl. the two endpoints) writes its eigen-space partial to its slot. nodeSlot/dadSlot

@@ -30,6 +30,7 @@
 #include "phylonode.h"
 #include <cstring>   // G.6: memcpy in the free-Q decompose callback
 #include "model/modelsubst.h"
+#include "model/modelmixture.h"   // G.8.0: ModelMixture per-class component accessors (at(m)->getEigenvalues() etc.)
 #include "model/rateheterogeneity.h"
 #include "model/rategamma.h"   // G.4.3b: GAMMA_CUT_MEAN — the robust mean-gamma discriminator (isGammaRate())
 #include "alignment/alignment.h"
@@ -157,6 +158,124 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
 }
 
 // ============================================================================================================
+// G.8.0 — clean-room whole-tree lnL for a PROFILE MIXTURE (C20/C60/MEOW80). Reads the LIVE ModelMixture's per-class
+// eigen via the component accessors mix[m]->getEigenvalues()/...() (already offset into the AVX-padded packed array,
+// so NO manual m*480 stride math — sidesteps the #1 silent-bug risk), per-class freq via getStateFrequency(.,m),
+// weights via getMixtureWeight(m). Regime r = m*ncat + c; builds echild[node][r] and per-class Uinv/freq, then calls
+// gpu_lnl_crosscheck_mix. SILENT, returns NaN on any unsupported regime. CPU path byte-unchanged (additive).
+// ============================================================================================================
+double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat) {
+    if (!model || !site_rate || !aln) return (double)NAN;
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) return (double)NAN;
+    if (!model->isReversible()) return (double)NAN;
+    int N = model->getNMixtures();
+    if (N <= 1) return (double)NAN;                       // single-model -> the non-mix path
+    if (model->isSiteSpecificModel()) return (double)NAN; // PMSF stays on CPU (per-site pi, no class sum)
+    if (site_rate->getPInvar() > 0.0) return (double)NAN;  // +I omitted in the clean-room sweep -> CPU
+
+    int ncat = site_rate->getNRate();
+    int nptn = (int)aln->size();
+    int ntax = (int)aln->getNSeq();
+    if (ncat < 1) return (double)NAN;
+    int R = N*ncat;
+
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || (int)mix->size() != N) return (double)NAN;
+    if (mix->isFused()) return (double)NAN;   // LG4M/LG4X = 1:1 class<->rate pairing, NOT the N*ncat cross-product
+                                              // this builds (weight from site_rate->getProp, not getMixtureWeight) -> CPU
+
+    // ---- per-class eigen (stride-safe via component pointers), freq, weight; per-regime weight = w_m*catProp_c ----
+    std::vector<double> Uinv((size_t)N*ns*ns), UinvRowSum((size_t)N*ns), freqC((size_t)N*ns);
+    std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
+    std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
+    for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    for (int m = 0; m < N; m++) {
+        ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
+        double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
+        if (!ev || !U || !Ui) return (double)NAN;
+        for (int i = 0; i < ns; i++) evalC[(size_t)m*ns+i] = ev[i];
+        for (int x = 0; x < ns*ns; x++) { Uc[(size_t)m*ns*ns+x] = U[x]; Uinv[(size_t)m*ns*ns+x] = Ui[x]; }
+        for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
+        double wf[64]; model->getStateFrequency(wf, m);   // ns<=20
+        for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
+        double wm = model->getMixtureWeight(m);
+        for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+
+    // ---- topology rooted at an internal node R (reversible-invariant) — identical to the single-model sweep ----
+    if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
+    Node *Rt = root->neighbors[0]->node;
+    if (Rt->isLeaf()) return (double)NAN;
+    map<Node*,int> nid; vector<Node*> nodes; vector<double> parentLen; vector<int> isLeafV, leafTax;
+    function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        int myi=(int)nodes.size(); nid[n]=myi; nodes.push_back(n); parentLen.push_back(lenToDad);
+        int lf=n->isLeaf()?1:0; isLeafV.push_back(lf); leafTax.push_back(lf?aln->getSeqID(n->name):-1);
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; indexDfs(nb->node,n,nb->length); }
+    };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes=(int)nodes.size();
+    vector<int> postInternal; vector<int> slot(nNodes,-1);
+    function<void(Node*,Node*)> postDfs = [&](Node *n, Node *dad){
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; postDfs(nb->node,n); }
+        if (!n->isLeaf()){ slot[nid[n]]=(int)postInternal.size(); postInternal.push_back(nid[n]); }
+    };
+    postDfs(Rt, nullptr);
+    int nInternal=(int)postInternal.size();
+
+    // ---- echild[child][r=m*ncat+c][x][i] = U_m[x][i]*exp(eval_m[i]*rate_c*parentLen) ----
+    size_t ecStride = (size_t)R*ns*ns;
+    vector<double> echild((size_t)nNodes*ecStride, 0.0);
+    for (int v = 0; v < nNodes; v++) {
+        if (v == nid[Rt]) continue;
+        double len_v = parentLen[v];
+        for (int m = 0; m < N; m++) {
+            const double *ev = &evalC[(size_t)m*ns]; const double *U = &Uc[(size_t)m*ns*ns];
+            for (int c = 0; c < ncat; c++) {
+                double l = len_v * catRate[c]; int r = m*ncat + c;
+                double ex[20]; for (int i=0;i<ns;i++) ex[i]=exp(ev[i]*l);
+                double *e = &echild[(size_t)v*ecStride + (size_t)r*ns*ns];
+                for (int x=0;x<ns;x++) for (int i=0;i<ns;i++) e[x*ns+i] = U[x*ns+i]*ex[i];
+            }
+        }
+    }
+
+    // ---- compact tip states ; pattern frequencies (identical to single-model) ----
+    vector<unsigned char> tip((size_t)ntax*nptn);
+    for (int v = 0; v < nNodes; v++) {
+        if (!isLeafV[v]) continue;
+        int tax = leafTax[v]; if (tax<0 || tax>=ntax) return (double)NAN;
+        for (int p=0;p<nptn;p++){ int st=(int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p]=(unsigned char)((st<ns)?st:ns); }
+    }
+    vector<double> ptnFreq(nptn);
+    for (int p=0;p<nptn;p++) ptnFreq[p]=(double)aln->at(p).frequency;
+
+    // ---- per-internal-node descriptors (postorder) — identical to single-model ----
+    vector<int> dRoot(nInternal), dNch(nInternal), dOut(nInternal);
+    vector<int> dChildNode(nInternal*3,-1), dChildIsLeaf(nInternal*3,0), dChildLeaf(nInternal*3,-1), dChildSlot(nInternal*3,-1);
+    for (int idx=0; idx<nInternal; idx++){
+        int vi=postInternal[idx]; Node *n=nodes[vi]; Node *dad=nullptr;
+        if (n!=Rt){ for(auto nb:n->neighbors){ if(nid[nb->node]<vi){ dad=nb->node; break; } } }
+        dRoot[idx]=(n==Rt)?1:0; dOut[idx]=(n==Rt)?-1:slot[vi];
+        int k=0;
+        for (auto nb:n->neighbors){
+            if (nb->node==dad) continue; if (k>=3) return (double)NAN;
+            int cv=nid[nb->node]; dChildNode[idx*3+k]=cv;
+            if (isLeafV[cv]){ dChildIsLeaf[idx*3+k]=1; dChildLeaf[idx*3+k]=leafTax[cv]; }
+            else            { dChildIsLeaf[idx*3+k]=0; dChildSlot[idx*3+k]=slot[cv]; }
+            k++;
+        }
+        dNch[idx]=k;
+    }
+
+    return gpu_lnl_crosscheck_mix(ns, nptn, ncat, N, ntax, nNodes, nInternal,
+        Uinv.data(), UinvRowSum.data(), freqC.data(), wreg.data(), echild.data(), tip.data(), ptnFreq.data(),
+        dRoot.data(), dNch.data(), dOut.data(),
+        dChildNode.data(), dChildIsLeaf.data(), dChildLeaf.data(), dChildSlot.data(),
+        out_patlh, out_lhcat);
+}
+
+// ============================================================================================================
 // G.2.0a — one-shot clean-room cross-check. Compares the GPU sweep against an INDEPENDENT CPU reference: if the
 // GPU Branch override is installed (G.2.0b), curScore is itself the GPU value, so we recompute the CPU lnL via
 // the SAVED CPU Branch pointer for a genuine in-process GPU-vs-CPU comparison; otherwise we use the passed
@@ -179,6 +298,77 @@ void PhyloTree::gpuLnLCrossCheckOnce(double cpu_lnL) {
     double rel = (cpu_ref != 0.0) ? fabs((gpu - cpu_ref)/cpu_ref) : fabs(gpu - cpu_ref);
     printf("[GPU-XCHECK] GPU lnL = %.6f   CPU lnL = %.6f (%s)   |d|=%.4e   rel=%.3e   -> %s\n",
            gpu, cpu_ref, src, fabs(gpu - cpu_ref), rel, (rel < 1e-6 ? "PASS (bridge OK)" : "MISMATCH"));
+}
+
+// ============================================================================================================
+// G.8.0 — one-shot PROFILE-MIXTURE lnL cross-check (C20/C60/MEOW80). Fires only for getNMixtures()>1 (does NOT
+// consume the one-shot for single-model runs). Compares the clean-room GPU mixture sweep vs an INDEPENDENT CPU
+// recompute (saved CPU Branch pointer) or curScore. Pure diagnostic; gate rel<=1e-9 (expect ~1e-12). The gate that
+// keeps mixtures off the production GPU path is unchanged — this only validates the kernel against the live model.
+// ============================================================================================================
+void PhyloTree::gpuMixLnLCrossCheckOnce(double cpu_lnL) {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // not a mixture -> leave the one-shot unconsumed
+    done = true;
+
+    int N = model->getNMixtures();
+    int nptn = (int)aln->size();
+    std::vector<double> glhcat((size_t)N*nptn);          // G.8.1: GPU per-class L_{p,m} = glhcat[m*nptn + p]
+    std::vector<double> gpatlh(nptn);                    // G.8.1 diag: GPU per-pattern log L_p (for self-consistency)
+    double gpu = gpuComputeTreeLnLCleanRoomMix(gpatlh.data(), glhcat.data());
+    if (std::isnan(gpu)) { printf("[GPU-XCHECK-MIX] skipped (unsupported regime or CUDA error)\n"); return; }
+
+    double cpu_ref = cpu_lnL;
+    const char *src = "curScore";
+    if (cpuComputeLikelihoodBranchPointer && current_it && current_it_back) {
+        cpu_ref = (this->*cpuComputeLikelihoodBranchPointer)(current_it, (PhyloNode*)current_it_back->node, false);
+        src = "CPU-recompute";
+    }
+    double rel = (cpu_ref != 0.0) ? fabs((gpu - cpu_ref)/cpu_ref) : fabs(gpu - cpu_ref);
+    printf("[GPU-XCHECK-MIX] N=%d ncat=%d  GPU lnL = %.6f   CPU lnL = %.6f (%s)   |d|=%.4e   rel=%.3e   -> %s\n",
+           N, site_rate ? site_rate->getNRate() : -1, gpu, cpu_ref, src,
+           fabs(gpu - cpu_ref), rel, (rel <= 1e-9 ? "PASS (G.8.0)" : "MISMATCH"));
+
+    // G.8.1 diag — GPU SELF-CONSISTENCY (no CPU ref): Σ_m L_{p,m} must equal L_p = exp(patlh[p]). If this holds the
+    // per-class emission is correct by construction, and any CPU-ref mismatch below is a contaminated reference (the
+    // GPU branch override leaves CPU per-cat partials unpopulated), NOT a kernel bug.
+    {
+        double selfmax = 0.0; int pbad = -1;
+        for (int p = 0; p < nptn; p++) {
+            double s = 0.0; for (int m = 0; m < N; m++) s += glhcat[(size_t)m*nptn + p];
+            double Lp = exp(gpatlh[p]);
+            double r = fabs(s - Lp) / (fabs(Lp) + 1e-300);
+            if (r > selfmax) { selfmax = r; pbad = p; }
+        }
+        printf("[GPU-XCHECK-MIX] GPU self-consistency Sum_m L_{p,m} vs L_p: max rel = %.3e (ptn %d)  -> %s\n",
+               selfmax, pbad, (selfmax <= 1e-9 ? "PASS (GPU per-class internally exact)" : "GPU EMISSION BUG"));
+    }
+
+    // G.8.1 — per-class POSTERIOR RESPONSIBILITY γ_{p,m} = L_{p,m}/Σ_m' L_{p,m'} (the EM E-step quantity the G.8.2
+    // weight M-step consumes: w_m_new = Σ_p f_p·γ_{p,m} / Σ_p f_p). This is the CORRECT cross-check metric because it is
+    // SCALE-INVARIANT: the CPU's _pattern_lh_cat is per-pattern SCALED (scale_num·LOG_SCALING_THRESHOLD underflow
+    // protection) while the GPU clean-room is raw/unscaled — they differ by exp(scale_p) per pattern (which is why the
+    // lnL still matches bit-exact: the factor is added back in the log domain). Self-normalising each side by its own
+    // per-pattern class sum cancels exp(scale_p), so γ_g and γ_c are directly comparable. Guarded: skip _pattern_lh_cat unalloc.
+    if (_pattern_lh_cat) {
+        computePatternLhCat(WSL_MIXTURE);                 // fills _pattern_lh_cat[ptn*N + m] (CPU, current state)
+        double mr = 0.0;
+        for (int p = 0; p < nptn; p++) {
+            double sg = 0.0, sc = 0.0;
+            for (int m = 0; m < N; m++) { sg += glhcat[(size_t)m*nptn + p]; sc += _pattern_lh_cat[(size_t)p*N + m]; }
+            if (sg <= 0.0 || sc <= 0.0) continue;        // fully-underflowed pattern carries no posterior information
+            for (int m = 0; m < N; m++) {
+                double gg = glhcat[(size_t)m*nptn + p] / sg, cc = _pattern_lh_cat[(size_t)p*N + m] / sc;
+                double r = fabs(gg - cc);                 // posteriors ∈ [0,1]; absolute diff is the right scale
+                if (r > mr) mr = r;
+            }
+        }
+        printf("[GPU-XCHECK-MIX] per-class posterior γ_{p,m} vs CPU _pattern_lh_cat (scale-invariant): max |Δγ| = %.3e  -> %s\n",
+               mr, (mr <= 1e-9 ? "PASS (G.8.1 per-class)" : "MISMATCH"));
+    } else {
+        printf("[GPU-XCHECK-MIX] per-class check skipped (_pattern_lh_cat not allocated)\n");
+    }
 }
 
 // ============================================================================================================

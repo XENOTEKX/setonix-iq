@@ -2091,6 +2091,16 @@ public:
         build never odr-uses this declaration. Pure read-only diagnostic. */
     void gpuLnLCrossCheckOnce(double cpu_lnL);
 
+    /** Phase G.8.0: one-shot profile-mixture (C20/C60/MEOW80) lnL cross-check. Fires only for getNMixtures()>1;
+        validates the clean-room GPU mixture sweep against the CPU reference (rel<=1e-9). Pure diagnostic. */
+    void gpuMixLnLCrossCheckOnce(double cpu_lnL);
+
+    /** Phase G.8.0/G.8.1: clean-room GPU whole-tree lnL for a PROFILE MIXTURE (regimes r=m*ncat+c, per-class eigen via
+        the ModelMixture component accessors). If out_lhcat != nullptr it is filled with the per-class likelihood
+        L_{p,m} = w_m·Σ_c catProp_c·L_{p,m,c} laid out [nmix][nptn] (G.8.1, the EM-weight numerator). Returns NaN for
+        non-mixtures / fused / PMSF / +I / ns∉{4,20} / CUDA error. */
+    double gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat = nullptr);
+
     /** Phase G.2.0b: reusable clean-room GPU whole-tree log-likelihood. Rebuilds the validated K1 eigen-space
         postorder sweep from the LIVE model/site_rate/tree/alignment and returns the ptn_freq-weighted total
         log-likelihood. If out_patlh != nullptr it is filled with the per-pattern log|lh_ptn| (aln->size()
