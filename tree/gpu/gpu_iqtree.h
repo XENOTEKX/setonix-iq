@@ -108,6 +108,23 @@ double gpu_derv_crosscheck(
     double* out_ddf,             // out: second derivative
     double* out_lnL);            // out: tree lnL at t
 
+// G.8.1b — profile-mixture single-edge derivative (df/ddf class-summed). Mirrors gpu_derv_crosscheck but the
+// sweep is per-regime (k1_node_mix), the central-edge coeffs are per-CLASS in global memory, and weights are
+// per-regime (wreg[r]=w_m*catProp_c). evalC = per-class eigenvalues [nmix*nstates].
+double gpu_derv_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
+    const double* Uinv, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* echild, const unsigned char* tip, const double* ptn_freq,
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    int nodeSlot, int nodeLeafTax,
+    int dadSlot,  int dadLeafTax,
+    const double* evalC,         // nmix*nstates (per-class eigenvalues)
+    const double* catRate,       // ncat
+    double t,
+    double* out_ddf,
+    double* out_lnL);
+
 // Phase G.4.2 — in-tree JOLT joint-gradient optimiser launcher. Runs the validated G.4.1b standalone driver
 // (gpu_k8b_jolt_alpha.cu) clean-room from host-prepared arrays built from the LIVE model/tree/alignment:
 // a SINGLE joint LM diagonal-Newton loop steps ALL branches AND (if optAlpha) the gamma shape alpha at once,

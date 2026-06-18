@@ -183,6 +183,47 @@ __global__ void k_leaf_eig(int ns, int nptn, int ncat, const unsigned char* __re
     }
 }
 
+// G.8.1b — single-edge branch derivative for PROFILE MIXTURES: k2_derv generalised to the regime axis
+// r = m*ncat + c (R = nmix*ncat). The central-edge derivative coefficients dval0/1/2 live in GLOBAL memory
+// (per-class eigenvalues -> R*ns entries exceed the __constant__ 64-cat budget at C60/MEOW80, the same reason
+// k1_node_mix moved Uinv/freq to global). node_eig/dad_eig are the per-regime eigen-space endpoint partials from
+// k1_node_mix (isRoot=0). Per pattern: lh=Σ dval0·θ, d1=Σ dval1·θ, d2=Σ dval2·θ (θ=node_eig·dad_eig); the
+// per-class weight w_m·catProp_c is folded into dval0 (= wreg[r]); π_m is already in the eigen-space partials.
+__global__ void k2_derv_mix(int ns, int nptn, int R,
+        const double* __restrict__ node_eig, const double* __restrict__ dad_eig,
+        const double* __restrict__ dval0, const double* __restrict__ dval1, const double* __restrict__ dval2,
+        double* __restrict__ pdf, double* __restrict__ pddf, double* __restrict__ patlh) {
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    double lh=0.0, d1=0.0, d2=0.0;
+    for (int r=0;r<R;r++) for (int x=0;x<ns;x++){
+        size_t o=(size_t)(r*ns+x)*nptn+ptn;
+        double th=node_eig[o]*dad_eig[o]; int k=r*ns+x;
+        lh+=dval0[k]*th; d1+=dval1[k]*th; d2+=dval2[k]*th;
+    }
+    double inv=1.0/lh, rr=d1*inv;
+    pdf[ptn]=rr; pddf[ptn]=d2*inv-rr*rr; patlh[ptn]=log(fabs(lh));
+}
+
+// G.8.1b — LEAF endpoint eigen partial for mixtures (per-class). Regime r=m*ncat+c: L[r][i] = Uinv_m[i][s]
+// (column s of class m's Uinv; UinvRowSum_m[i] if the state is ambiguous), replicated over the ncat cats within
+// class m. Reads the GLOBAL per-class d_Uinv/d_UinvRowSum (NOT the single-model __constant__ g_Uinv).
+__global__ void k_leaf_eig_mix(int ns, int nptn, int ncat, int nmix,
+        const unsigned char* __restrict__ tipt,
+        const double* __restrict__ d_Uinv, const double* __restrict__ d_UinvRowSum,
+        double* __restrict__ out){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    int s = tipt[ptn];
+    int R = nmix*ncat;
+    for (int r=0;r<R;r++){ int m=r/ncat;
+        const double* Uinv_m = d_Uinv + (size_t)m*ns*ns;
+        const double* Urs_m  = d_UinvRowSum + (size_t)m*ns;
+        for (int i=0;i<ns;i++){
+            double Li = (s<ns) ? Uinv_m[i*ns+s] : Urs_m[i];
+            out[(size_t)(r*ns+i)*nptn+ptn] = Li;
+        }
+    }
+}
+
 // =============================== G.4.2 JOLT kernels (ported from gpu_k8b_jolt_alpha.cu, runtime-ns) ===============================
 // kj_theta — t-independent edge product theta[c*ns+x] = node_eig (.) dad_eig, materialised so kj_derv AND
 // kj_ratenum can both read it (k2_derv above fuses the product; JOLT needs theta cached for the rate gradient).
@@ -395,6 +436,7 @@ extern "C" double gpu_lnl_crosscheck(
 // per-class Uinv/UinvRowSum/freq + per-regime weight live in GLOBAL memory (mix_* pools). echild/tip/partial/patlh
 // reuse the single-model pools (resized via DEVB to the larger mixture sizes). NaN on OOM/CUDA error -> CPU fallback.
 static DevBuf gb_mUinv, gb_mUrs, gb_mFreq, gb_mWreg, gb_mLhcat;
+static DevBuf gb_mDval0, gb_mDval1, gb_mDval2;   // G.8.1b central-edge derivative coeffs (R*ns, GLOBAL)
 extern "C" double gpu_lnl_crosscheck_mix(
     int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
     const double* Uinv, const double* UinvRowSum, const double* freq, const double* wreg,
@@ -458,6 +500,104 @@ extern "C" double gpu_lnl_crosscheck_mix(
     for (int p2=0; p2<nptn; p2++){ double term = ptn_freq[p2]*patlh[p2];
         double y=term-kc, t2=lnL+y; kc=(t2-lnL)-y; lnL=t2; }
     return lnL;
+}
+
+// G.8.1b — clean-room single-edge derivative launcher for PROFILE MIXTURES. Mirrors gpu_derv_crosscheck but:
+// (1) the descriptor sweep runs k1_node_mix (isRoot=0) so each endpoint writes its R=nmix*ncat regime eigen
+// partials; (2) the central-edge coefficients dval0/1/2[R*ns] are built per-CLASS (eval_{m,x}) with weight
+// w_m*catProp_c=wreg[r] and uploaded to GLOBAL memory (R*ns exceeds the __constant__ 64-cat budget); (3) leaf
+// endpoints synthesize per-class tip eigen via k_leaf_eig_mix. Returns df=Σ_ptn freq·(d1/lh) (un-negated), with
+// *out_ddf=Σ freq·(d2/lh−(d1/lh)²) and *out_lnL=tree lnL at t. NaN on CUDA error.
+extern "C" double gpu_derv_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
+    const double* Uinv, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* echild, const unsigned char* tip, const double* ptn_freq,
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    int nodeSlot, int nodeLeafTax, int dadSlot, int dadLeafTax,
+    const double* evalC, const double* catRate, double t,
+    double* out_ddf, double* out_lnL)
+{
+    int ns = nstates;
+    if (ns > NS_MAX || nmix < 1 || ncat < 1) { fprintf(stderr,"[GPU-DERV-MIX] unsupported ns=%d nmix=%d ncat=%d\n",ns,nmix,ncat); return (double)NAN; }
+    int R = nmix*ncat;
+    (void)desc_isRoot;   // all entries isRoot=0 for the derivative sweep
+
+    // per-class eigen + per-regime weight -> GLOBAL (same pools as the lnL mix path)
+    DEVB(gb_mUinv, (size_t)nmix*ns*ns*sizeof(double));
+    DEVB(gb_mUrs,  (size_t)nmix*ns*sizeof(double));
+    DEVB(gb_mFreq, (size_t)nmix*ns*sizeof(double));
+    DEVB(gb_mWreg, (size_t)R*sizeof(double));
+    GCK(cudaMemcpy(gb_mUinv.p, Uinv,       (size_t)nmix*ns*ns*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mUrs.p,  UinvRowSum, (size_t)nmix*ns*sizeof(double),    cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mFreq.p, freq,       (size_t)nmix*ns*sizeof(double),    cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mWreg.p, wreg,       (size_t)R*sizeof(double),          cudaMemcpyHostToDevice));
+    double *d_Uinv=(double*)gb_mUinv.p, *d_Urs=(double*)gb_mUrs.p, *d_Freq=(double*)gb_mFreq.p, *d_Wreg=(double*)gb_mWreg.p;
+
+    // central-edge derivative coeffs dval{0,1,2}[r*ns+x], r=m*ncat+c: cof=eval_{m,x}*rate_c; v0=exp(cof*t)*wreg[r];
+    // v1=cof*v0; v2=cof*cof*v0. Per-CLASS eigenvalues; π_m is NOT here (it is already in the eigen-space partials).
+    std::vector<double> v0((size_t)R*ns), v1((size_t)R*ns), v2((size_t)R*ns);
+    for (int m=0;m<nmix;m++) for (int c=0;c<ncat;c++){ int r=m*ncat+c; double rc=catRate[c], wr=wreg[r];
+        for (int x=0;x<ns;x++){ double cof=evalC[(size_t)m*ns+x]*rc, e=exp(cof*t)*wr;
+            v0[(size_t)r*ns+x]=e; v1[(size_t)r*ns+x]=cof*e; v2[(size_t)r*ns+x]=cof*cof*e; } }
+    DEVB(gb_mDval0,(size_t)R*ns*sizeof(double)); DEVB(gb_mDval1,(size_t)R*ns*sizeof(double)); DEVB(gb_mDval2,(size_t)R*ns*sizeof(double));
+    GCK(cudaMemcpy(gb_mDval0.p, v0.data(), (size_t)R*ns*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mDval1.p, v1.data(), (size_t)R*ns*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mDval2.p, v2.data(), (size_t)R*ns*sizeof(double), cudaMemcpyHostToDevice));
+    double *d_v0=(double*)gb_mDval0.p, *d_v1=(double*)gb_mDval1.p, *d_v2=(double*)gb_mDval2.p;
+
+    size_t ecStride=(size_t)R*ns*ns, slotSz=(size_t)R*ns*nptn;
+    DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
+    DEVB(gb_tip,    (size_t)ntax*nptn);
+    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
+    DEVB(gb_pdf,    (size_t)nptn*sizeof(double));
+    DEVB(gb_pddf,   (size_t)nptn*sizeof(double));
+    DEVB(gb_patlh,  (size_t)nptn*sizeof(double));
+    double *d_echild=(double*)gb_echild.p, *d_partial=(double*)gb_partial.p;
+    double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
+    unsigned char *d_tip=(unsigned char*)gb_tip.p;
+    GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
+
+    int TB=256, GB=(nptn+TB-1)/TB;
+    for (int idx=0; idx<nInternal; idx++){
+        int nchild=desc_nchild[idx];
+        double* out=(desc_outSlot[idx]<0)?nullptr:(d_partial+(size_t)desc_outSlot[idx]*slotSz);
+        const double* ec[3]={nullptr,nullptr,nullptr}; const double* p[3]={nullptr,nullptr,nullptr}; const unsigned char* tp[3]={nullptr,nullptr,nullptr};
+        for (int k=0;k<nchild && k<3;k++){ int cn=desc_childNode[idx*3+k];
+            if (cn>=0) ec[k]=d_echild+(size_t)cn*ecStride;
+            if (desc_childIsLeaf[idx*3+k]) tp[k]=d_tip+(size_t)desc_childLeaf[idx*3+k]*nptn;
+            else                          p[k]=d_partial+(size_t)desc_childSlot[idx*3+k]*slotSz; }
+        k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nchild,
+            ec[0],p[0],tp[0], ec[1],p[1],tp[1], ec[2],p[2],tp[2]);
+    }
+    GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+
+    // resolve node_eig/dad_eig: internal slot, or synthesize a leaf endpoint's per-class tip eigen (k_leaf_eig_mix)
+    const double *node_eig, *dad_eig;
+    if (nodeSlot >= 0) node_eig = d_partial + (size_t)nodeSlot*slotSz;
+    else { DEVB(gb_nodeleaf, slotSz*sizeof(double));
+           k_leaf_eig_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,d_tip+(size_t)nodeLeafTax*nptn,d_Uinv,d_Urs,(double*)gb_nodeleaf.p); node_eig=(double*)gb_nodeleaf.p; }
+    if (dadSlot >= 0) dad_eig = d_partial + (size_t)dadSlot*slotSz;
+    else { DEVB(gb_dadleaf, slotSz*sizeof(double));
+           k_leaf_eig_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,d_tip+(size_t)dadLeafTax*nptn,d_Uinv,d_Urs,(double*)gb_dadleaf.p); dad_eig=(double*)gb_dadleaf.p; }
+
+    k2_derv_mix<<<GB,TB>>>(ns,nptn,R,node_eig,dad_eig,d_v0,d_v1,d_v2,d_pdf,d_pddf,d_patlh);
+    GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+
+    std::vector<double> pdf(nptn),pddf(nptn),patlh(nptn);
+    GCK(cudaMemcpy(pdf.data(),d_pdf,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost));
+    GCK(cudaMemcpy(pddf.data(),d_pddf,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost));
+    GCK(cudaMemcpy(patlh.data(),d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost));
+
+    double df=0,kdf=0, ddf=0,kddf=0, lnL=0,kl=0;
+    for (int p2=0;p2<nptn;p2++){ double f=ptn_freq[p2];
+        { double term=f*pdf[p2],  y=term-kdf,  s=df +y; kdf =(s-df )-y; df =s; }
+        { double term=f*pddf[p2], y=term-kddf, s=ddf+y; kddf=(s-ddf)-y; ddf=s; }
+        { double term=f*patlh[p2],y=term-kl,   s=lnL+y; kl  =(s-lnL)-y; lnL=s; } }
+    if (out_ddf) *out_ddf=ddf;
+    if (out_lnL) *out_lnL=lnL;
+    return df;
 }
 
 // G.2.1a — clean-room single-edge derivative launcher. The descriptor list covers BOTH subtrees split by the

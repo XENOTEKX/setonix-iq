@@ -2141,10 +2141,19 @@ public:
         non-reversible / mixture / num_states∉{4,20}). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     double gpuComputeEdgeDervCleanRoom(PhyloNeighbor *dad_branch, PhyloNode *dad, double *out_ddf, double *out_lnL);
 
+    /** Phase G.8.1b: clean-room single-edge df/ddf for a PROFILE MIXTURE (df/ddf summed over N*ncat regimes).
+        Returns df=d(lnL)/dt (un-negated); *out_ddf, *out_lnL. NaN if unsupported (single-model / +I / fused /
+        PMSF / non-reversible / num_states∉{4,20}). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
+    double gpuComputeEdgeDervCleanRoomMix(PhyloNeighbor *dad_branch, PhyloNode *dad, double *out_ddf, double *out_lnL);
+
     /** Phase G.2.1a: one-shot (per process) GPU single-edge derivative cross-check. Picks an internal-internal
         edge and compares GPU df/ddf against IQ-TREE's own computeLikelihoodDerv. Pure read-only diagnostic;
         defined only under #ifdef IQTREE_GPU, call site guarded. */
     void gpuDervCrossCheckOnce();
+
+    /** Phase G.8.1b: one-shot PROFILE-MIXTURE derivative cross-check (getNMixtures()>1 only). INT-INT + LEAF
+        edges; GPU mixture df/ddf vs CPU computeLikelihoodDerv. Read-only diagnostic; call site guarded. */
+    void gpuMixDervCrossCheckOnce();
 
     /** Phase G.6.0a: one-shot (per process) GPU free-Q gradient cross-check (env JOLT_QGRADCHECK). For a reversible
         DNA free-Q model (HKY..GTR, fixed freqs, no +I), perturbs each free exchangeability (in rate-class space via
