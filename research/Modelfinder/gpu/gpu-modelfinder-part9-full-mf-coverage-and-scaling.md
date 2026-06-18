@@ -739,8 +739,9 @@ Implementation deltas vs the IX.11.3 plan:
 gate, ahead of the branch-gradient half = G.8.1b):
 - **GPU self-consistency** `Σ_m L_{p,m} = L_p` (CPU-independent, proves the per-class emission is internally exact):
   max rel **1.4e-14** on all three models (job 171604565).
-- **Per-class posterior** `γ_{p,m} = L_{p,m}/Σ_m' L_{p,m'}` vs CPU `_pattern_lh_cat` (`WSL_MIXTURE`): **|Δγ| = 5.76e-14**
-  (job 171633391, C20). **The posterior is the correct metric, NOT raw `L_{p,m}`:** CPU `_pattern_lh_cat` is per-pattern
+- **Per-class posterior** `γ_{p,m} = L_{p,m}/Σ_m' L_{p,m'}` vs CPU `_pattern_lh_cat` (`WSL_MIXTURE`): PASS on all three —
+  **|Δγ| = 6.84e-13 / 4.32e-12 / 1.00e-12** for C20/C60/MEOW80 (job 171633488; the C20 400-site spot-check was 5.76e-14,
+  job 171633391). **The posterior is the correct metric, NOT raw `L_{p,m}`:** CPU `_pattern_lh_cat` is per-pattern
   **scaled** (`scale_num`·`LOG_SCALING_THRESHOLD` underflow protection, active even on the NORM_LH 100-taxon path) while the
   GPU clean-room is **unscaled**, so the raw per-class values differ by `exp(scale_p)` per pattern (this is exactly why the
   lnL still matches bit-exact — the factor returns in the log domain). Self-normalising each side cancels `exp(scale_p)`,
