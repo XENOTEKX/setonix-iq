@@ -2,6 +2,36 @@
 
 ---
 
+## 🔬 FP64 tensor-core MMA lever — ✅ TESTED + CLOSED (T.0 kill-switch fired STOP: DMMA 1.6–2.8× SLOWER than JOLT scalar) — 2026-06-18
+
+**T.0 decider result (jobs 171587052 H200 / 171587053 A100, both exit 0).** Built the standalone `tree/gpu/tc_decider.cu` (FP64 `wmma`-double m8n8k4 DMMA matvec vs JOLT's register-resident scalar matvec, 20→32 padded; agent-reviewed before submit — wmma fragment mapping verified element-by-element vs CUDA-12.5 `mma.hpp`, no transpose bug). Measured per-eval matvec, AA-20 ncat=4:
+
+| Card | nptn | scalar | DMMA | speedup | parity |
+|---|---|---|---|---|---|
+| H200 | 100K | 0.073 ms | 0.129 ms | **0.56×** | rel 0.0 |
+| H200 | **1M (gate)** | 0.417 ms | 1.167 ms | **0.36×** | rel 0.0 |
+| A100 | 100K | 0.158 ms | 0.268 ms | 0.59× | rel 0.0 |
+| A100 | 1M | 1.227 ms | 2.026 ms | 0.60× | rel 0.0 |
+
+**VERDICT: STOP** (gate was ≥1.3× at 1M on H200; got 0.36×). The FP64 tensor-core matvec is **1.6–2.8× SLOWER** than JOLT's existing scalar matvec on both cards. **Parity was bit-identical (rel 0.0)** — wmma double matched the scalar accumulation order exactly, so the §XII.1 "rel ≤ 1e-12" concession was unneeded; correctness was never the blocker, speed is. **Why:** the 20→32 pad makes DMMA do ~2.56× the FLOPs, the matvec is latency/bandwidth-bound (the ~2× FP64-TC peak is never realized), and DMMA pays shared-staging + strided fragment loads JOLT's register-resident inline matvec avoids. Honest caveat: this is the *naive* wmma prototype; a tuned raw-PTX version would be faster — **but** BEAGLE's *fully-tuned* tensor kernel only beats JOLT-scalar by ~13% on H200 (lnL 15.27 vs 17.51), still below the 1.3× gate, so both converge on NO. **The kill-switch worked: 0.43 SU + ~10 s of GPU told us not to spend the 6–10 days on in-tree T.1–T.3.** Citable result — it explains why JOLT on ordinary CUDA cores ties tensor-core BEAGLE. Full detail: part12 §XII.6.
+
+---
+
+## 🔬 FP64 tensor-core MMA lever — PLAN (the BEAGLE-benchmark follow-up; researched + red-teamed; CONDITIONAL/likely-marginal) — 2026-06-18
+
+Follow-up to the BEAGLE-4.0 head-to-head below (§B). The honest line from that benchmark — *"H200 lnL: tensor-core BEAGLE 15.27 ms vs JOLT 17.51 ms (~13%) ⇒ adopt FP64 tensor cores in `k1_node`"* — was investigated with two independent read-only agents (one characterising JOLT's kernels, one reading BEAGLE-4.0's reference tensor-core source `dd962d48`) and an adversarial red-team review of the resulting plan. **Full plan: `research/Modelfinder/gpu/gpu-modelfinder-part12-fp64-tensor-core-lnl-kernel.md`.**
+
+**Verdict — the lever is real but MODEST and CONDITIONAL, not a slam dunk:**
+- **JOLT's *CUDA-core* eigenspace kernel already ties BEAGLE's *tensor-core* kernel** (A100 dead heat 26.51 vs 26.50; H200 only 13% behind) **because** JOLT is register-resident + fused, while BEAGLE's tensor path pays shared-mem staging + padding 20→**32** (~61% of the 2-D tile is zero) + a layout transpose. JOLT's scalar approach likely **already captured** the gain tensor cores would otherwise buy. BEAGLE's own 2.43× tensor-vs-CUDA gain was recovering *its* un-fused slack up to JOLT's level — slack JOLT doesn't have.
+- **Constraints:** AA-only (DNA 4×4 ≥75% tile waste = expected loss); **A100/H200-only** (V100/sm_70 has no FP64 tensor cores — can't even test there); kernels are **latency/scheduler-bound not FLOP-bound** (so the ~2× FLOP ceiling won't be realised, 100K likely a wash); **parity drops from bit-identical (rel 0.0) to rel ≤ 1e-12** (MMA accumulation order differs — verified BIC-flip-safe: ~7.9e-5 nat abs error at 1M ≪ ~4.7e-3 inter-model diffs); the deterministic reduction must **never** route through DMMA.
+- **BEAGLE reference recipe:** raw inline PTX `mma.sync.aligned.m8n8k4.row.col.f64` (not `nvcuda::wmma`), pad 20→32, 8 patterns/block, bank-conflict swizzle, gamma categories outside the MMA, peeling child-product post-MMA.
+
+**Plan = kill-switch-first** (mirrors G.3.0/G.4.0b): **T.0** standalone DMMA-vs-scalar decider on A100+H200 (gate ≥1.3× at 1M with rel≤1e-12 **on H200, the 1M/10M deploy card** — not "either card"; the 100K arm is a thesis-test, not a warm-up) → **T.1 gradient kernel FIRST** (`kj_pre`, the wall dominates lnL ~4.3:1: gradient 74.54 ms vs lnL 17.51 ms) → **T.2 lnL** (`k1_node`) only if T.1 wins end-to-end → **T.3** CTF wall + energy curve at 1M/10M. **A clean NO at T.0 is an acceptable, citable outcome** (it would *explain* the JOLT-CUDA ≈ BEAGLE-tensor tie). Carrying cost flagged: a shipped tensor path = two kernel code paths forever, validated on 2+ archs. Nothing built; ~6–10 days to the T.0 gate.
+
+**Red-team caught + fixed** in the plan: a fabricated "59.7 ms" preorder figure (→ real 74.54 vs 17.51), a stale "25%-occ/128-reg" citation (→ 56-reg/~57%; prod fused 32/100%, latency-bound), an inverted task order (gradient now before lnL), a too-weak "either card" gate (→ H200-specific), and an understated 37%→**61%** 2-D padding penalty.
+
+---
+
 ## 🧭 Commercial-card support (FP64) + BEAGLE-4.0 head-to-head (✅ JOLT competitive vs tensor cores, 2.3–2.4× over CUDA-core BEAGLE, runs AA-1M where BEAGLE OOMs; agent-reviewed) + overfitting recall sweep (n=30, ✅ DONE) — 2026-06-15 / 16
 
 Three threads from the panel's questions; status + verdicts below.
@@ -11,7 +41,7 @@ Three threads from the panel's questions; status + verdicts below.
 Question raised by the panel ("impossible without FP64/ECC") and the goal of democratising IQ-TREE ModelFinder to cheap cards. Two findings:
 
 1. **"Unlocking" FP64 on modern consumer GPUs is impossible — it's silicon, not a software lock.** NVIDIA's Ada whitepaper: AD102 has only **2 FP64 cores/SM (1/64 rate) "to ensure FP64 code operates correctly"** — a correctness provision, not throughput. No driver flag/vBIOS/Quadro-crossflash restores it (RTX 4090 and RTX 6000 Ada are the *same die*, both 1/64). The Kepler GTX-Titan toggle worked only because GK110 physically had the units; that era ended ~2014. **AMD is no backdoor** (RDNA FP64 regressed 1/16→1/32→1/64; RX 9070 XT only 0.76 TFLOPS). **Even datacenter FP64 is eroding** (Blackwell B300 dropped to 1/64). BIOS/driver hacks are also a **reproducibility dealbreaker** for a tool under IQ-TREE's name.
-2. **The engineering route-around WINS and is reproducible.** On a 1/64 card, **double-float ("df64", a hi+lo pair of FP32 ≈ 48-bit mantissa) is ~3–6× FASTER than native crippled FP64** (df64 ≈ 10–20 FP32 ops vs native FP64 = 64 FP32-equivalent). And you don't even pay that everywhere — **precision-tier it**: plain FP32 for the partial-likelihood recursion (99% of FLOPs); explicit integer/log **scaling for underflow** (the #1 correctness item — df64 does NOT fix FP32's 8-bit exponent range, ties to G.4.0b's 1e92 dynamic range); a **compensated (Neumaier/Kahan) or df64/long-accumulator reduction** only for the cross-site lnL + gradient sums (naïve FP32 there loses ~4 nats → flips BIC); native FP64 for the ~200 optimiser scalars. Net overhead ≈ a few %, FP64-equivalent BIC. **Speed crossover is clean: emulate on consumer (1/64); keep native FP64 on A100/H200 (1/2) — so our datacenter path is untouched.** Ozaki/tensor-core FP64 emulation is GEMM-only ⇒ a red herring for phylo's small-matvec+reduction shape. Reproducibility (cross-card bit-identical BIC) needs a fixed-order or ExBLAS-style long accumulator. **Recommendation: opt-in `--mixed` mode (FP32 + df64/compensated reductions + scaling), CTF coarse in plain FP32, refine reductions in df64, final winner re-verified in native FP64 and the delta reported — never silent. +R stays FP64.** Full write-up: `research/Modelfinder/gpu-modelfinder-part11-commercial-card-precision.md`.
+2. **The engineering route-around WINS and is reproducible.** On a 1/64 card, **double-float ("df64", a hi+lo pair of FP32 ≈ 48-bit mantissa) is ~3–6× FASTER than native crippled FP64** (df64 ≈ 10–20 FP32 ops vs native FP64 = 64 FP32-equivalent). And you don't even pay that everywhere — **precision-tier it**: plain FP32 for the partial-likelihood recursion (99% of FLOPs); explicit integer/log **scaling for underflow** (the #1 correctness item — df64 does NOT fix FP32's 8-bit exponent range, ties to G.4.0b's 1e92 dynamic range); a **compensated (Neumaier/Kahan) or df64/long-accumulator reduction** only for the cross-site lnL + gradient sums (naïve FP32 there loses ~4 nats → flips BIC); native FP64 for the ~200 optimiser scalars. Net overhead ≈ a few %, FP64-equivalent BIC. **Speed crossover is clean: emulate on consumer (1/64); keep native FP64 on A100/H200 (1/2) — so our datacenter path is untouched.** Ozaki/tensor-core FP64 emulation is GEMM-only ⇒ a red herring for phylo's small-matvec+reduction shape. Reproducibility (cross-card bit-identical BIC) needs a fixed-order or ExBLAS-style long accumulator. **Recommendation: opt-in `--mixed` mode (FP32 + df64/compensated reductions + scaling), CTF coarse in plain FP32, refine reductions in df64, final winner re-verified in native FP64 and the delta reported — never silent. +R stays FP64.** Full write-up: `research/Modelfinder/gpu/gpu-modelfinder-part11-commercial-card-precision.md`.
 
 ### B. JOLT+CTF vs BEAGLE 4.0 (tensor-core) ✅ DONE — lnL: A100 tie / H200 −13% vs tensor cores, 2.4× over CUDA-core; gradient ≈ parity vs tensor cores / 2.3× over CUDA-core; JOLT runs AA-1M where the BEAGLE client OOMs (agent-reviewed) (jobs 171210531/171265226/171267592/171269929/171270072)
 
@@ -212,7 +242,7 @@ Warp-stall breakdown @100K (P3.0b job 170399634): long-scoreboard 50.1% + short-
 
 The AA-10M OOM (below) had **two independent walls** — host RAM and GPU VRAM. They are fixed by two composable changes.
 
-**G.7.0 — cgroup-aware host memory (commit `c04a9ce1`), VALIDATED job 170934922 (H200):** IQ-TREE sized its
+**G.7.0 — cgroup-aware host memory (commit `b43d5a97`), VALIDATED job 170934922 (H200):** IQ-TREE sized its
 likelihood memory against *physical* node RAM, ignoring the PBS/cgroup allocation, so a 558 GB `LM_PER_NODE` arena was
 attempted inside a 180 GB job → host OOM-kill before the GPU engaged. Fix: `getAvailableMemory()=min(physical,cgroup)`
 with a **hierarchy-walking** cgroup reader (takes the MIN over the leaf AND every ancestor slice — correct for Docker
@@ -227,7 +257,7 @@ no-op on the working path); 10M `--jolt -te` printed `[--jolt] host LM_PER_NODE 
 util 0%, no `[JOLT]` line — JOLT did NOT engage on the GPU.** The 886 GB one-shot partial arena can't fit the H200's
 141 GB → `DEVB`→NaN→CPU fallback. So G.7.0 makes 10M *not crash* (runs on CPU); engaging the GPU needs the VRAM half.
 
-**G.7.1 — PATTERN TILING (commit `6d7f7483`), VALIDATED:** split the `nptn` patterns into `nTile` contiguous chunks,
+**G.7.1 — PATTERN TILING (commit `a972cefc`), VALIDATED:** split the `nptn` patterns into `nTile` contiguous chunks,
 run a full postorder+preorder sweep PER CHUNK, Kahan-accumulate each chunk's contribution to lnL/df_e/ddf_e/gradR_c.
 Every JOLT quantity is a SUM OVER PATTERNS, so this is **exact**. Shrinks every O(nptn) arena by ~`nTile`; auto-`nTile`
 from `cudaMemGetInfo`. Contained to `gpu_jolt_optimize` (the 3 sweep closures + the allocation block); the
@@ -274,9 +304,9 @@ GPU-vs-CPU ratio yet.) Detail: part9 §IX.10.1.
 
 ---
 
-## ✅ AUDIT HARDENING (G.6) — 2 holes found + fixed before the source release — 2026-06-13 (commit `3ec1b5c8`)
+## ✅ AUDIT HARDENING (G.6) — 2 holes found + fixed before the source release — 2026-06-13 (commit `2b80bec0`)
 
-An independent adversarial code audit of the G.5.1a + G.6 changeset (`65e45c4c..d5d69b48`) ran before pushing the GPU
+An independent adversarial code audit of the G.5.1a + G.6 changeset (`4cb639a7..d6d68943`) ran before pushing the GPU
 source to GitHub. **Core machinery verdict: CLEAN** — write-back ordering, process-mutex coverage (whole
 `gpu_jolt_optimize` incl. symbol uploads + DevBuf pool + decompose-callback), base-sweep-skip ↔ Q-FD coherence, FP64
 parity, 1-based variable indexing, and the NaN→CPU fallback were all verified; the safety-gate `rel` is a genuine
@@ -302,7 +332,7 @@ Full detail + ranked next steps: research/Modelfinder/part9 §IX.10.
 ## ✅ DNA FREE-Q (G.6) COMPLETE — DNA `-m MF` coverage 8 % → ~89 % on the GPU — 2026-06-13
 
 The free-Q DNA gap (62-of-90 declines = every HKY/TN/…/GTR matrix, the eigensystem MOVES when its exchangeabilities are
-optimised) is **closed.** Three validated commits (`525c4186`/`a12e6dde`/`d5d69b48`):
+optimised) is **closed.** Three validated commits (`e9498baa`/`afc1c5a1`/`d6d68943`):
 - **G.6.0a** (job 170787044): the free-Q lnL pipeline (eigendecompose→reupload→resweep) is **BIT-IDENTICAL** GPU==CPU
   (rel 0.000e+00) at every perturbed Q on HKY/TNe/TVM/SYM/GTR (nQ=1/2/4/5, both freq types). Two behaviour-neutral
   public wrappers `gpuGetFreeParams`/`gpuSetFreeParamsDecompose` (ModelSubst→ModelMarkov) give **one code path for all
@@ -386,7 +416,7 @@ projection-amplification risk, empirically confirmed** (PART X §X.5.5 + PART IX
 **Methodology lesson banked:** validate the EXACT shipped pipeline end-to-end; the CPU run is an oracle, not a stand-in.
 
 **Easy-wins (last round) VALIDATED + committed:** base-sweep skip + `d_theta` reclaim — job 170730082 PASS (116/116,
-rel 2.166e-10, best LG+G4); committed `56d16545`. Binary re-frozen `b85d482f` (`iqtree3.frozen_ab`) for the re-run.
+rel 2.166e-10, best LG+G4); committed `a648c58e`. Binary re-frozen `b85d482f` (`iqtree3.frozen_ab`) for the re-run.
 
 ---
 
@@ -429,7 +459,7 @@ on-device reductions are optimal and bit-identical; (b) the remaining wall win i
 
 ## 🔬 OPEN HYPOTHESIS — subsample sufficiency (the statistical foundation of CTF) — 2026-06-13
 
-Noted + under investigation: **PART X** (`research/Modelfinder/gpu-modelfinder-part10-subsample-sufficiency-hypothesis.md`).
+Noted + under investigation: **PART X** (`research/Modelfinder/gpu/gpu-modelfinder-part10-subsample-sufficiency-hypothesis.md`).
 The whole CTF ModelFinder rests on an *unproven* assumption — that beyond a saturation length L\* (hypothesised ≪ 1M),
 the **identity** of the best model (the BIC winner) stops changing, so a ~5000-site subsample recovers the same winner
 the full data would pick. The scale-consistent BIC rerank (`−2·(N/m)·logl + p·ln N`) **is** this assumption written as
@@ -494,7 +524,7 @@ composes with the **G.7.0** host-mem fix (the host self-check ran under the lean
 **Honest wall caveat:** the 639 s is **host-self-check-bound** — the LM_MEM_SAVE `computeLikelihood` recompute at 9.25M
 patterns dominates *after* the GPU optimise finishes; it is a HOST cost, the gate here is capability, not speed (the
 throughput lever — sampling the host self-check at extreme nptn — is part9 §IX.10.1 #4b). Energy was not instrumented
-for this engage run. (A100 second-device confirm: job 170978215, dgxa100.) Detail: part7 §VII.5.1, commit `6d7f7483`.
+for this engage run. (A100 second-device confirm: job 170978215, dgxa100.) Detail: part7 §VII.5.1, commit `a972cefc`.
 
 **Headline (measured, updated 2026-06-12):** **1 H200 GPU ModelFinder (CTF, +I 4-start, 893 s) beats all CPU node counts on MF wall and beats np16 overall**: 3.45× vs np2, 2.21× vs np4, 1.62× vs np8, **1.26× vs np16** — picking the correct model (LG+G4). The 4-start +I fix (G.4.3c, validated job 170580368) cut the wall 1994→893 s by eliminating 6 redundant pinv restart sweeps (10→4; single-start was rejected by the multimodal gate: 39.5-nat loss at pinv≈0.5). GPU energy: **67.89 Wh measured** (67.8 GB peak, 60% utilisation). The GPU does **not** run the tree-search phase at 1M (CTF is MF-equivalent only; deferred GPU tree-search hook is next); against the *full* `-m TEST` wall the CPU's tree search dominates (1.3–15 k s depending on np) and is not yet contested on GPU.
 
@@ -768,7 +798,7 @@ All correctness checks pass: |ΔlnL| < 0.5 and BIC delta < 1.0 vs baseline for e
 
 The reduced-bar goal is **ACHIEVED.** Full Coarse-to-Fine (subsample-rank + GPU JOLT refine of top-3, +I now GPU-eligible) on **one H200**: **TOTAL 1994 s = 1.54× faster than 2 SPR nodes (np2 3076.9 s)**, winner = **LG+G4 (correct — matches the FCA oracle)**. Misses 4 nodes (np4 1974.5 s) by 1% (20 s). Decomposition: subsample 0 s + coarse 158 s + refine 1836 s. **Refine is dominated by the +I models: LG+I+G4 869 s, LG+F+I+G4 889 s, vs LG+G4 just 78 s** — an 11× gap. ROOT CAUSE (confirmed from the log): IQ-TREE's `RateGammaInvar` runs **"10 start values"** — it externally sweeps 10 pinv restarts and **all 10 converge to the IDENTICAL optimum** (pinv→1e-6, lnL −78605275.6417; the data has only 2.2% constant sites so +I collapses) ⇒ **9 of 10 restarts are pure waste** at ~87 s/JOLT-call. **JOLT's joint pinv optimiser makes the external restart sweep redundant — skipping it (single-start) would drop each +I refine ~870 s→~87 s ⇒ total ~412 s = 7.5× vs np2 / 4.8× vs np4 (would crush BOTH bars).** Memory: **peak 67.8 GB** for 946,439 distinct patterns (< the 88 GB estimate) ⇒ **A100-80GB is viable** (run 170575806 queued). GPU util 62% (consistent with the audit's host-reduction bottleneck). Correctness: every JOLT call self-checked GPU≡CPU rel ~7.6e-14. Honest caveat: CTF refines on the 5000-site coarse tree, so the absolute lnL (−78605275.6) sits ~79 nat below FCA's full-ML-tree lnL (−78605196.4) — the MODEL choice is correct and the within-refine BIC comparison is fair (same tree), but a production run would re-refine the winner's topology. **Two independent levers to also beat 4 nodes: (1) skip the redundant +I restarts [algorithmic, ~412 s]; (2) the audit's on-device reduction [~1306 s = 1.51× vs np4].**
 
-## 2026-06-11 (gpu) — JOLT **CODE AUDIT (correctness + performance + simplification): correct & bug-audited, but the per-edge host reduction is the dominant avoidable 1M cost** (`research/Modelfinder/gpu-modelfinder-part8-jolt-code-audit.md`)
+## 2026-06-11 (gpu) — JOLT **CODE AUDIT (correctness + performance + simplification): correct & bug-audited, but the per-edge host reduction is the dominant avoidable 1M cost** (`research/Modelfinder/gpu/gpu-modelfinder-part8-jolt-code-audit.md`)
 
 Full self-critical audit of G.4.0→G.4.3b (two sub-agents — correctness `adeb1336`, performance `a7f213f1` Fable — + line-by-line read). **Correctness PASS** (GPU≡CPU rel 1.7e-12 at pinv up to 0.50; +R+I gate bug found+fixed). **Performance: the code is correct but un-optimized at scale.** Ranked findings (⏳ = code-derived estimate, NOT measured; the AA-1M H200 run 170517590 is the first measurement): **#1 `reduceDerv` host round-trip** (`gpu_lnl_intree.cu:484`) — 3 blocking D2H of full nptn arrays + a 555M-iteration single-thread Kahan loop, **once per edge** (~197×/gradient sweep) ⇒ ⏳ ~4.4 GB D2H + ~0.95 s/sweep (~35–40%), scales nptn×nedge×iters; fix = on-device reduction (3 scalars/edge), ⏳ ~1.6× on the sweep, low-med risk. **#2** redundant base-point `rebuildEchild`+`postorderFill` in `computeGradient` (the prior accepted `evalLnL` already built it) ⇒ ⏳ ~0.44 s/iter. **#3** fuse `kj_theta`/`kj_derv`/`kj_ratenum` (avoid materializing the 601 MB theta) ⇒ ⏳ ~0.4 s/sweep. **#4** pinv FD does a full extra sweep/iter (+I only; analytic form possible via existing `gradR` but non-trivial — `applyPinv` rescales rates so pinv isn't only the additive term). **#5** concurrent-stream multi-edge (exploits the ~49% occupancy headroom; after #1). **Refuted as 1M bottlenecks (honest negatives):** `rebuildEchild` host exp()+H2D (nptn-INDEPENDENT, flat 100K→1M), per-edge vector/constant allocs (ms-scale), no redundant topology rebuilds. **Memory:** ~85–88 GB/model (postorder arena) → pattern tiling (PART VII), a scalability ceiling orthogonal to wall. **Honest framing: none of the levers block correctness; whether any are NEEDED to beat 2/4 nodes at 1M depends on the H200 wall (pending) — measure first.**
 
@@ -776,7 +806,7 @@ Full self-critical audit of G.4.0→G.4.3b (two sub-agents — correctness `adeb
 
 **Why this work (the CTF 1M-AA post-mortem, jobs 170479448 A100 + 170479572 H200, both KILLED at ~3h):** `run_ctf_1m.sh` refines the top-k IN BIC-RANK ORDER, and on the 5000-site subsample the scale-consistent BIC ranked **LG+I+G4 #1** (a thin-margin flip — +I collapses, subLogL gap to LG+G4 only 0.097 nat on 5k sites; the (N/m)=188× scale-up amplified that noise into a spurious #1). So `refine_1 = LG+I+G4 = JOLT-INELIGIBLE (pinvar) → PURE CPU`. **Measured on the A100 node: ONE of 10 +I+G start-values took 8712 s on 16 cores (GPU 0% idle), 10 start-values ≈ 24 h — ONE start-value alone = 2.8× the entire 2-node wall (3076.9 s).** The +I CPU heavy-tail on a 16-core GPU node is the killer (the N/S ceiling made concrete: 16 GPU-node cores vs 208 SPR-cluster cores; the GPU can't touch +I). **The fix is +I on the GPU.**
 
-**IMPLEMENTATION (in-tree, gpu-kernel branch; HEAD before = `870dba60`, UNCOMMITTED pending the 1M result):** +I jointly optimised by JOLT for **+I+G only** (LG+I+G4, LG+F+I+G4 — the models that blocked the run). Per-pattern total `L_p = lh + pinv·base_invar[p]`; the invariant term is branch/α-independent, so the only kernel change is `kj_derv`'s DENOMINATOR (`lh → Lp`). `base_invar[p]` (pinv-independent) is computed host-side replicating `PhyloTree::computePtnInvar` EXACTLY (const_char → STATE_UNKNOWN→1 / <ns→freq[c] / DNA·PROTEIN ambiguous → Σ compatible freq / >SU→0) ⇒ ×pinv reproduces IQ-TREE's own `ptn_invar` ⇒ the CPU self-check is a genuine parity gate. pinv rides the same joint LM step as α (FD gradient, secant curvature, clamp `[1e-6, frac_const_sites]`); writeback via `site_rate->setPInvar()` + `clearAllPartialLH()`. Files: `gpu_lnl_intree.cu`, `phylotreegpu.cpp`, `gpu_iqtree.h`.
+**IMPLEMENTATION (in-tree, gpu-kernel branch; HEAD before = `4d801e7e`, UNCOMMITTED pending the 1M result):** +I jointly optimised by JOLT for **+I+G only** (LG+I+G4, LG+F+I+G4 — the models that blocked the run). Per-pattern total `L_p = lh + pinv·base_invar[p]`; the invariant term is branch/α-independent, so the only kernel change is `kj_derv`'s DENOMINATOR (`lh → Lp`). `base_invar[p]` (pinv-independent) is computed host-side replicating `PhyloTree::computePtnInvar` EXACTLY (const_char → STATE_UNKNOWN→1 / <ns→freq[c] / DNA·PROTEIN ambiguous → Σ compatible freq / >SU→0) ⇒ ×pinv reproduces IQ-TREE's own `ptn_invar` ⇒ the CPU self-check is a genuine parity gate. pinv rides the same joint LM step as α (FD gradient, secant curvature, clamp `[1e-6, frac_const_sites]`); writeback via `site_rate->setPInvar()` + `clearAllPartialLH()`. Files: `gpu_lnl_intree.cu`, `phylotreegpu.cpp`, `gpu_iqtree.h`.
 
 **THE PARITY BUG I FOUND + FIXED (the first cut was subtly wrong).** First validation (job 170509352): Gate B (right MLE) and Gate C (+G4 unchanged, 1.95e-12) passed, but **Gate A (GPU≡CPU self-check) was rel 8.6e-8 — 4 orders worse than +G4's 1e-12, and the error scaled with pinv.** Root cause (confirmed in `rategamma.cpp`): IQ-TREE's `RateGammaInvar` rates are the **mean-1 gamma rates DIVIDED by (1−pinv)** (`RateGamma::computeRates` preserves the pre-set `curScale=K/(1−pinv)`), so the overall mean rate incl. invariant sites at rate 0 stays 1. JOLT used plain mean-1 rates — harmless at pinv≈0.0014, a ~0.5× rate error on real-invariant data. **Fix:** JOLT now scales `catRate[c]=meanR[c]/(1−pinv)` exactly like IQ-TREE; the α-gradient FD scales its perturbation the same way; and the pinv gradient switched to **finite difference** (one extra cheap lnL sweep/iter), robust to the rate↔prop↔pinv coupling that the scaling introduces.
 
@@ -784,11 +814,11 @@ Full self-critical audit of G.4.0→G.4.3b (two sub-agents — correctness `adeb
 
 **AUDIT (sub-agent, user-authorised) → 1 latent BUG + 2 concerns FIXED:** the eligibility gate discriminated gamma-vs-freerate by `getGammaShape() <= 0`, but `RateFree` (+R) inherits a POSITIVE `gamma_shape` ⇒ **+R / +R+I would wrongly engage JOLT** (uniform proportions, mean-gamma rates) and, since writeback precedes the self-check, return a silently-corrupt result (does NOT bite `-m TESTONLY` — no +R there — but would corrupt `-m MFP`). **Fix:** require the robust `site_rate->isGammaRate() == GAMMA_CUT_MEAN`, which cleanly declines +R, +R+I, and median-gamma (+Gm) at once; also decline `-no_rescale_gamma_invar` (+I) and add a backward-FD step at the pinv upper boundary. Rebuilt + re-validated (job 170519288).
 
-**VRAM space-complexity opened as a deep-research item (`research/Modelfinder/gpu-modelfinder-part7-vram-space-complexity.md`)** at the user's direction: per-model JOLT memory is **O(nInternal·nptn) ≈ 88.6 GB at AA-1M** (postorder partial arena dominates at 59 GB, NOT recycled) → fits only H200, OOMs A100, far over V100/consumer cards. **Recommended fix = PATTERN TILING** (exact, since lnL + all gradients are sums over patterns; tunable: /10 → 8.9 GB fits V100/RTX4090, /40 → 2.2 GB fits any GPU; reuses every kernel, only host orchestration changes). Secondary: O(depth) postorder recycling (hard for the gradient's preorder pass), FP32-storage coarse phase, out-of-core. **Accessibility prerequisite** — the "runs on your GPU" claim is hollow if the GPU must be an H200. Build is future work; correctness gate (chunked == one-shot rel ≤ 1e-12) first.
+**VRAM space-complexity opened as a deep-research item (`research/Modelfinder/gpu/gpu-modelfinder-part7-vram-space-complexity.md`)** at the user's direction: per-model JOLT memory is **O(nInternal·nptn) ≈ 88.6 GB at AA-1M** (postorder partial arena dominates at 59 GB, NOT recycled) → fits only H200, OOMs A100, far over V100/consumer cards. **Recommended fix = PATTERN TILING** (exact, since lnL + all gradients are sums over patterns; tunable: /10 → 8.9 GB fits V100/RTX4090, /40 → 2.2 GB fits any GPU; reuses every kernel, only host orchestration changes). Secondary: O(depth) postorder recycling (hard for the gradient's preorder pass), FP32-storage coarse phase, out-of-core. **Accessibility prerequisite** — the "runs on your GPU" claim is hollow if the GPU must be an H200. Build is future work; correctness gate (chunked == one-shot rel ≤ 1e-12) first.
 
 ## 2026-06-10 (gpu) — **THE 100K VERDICT + Coarse-to-Fine design (PART V): two adversarial workflows + advisor → an honest answer to "break GPU ModelFinder at 100K"**
 
-**New doc `research/Modelfinder/gpu-modelfinder-part5-coarse-to-fine-and-the-100K-verdict.md`.** Produced by an understand+literature workflow (9 agents) + a 6-lens judge-panel design workflow (13 agents) + advisor review + a structural BIC pre-check + the empirical coverage re-measure.
+**New doc `research/Modelfinder/gpu/gpu-modelfinder-part5-coarse-to-fine-and-the-100K-verdict.md`.** Produced by an understand+literature workflow (9 agents) + a 6-lens judge-panel design workflow (13 agents) + advisor review + a structural BIC pre-check + the empirical coverage re-measure.
 
 - **THE SPINE:** a 100K lever helps ONLY if it (i) converts the kernel latency-bound→bandwidth-bound (breaks the 25%-occupancy/128-reg ceiling) or (ii) shrinks the precision-critical work. Everything else is a *measured* wash (K3 parity, K4 wash-to-loss, `__launch_bounds__` all slower).
 - **EMPIRICAL CONFIRMATION of the N/S diagnosis (job 170386010):** `--jolt -m TESTONLY -nt 12` ran GPU util **96%**, CPU only **~2.05/12 cores** (~83% idle, blocked on the JOLT mutex). Coverage **94%** (58/62 engage, incl. 28 `+F`; only 4 `pinvar` declines; best==LG+G4). The 59-min wall is **GPU-SERIALIZATION-bound, not coverage, not the CPU tail.** ⇒ coverage / `+I` work (G.4.3b) is OFF the critical path until concurrency exists.
@@ -804,7 +834,7 @@ Full self-critical audit of G.4.0→G.4.3b (two sub-agents — correctness `adeb
 
 **G.4.3 reframed by G.4.2b evidence (part4 §IV.7.2): COVERAGE before batching.** grid.z batching of the eligible models can't move a wall set by the CPU-fallback tail (memory-bandwidth-bound, 2.1×/12 threads); and there is **NO `+R` in `-m TESTONLY`** (rate set {∅,+I,+G4,+I+G4}; +R is MFP/-mrate). Rephased to G.4.3a (`+F`) → G.4.3b (`+I`/`+I+G`) → G.4.3c (grid.z) → G.3.5 (1M/10M tiling).
 
-**G.4.3a VERDICT — `+F` was never broken (honesty correction to my own earlier read).** A diagnostic (`JOLT_DEBUG=1` gate logging; jobs 170380392 timed out at -nt 1, **170384797 conclusive** with explicit single-model fixed-tree runs) showed `LG+F+G4` reaches `optimizeParametersJOLT` with `freqtype=3` (FREQ_EMPIRICAL), `getNDim()==0`, and **ENGAGES JOLT** (rel 5.5e-12). The earlier "0/29 `+F` reached JOLT / 5% coverage" was a **double logging artifact**: (i) the `[JOLT]` print used `model->name` (matrix only) + a hand-built rate suffix, **dropping `+F`** → `LG+F+G4` printed as `LG+G4`; (ii) the print was **capped at 12** (`report_count<12`), so 12 = the log cap, not the count. Matching G.4.2b's `[JOLT]` lnLs to the CPU baseline confirms `WAG+F+G4` (−7595889.912), `JTT+F+G4` (−7650982.356), `Q.PFAM+F+G4` (−7550676.681) all engaged — the two `+F+G4` I'd earlier called "CPU-fallback at rel 1.18e-9" were JOLT matching the CPU MLE. **`+F` is already JOLT-eligible; G.4.3a = a logging fix, not new code.** Fix: `[JOLT]` print now uses `model->getName()` (incl. `+F`), cap 12→1000. The genuine CPU-only gap is `+I`/`+I+G` (diagnostic declines `reason=pinvar`) → G.4.3b. True coverage being re-measured (job 170386010). Nothing committed beyond `870dba60`; the logging fix + JOLT_DEBUG instrumentation are uncommitted pending the coverage re-measure.
+**G.4.3a VERDICT — `+F` was never broken (honesty correction to my own earlier read).** A diagnostic (`JOLT_DEBUG=1` gate logging; jobs 170380392 timed out at -nt 1, **170384797 conclusive** with explicit single-model fixed-tree runs) showed `LG+F+G4` reaches `optimizeParametersJOLT` with `freqtype=3` (FREQ_EMPIRICAL), `getNDim()==0`, and **ENGAGES JOLT** (rel 5.5e-12). The earlier "0/29 `+F` reached JOLT / 5% coverage" was a **double logging artifact**: (i) the `[JOLT]` print used `model->name` (matrix only) + a hand-built rate suffix, **dropping `+F`** → `LG+F+G4` printed as `LG+G4`; (ii) the print was **capped at 12** (`report_count<12`), so 12 = the log cap, not the count. Matching G.4.2b's `[JOLT]` lnLs to the CPU baseline confirms `WAG+F+G4` (−7595889.912), `JTT+F+G4` (−7650982.356), `Q.PFAM+F+G4` (−7550676.681) all engaged — the two `+F+G4` I'd earlier called "CPU-fallback at rel 1.18e-9" were JOLT matching the CPU MLE. **`+F` is already JOLT-eligible; G.4.3a = a logging fix, not new code.** Fix: `[JOLT]` print now uses `model->getName()` (incl. `+F`), cap 12→1000. The genuine CPU-only gap is `+I`/`+I+G` (diagnostic declines `reason=pinvar`) → G.4.3b. True coverage being re-measured (job 170386010). Nothing committed beyond `4d801e7e`; the logging fix + JOLT_DEBUG instrumentation are uncommitted pending the coverage re-measure.
 
 ## 2026-06-10 (gpu) — JOLT **G.4.2b PASS: in-tree `--jolt` FULL `-m TESTONLY` ranking gate, thread-safe at -nt 12 — best==LG+G4, 12/12 JOLT self-checks PASS, [GPU-BRANCH]=0** (V100, job 170367630)
 
@@ -815,7 +845,7 @@ Full self-critical audit of G.4.0→G.4.3b (two sub-agents — correctness `adeb
 - **Wall:** MF @ -nt 12 = 3541 s (GPU util 80%, 8.63 GB, exit 0) — the ~200-model CPU-fallback tail parallelised as designed (vs ~7.5 hr extrapolated at -nt 1). HONEST: not the aggregate win — the un-batched CPU tail still dominates; cross-model GPU concurrency is G.4.3 (PHALANX grid.z).
 - **COVERAGE NOTE (correctness-neutral):** base-matrix `+G4` models get JOLT; `+F+G4` counted-frequency variants currently fall to CPU (the eligibility gate excludes the `+F` empirical-count frequency path). They're computed correctly on CPU; widening JOLT to `+F` is a future improvement.
 - **Diagnosis trail (what the slowness actually was):** the first re-run's apparent "hang" was NOT a JOLT bug — it was `-nt 1` single-threading the ~200-candidate CPU-fallback tail on 96K patterns (~3 models/26 min). Root cause = harness parallelism, not the optimiser. Fixed by `-nt 12` + the mutex.
-- Nothing committed yet beyond the G.4.2a backup `1b98061c` — the two thread-safety fixes (setLikelihoodKernelGPU no-op under --jolt; mutex + cross-check gate) are being committed locally now that they're validated.
+- Nothing committed yet beyond the G.4.2a backup `505b52d1` — the two thread-safety fixes (setLikelihoodKernelGPU no-op under --jolt; mutex + cross-check gate) are being committed locally now that they're validated.
 
 ## 2026-06-10 (gpu) — JOLT **G.4.2a PASS: the in-tree `--jolt` seam works in the REAL binary — GPU JOLT lnL == fresh CPU computeLikelihood rel 2.77e-12** (V100, job 170361630)
 
@@ -849,7 +879,7 @@ IQ-TREE's tree+model structures without leaving stale caches). 7-file change, al
   single-model `-te` best case (a pure +G branch+α optimisation, JOLT's wheelhouse). The full `-m TESTONLY`
   aggregate wall is gated by the un-ported +I/+R fallback tail and will stay ~flat (G.4.2b) — the aggregate
   wall win is G.4.3 (grid.z cross-model batching + tiling), which builds on this now-validated seam.
-- Job 4.21 SU, 7 min (incl. the 224 s CPU non-interference run), exit 0. Backup `1b98061c` (iqtree3-gpu
+- Job 4.21 SU, 7 min (incl. the 224 s CPU non-interference run), exit 0. Backup `505b52d1` (iqtree3-gpu
   `gpu-kernel`, local).
 - **DESIGN REFINEMENT (surfaced at G.4.2b, see part4 §IV.7.1): under `--jolt` the G.2.x stateless GPU
   likelihood overrides must NOT install.** `--jolt` implies `--gpu`, and `--gpu` independently armed the
@@ -1009,7 +1039,7 @@ arena OOMs the 32GB V100 (35-45GB) — needs Ji O(depth) recycling, deferred to 
 ## 2026-06-08 (gpu) — GPU ModelFinder **PART IV: JOLT — first-principles GPU-native joint-gradient optimizer** (new research direction; literature-grounded)
 
 A first-principles redesign of the OPTIMIZER (not the substrate), written to
-`research/Modelfinder/gpu-modelfinder-part4-jolt-optimizer.md`. **Thesis:** IQ-TREE's per-edge Gauss-Seidel
+`research/Modelfinder/gpu/gpu-modelfinder-part4-jolt-optimizer.md`. **Thesis:** IQ-TREE's per-edge Gauss-Seidel
 NR + alpha-Brent + EM is a CPU-shaped algorithm (low-memory, few-traversal, SEQUENTIAL) and the
 sequentiality is what starves the GPU (25% occ, latency-bound, 50–100× on -m TEST). The GPU-optimal algorithm
 is the opposite: the **Ji-2020 / Gangavarapu-2024 linear-time all-branch + all-param analytic gradient in 2
@@ -1048,7 +1078,7 @@ before timeout (~25 min/model)** — the 6 are **bit-identical to the CPU baseli
 (full 224-model ≈ tens of hours vs CPU 221.6 s). The entire remaining problem is THROUGHPUT.
 
 **Architecture decided (user): cross-model batching centerpiece + regime-aware routing.** A 15-agent
-research→design→review→synthesis workflow produced **PHALANX-BMF** (`research/Modelfinder/gpu-modelfinder-part3-architecture.md`):
+research→design→review→synthesis workflow produced **PHALANX-BMF** (`research/Modelfinder/gpu/gpu-modelfinder-part3-architecture.md`):
 5 composable layers — (1) warp-cooperative state-distributed kernels K1c/K2c to break the 128-reg/25%-occupancy
 ceiling; (2) cross-model `grid.z=model` batch (the novel centerpiece — FCA model-dispatch as on-device DATA
 parallelism, B candidates co-resident sharing topology/tips/ptn_freq); (3) intra-NR-burst device-resident theta
@@ -1432,7 +1462,7 @@ Phase A.2 `filterRatesMPI` still fires afterwards (`ws_bcast_fields=4`) — the 
 ## 2026-06-06 — GPU ModelFinder **Phase G.0 gradient: algorithm validated (CPU), BEAGLE-4.0.1 GPU gradient broken for protein**
 
 > Completes the gradient leg of G.0 (entry below covers lnL). Full record + bugs 11–16:
-> `research/Modelfinder/gpu-modelfinder-g0-log.md`; design §5 updated: `gpu-modelfinder-design.md`.
+> `research/Modelfinder/gpu/gpu-modelfinder-g0-log.md`; design §5 updated: `gpu-modelfinder-design.md`.
 
 The branch-length gradient is the exact computation Mode-L overflowed at 10⁵⁴, so confirming it via BEAGLE
 is high-value. Outcome — **the algorithm is correct, BEAGLE-4.0.1's protein GPU gradient is not:**
@@ -1463,7 +1493,7 @@ is high-value. Outcome — **the algorithm is correct, BEAGLE-4.0.1's protein GP
 ## 2026-06-01 — GPU ModelFinder **Phase G.0 de-risk PASSES** (BEAGLE on V100): bit-parity + 43–66×, +R10 long-pole runs ~57×
 
 > Go-forward direction after Mode-L abandonment (entry below). Full record:
-> `research/Modelfinder/gpu-modelfinder-g0-log.md`; design: `gpu-modelfinder-design.md`.
+> `research/Modelfinder/gpu/gpu-modelfinder-g0-log.md`; design: `gpu-modelfinder-design.md`.
 > All GPU jobs reuse the **existing** FCA AA-100K CPU data (job 169095077, gate 169643959) for the
 > reference tree + parity target — no CPU baselines re-run (per user).
 
