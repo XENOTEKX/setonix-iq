@@ -747,5 +747,31 @@ gate, ahead of the branch-gradient half = G.8.1b):
   lnL still matches bit-exact — the factor returns in the log domain). Self-normalising each side cancels `exp(scale_p)`,
   and `γ` (the EM E-step responsibility) is precisely what the G.8.2 M-step `w_m_new = Σ_p f_p·γ_{p,m}/Σ_p f_p` consumes.
 
-**Still ahead:** **G.8.1b** = the mixture branch-length gradient (`k2_derv_mix`: df/ddf **summed over classes** vs CPU
-`computeLikelihoodDerv`, the G.2.1a rel ≤ 1e-9 gate) — the other half of G.8.1 — then G.8.2 → G.8.3 → G.8.4 as planned.
+**G.8.1b — mixture branch-length DERIVATIVE ✅ (2026-06-18, commit `b855c3fe`).** The gradient half of G.8.1: single-edge
+`df=d(lnL)/dt` and `ddf=d²(lnL)/dt²` summed over the N·ncat regimes, vs IQ-TREE's own `computeLikelihoodDerv`. Jobs
+171637224 (V100 C20) + 171637348 (A100 3-model, 5000-site euk):
+
+| model | INT-INT df / ddf rel | LEAF df / ddf rel |
+|---|---|---|
+| LG+C20+G4 | 8.1e-14 / 2.1e-14 | 1.5e-14 / 1.2e-15 |
+| LG+C60+G4 | 4.8e-14 / 1.5e-14 | 3.2e-14 / 4.9e-16 |
+| LG+MEOW80+G4 | 1.1e-13 / 7.0e-15 | 1.2e-13 / 1.1e-15 |
+
+- **`k2_derv_mix`** = the single-model `k2_derv` reduction on the regime axis `r=m·ncat+c` (`lh=Σ dval0·θ`, `d1=Σ dval1·θ`,
+  `d2=Σ dval2·θ`; `pdf=d1/lh`, `pddf=d2/lh−pdf²`); endpoint partials `θ=node_eig·dad_eig` come from `k1_node_mix` (isRoot=0).
+  Central-edge coeffs `dval{0,1,2}[r·ns+x]=exp(eval_m[x]·rate_c·t)·wreg[r]` (`v1=cof·v0`, `v2=cof²·v0`, `cof=eval_m[x]·rate_c`,
+  `wreg[r]=w_m·catProp_c`) in **global** memory — `R·ns` exceeds the `__constant__` 64-cat budget. `k_leaf_eig_mix` synthesizes
+  per-class tip eigen for leaf endpoints. Host `gpuComputeEdgeDervCleanRoomMix` = the G.2.1a two-sub-root central-edge split ×
+  the G.8.0 per-class eigen assembly; same `+I`/fused/PMSF/nonrev decline gate.
+- **π_m is absorbed in the eigen-space partials (theta trick), NOT re-applied at the central edge** — proven by the bit-exact
+  df/ddf (if π were mishandled the derivative would diverge). df is returned **un-negated** (matching CPU `computeLikelihoodDerv`;
+  `computeFuncDerv` negates downstream); the cross-check seeds host partials via the saved CPU branch pointer and references the
+  saved CPU **Derv** pointer (not the GPU override).
+- **Red-team (agent): no correctness bug.** val math matches CPU exactly, indexing `size_t`-safe to MEOW80 (R=320), df/ddf are
+  scale-free `dL/L` ratios so the CPU's per-pattern `scale_num` scaling cancels. Residual (no bug): 2-taxon-edge / degree-4-
+  sub-root topologies untested (won't occur in real ≥100-taxon trees, fall back to CPU); >2000-taxon SAFE_LH out of scope. The
+  MEOW80 derivative arena scales as `nInternal·R·ns·nptn·8` ≈ 25 GB at 5000 ptn (fits A100-80; ~113 GB at the full 22k-pattern
+  matrix would need tiling) — MEOW80 engaged genuinely on GPU here (a `PASS` is real, since the cross-check prints "skipped" on NaN).
+
+**Still ahead:** **G.8.2** = the EM weight optimiser — the G.8.1a per-class posterior M-step `w_m_new=Σ_p f_p·γ_{p,m}/Σ_p f_p`
+plus the G.8.1b branch gradient ride the joint diagonal-LM (existing G.4.1b machinery) — then G.8.3 (seam + gate relax) → G.8.4.

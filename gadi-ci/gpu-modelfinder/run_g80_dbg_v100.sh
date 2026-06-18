@@ -49,5 +49,5 @@ nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || true
 "$BIN" --gpu -te "$TREE" -s "$WB/euk400.phy" -m LG+C20+G4 -nt 12 -pre "$WB/c20dbg" -redo > "$WB/c20dbg.console" 2>&1
 echo "  exit=$?"
 echo "── probes + cross-check (from c20dbg.console, NOT the -pre log) ──"
-grep -aE '\[CL-DBG\]|\[SLK-DBG\]|\[GPU-XCHECK-MIX\]|\[GPU-XCHECK\]|\[GPU-KERNEL\]' "$WB/c20dbg.console" | sed 's/^/  /' || echo "  (none)"
+grep -aE '\[CL-DBG\]|\[SLK-DBG\]|\[GPU-XCHECK-MIX\]|\[GPU-XCHECK\]|\[GPU-DERV-XCHECK-MIX\]|\[GPU-KERNEL\]' "$WB/c20dbg.console" | sed 's/^/  /' || echo "  (none)"
 echo "════ DONE $(date -Iseconds) ════"

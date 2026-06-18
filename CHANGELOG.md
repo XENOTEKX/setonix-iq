@@ -2,6 +2,24 @@
 
 ---
 
+## 🧬 G.8.1b — Profile-mixture branch-length DERIVATIVE (df/ddf) on GPU — ✅ VALIDATED vs CPU computeLikelihoodDerv — 2026-06-18
+
+The gradient half of G.8.1: single-edge `d(lnL)/dt` and `d²(lnL)/dt²` for profile mixtures, summed over the N·ncat regimes, matching IQ-TREE's own `computeLikelihoodDerv` at ~machine-eps. **Purely additive; CPU path byte-unchanged.** Commit `b855c3fe` (iqtree3-gpu, local).
+
+| model | INT-INT df / ddf rel | LEAF df / ddf rel |
+|---|---|---|
+| LG+C20+G4 | 8.1e-14 / 2.1e-14 | 1.5e-14 / 1.2e-15 |
+| LG+C60+G4 | 4.8e-14 / 1.5e-14 | 3.2e-14 / 4.9e-16 |
+| LG+MEOW80+G4 (320 regimes) | 1.1e-13 / 7.0e-15 | 1.2e-13 / 1.1e-15 |
+
+(jobs 171637224 V100 C20 + 171637348 A100 3-model, 5000-site euk; gate rel ≤ 1e-9.) **MEOW80 engaged genuinely on GPU** (no CPU fallback — the cross-check prints "skipped" on NaN, so a PASS is real). New kernel `k2_derv_mix` (= `k2_derv` on the regime axis `r=m·ncat+c`) + `k_leaf_eig_mix` (per-class tip eigen) + `gpu_derv_crosscheck_mix` launcher + host `gpuComputeEdgeDervCleanRoomMix` (two-sub-root central-edge split from G.2.1a × per-class eigen from G.8.0) + gated one-shot `gpuMixDervCrossCheckOnce`. Central-edge coeffs `dval{0,1,2}[r·ns+x]=exp(eval_m[x]·rate_c·t)·wreg[r]` in **global** memory (R·ns exceeds the `__constant__` 64-cat budget). **π_m is absorbed in the eigen-space partials (theta trick), NOT re-applied at the central edge** — verified by the bit-exact df/ddf. Same +I/fused/PMSF/nonrev decline gate as the lnL path.
+
+**Red-team (agent): no correctness bug** — val math matches CPU (`wreg[r]==prop`, regime ordering identical), indexing `size_t`-safe to MEOW80, df/ddf are scale-free `dL/L` ratios so the CPU's per-pattern scaling cancels, sign un-negated against the saved genuine CPU Derv pointer. Residual follow-ups (no bug): 2-taxon-edge / degree-4-sub-root topologies untested (won't occur in real 100-taxon trees, fall back to CPU); >2000-taxon SAFE_LH out of scope (NORM_LH, no explicit taxon gate).
+
+**Next:** G.8.2 (EM weight optimiser using the G.8.1a per-class posterior + this branch gradient in the joint LM) → G.8.3 (seam + gate relax) → G.8.4 (eukaryote payoff).
+
+---
+
 ## 🧬 G.8.0 / G.8.1a — Profile-mixture (C20/C60/MEOW80) lnL + per-class posterior on GPU — ✅ VALIDATED bit-exact — 2026-06-18
 
 First profile mixtures running on the GPU likelihood path. New clean-room kernel `k1_node_mix` (+ `accum_child_mix`, launcher `gpu_lnl_crosscheck_mix` in `tree/gpu/gpu_lnl_intree.cu`) and host bridge `gpuComputeTreeLnLCleanRoomMix` (`tree/phylotreegpu.cpp`), validated against CPU via the gated one-shot `gpuMixLnLCrossCheckOnce` (mirrors the G.2.0a single-model pattern). **Purely additive; CPU path byte-unchanged.** Commit `2277273d` (iqtree3-gpu, local).
