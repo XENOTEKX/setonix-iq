@@ -94,6 +94,7 @@ path); a process-wide `std::mutex` serialises JOLT on the 1 GPU (ModelFinder is 
 | **G.5.0** | On-device reduction; 116/116 rel 2.17e-10; util 61→96%; **A100 1355 s beats np8 (1443.9 s)** | 170634239, 170636493 | — |
 | **G.5.1a i1** | +R weight gradient `gz_c=WN_c−w_c·N` FD-validated 1.03e-8; ΣWN_c=N exact | 170777660 | `4cb639a7` |
 | **G.5.1a i2a** | Standalone +R convergence: **R4 4/4 PASS** (+0.2289 vs CPU-EM); **R6 1/4 CHECK** (multimodal); gate UNFLIPPED | 171516319 | — |
+| **G.5.1b boundary** | +R reproducibility cutoff MAPPED: **R3 & R4 PASS** (4/4 starts agree, match/beat CPU-EM, grad WN exact); **R5/R6/R8 CHECK** (1/4–1/8, multimodal — JOLT's *best* beats CPU-EM ~10 nats but not reproducible). **Cutoff = R4↔R5.** Ship R2–R4, decline R5+ to CPU (or EM-warm-start). Gate still UNFLIPPED | 171518800 | — |
 | **G.6.0a** | Q-FD gradient cross-check **bit-identical** (maxrel_lnL 0.0) HKY/TNe/TVM/SYM/GTR | 170787044 | `e9498baa` |
 | **G.6.0b** | Free-Q FD-LM: **JOLT ≥ CPU all 5** (GTR +0.0029); no stall even GTR 5 coupled rates (13–34 iters) | 170792611 | `afc1c5a1` |
 | **G.6.1** | DNA coverage **8→70 engage**; worst write-back rel 6.224e-12, ZERO mismatch; free-Q **ON BY DEFAULT** | 170795329 | `d6d68943` |
@@ -199,11 +200,13 @@ comparison gate** (JOLT lnL ≥ CPU−eps else NaN→CPU); deterministic FP64 re
 
 ## 7. Open work (ranked)
 
-1. **G.5.1b — +R / +I+R in-tree JOLT.** The last AA -m MF gap. Gradient FD-validated (G.5.1a i1); standalone convergence
-   shows **R4 reproducible (4/4, beats CPU-EM), R6 NOT (1/4, multimodal)**. Open scope decision (do NOT flip the gate on a
-   non-robust optimiser): (a) EM-warm-start, (b) scope to reproducible low-ncat + decline high-ncat to CPU, (c) more cold
-   starts. Runtime CPU-optimum gate is the backstop. **Boundary-mapping run (job 171518800) in flight** to find the exact
-   ncat reproducibility cutoff. +I+R declines initially (RateFreeInvar's `pinv=1−Σprop` ≠ G.4.3b coupling).
+1. **G.5.1b — +R / +I+R in-tree JOLT.** The last AA -m MF gap. Gradient FD-validated (G.5.1a i1) and exact at every ncat
+   (WN identity `relWN=0.0`). **Boundary now MAPPED (job 171518800):** R3 & R4 reproducible (4/4 starts agree, match/beat
+   CPU-EM); **R5/R6/R8 multimodal** (1/4–1/8 starts; JOLT's best beats CPU-EM ~10 nats but not reproducibly) — **cutoff =
+   R4↔R5.** ⇒ data-justified scope: **engage in-tree +R for ncat≤4 only, decline ncat≥5 to CPU** (EM-warm-start could lift
+   the cap later). The gate flip (`phylotreegpu.cpp:502`) is now justified *for ncat≤4* but is an invasive in-tree change —
+   surface + CPU-optimum-gate backstop before flipping; do NOT flip wholesale on the multimodal high-ncat path. +I+R
+   declines initially (RateFreeInvar's `pinv=1−Σprop` ≠ G.4.3b coupling).
 2. **G.8 — Profile-mixture JOLT (C60/MEOW80/UDM).** part9 §IX.11. The eukaryote LG+MEOW80+G4 case. A genuine per-model
    **DEPTH** case (one heavy model, no breadth competition) — **NOT** an occupancy-ceiling escape and NOT a new grid.z
    breadth win (red-team-corrected; 80× arithmetic = more latency-bound work, not 80× speedup). Real structural wins: fixed
