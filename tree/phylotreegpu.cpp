@@ -1688,7 +1688,6 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     if (!model->isReversible() || model->getNMixtures() <= 1 || model->isSiteSpecificModel()) JMIX_DECLINE("nonrev/single/ssm");
     ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
     if (!mix || mix->isFused()) JMIX_DECLINE("not-nonfused-mixture");   // LG4M/LG4X 1:1 class<->rate pairing -> CPU
-    if (model->getNDim() != 0) JMIX_DECLINE("free-mixture-params");     // free weights (-mwopt) or per-class freq/Q (-mfopt) -> CPU
     if (site_rate->getPInvar() > 0.0) JMIX_DECLINE("plus-I");           // +I omitted in the clean-room sweep -> CPU
     int N = model->getNMixtures();
     int ncat = site_rate->getNRate();
@@ -1697,6 +1696,20 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     if (!root || !root->isLeaf() || root->neighbors.empty()) JMIX_DECLINE("bad-root");
     Node *Rt = root->neighbors[0]->node;
     if (!Rt || Rt->isLeaf()) JMIX_DECLINE("Rt-leaf");
+    // G.8.2.4 — ELIGIBILITY (red-teamed). model->getNDim()==0 => FIXED published weights (C20/C60), branches+alpha
+    // only (the validated G.8.2.2 path). Otherwise the model has free params: engage ONLY if they are the class
+    // WEIGHTS ALONE (fix_prop=false AND every per-class getNDim()==0 AND no linked-GTR), in which case we add the EM
+    // weight block (MEOW80 / ESmodel: getNDim()==N-1). ANY free per-class freq/Q dim (-mfopt) or linked-GTR -> CPU:
+    // the GPU would silently drop those and the write-back self-check (recomputes CPU lnL at the SAME un-optimised
+    // freqs the GPU used) would NOT catch it. getNDim()==N-1 alone is unsafe (could be per-class dims), so the test
+    // is the compound !isFixMixtureWeight() && Sum_m component->getNDim()==0.
+    int optWeights;
+    { int nd = model->getNDim();
+      if (nd == 0) optWeights = 0;
+      else { int scd = 0; for (int m = 0; m < N; m++) scd += (*mix)[m]->getNDim();
+             if (mix->isFixMixtureWeight() || scd != 0 || (params && params->optimize_linked_gtr))
+                 JMIX_DECLINE("free-per-class-or-linked-gtr");   // -mfopt / linked-GTR -> CPU
+             optWeights = 1; } }
     #undef JMIX_DECLINE
 
     // canonical node ordering: REPLICATE the clean-room indexDfs (root at Rt, preorder, skip dad) so b[] indexed by
@@ -1715,6 +1728,17 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     int optAlpha = (ncat > 1 && !site_rate->isFixGammaShape()) ? 1 : 0;
     auto alphaArg = [&](double a){ return (ncat > 1) ? a : -1.0; };   // -1 => clean-room keeps the live cat rates (ncat==1 path)
 
+    // G.8.2.4 — estimated-weight support. f[]/Ftot: pattern frequencies for the EM M-step. w: the weight iterate
+    // (init from the live model). wp drives the lnL clean-room calls — w.data() for the EM case (stable: w is never
+    // resized) or nullptr => live published weights (byte-identical to the fixed-weight G.8.2.2 path). The all-branch
+    // derivative reads the LIVE model weights and has no w_override, so each outer sets the live weights to the
+    // current w (optWeights only) to keep the gradient consistent with the lnL the backtracking evaluates.
+    int nptn = (int)aln->size();
+    std::vector<double> f(nptn); double Ftot = 0.0;
+    if (optWeights) { for (int p = 0; p < nptn; p++) { f[p] = (double)aln->at(p).frequency; Ftot += f[p]; } }
+    std::vector<double> w(N); for (int m = 0; m < N; m++) w[m] = model->getMixtureWeight(m);
+    const double* wp = optWeights ? w.data() : nullptr;
+
     // ---- GPU optimiser loop: joint diagonal-LM over (all branches + alpha), weights FIXED (w_override=nullptr => the
     // clean-room reads the live model weights, identical to what the derivative uses). Validated diagonal-LM core from
     // gpuMixJointOptimizeCrossCheckOnce::runOpt (warm path, EM weight block removed). Held under the process-wide mutex
@@ -1724,11 +1748,14 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     {
         std::lock_guard<std::mutex> lk(gpu_mixjolt_mtx);
         double mu = 1.0; int stall = 0;
-        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, b.data(), alphaArg(alpha));
+        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alphaArg(alpha));
         if (!std::isnan(lnL)) {
             const int maxOuter = 400;
             for (int outer = 0; outer < maxOuter; outer++) {
                 double lnL0 = lnL;
+                // optWeights: sync the LIVE model weights to the current iterate so the all-branch derivative (which
+                // reads live weights, no w_override) is consistent with the lnL backtracking (which uses wp=w.data()).
+                if (optWeights) for (int m = 0; m < N; m++) model->setMixtureWeight(m, w[m]);
                 std::vector<Node*> cN, pN; std::vector<double> df, ddf;
                 if (!gpuComputeAllBranchDervCleanRoomMix(cN, pN, df, ddf, b.data(), alphaArg(alpha))) { lnL = (double)NAN; break; }
                 std::vector<double> gdf(nNodes, 0.0), gddf(nNodes, 0.0);
@@ -1736,8 +1763,8 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
                 double ga = 0.0, curvA = 1e-12, eps = 0.0;
                 if (optAlpha) {   // alpha gradient/curvature by central FD on the clean-room lnL (no new kernel)
                     eps = 1e-3 * std::max(alpha, 1.0);
-                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, b.data(), alpha+eps);
-                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, b.data(), alpha-eps);
+                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alpha+eps);
+                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alpha-eps);
                     if (std::isnan(lp) || std::isnan(lm)) { lnL = (double)NAN; break; }
                     ga = (lp - lm) / (2.0*eps); curvA = std::fabs((lp - 2.0*lnL + lm) / (eps*eps)); if (curvA < 1e-12) curvA = 1e-12;
                 }
@@ -1748,12 +1775,34 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
                         if (bc[v] < 1e-6) bc[v] = 1e-6; if (bc[v] > 20.0) bc[v] = 20.0; }
                     double ac = alpha;
                     if (optAlpha) { ac = alpha + ga / (curvA + mu); if (ac < 0.02) ac = 0.02; if (ac > 50.0) ac = 50.0; }
-                    double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, bc.data(), alphaArg(ac));
+                    double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, bc.data(), alphaArg(ac));
                     if (std::isnan(ln)) { lnL = (double)NAN; break; }
                     if (ln > lnL) { b = bc; alpha = ac; lnL = ln; mu = std::max(mu*0.5, 1e-9); break; }   // accept any strict improvement
                     else mu = std::min(mu*4.0, 1e12);                                                     // cap mu (else it runs to +inf and freezes)
                 }
                 if (std::isnan(lnL)) break;
+                // G.8.2.4 — EM WEIGHT BLOCK (estimated weights only; mirrors ModelMixture::optimizeWeights + the
+                // validated kill-switch EM). a_{p,m} is WEIGHT-INDEPENDENT, so ONE GPU sweep at uniform w yields
+                // lhc[m][p]=a_{p,m}/N (the 1/N cancels in the posterior); the full EM M-step then runs on the HOST:
+                // gamma_{p,m}=w_m*lhc / Sum_m w_m*lhc ; w_m = Sum_p gamma_{p,m}*freq_p / Sum freq. One final GPU sweep
+                // gives the exact lnL at the new weights. Branches/alpha are fixed in this block (block-coordinate).
+                if (optWeights) {
+                    std::vector<double> lhc((size_t)N*nptn), wunif(N, 1.0/N), wn(N);
+                    double l1 = gpuComputeTreeLnLCleanRoomMix(nullptr, lhc.data(), wunif.data(), b.data(), alphaArg(alpha));
+                    if (std::isnan(l1)) { lnL = (double)NAN; break; }
+                    for (int em = 0; em < 1000; em++) {
+                        std::fill(wn.begin(), wn.end(), 0.0);
+                        for (int p = 0; p < nptn; p++) { double s = 0.0; for (int m = 0; m < N; m++) s += w[m]*lhc[(size_t)m*nptn+p];
+                            if (s <= 0.0) continue; double fp = f[p];
+                            for (int m = 0; m < N; m++) wn[m] += fp * (w[m]*lhc[(size_t)m*nptn+p] / s); }
+                        double stepw = 0.0; for (int m = 0; m < N; m++) { wn[m] /= Ftot; if (wn[m] < 1e-10) wn[m] = 1e-10;
+                            double d = std::fabs(wn[m]-w[m]); if (d > stepw) stepw = d; }
+                        w = wn;
+                        if (em > 0 && stepw < 1e-12) break;
+                    }
+                    lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha));
+                    if (std::isnan(lnL)) break;
+                }
                 outIters = outer + 1;
                 if (JOLT_DBG) fprintf(stderr, "[JOLTMIX-DBG] outer=%d lnL=%.6f mu=%.2e alpha=%.4f\n", outer, lnL, mu, alpha);
                 // ridge-recognizing termination: 3 consecutive outers improving by <1e-7 => the diagonal-LM has reached
@@ -1772,7 +1821,12 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
         return (double)NAN;
     }
 
-    // ---- write the optimised branch lengths (both directed neighbours) + alpha back; NO weight/Q write-back (fixed) ----
+    // ---- write-back. optWeights: set the FINAL EM weights live (the last EM updated w AFTER the per-outer sync, so
+    // the live weights are one EM-step stale). NO rate-1 rescale in this v1: the lnL is rescale-invariant, so the
+    // self-check and the GPU>=CPU selection are exact; the written branch lengths sit in the live total_num_subst
+    // scale (a global factor off IQ-TREE's Sum prop*tns=1 convention) — branch-scale fidelity is the next increment.
+    if (optWeights) for (int m = 0; m < N; m++) model->setMixtureWeight(m, w[m]);
+    // ---- write the optimised branch lengths (both directed neighbours) + alpha back ----
     for (int v = 0; v < nNodes; v++) {
         Node *child = nodes[v], *par = parentOf[v];
         if (!par) continue;                                     // Rt: no parent edge (covered as some node's child edge)
@@ -1781,7 +1835,7 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
         if (bwd) bwd->length = b[v];
     }
     if (optAlpha) site_rate->setGammaShape(alpha);              // sets gamma_shape + recomputes the discrete rates
-    clearAllPartialLH();                                        // brlen + alpha changed -> partials/theta stale
+    clearAllPartialLH();                                        // brlen + alpha + weights changed -> partials/theta stale
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL at the written-back params ----
     double cpuLnL = computeLikelihood();
@@ -1789,8 +1843,8 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     static int report_count = 0;
     string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
     if (report_count < 1000) { report_count++;
-        printf("[JOLTMIX] model=%s N=%d ns=%d ncat=%d: %d iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
-               joltModelName.c_str(), N, ns, ncat, outIters, finalLnL, cpuLnL, rel,
+        printf("[JOLTMIX] model=%s N=%d ns=%d ncat=%d weights=%s: %d iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
+               joltModelName.c_str(), N, ns, ncat, (optWeights ? "EM" : "fixed"), outIters, finalLnL, cpuLnL, rel,
                (rel <= 1e-6 ? "OK" : "MISMATCH"), alpha0, (ncat > 1 ? site_rate->getGammaShape() : 0.0)); }
 
     if (!(rel <= 1e-6)) {   // NOT(<=) so a NaN/inf rel also trips the fallback before setCurScore poisons _cur_score
