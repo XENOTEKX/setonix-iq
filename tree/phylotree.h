@@ -2099,7 +2099,7 @@ public:
         the ModelMixture component accessors). If out_lhcat != nullptr it is filled with the per-class likelihood
         L_{p,m} = w_m·Σ_c catProp_c·L_{p,m,c} laid out [nmix][nptn] (G.8.1, the EM-weight numerator). Returns NaN for
         non-mixtures / fused / PMSF / +I / ns∉{4,20} / CUDA error. */
-    double gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat = nullptr);
+    double gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat = nullptr, const double *w_override = nullptr);
 
     /** Phase G.2.0b: reusable clean-room GPU whole-tree log-likelihood. Rebuilds the validated K1 eigen-space
         postorder sweep from the LIVE model/site_rate/tree/alignment and returns the ptn_freq-weighted total
@@ -2154,6 +2154,11 @@ public:
     /** Phase G.8.1b: one-shot PROFILE-MIXTURE derivative cross-check (getNMixtures()>1 only). INT-INT + LEAF
         edges; GPU mixture df/ddf vs CPU computeLikelihoodDerv. Read-only diagnostic; call site guarded. */
     void gpuMixDervCrossCheckOnce();
+
+    /** Phase G.8.2.0: one-shot EM weight-optimiser kill-switch (getNMixtures()>1, non-fused, no +I). GPU EM weights
+        from a uniform cold start (branches/α fixed) — monotone lnL climb to the weight-MLE — vs IQ-TREE's own
+        ModelMixture::optimizeWeights(). Read-only (prop[] saved/restored); call site guarded. */
+    void gpuMixWeightEMCrossCheckOnce();
 
     /** Phase G.6.0a: one-shot (per process) GPU free-Q gradient cross-check (env JOLT_QGRADCHECK). For a reversible
         DNA free-Q model (HKY..GTR, fixed freqs, no +I), perturbs each free exchangeability (in rate-class space via

@@ -164,7 +164,7 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
 // weights via getMixtureWeight(m). Regime r = m*ncat + c; builds echild[node][r] and per-class Uinv/freq, then calls
 // gpu_lnl_crosscheck_mix. SILENT, returns NaN on any unsupported regime. CPU path byte-unchanged (additive).
 // ============================================================================================================
-double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat) {
+double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat, const double *w_override) {
     if (!model || !site_rate || !aln) return (double)NAN;
     int ns = aln->num_states;
     if (ns != 20 && ns != 4) return (double)NAN;
@@ -199,7 +199,7 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
         for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
         double wf[64]; model->getStateFrequency(wf, m);   // ns<=20
         for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
-        double wm = model->getMixtureWeight(m);
+        double wm = w_override ? w_override[m] : model->getMixtureWeight(m);   // G.8.2: optional EM-iterate weights
         for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
     }
 
@@ -300,6 +300,13 @@ void PhyloTree::gpuLnLCrossCheckOnce(double cpu_lnL) {
            gpu, cpu_ref, src, fabs(gpu - cpu_ref), rel, (rel < 1e-6 ? "PASS (bridge OK)" : "MISMATCH"));
 }
 
+// Set by gpuMixLnLCrossCheckOnce (G.8.0) iff the GPU mixture lnL ENGINE is validated this run: GPU lnL == CPU lnL
+// (rel<=1e-9) AND the per-class emission is self-consistent (Σ_m L_{p,m} == L_p). The G.8.2.0 EM weight check below
+// trusts the GPU per-class L_{p,m} only when this is true — closing the red-team's MINOR-3 (the EM check's engine-
+// isolation argument is sound *because* G.8.0 independently pinned the engine; this makes that dependency programmatic
+// instead of "they happen to both fire from the same hook").
+static bool s_gpuMixLnLEngineValidated = false;
+
 // ============================================================================================================
 // G.8.0 — one-shot PROFILE-MIXTURE lnL cross-check (C20/C60/MEOW80). Fires only for getNMixtures()>1 (does NOT
 // consume the one-shot for single-model runs). Compares the clean-room GPU mixture sweep vs an INDEPENDENT CPU
@@ -326,13 +333,15 @@ void PhyloTree::gpuMixLnLCrossCheckOnce(double cpu_lnL) {
         src = "CPU-recompute";
     }
     double rel = (cpu_ref != 0.0) ? fabs((gpu - cpu_ref)/cpu_ref) : fabs(gpu - cpu_ref);
+    bool lnL_ok = (rel <= 1e-9);
     printf("[GPU-XCHECK-MIX] N=%d ncat=%d  GPU lnL = %.6f   CPU lnL = %.6f (%s)   |d|=%.4e   rel=%.3e   -> %s\n",
            N, site_rate ? site_rate->getNRate() : -1, gpu, cpu_ref, src,
-           fabs(gpu - cpu_ref), rel, (rel <= 1e-9 ? "PASS (G.8.0)" : "MISMATCH"));
+           fabs(gpu - cpu_ref), rel, (lnL_ok ? "PASS (G.8.0)" : "MISMATCH"));
 
     // G.8.1 diag — GPU SELF-CONSISTENCY (no CPU ref): Σ_m L_{p,m} must equal L_p = exp(patlh[p]). If this holds the
     // per-class emission is correct by construction, and any CPU-ref mismatch below is a contaminated reference (the
     // GPU branch override leaves CPU per-cat partials unpopulated), NOT a kernel bug.
+    bool self_ok = false;
     {
         double selfmax = 0.0; int pbad = -1;
         for (int p = 0; p < nptn; p++) {
@@ -341,8 +350,9 @@ void PhyloTree::gpuMixLnLCrossCheckOnce(double cpu_lnL) {
             double r = fabs(s - Lp) / (fabs(Lp) + 1e-300);
             if (r > selfmax) { selfmax = r; pbad = p; }
         }
+        self_ok = (selfmax <= 1e-9);
         printf("[GPU-XCHECK-MIX] GPU self-consistency Sum_m L_{p,m} vs L_p: max rel = %.3e (ptn %d)  -> %s\n",
-               selfmax, pbad, (selfmax <= 1e-9 ? "PASS (GPU per-class internally exact)" : "GPU EMISSION BUG"));
+               selfmax, pbad, (self_ok ? "PASS (GPU per-class internally exact)" : "GPU EMISSION BUG"));
     }
 
     // G.8.1 — per-class POSTERIOR RESPONSIBILITY γ_{p,m} = L_{p,m}/Σ_m' L_{p,m'} (the EM E-step quantity the G.8.2
@@ -369,6 +379,10 @@ void PhyloTree::gpuMixLnLCrossCheckOnce(double cpu_lnL) {
     } else {
         printf("[GPU-XCHECK-MIX] per-class check skipped (_pattern_lh_cat not allocated)\n");
     }
+
+    // The G.8.2.0 EM weight check (below) consumes the GPU per-class L_{p,m}; it may trust them only if the engine
+    // is validated this run: GPU lnL == CPU lnL AND the per-class emission reconstructs L_p (self-consistency).
+    s_gpuMixLnLEngineValidated = lnL_ok && self_ok;
 }
 
 // ============================================================================================================
@@ -753,6 +767,115 @@ void PhyloTree::gpuMixDervCrossCheckOnce() {
     if (!Lf) { for (auto nb : Rnode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; intNode = Rnode; break; } }
     if (Lf) checkEdge((PhyloNeighbor*)intNode->findNeighbor(Lf), intNode, "LEAF");
     else    printf("[GPU-DERV-XCHECK-MIX] LEAF skipped (no pendant edge found)\n");
+}
+
+// ============================================================================================================
+// G.8.2.0 — one-shot EM WEIGHT-OPTIMISER kill-switch (profile mixtures). With branches+α FIXED at the current
+// state the mixture-weight sub-problem is concave (lnL = Σ_p f_p·log Σ_m w_m·a_{p,m}), so the EM M-step
+// w_m ← Σ_p f_p·γ_{p,m} / Σ_p f_p  (γ_{p,m}=L_{p,m}/Σ_m' L_{p,m'}) converges to the UNIQUE weight-MLE from any
+// interior start. This de-risks the G.8.2.1 joint optimiser by proving the GPU posterior-based M-step (a) climbs
+// lnL MONOTONICALLY and (b) reaches the SAME optimum as IQ-TREE's own EM `ModelMixture::optimizeWeights()`. The
+// GPU EM runs off the validated clean-room lnL+per-class (custom-weight override); both compared lnLs are
+// GPU-computed (at CPU-EM weights vs GPU-EM weights) so the gate measures only the WEIGHT optimum, not the engine.
+// CPU reference = optimizeWeights() with prop[] saved/restored (read-only net effect). Gated nmix>1, non-fused,
+// no +I (the EM denominator would need ptn_invar). Fires from computeLikelihood under --gpu (not --jolt).
+// ============================================================================================================
+void PhyloTree::gpuMixWeightEMCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // unconsumed for single-model
+    done = true;
+    if (!site_rate || !aln) { printf("[GPU-WEM] skipped (model/tree not ready)\n"); return; }
+    if (site_rate->getPInvar() > 0.0) { printf("[GPU-WEM] skipped (+I; EM denominator needs ptn_invar)\n"); return; }
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || mix->isFused()) { printf("[GPU-WEM] skipped (not a non-fused profile mixture)\n"); return; }
+    if (!cpuComputeLikelihoodBranchPointer || !current_it || !current_it_back) {
+        printf("[GPU-WEM] skipped (no CPU branch pointer to seed partials)\n"); return; }
+    if (!s_gpuMixLnLEngineValidated) {   // MINOR-3: only trust the GPU per-class L_{p,m} if G.8.0 pinned the engine
+        printf("[GPU-WEM] skipped (GPU mixture lnL engine NOT validated this run — G.8.0 lnL/self-consistency check did not PASS)\n");
+        return; }
+
+    int N = model->getNMixtures();
+    int nptn = (int)aln->size();
+    // Ftot = Σ_p frequency[p] == getAlnNSite() for a standard alignment (the denominator CPU optimizeWeights uses).
+    // We divide the M-step by Ftot rather than getNSite() so the GPU EM fixed point sums to 1 by construction; the
+    // two agree unless expected_num_sites is set (not the mixture case here).
+    std::vector<double> f(nptn); double Ftot = 0.0;
+    for (int p = 0; p < nptn; p++) { f[p] = (double)aln->at(p).frequency; Ftot += f[p]; }
+
+    // ---- CPU reference: IQ-TREE's own EM optimizeWeights() at the current (fixed) branches/α; save+restore prop ----
+    std::vector<double> w0(N), wCPU(N);
+    for (int m = 0; m < N; m++) w0[m] = model->getMixtureWeight(m);
+    (this->*cpuComputeLikelihoodBranchPointer)(current_it, (PhyloNode*)current_it_back->node, false);  // seed host partials
+    mix->optimizeWeights();                                              // CPU EM -> prop[] = weight-MLE (branches/α fixed)
+    for (int m = 0; m < N; m++) wCPU[m] = model->getMixtureWeight(m);
+    for (int m = 0; m < N; m++) model->setMixtureWeight(m, w0[m]);       // RESTORE prop[] exactly
+    // State-safety (red-team): restoring prop[] is sufficient TODAY only because mixture weights do not affect internal-
+    // node partials (weights enter only at the root sum), so the partials optimizeWeights left at CPU-EM weights are
+    // still valid for the restored weights. clearAllPartialLH() makes that UNCONDITIONAL — if a future change ever made
+    // partials weight-dependent, this prevents the one-shot from silently corrupting the subsequent real analysis. It is
+    // a one-shot; the cost is a single partial recompute on the next computeLikelihood.
+    clearAllPartialLH();
+    double lnL_cpuW = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wCPU.data());   // GPU lnL at CPU-EM weights (stateless sweep)
+    // Min weight is DIAGNOSTIC CONTEXT, not a gate: an over-parameterised mixture on a finite alignment legitimately
+    // drives weak classes toward 0 (a data-driven interior stationary point), so requiring "chunky" weights would
+    // spuriously fail correct runs. The real boundary case is FLOOR-CLAMPING (w pinned to the 1e-10 EM floor); both
+    // optimisers share that floor, so if they clamp the SAME class the lnL/Δw gates still hold, and if they disagree
+    // those gates catch it. We therefore only report it. (10× the floor => "essentially clamped".)
+    double wmin_cpu = 1.0; bool floorClampedCPU = false;
+    for (int m = 0; m < N; m++) { if (wCPU[m] < wmin_cpu) wmin_cpu = wCPU[m]; if (wCPU[m] <= 1e-9) floorClampedCPU = true; }
+
+    // ---- GPU EM: from a UNIFORM cold start (branches/α fixed), monotone climb to the weight-MLE ----
+    std::vector<double> lhcat((size_t)N*nptn), w(N, 1.0/N), wn(N);
+    auto emStep = [&](const std::vector<double>& lh, std::vector<double>& out) {
+        std::fill(out.begin(), out.end(), 0.0);
+        for (int p = 0; p < nptn; p++) {
+            double s = 0.0; for (int m = 0; m < N; m++) s += lh[(size_t)m*nptn + p];
+            if (s <= 0.0) continue; double fp = f[p];
+            for (int m = 0; m < N; m++) out[m] += fp * (lh[(size_t)m*nptn + p] / s);   // Σ_p f_p·γ_{p,m}
+        }
+        for (int m = 0; m < N; m++) { out[m] /= Ftot; if (out[m] < 1e-10) out[m] = 1e-10; }  // /Σf, floor (CPU EM floor)
+    };
+    // M1 (red-team): match CPU optimizeWeights' iteration budget = (getNDim()+1)*100 = N*100 (2000 for C20, 6000 for
+    // C60, 8000 for MEOW80) so the GPU is never capped before the CPU would be, and REQUIRE the GPU broke on the
+    // convergence condition (not cap-exhaustion) in the PASS gate — otherwise an under-converged high-N run could slip
+    // through on wErr/lnLErr alone. The loop still terminates on convergence (typically <100 iters; floored classes pin
+    // and stop moving), so the high cap is only a safety ceiling, not the expected count.
+    const int maxIters = N * 100;
+    double prev = -1e300, worst_drop = 0.0, lnL = (double)NAN; bool monotone = true, gpuConverged = false; int iters = 0;
+    for (int k = 0; k < maxIters; k++) {
+        iters = k + 1;
+        lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, lhcat.data(), w.data());     // lnL(w^k) + per-class L_{p,m}(w^k)
+        if (std::isnan(lnL)) { printf("[GPU-WEM] skipped (CUDA/unsupported on the EM sweep)\n"); return; }
+        if (k > 0 && lnL < prev - 1e-7) { monotone = false; if (prev - lnL > worst_drop) worst_drop = prev - lnL; }
+        double delta = lnL - prev; prev = lnL;
+        emStep(lhcat, wn);
+        double step = 0.0; for (int m = 0; m < N; m++) { double d = fabs(wn[m] - w[m]); if (d > step) step = d; }
+        w = wn;                                                                   // w^{k+1}
+        if (k > 0 && delta >= 0.0 && delta < 1e-9 && step < 1e-9) { gpuConverged = true; break; }
+    }
+    double lnL_gpuW = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data());  // GPU lnL at GPU-EM weights
+    double wErr = 0.0, wmin_gpu = 1.0;
+    for (int m = 0; m < N; m++) { double d = fabs(w[m] - wCPU[m]); if (d > wErr) wErr = d; if (w[m] < wmin_gpu) wmin_gpu = w[m]; }
+    double lnLErr = (lnL_cpuW != 0.0) ? fabs((lnL_gpuW - lnL_cpuW)/lnL_cpuW) : fabs(lnL_gpuW - lnL_cpuW);
+    // PASS criteria (the DECISIVE one is (b): the GPU EM reaches a likelihood at least as high as the CPU's own EM on
+    // the concave weight surface, so it cannot have under-climbed):
+    //   (a) monotone     — lnL non-decreasing across all iters (defining property of a correct EM M-step);
+    //   (b) gpuConverged — the GPU broke on the convergence condition, NOT cap-exhaustion (M1: an under-converged
+    //                      high-N run must not slip through on wErr/lnLErr alone);
+    //   (c) lnL_gpuW >= lnL_cpuW - 1e-6   — GPU climbs at least as high as CPU optimizeWeights;
+    //   (d) lnLErr <= 1e-7                — the two optima agree in lnL to ~1e-7 relative.
+    // wErr (max|Δw|) is reported but bounded only LOOSELY at 1e-3, NOT 1e-4: CPU stops at its own |Δprop|<1e-4
+    // tolerance while the GPU runs to 1e-9, so the two legitimately sit at slightly different points on the same
+    // near-flat concave ridge (C20/400-site shows 1.6e-4, the CPU early-stop, with GPU lnL actually +5.9e-4 BETTER).
+    // It is a sanity bound on weight-space agreement, not the primary gate — (b)+(c) are.
+    bool pass = monotone && gpuConverged && (lnLErr <= 1e-7) && (lnL_gpuW >= lnL_cpuW - 1e-6) && (wErr <= 1e-3);
+    printf("[GPU-WEM] N=%d EM weights (branches/α fixed): %d/%d iters from uniform, converged=%d, monotone=%d (worst drop %.2e); "
+           "min w: CPU=%.2e GPU=%.2e floor-clamped(CPU)=%d; GPU-EM vs CPU optimizeWeights: max|Δw|=%.3e, "
+           "lnL %.6f vs %.6f (GPU-CPU=%+.2e) rel=%.3e  -> %s\n",
+           N, iters, maxIters, (int)gpuConverged, (int)monotone, worst_drop, wmin_cpu, wmin_gpu, (int)floorClampedCPU,
+           wErr, lnL_gpuW, lnL_cpuW, (lnL_gpuW - lnL_cpuW), lnLErr,
+           (pass ? "PASS (G.8.2.0)" : "CHECK"));
 }
 
 // ============================================================================================================
