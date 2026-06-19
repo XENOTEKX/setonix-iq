@@ -1313,7 +1313,7 @@ double PhyloTree::computeLikelihood(double *pattern_lh, bool save_log_value) {
     // df/ddf vs IQ-TREE's own computeLikelihoodDerv). Both run once per process; pure read-only diagnostics.
     // G.4.2: skip the G.2.x one-shot cross-checks under --jolt — ModelFinder is across-model OpenMP-parallel
     // (phylotesting.cpp:4097), so these GPU-constant-touching diagnostics would race concurrent JOLT calls.
-    if (params && params->gpu && !params->jolt) { gpuLnLCrossCheckOnce(score); gpuMixLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); gpuMixDervCrossCheckOnce(); gpuMixAllBranchDervCrossCheckOnce(); gpuMixWeightEMCrossCheckOnce(); gpuFreeQGradCheckOnce(); }
+    if (params && params->gpu && !params->jolt) { gpuLnLCrossCheckOnce(score); gpuMixLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); gpuMixDervCrossCheckOnce(); gpuMixAllBranchDervCrossCheckOnce(); gpuMixWeightEMCrossCheckOnce(); gpuMixJointOptimizeCrossCheckOnce(); gpuFreeQGradCheckOnce(); }
 #endif
     return score;
 }

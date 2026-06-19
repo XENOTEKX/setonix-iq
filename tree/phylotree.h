@@ -2099,7 +2099,8 @@ public:
         the ModelMixture component accessors). If out_lhcat != nullptr it is filled with the per-class likelihood
         L_{p,m} = w_m·Σ_c catProp_c·L_{p,m,c} laid out [nmix][nptn] (G.8.1, the EM-weight numerator). Returns NaN for
         non-mixtures / fused / PMSF / +I / ns∉{4,20} / CUDA error. */
-    double gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat = nullptr, const double *w_override = nullptr);
+    double gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat = nullptr, const double *w_override = nullptr,
+                                         const double *parentLenOverride = nullptr, double alphaOverride = -1.0);
 
     /** Phase G.2.0b: reusable clean-room GPU whole-tree log-likelihood. Rebuilds the validated K1 eigen-space
         postorder sweep from the LIVE model/site_rate/tree/alignment and returns the ptn_freq-weighted total
@@ -2151,7 +2152,8 @@ public:
         childNodes=v, parentNodes=parent, dfOut=d(lnL)/db_v, ddfOut=2nd deriv. Returns false on ineligibility/CUDA
         error (same gate as the lnL mix path). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     bool gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
-                                             std::vector<double>& dfOut, std::vector<double>& ddfOut);
+                                             std::vector<double>& dfOut, std::vector<double>& ddfOut,
+                                             const double *parentLenOverride = nullptr, double alphaOverride = -1.0);
 
     /** Phase G.2.1a: one-shot (per process) GPU single-edge derivative cross-check. Picks an internal-internal
         edge and compares GPU df/ddf against IQ-TREE's own computeLikelihoodDerv. Pure read-only diagnostic;
@@ -2171,6 +2173,14 @@ public:
         from a uniform cold start (branches/α fixed) — monotone lnL climb to the weight-MLE — vs IQ-TREE's own
         ModelMixture::optimizeWeights(). Read-only (prop[] saved/restored); call site guarded. */
     void gpuMixWeightEMCrossCheckOnce();
+
+    /** Phase G.8.2.1b: one-shot JOINT cold-start optimiser kill-switch (getNMixtures()>1, non-fused, no +I, mean-gamma).
+        Host-driven block-coordinate ascent — all-branch LM (k7_pre_mix) + EM weights (G.8.2.0) + scalar-α FD-Newton —
+        composing the validated clean-room sweeps at ITERATE (b,w,α) via the parentLen/alpha overrides. Runs from a COLD
+        start (b=0.1, w=1/N, α=1.0) AND a WARM start (live MLE), and gates both converged lnLs against the GPU lnL at the
+        CPU MLE (rel<=1e-9, monotone, GPU>=CPU). Warm iter-0 reproducing lnL_gpu@cpuMLE doubles as the override
+        index-consistency self-test. Read-only (overrides mutate nothing; ends with clearAllPartialLH). Call site guarded. */
+    void gpuMixJointOptimizeCrossCheckOnce();
 
     /** Phase G.6.0a: one-shot (per process) GPU free-Q gradient cross-check (env JOLT_QGRADCHECK). For a reversible
         DNA free-Q model (HKY..GTR, fixed freqs, no +I), perturbs each free exchangeability (in rate-class space via

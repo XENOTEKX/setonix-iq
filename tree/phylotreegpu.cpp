@@ -164,7 +164,8 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
 // weights via getMixtureWeight(m). Regime r = m*ncat + c; builds echild[node][r] and per-class Uinv/freq, then calls
 // gpu_lnl_crosscheck_mix. SILENT, returns NaN on any unsupported regime. CPU path byte-unchanged (additive).
 // ============================================================================================================
-double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat, const double *w_override) {
+double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat, const double *w_override,
+                                                const double *parentLenOverride, double alphaOverride) {
     if (!model || !site_rate || !aln) return (double)NAN;
     int ns = aln->num_states;
     if (ns != 20 && ns != 4) return (double)NAN;
@@ -190,6 +191,9 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
     std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
     std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
     for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    // G.8.2.1b: optional iterate-alpha override — recompute mean-1 discrete-gamma catRate[] at alphaOverride (catProp
+    // stays fixed 1/ncat). Used by the joint-optimiser's alpha FD-Newton; warm-run reproduces the live rates exactly.
+    if (alphaOverride > 0.0 && ncat > 1) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());
     for (int m = 0; m < N; m++) {
         ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
         double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
@@ -215,6 +219,9 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
     };
     indexDfs(Rt, nullptr, 0.0);
     int nNodes=(int)nodes.size();
+    // G.8.2.1b: optional iterate-branch override — replace the live edge lengths with parentLenOverride[v] (indexed by
+    // this function's DFS nid; root entry is 0.0). The echild build below consumes it transparently. nullptr => live tree.
+    if (parentLenOverride) for (int v = 0; v < nNodes; v++) parentLen[v] = parentLenOverride[v];
     vector<int> postInternal; vector<int> slot(nNodes,-1);
     function<void(Node*,Node*)> postDfs = [&](Node *n, Node *dad){
         for (auto nb:n->neighbors){ if(nb->node==dad) continue; postDfs(nb->node,n); }
@@ -671,7 +678,8 @@ double PhyloTree::gpuComputeEdgeDervCleanRoomMix(PhyloNeighbor *dad_branch, Phyl
 // error (same +I/fused/PMSF/nonrev/single-model gate as the lnL mix path). Read-only (no host/device state persists).
 // ============================================================================================================
 bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
-                                                    std::vector<double>& dfOut, std::vector<double>& ddfOut) {
+                                                    std::vector<double>& dfOut, std::vector<double>& ddfOut,
+                                                    const double *parentLenOverride, double alphaOverride) {
     childNodes.clear(); parentNodes.clear(); dfOut.clear(); ddfOut.clear();
     if (!model || !site_rate || !aln) return false;
     int ns = aln->num_states;
@@ -697,6 +705,8 @@ bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNod
     std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
     std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
     for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    // G.8.2.1b: optional iterate-alpha override (joint-optimiser gradient at an FD-perturbed alpha) — see the lnL path.
+    if (alphaOverride > 0.0 && ncat > 1) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());
     for (int m = 0; m < N; m++) {
         ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
         double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
@@ -719,6 +729,9 @@ bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNod
         for (auto nb:n->neighbors){ if(nb->node==dad) continue; indexDfs(nb->node,n,nb->length); } };
     indexDfs(Rt, nullptr, 0.0);
     int nNodes = (int)nodes.size();
+    // G.8.2.1b: optional iterate-branch override (joint-optimiser gradient at iterate b) — indexed by this function's
+    // DFS nid; the echild + nodeParentLen (preorder expfac) builds below consume it transparently. nullptr => live tree.
+    if (parentLenOverride) for (int v = 0; v < nNodes; v++) parentLen[v] = parentLenOverride[v];
     for (int i=0;i<nNodes;i++){ Node *n=nodes[i], *dad=parentNode[i];
         for (auto nb:n->neighbors){ if(nb->node==dad) continue; childList[i].push_back(nid[nb->node]); }
         if ((int)childList[i].size()>3) return false; }
@@ -1051,6 +1064,182 @@ void PhyloTree::gpuMixWeightEMCrossCheckOnce() {
            N, iters, maxIters, (int)gpuConverged, (int)monotone, worst_drop, wmin_cpu, wmin_gpu, (int)floorClampedCPU,
            wErr, lnL_gpuW, lnL_cpuW, (lnL_gpuW - lnL_cpuW), lnLErr,
            (pass ? "PASS (G.8.2.0)" : "CHECK"));
+}
+
+// ============================================================================================================
+// G.8.2.1b — one-shot JOINT cold-start optimiser kill-switch (non-fused profile mixture, no +I, mean-gamma).
+// Host-driven block-coordinate ascent composing the THREE validated pieces at ITERATE (b,w,α) via the parentLen/
+// alpha overrides on the clean-room sweeps: (1) all-branch LM diagonal-Newton (k7_pre_mix, G.8.2.1a), (2) EM weight
+// M-step (G.8.2.0), (3) scalar-α central-FD Newton/secant (no new kernel; matches the validated dr_c/dα = host-FD).
+// Runs from a COLD (b=0.1,w=1/N,α=1) AND a WARM (live) start. The gate is NON-REENTRANT (no CPU optimiser is invoked
+// inside this computeLikelihood hook — the hook fires at the FIRST computeLikelihood, before IQ-TREE has optimised)
+// and self-contained: it proves the GPU joint optimiser is a consistent ascent method reaching the SAME stationary
+// MLE from both starts (cold==warm rel<=1e-9 — the decisive basin/convergence check), monotone, improving on the
+// start (the converged branch gradient |g|inf is reported for context). The end-to-end "GPU MLE == CPU joint MLE" tie is done at
+// VALIDATION time by comparing the printed cold/warm MLE to the run's own .iqtree CPU lnL on the same -te topology.
+// Read-only (the overrides mutate nothing; ends with clearAllPartialLH defensively). Mirrors the one-shot pattern.
+void PhyloTree::gpuMixJointOptimizeCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;                  // single-model -> unconsumed
+    done = true;
+    if (!site_rate || !aln) { printf("[GPU-MIXJOINT] skipped (model/tree not ready)\n"); return; }
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) { printf("[GPU-MIXJOINT] skipped (ns=%d)\n", ns); return; }
+    if (!model->isReversible()) { printf("[GPU-MIXJOINT] skipped (non-reversible)\n"); return; }
+    if (model->isSiteSpecificModel()) { printf("[GPU-MIXJOINT] skipped (PMSF)\n"); return; }
+    if (site_rate->getPInvar() > 0.0) { printf("[GPU-MIXJOINT] skipped (+I)\n"); return; }
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || mix->isFused()) { printf("[GPU-MIXJOINT] skipped (not a non-fused profile mixture)\n"); return; }
+    int N = model->getNMixtures();
+    int ncat = site_rate->getNRate();
+    if (ncat < 1) { printf("[GPU-MIXJOINT] skipped (ncat<1)\n"); return; }
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) { printf("[GPU-MIXJOINT] skipped (non-mean-gamma)\n"); return; }
+    if (!s_gpuMixLnLEngineValidated) { printf("[GPU-MIXJOINT] skipped (GPU mixture lnL engine not validated this run)\n"); return; }
+    if (!root || !root->isLeaf() || root->neighbors.empty()) { printf("[GPU-MIXJOINT] skipped (bad root)\n"); return; }
+    Node *Rt = root->neighbors[0]->node;
+    if (!Rt || Rt->isLeaf()) { printf("[GPU-MIXJOINT] skipped (Rt leaf)\n"); return; }
+
+    int nptn = (int)aln->size();
+    bool DBG = getenv("MIXJOINT_DBG") != nullptr;
+
+    // canonical node ordering: REPLICATE the clean-room indexDfs (root at Rt, preorder, recurse neighbors skipping dad).
+    // b[] is indexed by this nid; b[v] = length of the edge above node v (b[root]=0). The SAME vector is a valid
+    // parentLenOverride for BOTH clean-room functions (identical indexDfs => identical nid). nidMap maps the all-branch
+    // derivative's returned childNodes back to this index. The warm-init self-test below confirms the index match.
+    std::map<Node*,int> nidMap; std::vector<Node*> nodes; std::vector<double> bLive;
+    std::function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        nidMap[n] = (int)nodes.size(); nodes.push_back(n); bLive.push_back(lenToDad);
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; indexDfs(nb->node, n, nb->length); }
+    };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    int rootId = nidMap[Rt];
+
+    std::vector<double> f(nptn); double Ftot = 0.0;                    // EM denominator (Σ_p frequency[p])
+    for (int p = 0; p < nptn; p++) { f[p] = (double)aln->at(p).frequency; Ftot += f[p]; }
+    std::vector<double> w0(N); for (int m = 0; m < N; m++) w0[m] = model->getMixtureWeight(m);
+    double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : -1.0;
+
+    // engine reference at the LIVE state + the override self-test (live params THROUGH the overrides must reproduce it
+    // to ~1e-12, proving the iterate plumbing is transparent and this gate's nid matches the clean-room functions' nid).
+    double lnL_live = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr);
+    if (std::isnan(lnL_live)) { printf("[GPU-MIXJOINT] skipped (CUDA/unsupported on the live sweep)\n"); return; }
+    double lnL_warmInit = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w0.data(), bLive.data(), alpha0);
+    double selfRel = (lnL_live != 0.0) ? std::fabs((lnL_warmInit - lnL_live)/lnL_live) : std::fabs(lnL_warmInit - lnL_live);
+
+    // all-branch DERIVATIVE override self-test: central-FD one edge's df (from the all-branch sweep at bLive) against
+    // the VALIDATED lnL override at bLive±ε. The lnL selfRel above only exercises the lnL override; this index-checks
+    // the all-branch override seam (a divergent indexDfs there would corrupt the branch step but pass selfRel).
+    double selfRelDrv = (double)NAN;
+    { std::vector<Node*> cN0, pN0; std::vector<double> df0, ddf0;
+      if (gpuComputeAllBranchDervCleanRoomMix(cN0, pN0, df0, ddf0, bLive.data(), alpha0) && !cN0.empty()) {
+          int ev = nidMap.at(cN0[0]); double dfAll = df0[0];
+          double eps = 1e-4 * std::max(std::fabs(bLive[ev]), 1e-3);
+          std::vector<double> bp = bLive; bp[ev] = bLive[ev] + eps;
+          double Lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w0.data(), bp.data(), alpha0);
+          bp[ev] = bLive[ev] - eps;
+          double Lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w0.data(), bp.data(), alpha0);
+          if (!std::isnan(Lp) && !std::isnan(Lm)) { double dfFD = (Lp - Lm) / (2.0*eps);
+              selfRelDrv = std::fabs(dfAll - dfFD) / std::max(std::fabs(dfFD), 1.0); }
+      }
+    }
+
+    auto alphaArg = [&](double a){ return (ncat > 1) ? a : -1.0; };
+
+    // host-driven block-coordinate optimiser: branch LM -> EM weights -> α FD-Newton (each block monotone/accept-or-stay)
+    auto runOpt = [&](bool warm, double &outLnL, int &outIters, bool &outMono, bool &outConv, double &outGradInf) {
+        std::vector<double> b(nNodes), w(N); double alpha;
+        if (warm) { b = bLive; w = w0; alpha = (ncat > 1 ? alpha0 : 1.0); }
+        else { std::fill(b.begin(), b.end(), 0.1); b[rootId] = 0.0; std::fill(w.begin(), w.end(), 1.0/N); alpha = 1.0; }
+        double mu = 1.0;   // shared LM damping for the joint branch+α step (single-model JOLT style)
+        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha));
+        outMono = true; outConv = false; outIters = 0; outGradInf = (double)NAN;
+        const int maxOuter = 200;
+        for (int outer = 0; outer < maxOuter; outer++) {
+            double lnL0 = lnL;
+            // (1) JOINT BRANCH+α BLOCK — gradients at the current (b,w,α), then ONE shared-μ LM step over ALL branches
+            // AND the scalar α together (mirrors the single-model JOLT joint step). Stepping the coupled pair together
+            // avoids the block-coordinate moving target (a branch-only step stalls: α keeps reshaping the branch
+            // surface so |g| never shrinks). α gradient/curvature by central FD on the clean-room lnL (no new kernel).
+            std::vector<Node*> cN, pN; std::vector<double> df, ddf;
+            if (!gpuComputeAllBranchDervCleanRoomMix(cN, pN, df, ddf, b.data(), alphaArg(alpha))) { outLnL = (double)NAN; return; }
+            std::vector<double> gdf(nNodes, 0.0), gddf(nNodes, 0.0); double gradInf = 0.0;
+            for (size_t i = 0; i < cN.size(); i++) { int v = nidMap.at(cN[i]); gdf[v] = df[i]; gddf[v] = ddf[i];
+                if (std::fabs(df[i]) > gradInf) gradInf = std::fabs(df[i]); }
+            outGradInf = gradInf;
+            double ga = 0.0, curvA = 1e-12, eps = 0.0;
+            if (ncat > 1) {
+                eps = 1e-3 * std::max(alpha, 1.0);
+                double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alpha+eps);
+                double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alpha-eps);
+                if (std::isnan(lp) || std::isnan(lm)) { outLnL = (double)NAN; return; }
+                ga = (lp - lm) / (2.0*eps); curvA = std::fabs((lp - 2.0*lnL + lm) / (eps*eps)); if (curvA < 1e-12) curvA = 1e-12;
+            }
+            for (int bt = 0; bt < 16; bt++) {
+                std::vector<double> bc = b;
+                for (int v = 0; v < nNodes; v++) { if (v == rootId) continue;
+                    double stepv = gdf[v] / (std::fabs(gddf[v]) + mu); bc[v] = b[v] + stepv;
+                    if (bc[v] < 1e-6) bc[v] = 1e-6; if (bc[v] > 20.0) bc[v] = 20.0; }
+                double ac = alpha;
+                if (ncat > 1) { ac = alpha + ga / (curvA + mu); if (ac < 0.02) ac = 0.02; if (ac > 50.0) ac = 50.0; }
+                double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), bc.data(), alphaArg(ac));
+                if (std::isnan(ln)) { outLnL = (double)NAN; return; }
+                if (ln > lnL + 1e-9) { b = bc; alpha = ac; lnL = ln; mu = std::max(mu*0.5, 1e-9); break; }
+                else mu *= 4.0;
+            }
+            // (2) WEIGHT BLOCK — EM M-step to FULL convergence. KEY: the per-class likelihood a_{p,m} is WEIGHT-
+            // INDEPENDENT (branches/α are fixed in this block — the weight only multiplies at the final pattern sum),
+            // so compute it ONCE (one GPU sweep at uniform w => lhc[m][p] = a_{p,m}/N; the 1/N cancels in the posterior)
+            // and iterate the ENTIRE EM M-step PURELY ON THE HOST (γ = w_m·lhc / Σ_m w_m·lhc). Same concave climb as
+            // G.8.2.0 but ~20× fewer GPU sweeps, AND it converges the weights FULLY each outer so the branch gradient
+            // no longer chases a moving weight target (the prior partial-EM stall). One final GPU sweep for the exact lnL.
+            { std::vector<double> lhc((size_t)N*nptn), wunif(N, 1.0/N), wn(N);
+              double l1 = gpuComputeTreeLnLCleanRoomMix(nullptr, lhc.data(), wunif.data(), b.data(), alphaArg(alpha));
+              if (std::isnan(l1)) { outLnL = (double)NAN; return; }
+              for (int em = 0; em < 1000; em++) {
+                  std::fill(wn.begin(), wn.end(), 0.0);
+                  for (int p = 0; p < nptn; p++) { double s = 0.0; for (int m = 0; m < N; m++) s += w[m]*lhc[(size_t)m*nptn+p];
+                      if (s <= 0.0) continue; double fp = f[p];
+                      for (int m = 0; m < N; m++) wn[m] += fp * (w[m]*lhc[(size_t)m*nptn+p] / s); }
+                  double stepw = 0.0; for (int m = 0; m < N; m++) { wn[m] /= Ftot; if (wn[m] < 1e-10) wn[m] = 1e-10;
+                      double d = std::fabs(wn[m]-w[m]); if (d > stepw) stepw = d; }
+                  w = wn;
+                  if (em > 0 && stepw < 1e-12) break;
+              }
+              lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha)); }
+            if (lnL < lnL0 - 1e-7) outMono = false;
+            outIters = outer + 1;
+            if (DBG) fprintf(stderr, "[MIXJOINT-DBG] %s outer=%d lnL=%.6f mu=%.2e alpha=%.4f |g|inf=%.2e\n",
+                             warm ? "warm" : "cold", outer, lnL, mu, alpha, outGradInf);
+            // stop in the flat region: Δ<1e-7 leaves the lnL within ~gap=Δ·r/(1-r)~1e-6 of the MLE (host-driven
+            // diagonal-Newton converges LINEARLY in the tail — the device-resident G.8.2.1c affords the 1e-9 tail).
+            // Two points each within ~1e-6 of the same MLE differ by <2e-6 => cold-vs-warm rel <1e-9 still holds.
+            if (outer > 0 && std::fabs(lnL - lnL0) < 1e-7) { outConv = true; break; }
+        }
+        outLnL = lnL;
+    };
+
+    double lnL_warm, lnL_cold, gradWarm, gradCold; int itWarm, itCold; bool monoWarm, monoCold, convWarm, convCold;
+    runOpt(true,  lnL_warm, itWarm, monoWarm, convWarm, gradWarm);
+    runOpt(false, lnL_cold, itCold, monoCold, convCold, gradCold);
+    clearAllPartialLH();   // defensive read-only contract (the clean-room sweeps touch no live partials; cheap one-shot)
+
+    if (std::isnan(lnL_warm) || std::isnan(lnL_cold)) { printf("[GPU-MIXJOINT-XCHECK] skipped (CUDA/unsupported during optimise)\n"); return; }
+    double relCW = (lnL_warm != 0.0) ? std::fabs((lnL_cold - lnL_warm)/lnL_warm) : std::fabs(lnL_cold - lnL_warm);
+    // PASS criteria (decisive = (c): cold and warm converge to the SAME MLE => consistent ascent, no basin pathology):
+    //   (a) BOTH override self-tests transparent — lnL selfRel<=1e-12 AND all-branch-derivative selfRelDrv<=1e-4 (FD)
+    //       (NaN selfRelDrv => the derivative seam couldn't be checked => fails safe to CHECK);
+    //   (b) both monotone AND broke on convergence (not cap); (c) rel(cold,warm)<=1e-9; (d) both improve on the live
+    //   start. The converged branch gradient |g|inf is reported for context (not gated; (c) is decisive). End-to-end
+    //   "GPU MLE == CPU joint MLE" tie is the VALIDATION step (compare printed cold/warm to the run's .iqtree CPU lnL).
+    bool pass = (selfRel <= 1e-12) && (selfRelDrv <= 1e-4) && monoWarm && monoCold && convWarm && convCold
+                && (relCW <= 1e-9) && (lnL_cold >= lnL_live - 1e-6) && (lnL_warm >= lnL_live - 1e-6);
+    printf("[GPU-MIXJOINT-XCHECK] N=%d ncat=%d  lnL_live=%.6f -> cold=%.6f (%d it mono=%d conv=%d |g|inf=%.2e) "
+           "warm=%.6f (%d it mono=%d conv=%d |g|inf=%.2e); selfTest lnL rel=%.2e drv rel=%.2e; cold-vs-warm rel=%.3e  -> %s\n",
+           N, ncat, lnL_live, lnL_cold, itCold, (int)monoCold, (int)convCold, gradCold,
+           lnL_warm, itWarm, (int)monoWarm, (int)convWarm, gradWarm, selfRel, selfRelDrv, relCW,
+           (pass ? "PASS (G.8.2.1b)" : "CHECK"));
 }
 
 // ============================================================================================================

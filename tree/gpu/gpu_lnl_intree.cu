@@ -905,6 +905,9 @@ static void jolt_discreteGammaMean(double alpha, int K, double* rates){
         else { double bc=jolt_gammp_inv(alpha,(double)(c+1)/(double)K)/alpha; hi=jolt_gammp_reg(alpha+1.0, alpha*bc); }
         rates[c]=(double)K*(hi-prev); prev=hi; }
 }
+// G.8.2.1b: host shim so the mixture joint-optimiser's α-override can recompute mean-1 discrete-gamma rates at an
+// iterate α (bit-identical to the live RateGamma::computeRatesMean / GAMMA_CUT_MEAN path used in the eligible gate).
+extern "C" void gpu_discrete_gamma_mean(double alpha, int K, double* rates){ jolt_discreteGammaMean(alpha, K, rates); }
 
 // JOLT-specific persistent device buffers (separate from the lnL/derv pools; same alloc-once / reuse policy).
 static DevBuf gbj_echild, gbj_partial, gbj_patlh, gbj_pdf, gbj_pddf,

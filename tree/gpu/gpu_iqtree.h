@@ -137,6 +137,10 @@ double gpu_allbranch_derv_crosscheck_mix(
     const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
     double* out_df, double* out_ddf);
 
+// Phase G.8.2.1b — host shim exposing the JOLT mean-1 discrete-gamma discretiser so the mixture joint-optimiser
+// kill-switch can recompute catRate[] at an iterate alpha (bit-identical to the live GAMMA_CUT_MEAN rates).
+void gpu_discrete_gamma_mean(double alpha, int K, double* rates);
+
 // Phase G.4.2 — in-tree JOLT joint-gradient optimiser launcher. Runs the validated G.4.1b standalone driver
 // (gpu_k8b_jolt_alpha.cu) clean-room from host-prepared arrays built from the LIVE model/tree/alignment:
 // a SINGLE joint LM diagonal-Newton loop steps ALL branches AND (if optAlpha) the gamma shape alpha at once,
