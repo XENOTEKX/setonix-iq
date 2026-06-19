@@ -2,7 +2,7 @@
 
 This directory holds the **GPU ModelFinder source code** (custom in-tree CUDA kernels + the JOLT optimizer) for the
 IQ-TREE 3 GPU offload project. The development fork lives at `/scratch/rc29/as1708/iqtree3-gpu` (branch `gpu-kernel-clean`,
-HEAD `dcef6ea0`), whose `origin` is a *local* path — so this branch is how the source reaches GitHub. The narrative,
+HEAD `25459a01`), whose `origin` is a *local* path — so this branch is how the source reaches GitHub. The narrative,
 benchmarks, and phased design are in [`../research/Modelfinder/`](../research/Modelfinder/) (part3–part10) and
 [`../CHANGELOG.md`](../CHANGELOG.md).
 
@@ -27,7 +27,7 @@ subsample-sufficiency hypothesis) and a confirmed projection-amplification bug +
 gpu-src/
   README.md                     this file
   gpu_modelfinder_full.patch    the COMPLETE GPU ModelFinder changeset (git diff vs the pre-GPU base
-                                5604606d..dcef6ea0) — 22 files, applyable with `git apply`
+                                5604606d..25459a01) — 22 files, applyable with `git apply`
   src/
     tree/gpu/gpu_lnl_intree.cu  the CUDA kernels + the gpu_jolt_optimize launcher (the heart)
     tree/gpu/gpu_iqtree.h       device/launcher declarations + the free-Q decompose-callback ABI
@@ -43,8 +43,8 @@ patch (see below).
 
 ## The full changeset (`gpu_modelfinder_full.patch`)
 
-`git diff` from the last pre-GPU commit (`5604606d`, an FCA/MPI CPU commit) to the current GPU HEAD (`dcef6ea0`).
-It isolates *only* the GPU ModelFinder work from the CPU/FCA fork, across all 22 touched files (3986 insertions):
+`git diff` from the last pre-GPU commit (`5604606d`, an FCA/MPI CPU commit) to the current GPU HEAD (`25459a01`).
+It isolates *only* the GPU ModelFinder work from the CPU/FCA fork, across all 22 touched files (3979 insertions):
 
 | file | role |
 |---|---|
@@ -83,7 +83,7 @@ export LIBRARY_PATH="$CUDA_HOME/lib64:$LIBRARY_PATH"
 | audit | independent audit (`3ec1b5c8`): core machinery CLEAN; RISK-1 (tied-freq eligibility) + RISK-3 (NaN-rel) fixed | ✅ |
 | G.8.0–G.8.1 | **profile-mixture (C20/C60/MEOW80)** GPU lnL + per-class posterior + EM weight gradient + all-branch derivative (`k7_pre_mix`, a regime-axis preorder kernel) — bit-exact vs the CPU mixture engine | ✅ |
 | G.8.2.1a–c | mixture JOINT cold-start optimiser **kill-switch** (diagonal-LM): cold & warm reach the same mixture MLE, GPU ≥ CPU `-mwopt`; PASS at 1e-8 — the shared-µ diagonal-LM's FP-resolution × ridge-conditioning accuracy floor (cold-vs-warm 8.85e-9) | ✅ |
-| G.8.2.1d | curvature-aware **L-BFGS** (inner (b,α)-at-fixed-w + outer EM, clean secant pairs) to break the diagonal-LM floor to cold-vs-warm ≤ 1e-9 | ⏳ *implementation committed; validation in-flight (V100 job 171692604) — not yet confirmed* |
+| G.8.2.1d | curvature-aware **L-BFGS** attempt to break the diagonal-LM floor to ≤ 1e-9 | ❌ *validated WORSE (cold-vs-warm 2.68e-7, job 171692604) — reverted (`25459a01`); a host-side retry needs γ-scaled H0 + persistent history + gradient-norm convergence. True ≤1e-9 deferred to the **device-resident** optimiser phase.* |
 
 **Coverage:** AA `-m MF` ~95 % on GPU (the whole empirical-matrix family × {+G4,+I+G4,+F+G4,+F+I+G4}; the residual is
 `+R`); DNA `-m MF` ~89 % on GPU after free-Q (residual `+R`/`+I+R`/pure-`+I`). FP64 parity is bit-level on the lnL and
