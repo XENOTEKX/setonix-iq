@@ -486,6 +486,25 @@ extern "C" double gpu_lnl_crosscheck(
 // reuse the single-model pools (resized via DEVB to the larger mixture sizes). NaN on OOM/CUDA error -> CPU fallback.
 static DevBuf gb_mUinv, gb_mUrs, gb_mFreq, gb_mWreg, gb_mLhcat;
 static DevBuf gb_mDval0, gb_mDval1, gb_mDval2;   // G.8.1b central-edge derivative coeffs (R*ns, GLOBAL)
+
+// G.8.2.5 — pick the pattern-tiling factor for a mixture clean-room launcher. perPatternDoubles = the O(nptn) device
+// footprint PER PATTERN, in doubles (e.g. nInternal*R*ns for the lnL partial arena; +nPool*R*ns for the derivative
+// preorder pool). nTile = ceil(one-shot O(nptn) bytes / 80% free VRAM); JOLT_NTILE overrides. The result is
+// chunk-count-INDEPENDENT (per-pattern values are chunk-independent; the Kahan reductions add patterns in order
+// 0..nptn-1), so nTile only trades VRAM for kernel launches, never the answer.
+static int mix_pick_ntile(int nptn, size_t perPatternDoubles) {
+    if (const char* e = getenv("JOLT_NTILE")) { int t=atoi(e); if(t<1)t=1;
+        if(getenv("JOLT_DEBUG")) fprintf(stderr,"[MIX-TILE] JOLT_NTILE=%d (nptn=%d)\n",t,nptn); return t; }
+    size_t foot = perPatternDoubles * (size_t)nptn * sizeof(double);
+    size_t freeB=0, totB=0; int nTile=1;
+    if (cudaMemGetInfo(&freeB,&totB)==cudaSuccess && freeB>0) {
+        double budget = 0.80*(double)freeB;
+        int T = (int)ceil((double)foot/budget); if(T<1)T=1; nTile=T;
+    }
+    if (getenv("JOLT_DEBUG")) fprintf(stderr,"[MIX-TILE] nptn=%d perPtnDoubles=%zu O(nptn)foot=%.2fGB freeVRAM=%.1fGB -> nTile=%d (chunk~%d)\n",
+        nptn,perPatternDoubles,(double)foot/1.073741824e9,(double)freeB/1.073741824e9,nTile,(nptn+nTile-1)/nTile);
+    return nTile;
+}
 extern "C" double gpu_lnl_crosscheck_mix(
     int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
     const double* Uinv, const double* UinvRowSum, const double* freq, const double* wreg,
@@ -509,46 +528,61 @@ extern "C" double gpu_lnl_crosscheck_mix(
     GCK(cudaMemcpy(gb_mWreg.p, wreg,       (size_t)R*sizeof(double),          cudaMemcpyHostToDevice));
     double *d_Uinv=(double*)gb_mUinv.p, *d_Urs=(double*)gb_mUrs.p, *d_Freq=(double*)gb_mFreq.p, *d_Wreg=(double*)gb_mWreg.p;
 
-    size_t ecStride = (size_t)R*ns*ns;        // echild per node, regime-strided
-    size_t slotSz   = (size_t)R*ns*nptn;      // partial per internal slot, regime-strided
+    size_t ecStride = (size_t)R*ns*ns;        // echild per node, regime-strided — PATTERN-INDEPENDENT (built once)
+
+    // G.8.2.5 — PATTERN TILING (mirrors single-model gpu_jolt_optimize G.7.1). The partial arena nInternal*R*ns*nptn
+    // dominates VRAM (MEOW80+G4 full-data ~100 GB lnL / ~145 GB derivative); chunking nptn into nTile contiguous pieces
+    // and running a full postorder per chunk shrinks every O(nptn) buffer by ~nTile. echild/eigen carry NO pattern axis
+    // (built once). The per-pattern patlh[p] is chunk-INDEPENDENT and the Kahan lnL accumulator adds patterns in the
+    // SAME order 0..nptn-1 across chunks => BIT-IDENTICAL to one-shot for any nTile. Auto-pick from free VRAM (80%
+    // target) or JOLT_NTILE override.
+    int nTile = mix_pick_ntile(nptn, (size_t)(nInternal>0?nInternal:1)*(size_t)R*ns + (size_t)(out_lhcat?nmix:0) + 2);
+    int chunk0 = (nptn + nTile - 1) / nTile;
+    size_t slotSzMax = (size_t)R*ns*chunk0;
     DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
-    DEVB(gb_tip,    (size_t)ntax*nptn);
-    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
-    DEVB(gb_patlh,  (size_t)nptn*sizeof(double));
+    DEVB(gb_tip,    (size_t)ntax*chunk0);
+    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSzMax*sizeof(double));
+    DEVB(gb_patlh,  (size_t)chunk0*sizeof(double));
     double *d_echild=(double*)gb_echild.p, *d_partial=(double*)gb_partial.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     double *d_lhcat = nullptr;
-    if (out_lhcat) { DEVB(gb_mLhcat, (size_t)nmix*nptn*sizeof(double)); d_lhcat=(double*)gb_mLhcat.p; }   // G.8.1
-    GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));
-    GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
+    if (out_lhcat) { DEVB(gb_mLhcat, (size_t)nmix*chunk0*sizeof(double)); d_lhcat=(double*)gb_mLhcat.p; }   // G.8.1
+    GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));      // pattern-independent
 
-    int TB=256, GB=(nptn+TB-1)/TB;
-    for (int idx=0; idx<nInternal; idx++){
-        int isRoot = desc_isRoot[idx], nchild = desc_nchild[idx];
-        double* out = (desc_outSlot[idx] < 0) ? nullptr : (d_partial + (size_t)desc_outSlot[idx]*slotSz);
-        const double* ec[3]={nullptr,nullptr,nullptr};
-        const double* p[3]={nullptr,nullptr,nullptr};
-        const unsigned char* t[3]={nullptr,nullptr,nullptr};
-        for (int k=0;k<nchild && k<3;k++){
-            int cn = desc_childNode[idx*3+k];
-            if (cn>=0) ec[k] = d_echild + (size_t)cn*ecStride;
-            if (desc_childIsLeaf[idx*3+k]) t[k] = d_tip + (size_t)desc_childLeaf[idx*3+k]*nptn;
-            else                          p[k] = d_partial + (size_t)desc_childSlot[idx*3+k]*slotSz;
-        }
-        dim3 gMix = isRoot ? dim3(GB,1) : dim3(GB,R);   // G.8.2.3: root accumulates over regimes (1D); non-root parallelises them
-        k1_node_mix<<<gMix,TB>>>(ns,nptn,ncat,nmix,isRoot,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,d_lhcat,nchild,
-            ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
-    }
-    GCK(cudaDeviceSynchronize());
-    GCK(cudaGetLastError());
-
-    std::vector<double> patlh(nptn);
-    GCK(cudaMemcpy(patlh.data(), d_patlh, (size_t)nptn*sizeof(double), cudaMemcpyDeviceToHost));
-    if (out_patlh) for (int p2=0; p2<nptn; p2++) out_patlh[p2] = patlh[p2];
-    if (out_lhcat) GCK(cudaMemcpy(out_lhcat, d_lhcat, (size_t)nmix*nptn*sizeof(double), cudaMemcpyDeviceToHost));  // G.8.1
+    std::vector<unsigned char> tipChunk((size_t)ntax*chunk0);
+    std::vector<double> patlh(chunk0), lhcatChunk((size_t)(out_lhcat?nmix:0)*chunk0);
     double lnL=0.0, kc=0.0;
-    for (int p2=0; p2<nptn; p2++){ double term = ptn_freq[p2]*patlh[p2];
-        double y=term-kc, t2=lnL+y; kc=(t2-lnL)-y; lnL=t2; }
+    int TB=256;
+    for (int tchunk=0; tchunk<nTile; tchunk++){
+        int pOff=tchunk*chunk0, p1=pOff+chunk0; if(p1>nptn)p1=nptn; int Pn=p1-pOff; if(Pn<=0) break;
+        size_t slotSz=(size_t)R*ns*Pn; int GB=(Pn+TB-1)/TB;
+        for(int a=0;a<ntax;a++) memcpy(&tipChunk[(size_t)a*Pn], tip+(size_t)a*nptn+pOff, (size_t)Pn);
+        GCK(cudaMemcpy(d_tip, tipChunk.data(), (size_t)ntax*Pn, cudaMemcpyHostToDevice));
+        for (int idx=0; idx<nInternal; idx++){
+            int isRoot = desc_isRoot[idx], nchild = desc_nchild[idx];
+            double* out = (desc_outSlot[idx] < 0) ? nullptr : (d_partial + (size_t)desc_outSlot[idx]*slotSz);
+            const double* ec[3]={nullptr,nullptr,nullptr};
+            const double* p[3]={nullptr,nullptr,nullptr};
+            const unsigned char* t[3]={nullptr,nullptr,nullptr};
+            for (int k=0;k<nchild && k<3;k++){
+                int cn = desc_childNode[idx*3+k];
+                if (cn>=0) ec[k] = d_echild + (size_t)cn*ecStride;
+                if (desc_childIsLeaf[idx*3+k]) t[k] = d_tip + (size_t)desc_childLeaf[idx*3+k]*Pn;   // tip stride = chunk width
+                else                          p[k] = d_partial + (size_t)desc_childSlot[idx*3+k]*slotSz;
+            }
+            dim3 gMix = isRoot ? dim3(GB,1) : dim3(GB,R);   // G.8.2.3: root accumulates over regimes (1D); non-root parallelises them
+            k1_node_mix<<<gMix,TB>>>(ns,Pn,ncat,nmix,isRoot,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,d_lhcat,nchild,
+                ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+        }
+        GCK(cudaDeviceSynchronize());
+        GCK(cudaGetLastError());
+        GCK(cudaMemcpy(patlh.data(), d_patlh, (size_t)Pn*sizeof(double), cudaMemcpyDeviceToHost));
+        if (out_patlh) for (int p2=0; p2<Pn; p2++) out_patlh[pOff+p2] = patlh[p2];
+        if (out_lhcat) { GCK(cudaMemcpy(lhcatChunk.data(), d_lhcat, (size_t)nmix*Pn*sizeof(double), cudaMemcpyDeviceToHost));
+            for (int m=0;m<nmix;m++) for (int p2=0;p2<Pn;p2++) out_lhcat[(size_t)m*nptn+pOff+p2] = lhcatChunk[(size_t)m*Pn+p2]; }   // G.8.1
+        for (int p2=0; p2<Pn; p2++){ double term = ptn_freq[pOff+p2]*patlh[p2];   // continuous Kahan, order 0..nptn-1 => bit-identical
+            double y=term-kc, t2=lnL+y; kc=(t2-lnL)-y; lnL=t2; }
+    }
     return lnL;
 }
 
@@ -684,7 +718,7 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
     int nPool=treeH+2;   // O(depth): preorder holds one upper-partial slot per ancestor on the current path (peak == treeH)
     if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] entry ns=%d nptn=%d ncat=%d nmix=%d nnodes=%d root=%d nInternal=%d treeH=%d nPool=%d R=%d\n",ns,nptn,ncat,nmix,nnodes,root,nInternal,treeH,nPool,R);
 
-    size_t ecStride=(size_t)R*ns*ns, slotSz=(size_t)R*ns*nptn, exStride=(size_t)R*ns;
+    size_t ecStride=(size_t)R*ns*ns, exStride=(size_t)R*ns;   // slotSz is chunk-scoped (G.8.2.5 tiling)
 
     // ---- per-class eigen (Uinv down-map, U up-map) + per-regime weight -> GLOBAL ----
     DEVB(gb_mUinv, (size_t)nmix*ns*ns*sizeof(double));
@@ -699,55 +733,64 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
     GCK(cudaMemcpy(gb_mWreg.p, wreg,       (size_t)R*sizeof(double),          cudaMemcpyHostToDevice));
     double *d_Uinv=(double*)gb_mUinv.p, *d_U=(double*)gb_mU.p, *d_Urs=(double*)gb_mUrs.p, *d_Freq=(double*)gb_mFreq.p, *d_Wreg=(double*)gb_mWreg.p;
 
-    // ---- echild (per-node per-regime) + expfac (per-node per-regime, the parent-branch eigen factor) + tip ----
+    // G.8.2.5 — PATTERN TILING for the all-branch gradient. The two O(nptn) partial arenas dominate VRAM:
+    // gb_partial = nInternal*R*ns*nptn (all postorder lower partials, resident) + gb_prepool = nPool*R*ns*nptn
+    // (O(depth) preorder pool). MEOW80+G4 full-data ~145 GB OOMs even an H200. Chunk nptn into nTile contiguous
+    // pieces; per chunk run a FULL postorder + preorder proc sweep and accumulate each edge's df/ddf into a
+    // CONTINUOUS per-edge Kahan accumulator carried across chunks. echild/expfac/eigen have NO pattern axis
+    // (uploaded once). Per-pattern pdf[p]/pddf[p] are chunk-INDEPENDENT and each edge's Kahan reduction adds
+    // patterns in order 0..nptn-1 across chunks => BIT-IDENTICAL to one-shot for any nTile (mirrors the lnL launcher).
+    int nTile  = mix_pick_ntile(nptn, (size_t)(nInternal+nPool+1)*R*ns + 3);
+    int chunk0 = (nptn + nTile - 1) / nTile;
+    size_t slotSzMax = (size_t)R*ns*chunk0;
+
+    // ---- echild + expfac uploaded ONCE (pattern-independent); partial arenas sized to chunk0 ----
     DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
     DEVB(gb_expfac, (size_t)nnodes*exStride*sizeof(double));
-    DEVB(gb_tip,    (size_t)ntax*nptn);
-    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
-    DEVB(gb_prepool,(size_t)nPool*slotSz*sizeof(double));
-    DEVB(gb_pdf,    (size_t)nptn*sizeof(double));
-    DEVB(gb_pddf,   (size_t)nptn*sizeof(double));
-    DEVB(gb_patlh,  (size_t)nptn*sizeof(double));
+    DEVB(gb_tip,    (size_t)ntax*chunk0);
+    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSzMax*sizeof(double));
+    DEVB(gb_prepool,(size_t)nPool*slotSzMax*sizeof(double));
+    DEVB(gb_pdf,    (size_t)chunk0*sizeof(double));
+    DEVB(gb_pddf,   (size_t)chunk0*sizeof(double));
+    DEVB(gb_patlh,  (size_t)chunk0*sizeof(double));
     DEVB(gb_mDval0, (size_t)R*ns*sizeof(double)); DEVB(gb_mDval1,(size_t)R*ns*sizeof(double)); DEVB(gb_mDval2,(size_t)R*ns*sizeof(double));
-    DEVB(gb_nodeleaf, slotSz*sizeof(double));   // scratch for a leaf endpoint's lower eigen partial (k_leaf_eig_mix)
+    DEVB(gb_nodeleaf, slotSzMax*sizeof(double));   // scratch for a leaf endpoint's lower eigen partial (k_leaf_eig_mix)
     double *d_echild=(double*)gb_echild.p, *d_expfac=(double*)gb_expfac.p, *d_partial=(double*)gb_partial.p, *d_prepool=(double*)gb_prepool.p;
     double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
     double *d_v0=(double*)gb_mDval0.p, *d_v1=(double*)gb_mDval1.p, *d_v2=(double*)gb_mDval2.p, *d_tipeig=(double*)gb_nodeleaf.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
-    GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
-    GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
-    GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));   // pattern-independent
+    GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));   // pattern-independent
 
-    int TB=256, GB=(nptn+TB-1)/TB;
+    int TB=256;
+    // chunk-scoped pattern window (referenced by the lambdas below): updated each tile iteration
+    int Pn=0, pOff=0, GB=0; size_t slotSz=0;
+    std::vector<unsigned char> tipChunk((size_t)ntax*chunk0);
+    // per-edge CONTINUOUS Kahan accumulators (carried across chunks => addition order 0..nptn-1 per edge)
+    std::vector<double> accDf(nnodes,0.0), accDfK(nnodes,0.0), accDdf(nnodes,0.0), accDdfK(nnodes,0.0);
+    for(int v=0;v<nnodes;v++){ out_df[v]=0.0; out_ddf[v]=0.0; }
 
     // child-args helper (exclude `excl`, -1 for none): fills echild/partial/tip pointers for k1_node_mix
     auto fillChild=[&](int u,int excl,int& nch,const double** ec,const double** p,const unsigned char** t){
         nch=0; for(int k=0;k<3;k++){ec[k]=nullptr;p[k]=nullptr;t[k]=nullptr;}
         for(int c:child[u]){ if(c==excl||nch>=3) continue; ec[nch]=d_echild+(size_t)c*ecStride;
-            if(leaf[c]>=0) t[nch]=d_tip+(size_t)leaf[c]*nptn; else p[nch]=d_partial+(size_t)slot[c]*slotSz; nch++; } };
+            if(leaf[c]>=0) t[nch]=d_tip+(size_t)leaf[c]*Pn; else p[nch]=d_partial+(size_t)slot[c]*slotSz; nch++; } };
 
-    // ---- POSTORDER: lower partial pl_u for every internal node (skip root: its lower partial is never used) ----
-    for (int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
-        int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
-        k1_node_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,d_partial+(size_t)slot[u]*slotSz,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nch,
-            ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
-    GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
-    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] postorder done (%d internal)\n",nInternal);
-
-    // per-edge df/ddf reduction (ptn_freq-weighted Kahan, same channel order as gpu_derv_crosscheck_mix)
-    auto reduce=[&](double& df,double& ddf){
-        std::vector<double> pdf(nptn),pddf(nptn);
-        cudaMemcpy(pdf.data(),d_pdf,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost);
-        cudaMemcpy(pddf.data(),d_pddf,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost);
-        double D=0,kd=0,DD=0,kdd=0;
-        for(int p=0;p<nptn;p++){ double f=ptn_freq[p];
+    // per-edge df/ddf reduction: ADD this chunk's patterns continuously into accDf[v]/accDdf[v] (ptn_freq-weighted
+    // Kahan). Carrying (acc,accK) across chunks makes the per-edge sum one continuous Kahan sweep over 0..nptn-1.
+    auto reduceInto=[&](int v){
+        std::vector<double> pdf(Pn),pddf(Pn);
+        cudaMemcpy(pdf.data(),d_pdf,(size_t)Pn*sizeof(double),cudaMemcpyDeviceToHost);
+        cudaMemcpy(pddf.data(),d_pddf,(size_t)Pn*sizeof(double),cudaMemcpyDeviceToHost);
+        double D=accDf[v],kd=accDfK[v],DD=accDdf[v],kdd=accDdfK[v];
+        for(int p=0;p<Pn;p++){ double f=ptn_freq[pOff+p];
             { double term=f*pdf[p],  y=term-kd,  s=D +y; kd =(s-D )-y; D =s; }
             { double term=f*pddf[p], y=term-kdd, s=DD+y; kdd=(s-DD)-y; DD=s; } }
-        df=D; ddf=DD; };
+        accDf[v]=D; accDfK[v]=kd; accDdf[v]=DD; accDdfK[v]=kdd; };
     // resolve v's lower partial (internal slot, or synthesise a leaf tip eigen into the scratch buffer)
     auto edgeNodePtr=[&](int v)->const double*{
         if(leaf[v]<0) return d_partial+(size_t)slot[v]*slotSz;
-        k_leaf_eig_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,d_tip+(size_t)leaf[v]*nptn,d_Uinv,d_Urs,d_tipeig); return d_tipeig; };
+        k_leaf_eig_mix<<<GB,TB>>>(ns,Pn,ncat,nmix,d_tip+(size_t)leaf[v]*Pn,d_Uinv,d_Urs,d_tipeig); return d_tipeig; };
     // central-edge coeffs for t=b_v: dval{0,1,2}[r*ns+x]=exp(eval_m[x]·rate_c·t)·wreg[r] (π_m absorbed in the partials)
     auto setDval=[&](double t){ std::vector<double> v0((size_t)R*ns),v1((size_t)R*ns),v2((size_t)R*ns);
         for(int m=0;m<nmix;m++) for(int c=0;c<ncat;c++){ int r=m*ncat+c; double rc=catRate[c], wr=wreg[r];
@@ -756,11 +799,8 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
         cudaMemcpy(d_v1,v1.data(),(size_t)R*ns*sizeof(double),cudaMemcpyHostToDevice);
         cudaMemcpy(d_v2,v2.data(),(size_t)R*ns*sizeof(double),cudaMemcpyHostToDevice); };
 
-    for(int v=0;v<nnodes;v++){ out_df[v]=0.0; out_ddf[v]=0.0; }
-
-    // ---- PREORDER: upper partial pre_v for every node, then per-edge derivative. O(depth) slot pool. ----
-    std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
-    bool poolUnderflow=false; int held=0, maxHeld=0;
+    // ---- PREORDER pool + proc recursion (the O(depth) slot pool is reset per chunk; proc rebuilt each tile) ----
+    std::vector<int> freeSlots; bool poolUnderflow=false; int held=0, maxHeld=0;
     auto acq=[&]()->int{ if(freeSlots.empty()){ poolUnderflow=true; fprintf(stderr,"[ALLDERV-DBG] PREPOOL UNDERFLOW (nPool=%d treeH=%d)\n",nPool,treeH); return 0; } held++; if(held>maxHeld)maxHeld=held; int s=freeSlots.back();freeSlots.pop_back();return s;};
     auto rls=[&](int s){ held--; freeSlots.push_back(s);};
     std::function<void(int,int)> proc=[&](int u,int su){
@@ -769,31 +809,49 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
             int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
             if(u==root){   // root child: upper partial = lower partial of root EXCLUDING v (k1_node_mix isRoot=0; NO π/wreg)
                 int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,v,nch,ec,p,t);
-                k1_node_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,pre,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,nullptr,nch,
+                k1_node_mix<<<dim3(GB,R),TB>>>(ns,Pn,ncat,nmix,/*isRoot=*/0,pre,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,nullptr,nch,
                     ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
             } else {       // internal parent: propagate pre_u through u with siblings-of-v and the parent branch b_u
                 const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
                 for(int w:child[u]){ if(w==v||nsb>=2) continue; ec[nsb]=d_echild+(size_t)w*ecStride;
-                    if(leaf[w]>=0) st[nsb]=d_tip+(size_t)leaf[w]*nptn; else sp[nsb]=d_partial+(size_t)slot[w]*slotSz; nsb++; }
-                k7_pre_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*exStride,d_U,d_Uinv,d_Urs,nsb,
+                    if(leaf[w]>=0) st[nsb]=d_tip+(size_t)leaf[w]*Pn; else sp[nsb]=d_partial+(size_t)slot[w]*slotSz; nsb++; }
+                k7_pre_mix<<<dim3(GB,R),TB>>>(ns,Pn,ncat,nmix,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*exStride,d_U,d_Uinv,d_Urs,nsb,
                     ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
             }
             GCK(cudaDeviceSynchronize());
             const double* plv=edgeNodePtr(v); GCK(cudaDeviceSynchronize());
             setDval(brlen[v]);
-            k2_derv_mix<<<GB,TB>>>(ns,nptn,R,plv,pre,d_v0,d_v1,d_v2,d_pdf,d_pddf,d_patlh); GCK(cudaDeviceSynchronize());
-            double df,ddf; reduce(df,ddf); out_df[v]=df; out_ddf[v]=ddf;
+            k2_derv_mix<<<GB,TB>>>(ns,Pn,R,plv,pre,d_v0,d_v1,d_v2,d_pdf,d_pddf,d_patlh); GCK(cudaDeviceSynchronize());
+            reduceInto(v);
             if(leaf[v]<0) proc(v,sv); rls(sv);   // recurse THEN release (v's pre must stay live for its children)
         }
         return (double)0;   // EVERY control path must return: GCK injects `return (double)NAN`, so this lambda's
                             // deduced return type is double — falling off the end (normal loop exit) was UB and
                             // crashed the first frame to complete its loop (the deepest leaf-only parent).
     };
-    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] entering proc(root)\n");
-    proc(root,-1);
-    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] proc done (underflow=%d maxHeld=%d treeH=%d nInternal=%d)\n",(int)poolUnderflow,maxHeld,treeH,nInternal);
-    if(poolUnderflow) return (double)NAN;
-    GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+
+    // ---- TILE LOOP: full postorder + proc per chunk; per-edge Kahan accumulators carry across chunks ----
+    for (int tchunk=0; tchunk<nTile; tchunk++){
+        pOff=tchunk*chunk0; int p1=pOff+chunk0; if(p1>nptn)p1=nptn; Pn=p1-pOff; if(Pn<=0) break;
+        slotSz=(size_t)R*ns*Pn; GB=(Pn+TB-1)/TB;
+        for(int a=0;a<ntax;a++) memcpy(&tipChunk[(size_t)a*Pn], tip+(size_t)a*nptn+pOff, (size_t)Pn);   // tip stride = chunk width
+        GCK(cudaMemcpy(d_tip,tipChunk.data(),(size_t)ntax*Pn,cudaMemcpyHostToDevice));
+
+        // POSTORDER: lower partial pl_u for every internal node (skip root: its lower partial is never used)
+        for (int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
+            int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
+            k1_node_mix<<<dim3(GB,R),TB>>>(ns,Pn,ncat,nmix,/*isRoot=*/0,d_partial+(size_t)slot[u]*slotSz,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nch,
+                ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
+        GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+
+        // PREORDER: reset the O(depth) pool, then proc(root) does upper partials + per-edge reduceInto for this chunk
+        freeSlots.clear(); for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s); held=0;
+        proc(root,-1);
+        if(poolUnderflow) return (double)NAN;
+        GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+    }
+    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] tiled proc done (nTile=%d underflow=%d maxHeld=%d treeH=%d nInternal=%d)\n",nTile,(int)poolUnderflow,maxHeld,treeH,nInternal);
+    for(int v=0;v<nnodes;v++){ out_df[v]=accDf[v]; out_ddf[v]=accDdf[v]; }
     return 0.0;
 }
 
