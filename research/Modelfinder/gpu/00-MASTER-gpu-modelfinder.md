@@ -108,7 +108,8 @@ path); a process-wide `std::mutex` serialises JOLT on the 1 GPU (ModelFinder is 
 | **G.8.0** | **Profile-mixture lnL on GPU bit-exact**: `k1_node_mix` GPU lnL == CPU for LG+**C20**/**C60**/**MEOW80**+G4 rel **3.06e-16 / 1.54e-16 / 1.56e-16** (320-regime MEOW80 via global-mem per-regime arrays, dodges `__constant__` 64-cat limit) | 171604565 | `2277273d` |
 | **G.8.1a** | **Mixture per-class** for EM numerator: GPU self-consistency Σ_m L_{p,m}=L_p **1.4e-14** (×3); posterior γ_{p,m} vs CPU `_pattern_lh_cat` **\|Δγ\|=6.84e-13/4.32e-12/1.00e-12** (C20/C60/MEOW80) — scale-invariant metric (CPU per-pattern scaled, GPU clean-room unscaled) | 171633488 | `2277273d` |
 | **G.8.1b** | **Mixture branch DERIVATIVE** df/ddf == CPU `computeLikelihoodDerv` ~machine-eps: INT-INT **df 8.1e-14/4.8e-14/1.1e-13** ddf ~1e-14; LEAF **df 1.5e-14/3.2e-14/1.2e-13** ddf ~1e-15 (C20/C60/MEOW80, both edge types). `k2_derv_mix` regime-axis + per-class global-mem coeffs; π_m absorbed via theta trick. Red-team clean | 171637224/171637348 | `b855c3fe` |
-| **G.8 →** | next: G.8.2 EM weight optimiser (G.8.1a posterior + G.8.1b gradient in joint LM) → G.8.3 seam+gate relax → G.8.4 eukaryote LG+MEOW80+G4 payoff (part9 §IX.11); production still declines mixtures to CPU | — | — |
+| **G.8.2.0** | **Mixture EM weight-optimiser KILL-SWITCH**: GPU EM weights (M-step `w_m←Σf_p·γ_{p,m}/Σf_p`, uniform cold start) **monotone + converged** to the weight-MLE, **≥ CPU `optimizeWeights`** in every case (C20/C60/MEOW80 GPU−CPU lnL **+4.2e-4/+1.8e-2/+1.6e-2**, conv 33/126/59 iters). Decisive = converged+monotone+lnL≥CPU (max\|Δw\|/rel measure CPU's `\|Δprop\|<1e-4` early-stop, not GPU error). Red-team: M1 cap→N·100 + converged-gate, engine-validated guard, `clearAllPartialLH` safety | 171644621 | `9f3fee28` |
+| **G.8 →** | next: G.8.2.1 full cold-start joint optimiser (G.8.2.0 EM weights + G.8.1b gradient in joint diagonal-LM, MLE==CPU rel≤1e-9) → G.8.3 seam+gate relax → G.8.4 eukaryote LG+MEOW80+G4 payoff (part9 §IX.11); production still declines mixtures to CPU | — | — |
 
 ---
 
@@ -215,11 +216,12 @@ comparison gate** (JOLT lnL ≥ CPU−eps else NaN→CPU); deterministic FP64 re
    breadth win (red-team-corrected; 80× arithmetic = more latency-bound work, not 80× speedup). Real structural wins: fixed
    profiles → cache eigens once; branch gradient linear across classes. Weights by EM (de-risked vs +R multimodality), but
    CPU default is BFGS ⇒ MLE-equality gate. **✅ G.8.0 (lnL) + G.8.1a (per-class posterior) + G.8.1b (branch derivative)
-   DONE — all ×3 at machine-eps, commits `2277273d` + `b855c3fe`** (C20/C60/MEOW80 lnL rel ~1e-16; posterior |Δγ| ~1e-12;
-   df/ddf vs CPU `computeLikelihoodDerv` ~1e-13/1e-14 INT-INT + LEAF; 320-regime MEOW80 via global-mem per-regime arrays,
-   so the 64-entry `__constant__` cap was NOT hit by the clean-room path — it WILL bind a production `k1_node`). **NEXT: G.8.2
-   EM weight optimiser** (the G.8.1a posterior M-step + G.8.1b branch gradient ride the joint diagonal-LM) → G.8.3 seam + gate
-   relax (`phylotreegpu.cpp:573`) → G.8.4 eukaryote payoff. **Watch (still ahead):** low-register class map, the `__constant__`
+   + G.8.2.0 (EM weight kill-switch) DONE — commits `2277273d` + `b855c3fe` + `9f3fee28`** (C20/C60/MEOW80 lnL rel ~1e-16;
+   posterior |Δγ| ~1e-12; df/ddf vs CPU `computeLikelihoodDerv` ~1e-13/1e-14 INT-INT + LEAF; **GPU EM weights monotone +
+   converged + ≥ CPU `optimizeWeights`** in all three, GPU−CPU lnL +4.2e-4/+1.8e-2/+1.6e-2; 320-regime MEOW80 via global-mem
+   per-regime arrays, so the 64-entry `__constant__` cap was NOT hit by the clean-room path — it WILL bind a production
+   `k1_node`). **NEXT: G.8.2.1 full cold-start joint optimiser** (the G.8.2.0 EM weight M-step + G.8.1b branch gradient ride
+   the joint diagonal-LM, MLE==CPU rel≤1e-9) → G.8.3 seam + gate relax (`phylotreegpu.cpp:573`) → G.8.4 eukaryote payoff. **Watch (still ahead):** low-register class map, the `__constant__`
    cap when the kernel goes in-tree, EM near-zero-weight overfitting floor. ~12 days remaining.
 3. **CAT-PMSF** (site-specific `ModelSet`, +R4) — separate later track (per-site π, no class sum).
 4. **10M throughput follow-up** — the host self-check at extreme nptn dominates wall (a HOST cost after GPU optimise);

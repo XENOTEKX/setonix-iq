@@ -58,7 +58,7 @@ run(){ local lbl=$1; shift
   # (the G.4.3a double-logging artifact — what made 171596955 show "no XCHECK line" despite the hook firing).
   timeout 2400 "$BIN" --gpu -te "$TREE" -s "$SUB" "$@" -nt 12 -pre "$WB/$lbl" -redo > "$WB/$lbl.console" 2>&1
   echo "  exit=$?"
-  grep -aE '\[GPU-XCHECK-MIX\]|\[GPU-XCHECK\]|\[GPU-DERV-XCHECK-MIX\]' "$WB/$lbl.console" | sed 's/^/  /' || echo "  (no XCHECK line — check $lbl.console)"
+  grep -aE '\[GPU-XCHECK-MIX\]|\[GPU-XCHECK\]|\[GPU-DERV-XCHECK-MIX\]|\[GPU-WEM\]' "$WB/$lbl.console" | sed 's/^/  /' || echo "  (no XCHECK line — check $lbl.console)"
 }
 
 echo "════ G.8.0 mixture lnL cross-check — $(hostname) $(date -Iseconds) ════"

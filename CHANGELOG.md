@@ -2,6 +2,24 @@
 
 ---
 
+## 🧬 G.8.2.0 — Profile-mixture EM weight-optimiser KILL-SWITCH on GPU — ✅ VALIDATED vs CPU optimizeWeights — 2026-06-19
+
+The de-risk before the G.8.2.1 joint optimiser: prove the GPU EM weight M-step **climbs lnL monotonically** and **converges to the weight-MLE**, cross-validated against IQ-TREE's own `ModelMixture::optimizeWeights()`. With branches+α FIXED the weight sub-problem `lnL = Σ_p f_p·log Σ_m w_m·a_{p,m}` is **concave**, so the M-step `w_m ← Σ_p f_p·γ_{p,m}/Σ_p f_p` (γ = the G.8.1a per-class posterior, floor 1e-10) ascends from a uniform cold start to the unique max. **Purely additive; CPU path byte-unchanged.** Commit `9f3fee28` (iqtree3-gpu, local).
+
+| model | iters / cap | converged | monotone | min w CPU/GPU | max\|Δw\| | GPU−CPU lnL | rel |
+|---|---|---|---|---|---|---|---|
+| LG+C20+G4 | 33 / 2000 | ✔ | ✔ | 1.61e-2 / 1.61e-2 | 1.49e-4 | **+4.24e-4** | 1.12e-9 |
+| LG+C60+G4 | 126 / 6000 | ✔ | ✔ | 6.10e-4 / 6.09e-4 | 7.69e-4 | **+1.81e-2** | 4.82e-8 |
+| LG+MEOW80+G4 | 59 / 8000 | ✔ | ✔ | 9.67e-4 / 9.35e-4 | 2.10e-4 | **+1.62e-2** | 4.35e-8 |
+
+(job 171644621, A100, 5000-site euk.) **The GPU EM is ≥ CPU in every case** — CPU `optimizeWeights` stops at its own `|Δprop|<1e-4` tolerance while the GPU runs to `step<1e-9`, climbing *further up the same concave ridge*, so `max|Δw|` and the lnL gap measure **CPU's early-stop distance, not GPU error**. The **decisive correctness criteria** are `converged` (GPU reached a fixed point, not a cap) + `monotone` + `lnL_gpuW ≥ lnL_cpuW`. New host `gpuMixWeightEMCrossCheckOnce` (`tree/phylotreegpu.cpp`) runs the GPU EM (each iter a stateless `gpuComputeTreeLnLCleanRoomMix` clean-room sweep with a new **`w_override`** weight vector feeding `out_lhcat`) vs CPU `optimizeWeights()` (`prop[]` saved/restored, net read-only). Gated `nmix>1`, non-fused, **no +I**; fires at the first `computeLikelihood` under `--gpu` (not `--jolt`); production GPU path still declines mixtures (`[GPU-BRANCH]`=0).
+
+**Red-team (agent) — one MAJOR + four MINOR, all fixed before the validating build:** (M1) GPU was capped at 200 iters while CPU runs `(getNDim()+1)·100` (8000 for MEOW80) with **no convergence guard** → cap raised to the CPU-matched `N·100` + a `converged` flag now **required** for PASS (verified: all three broke on convergence at 33/126/59, far inside the ceiling). (MINOR-3) added a programmatic `s_gpuMixLnLEngineValidated` flag (set iff G.8.0 GPU lnL==CPU **and** Σ_m L_{p,m}==L_p) that the EM check **requires** before trusting the per-class `L_{p,m}`. (State-safety) `clearAllPartialLH()` after restore makes net-read-only **unconditional**. (MINOR-1/4) `max|Δw|` reframed as a loose sanity bound (not the 1e-4 the comment claimed) + `Ftot==getAlnNSite()` invariant documented. **Verified SOUND:** the GPU M-step is provably the same map as CPU `optimizeWeights` (same posterior, same floor, same no-renormalise), the `+I` guard is necessary, and the engine-isolation design cannot false-PASS once gated on G.8.0.
+
+**Next:** G.8.2.1 (full cold-start joint optimiser — EM weights + the G.8.1b branch gradient in the joint diagonal-LM, MLE == CPU rel ≤ 1e-9) → G.8.3 (seam + gate relax) → G.8.4 (eukaryote payoff).
+
+---
+
 ## 🧬 G.8.1b — Profile-mixture branch-length DERIVATIVE (df/ddf) on GPU — ✅ VALIDATED vs CPU computeLikelihoodDerv — 2026-06-18
 
 The gradient half of G.8.1: single-edge `d(lnL)/dt` and `d²(lnL)/dt²` for profile mixtures, summed over the N·ncat regimes, matching IQ-TREE's own `computeLikelihoodDerv` at ~machine-eps. **Purely additive; CPU path byte-unchanged.** Commit `b855c3fe` (iqtree3-gpu, local).

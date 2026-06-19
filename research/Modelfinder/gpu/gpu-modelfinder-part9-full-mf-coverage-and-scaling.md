@@ -773,5 +773,42 @@ gate, ahead of the branch-gradient half = G.8.1b):
   MEOW80 derivative arena scales as `nInternal·R·ns·nptn·8` ≈ 25 GB at 5000 ptn (fits A100-80; ~113 GB at the full 22k-pattern
   matrix would need tiling) — MEOW80 engaged genuinely on GPU here (a `PASS` is real, since the cross-check prints "skipped" on NaN).
 
-**Still ahead:** **G.8.2** = the EM weight optimiser — the G.8.1a per-class posterior M-step `w_m_new=Σ_p f_p·γ_{p,m}/Σ_p f_p`
-plus the G.8.1b branch gradient ride the joint diagonal-LM (existing G.4.1b machinery) — then G.8.3 (seam + gate relax) → G.8.4.
+**G.8.2.0 — the EM weight optimiser KILL-SWITCH ✅ (2026-06-19, commit `9f3fee28`, iqtree3-gpu local).** Before wiring the weight
+M-step into the joint optimiser (G.8.2.1), a one-shot de-risk proves the GPU posterior-based EM weight update (a) climbs
+lnL **monotonically** and (b) **converges to the weight-MLE**, cross-validated against IQ-TREE's own EM
+`ModelMixture::optimizeWeights()`. With branches + α held FIXED the weight sub-problem `lnL = Σ_p f_p·log Σ_m w_m·a_{p,m}`
+is **concave**, so the M-step `w_m ← Σ_p f_p·γ_{p,m} / Σ_p f_p` (γ = the G.8.1a per-class posterior `L_{p,m}/Σ_m' L_{p,m'}`,
+floor 1e-10) ascends from any interior start to the unique maximum. Job 171644621 (A100, 5000-site euk), hardened binary:
+
+| model | iters / cap | converged | monotone (worst drop) | min w CPU / GPU | max\|Δw\| | GPU−CPU lnL | rel | verdict |
+|---|---|---|---|---|---|---|---|---|
+| LG+C20+G4    | 33 / 2000  | ✔ | ✔ (0.0) | 1.61e-2 / 1.61e-2 | 1.49e-4 | **+4.24e-4** | 1.12e-9 | **PASS** |
+| LG+C60+G4    | 126 / 6000 | ✔ | ✔ (0.0) | 6.10e-4 / 6.09e-4 | 7.69e-4 | **+1.81e-2** | 4.82e-8 | **PASS** |
+| LG+MEOW80+G4 | 59 / 8000  | ✔ | ✔ (0.0) | 9.67e-4 / 9.35e-4 | 2.10e-4 | **+1.62e-2** | 4.35e-8 | **PASS** |
+
+- **The GPU EM is BETTER than CPU in every case** (GPU−CPU lnL > 0): CPU `optimizeWeights` stops at its own `|Δprop|<1e-4`
+  tolerance while the GPU runs to `step<1e-9`, so the GPU climbs *further up the same concave ridge*. This is why `max|Δw|`
+  and the lnL gap **grow with the early-stop distance, not with any GPU error** — they measure CPU's stopping tolerance.
+  The **decisive correctness criteria** are therefore `converged` (the GPU reached a fixed point, not a cap) + `monotone`
+  + `lnL_gpuW ≥ lnL_cpuW` (the GPU optimum is at least as good as IQ-TREE's own EM on the unique concave max).
+- **`gpuMixWeightEMCrossCheckOnce`** (`phylotreegpu.cpp`): GPU EM from a **uniform cold start**, each iter a stateless
+  `gpuComputeTreeLnLCleanRoomMix` sweep with a per-iteration **`w_override`** weight vector (new param) feeding `out_lhcat`
+  → host M-step. CPU reference = `optimizeWeights()` with `prop[]` **saved/restored** (net read-only). Both compared lnLs
+  are GPU-computed (at CPU-EM weights vs GPU-EM weights) so the gate isolates the **weight optimum**, not the lnL engine.
+  Gated `nmix>1`, non-fused, **no +I** (the EM denominator needs `ptn_invar`). Fires at the first `computeLikelihood`
+  under `--gpu` (not `--jolt`); the production GPU path still declines mixtures (`[GPU-BRANCH]` = 0, read-only).
+- **Red-team (agent): one MAJOR + four MINOR, all fixed before the validating build.** (M1) GPU was capped at 200 iters
+  while CPU runs `(getNDim()+1)·100` (8000 for MEOW80) with **no convergence guard in the gate** → an under-converged
+  high-N run could slip through; **fix** = cap raised to the CPU-matched `N·100` + a `converged` flag now **required** for
+  PASS (verified: all three broke on convergence at 33/126/59, far inside the ceiling). (MINOR-3) the engine-trust argument
+  depends on G.8.0 passing → added a programmatic `s_gpuMixLnLEngineValidated` flag (set iff GPU lnL == CPU **and**
+  Σ_m L_{p,m} == L_p) that the EM check **requires** before trusting the per-class `L_{p,m}`. (State-safety) restoring
+  `prop[]` is sufficient only because weights don't affect internal partials → added `clearAllPartialLH()` after restore to
+  make it **unconditional**. (MINOR-1/4) `max|Δw|` reframed as a loose sanity bound (not the 1e-4 the comment claimed) +
+  `Ftot==getAlnNSite()` invariant documented. **Verified SOUND** by the agent: the GPU M-step is provably the same map as
+  CPU `optimizeWeights` (same posterior, same 1e-10 floor, same no-renormalise), the `+I` guard is necessary, and the
+  engine-isolation design cannot false-PASS once gated on G.8.0.
+
+**Still ahead:** **G.8.2.1** = the full cold-start joint optimiser — the EM weight M-step (this phase) + the G.8.1b branch
+gradient ride the joint diagonal-LM (existing G.4.1b machinery), MLE == CPU `rel ≤ 1e-9` from cold & warm starts — then
+G.8.3 (seam + production gate relax) → G.8.4.
