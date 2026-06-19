@@ -124,8 +124,14 @@ __global__ void k1_node_mix(int ns, int nptn, int ncat, int nmix, int isRoot,
         const double* ec2, const double* p2, const unsigned char* t2) {
     int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
     int R = nmix*ncat;
-    double lh = 0.0, clh = 0.0;   // clh = running per-class accumulator (G.8.1)
-    for (int r=0;r<R;r++){
+    // G.8.2.3 — 2D-grid REGIME parallelisation. A 2D launch (gridDim.y==R) assigns each blockIdx.y ONE regime r,
+    // so the GPU saturates on small nptn (the old nptn-only grid was ~2 blocks => ~0.3% V100 occupancy, the JOLTMix
+    // bottleneck per nsys). A 1D launch (gridDim.y==1 — the root path, which sums lh over ALL regimes into patlh, and
+    // any legacy caller) keeps the full in-thread r-loop. Non-root writes out[r*ns*nptn+..] are regime-disjoint => no race.
+    int r0 = (gridDim.y>1) ? blockIdx.y : 0;
+    int rN = (gridDim.y>1) ? (blockIdx.y+1) : R;
+    double lh = 0.0, clh = 0.0;   // clh = running per-class accumulator (G.8.1) — root path only (always 1D)
+    for (int r=r0;r<rN;r++){
         int m = r/ncat;
         const double* Uinv_m = d_Uinv + (size_t)m*ns*ns;
         const double* Urs_m  = d_UinvRowSum + (size_t)m*ns;
@@ -247,7 +253,11 @@ __global__ void k7_pre_mix(int ns, int nptn, int ncat, int nmix,
         const double* ec1, const double* sp1, const unsigned char* st1) {
     int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
     int R = nmix*ncat;
-    for (int r=0;r<R;r++){ int m=r/ncat;
+    // G.8.2.3 — 2D-grid regime parallelisation (gridDim.y==R => one regime per blockIdx.y; saturates small nptn).
+    // pre_v[r] is computed independently per regime (no cross-regime accumulation) so the 2D split is race-free.
+    int r0 = (gridDim.y>1) ? blockIdx.y : 0;
+    int rN = (gridDim.y>1) ? (blockIdx.y+1) : R;
+    for (int r=r0;r<rN;r++){ int m=r/ncat;
         const double* U_m    = d_U          + (size_t)m*ns*ns;
         const double* Uinv_m = d_Uinv       + (size_t)m*ns*ns;
         const double* Urs_m  = d_UinvRowSum + (size_t)m*ns;
@@ -525,7 +535,8 @@ extern "C" double gpu_lnl_crosscheck_mix(
             if (desc_childIsLeaf[idx*3+k]) t[k] = d_tip + (size_t)desc_childLeaf[idx*3+k]*nptn;
             else                          p[k] = d_partial + (size_t)desc_childSlot[idx*3+k]*slotSz;
         }
-        k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,isRoot,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,d_lhcat,nchild,
+        dim3 gMix = isRoot ? dim3(GB,1) : dim3(GB,R);   // G.8.2.3: root accumulates over regimes (1D); non-root parallelises them
+        k1_node_mix<<<gMix,TB>>>(ns,nptn,ncat,nmix,isRoot,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,d_lhcat,nchild,
             ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
     }
     GCK(cudaDeviceSynchronize());
@@ -607,7 +618,7 @@ extern "C" double gpu_derv_crosscheck_mix(
             if (cn>=0) ec[k]=d_echild+(size_t)cn*ecStride;
             if (desc_childIsLeaf[idx*3+k]) tp[k]=d_tip+(size_t)desc_childLeaf[idx*3+k]*nptn;
             else                          p[k]=d_partial+(size_t)desc_childSlot[idx*3+k]*slotSz; }
-        k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nchild,
+        k1_node_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,out,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nchild,
             ec[0],p[0],tp[0], ec[1],p[1],tp[1], ec[2],p[2],tp[2]);
     }
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
@@ -718,7 +729,7 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
     // ---- POSTORDER: lower partial pl_u for every internal node (skip root: its lower partial is never used) ----
     for (int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
-        k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,d_partial+(size_t)slot[u]*slotSz,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nch,
+        k1_node_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,d_partial+(size_t)slot[u]*slotSz,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nch,
             ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
     if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] postorder done (%d internal)\n",nInternal);
@@ -758,13 +769,13 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
             int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
             if(u==root){   // root child: upper partial = lower partial of root EXCLUDING v (k1_node_mix isRoot=0; NO π/wreg)
                 int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,v,nch,ec,p,t);
-                k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,pre,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,nullptr,nch,
+                k1_node_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,pre,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,nullptr,nch,
                     ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
             } else {       // internal parent: propagate pre_u through u with siblings-of-v and the parent branch b_u
                 const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
                 for(int w:child[u]){ if(w==v||nsb>=2) continue; ec[nsb]=d_echild+(size_t)w*ecStride;
                     if(leaf[w]>=0) st[nsb]=d_tip+(size_t)leaf[w]*nptn; else sp[nsb]=d_partial+(size_t)slot[w]*slotSz; nsb++; }
-                k7_pre_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*exStride,d_U,d_Uinv,d_Urs,nsb,
+                k7_pre_mix<<<dim3(GB,R),TB>>>(ns,nptn,ncat,nmix,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*exStride,d_U,d_Uinv,d_Urs,nsb,
                     ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
             }
             GCK(cudaDeviceSynchronize());
