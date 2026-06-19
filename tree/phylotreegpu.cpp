@@ -40,7 +40,15 @@
 #include <functional>
 #include <cmath>
 #include <cstdio>
+#include <mutex>     // G.8.2.2: serialize the unguarded mix clean-room launchers across ModelFinder's per-model OpenMP threads
 using namespace std;
+
+// G.8.2.2 — process-wide lock for optimizeParametersJOLTMix. The mixture clean-room launchers
+// (gpu_lnl_crosscheck_mix / the all-branch-derv-mix launcher) are NOT internally mutexed (unlike gpu_jolt_optimize,
+// which holds its own jolt_gpu_mtx), and ModelFinder scores candidate models across-model OpenMP-parallel
+// (phylotesting.cpp). Without this, concurrent JOLTMix calls would race the single GPU's constant memory. JOLTMix
+// therefore serializes on the one GPU (the G.4.2b decision); ineligible candidates still run N-parallel on the CPU.
+static std::mutex gpu_mixjolt_mtx;
 
 // ============================================================================================================
 // Reusable clean-room GPU whole-tree log-likelihood (extracted from the G.2.0a cross-check). SILENT (no prints
@@ -1649,6 +1657,148 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
         return (double)NAN;
     }
 
+    setCurScore(cpuLnL);
+    return cpuLnL;
+}
+
+// ============================================================================================================
+// Phase G.8.2.2 — PRODUCTION GPU JOLT optimiser for NON-FUSED PROFILE-MIXTURE models (C20/C30/C60/MEOW...).
+// The mixture analogue of optimizeParametersJOLT: dispatched from ModelFactory::optimizeParameters under --jolt
+// when getNMixtures()>1. Optimises BRANCHES + the gamma shape alpha on the GPU (validated diagonal-LM joint step
+// over the regime axis r=m*ncat+c), holding the CLASS WEIGHTS FIXED, then writes back + self-checks vs a fresh CPU
+// computeLikelihood (rel<=1e-6 gate -> NaN/CPU fallback). It reuses the VALIDATED block-optimiser core of the
+// gpuMixJointOptimizeCrossCheckOnce kill-switch (PASS@1e-8, cold-vs-warm 8.85e-9) — the warm path with the EM weight
+// block REMOVED, because the eligibility gate restricts to weight-fixed mixtures.
+//
+// ELIGIBILITY — gate on model->getNDim()==0 (red-teamed, the necessary-AND-sufficient "branches+alpha only" test):
+// ModelMixture::getNDim() = (fix_prop?0:size-1) + Sum_m at(m)->getNDim(). ==0 therefore implies BOTH fix_prop==true
+// (fixed published class weights, the C-series default; else +size-1 weight dims) AND every per-class getNDim()==0
+// (no free per-class freq/Q dims). The latter matters: with -mfopt each class becomes FREQ_ESTIMATE adding ns-1 free
+// freq params per class that the CPU optimises and the GPU would SILENTLY DROP — and the write-back self-check would
+// NOT catch it (it recomputes the CPU lnL at the SAME un-optimised freqs the GPU used, so they agree). This mirrors
+// the single-model gate (optimizeParametersJOLT: if (ndim!=0 && !freeQok) DECLINE). +I and free weights -> CPU.
+// ============================================================================================================
+double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
+    static const bool JOLT_DBG = (getenv("JOLT_DEBUG") != nullptr);
+    #define JMIX_DECLINE(why) do { if (JOLT_DBG) { fprintf(stderr, "[JOLTMIX-GATE] decline reason=%s\n", why); fflush(stderr); } return (double)NAN; } while (0)
+    if (!model || !site_rate || !aln) JMIX_DECLINE("null-ptr");
+    if (fixed_len != BRLEN_OPTIMIZE) JMIX_DECLINE("brlen-mode");
+    int ns = aln->num_states;
+    if (ns != 4 && ns != 20) JMIX_DECLINE("num-states");
+    if (!model->isReversible() || model->getNMixtures() <= 1 || model->isSiteSpecificModel()) JMIX_DECLINE("nonrev/single/ssm");
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || mix->isFused()) JMIX_DECLINE("not-nonfused-mixture");   // LG4M/LG4X 1:1 class<->rate pairing -> CPU
+    if (model->getNDim() != 0) JMIX_DECLINE("free-mixture-params");     // free weights (-mwopt) or per-class freq/Q (-mfopt) -> CPU
+    if (site_rate->getPInvar() > 0.0) JMIX_DECLINE("plus-I");           // +I omitted in the clean-room sweep -> CPU
+    int N = model->getNMixtures();
+    int ncat = site_rate->getNRate();
+    if (ncat < 1 || ncat > 64) JMIX_DECLINE("ncat-range");
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) JMIX_DECLINE("non-mean-gamma");  // only the Yang-1994 mean discretisation
+    if (!root || !root->isLeaf() || root->neighbors.empty()) JMIX_DECLINE("bad-root");
+    Node *Rt = root->neighbors[0]->node;
+    if (!Rt || Rt->isLeaf()) JMIX_DECLINE("Rt-leaf");
+    #undef JMIX_DECLINE
+
+    // canonical node ordering: REPLICATE the clean-room indexDfs (root at Rt, preorder, skip dad) so b[] indexed by
+    // this nid is a valid parentLenOverride for BOTH clean-room functions (identical indexDfs => identical nid). The
+    // self-check below proves the index match (a divergent nid would corrupt the branch step and fail the gate).
+    std::map<Node*,int> nidMap; std::vector<Node*> nodes; std::vector<Node*> parentOf; std::vector<double> bLive;
+    std::function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        nidMap[n] = (int)nodes.size(); nodes.push_back(n); parentOf.push_back(dad); bLive.push_back(lenToDad);
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; indexDfs(nb->node, n, nb->length); }
+    };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    int rootId = nidMap[Rt];
+
+    double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : 1.0;
+    int optAlpha = (ncat > 1 && !site_rate->isFixGammaShape()) ? 1 : 0;
+    auto alphaArg = [&](double a){ return (ncat > 1) ? a : -1.0; };   // -1 => clean-room keeps the live cat rates (ncat==1 path)
+
+    // ---- GPU optimiser loop: joint diagonal-LM over (all branches + alpha), weights FIXED (w_override=nullptr => the
+    // clean-room reads the live model weights, identical to what the derivative uses). Validated diagonal-LM core from
+    // gpuMixJointOptimizeCrossCheckOnce::runOpt (warm path, EM weight block removed). Held under the process-wide mutex
+    // because the mix clean-room launchers are not internally locked and ModelFinder runs candidates OpenMP-parallel. ----
+    std::vector<double> b = bLive; double alpha = (ncat > 1 ? alpha0 : 1.0);
+    double finalLnL = (double)NAN; int outIters = 0;
+    {
+        std::lock_guard<std::mutex> lk(gpu_mixjolt_mtx);
+        double mu = 1.0; int stall = 0;
+        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, b.data(), alphaArg(alpha));
+        if (!std::isnan(lnL)) {
+            const int maxOuter = 400;
+            for (int outer = 0; outer < maxOuter; outer++) {
+                double lnL0 = lnL;
+                std::vector<Node*> cN, pN; std::vector<double> df, ddf;
+                if (!gpuComputeAllBranchDervCleanRoomMix(cN, pN, df, ddf, b.data(), alphaArg(alpha))) { lnL = (double)NAN; break; }
+                std::vector<double> gdf(nNodes, 0.0), gddf(nNodes, 0.0);
+                for (size_t i = 0; i < cN.size(); i++) { int v = nidMap.at(cN[i]); gdf[v] = df[i]; gddf[v] = ddf[i]; }
+                double ga = 0.0, curvA = 1e-12, eps = 0.0;
+                if (optAlpha) {   // alpha gradient/curvature by central FD on the clean-room lnL (no new kernel)
+                    eps = 1e-3 * std::max(alpha, 1.0);
+                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, b.data(), alpha+eps);
+                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, b.data(), alpha-eps);
+                    if (std::isnan(lp) || std::isnan(lm)) { lnL = (double)NAN; break; }
+                    ga = (lp - lm) / (2.0*eps); curvA = std::fabs((lp - 2.0*lnL + lm) / (eps*eps)); if (curvA < 1e-12) curvA = 1e-12;
+                }
+                for (int bt = 0; bt < 16; bt++) {   // shared-mu LM backtracking over ALL branches + the scalar alpha together
+                    std::vector<double> bc = b;
+                    for (int v = 0; v < nNodes; v++) { if (v == rootId) continue;
+                        double stepv = gdf[v] / (std::fabs(gddf[v]) + mu); bc[v] = b[v] + stepv;
+                        if (bc[v] < 1e-6) bc[v] = 1e-6; if (bc[v] > 20.0) bc[v] = 20.0; }
+                    double ac = alpha;
+                    if (optAlpha) { ac = alpha + ga / (curvA + mu); if (ac < 0.02) ac = 0.02; if (ac > 50.0) ac = 50.0; }
+                    double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr, bc.data(), alphaArg(ac));
+                    if (std::isnan(ln)) { lnL = (double)NAN; break; }
+                    if (ln > lnL) { b = bc; alpha = ac; lnL = ln; mu = std::max(mu*0.5, 1e-9); break; }   // accept any strict improvement
+                    else mu = std::min(mu*4.0, 1e12);                                                     // cap mu (else it runs to +inf and freezes)
+                }
+                if (std::isnan(lnL)) break;
+                outIters = outer + 1;
+                if (JOLT_DBG) fprintf(stderr, "[JOLTMIX-DBG] outer=%d lnL=%.6f mu=%.2e alpha=%.4f\n", outer, lnL, mu, alpha);
+                // ridge-recognizing termination: 3 consecutive outers improving by <1e-7 => the diagonal-LM has reached
+                // its ~1e-8 accuracy floor on the ill-conditioned mixture ridge (validated in the kill-switch). The
+                // 1e-6 write-back gate is comfortably above this floor, so coherence holds; the lnL may sit marginally
+                // below the true MLE but the gap (<<1) is inconsequential for BIC selection (exact penalty term).
+                if (std::fabs(lnL - lnL0) < 1e-7) stall++; else stall = 0;
+                if (outer > 0 && stall >= 3) break;
+            }
+            finalLnL = lnL;
+        }
+    }
+    if (std::isnan(finalLnL)) {
+        static bool warned = false;
+        if (!warned) { warned = true; printf("[JOLTMIX] gpu mixture optimise returned NaN -> CPU fallback (optimizeParameters)\n"); }
+        return (double)NAN;
+    }
+
+    // ---- write the optimised branch lengths (both directed neighbours) + alpha back; NO weight/Q write-back (fixed) ----
+    for (int v = 0; v < nNodes; v++) {
+        Node *child = nodes[v], *par = parentOf[v];
+        if (!par) continue;                                     // Rt: no parent edge (covered as some node's child edge)
+        Neighbor *fwd = par->findNeighbor(child); Neighbor *bwd = child->findNeighbor(par);
+        if (fwd) fwd->length = b[v];
+        if (bwd) bwd->length = b[v];
+    }
+    if (optAlpha) site_rate->setGammaShape(alpha);              // sets gamma_shape + recomputes the discrete rates
+    clearAllPartialLH();                                        // brlen + alpha changed -> partials/theta stale
+
+    // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL at the written-back params ----
+    double cpuLnL = computeLikelihood();
+    double rel = (cpuLnL != 0.0) ? std::fabs((finalLnL - cpuLnL) / cpuLnL) : std::fabs(finalLnL - cpuLnL);
+    static int report_count = 0;
+    string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
+    if (report_count < 1000) { report_count++;
+        printf("[JOLTMIX] model=%s N=%d ns=%d ncat=%d: %d iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
+               joltModelName.c_str(), N, ns, ncat, outIters, finalLnL, cpuLnL, rel,
+               (rel <= 1e-6 ? "OK" : "MISMATCH"), alpha0, (ncat > 1 ? site_rate->getGammaShape() : 0.0)); }
+
+    if (!(rel <= 1e-6)) {   // NOT(<=) so a NaN/inf rel also trips the fallback before setCurScore poisons _cur_score
+        static bool warned_mm = false;
+        if (!warned_mm) { warned_mm = true;
+            printf("[JOLTMIX] write-back MISMATCH rel=%.3e > 1e-6 -> CPU fallback (model=%s)\n", rel, joltModelName.c_str()); }
+        return (double)NAN;
+    }
     setCurScore(cpuLnL);
     return cpuLnL;
 }

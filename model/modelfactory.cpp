@@ -1595,9 +1595,25 @@ double ModelFactory::optimizeParameters(int fixed_len, bool write_info,
     // back through the cache-invalidating setters and self-checks vs a fresh CPU computeLikelihood; it returns NaN
     // for ineligible regimes / CUDA errors, in which case we fall through to the standard CPU path below.
     if (tree->params && tree->params->jolt) {
-        double jolt_lh = tree->optimizeParametersJOLT(fixed_len);
-        if (!std::isnan(jolt_lh))
-            return jolt_lh;
+        ModelSubst *jm = tree->getModel();
+        if (jm && jm->getNMixtures() > 1) {
+            // G.8.2.2: the host-driven profile-mixture optimiser (optimizeParametersJOLTMix) is CORRECT but
+            // launch-latency-bound — validated job 171697527: it engages and monotone-converges to the fixed-weight
+            // optimum, but at ~4.4 s/outer on a 400-site alignment (per-tree-node kernel launches + a host echild
+            // rebuild + re-upload every sweep). It is therefore a correctness REFERENCE, gated OFF by default until
+            // the device-resident mixture optimiser (gpu_jolt_optimize_mix) lands. Opt in with JOLT_MIX_HOSTDRIVEN=1;
+            // without the flag, mixtures fall through to the (fast) CPU path below.
+            if (getenv("JOLT_MIX_HOSTDRIVEN")) {
+                double jolt_lh = tree->optimizeParametersJOLTMix(fixed_len);
+                if (!std::isnan(jolt_lh))
+                    return jolt_lh;
+            }
+            // else: fall through to CPU
+        } else {
+            double jolt_lh = tree->optimizeParametersJOLT(fixed_len);
+            if (!std::isnan(jolt_lh))
+                return jolt_lh;
+        }
     }
 #endif
 

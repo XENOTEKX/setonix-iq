@@ -2120,6 +2120,14 @@ public:
         back to the standard CPU/stateless-GPU path. Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     double optimizeParametersJOLT(int fixed_len);
 
+    /** Phase G.8.2.2: GPU JOLT optimiser for NON-FUSED PROFILE-MIXTURE models (C20/C30/C60/MEOW...). The mixture
+        analogue of optimizeParametersJOLT, dispatched from ModelFactory::optimizeParameters under --jolt when
+        getNMixtures()>1. Optimises (all branches + gamma alpha) on the GPU over the regime axis r=m*ncat+c, holding
+        the class WEIGHTS FIXED (eligibility gate model->getNDim()==0 => fix_prop && no free per-class freq/Q params),
+        then writes back + self-checks vs a fresh CPU computeLikelihood (rel<=1e-6 -> NaN/CPU fallback). Returns the
+        optimised lnL, or NaN if the regime is ineligible / a CUDA error occurs. Defined only under #ifdef IQTREE_GPU. */
+    double optimizeParametersJOLTMix(int fixed_len);
+
     /** Phase G.2.0b: GPU override for computeLikelihoodBranchPointer (byte-matches ComputeLikelihoodBranchType).
         Returns the whole-tree lnL via gpuComputeTreeLnLCleanRoom (reversible ⇒ branch-independent), mirrors the
         per-pattern values into _pattern_lh[] and zeroes the branch lh_scale_factor (NORM_LH) so the downstream
