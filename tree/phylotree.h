@@ -2146,6 +2146,13 @@ public:
         PMSF / non-reversible / num_states∉{4,20}). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     double gpuComputeEdgeDervCleanRoomMix(PhyloNeighbor *dad_branch, PhyloNode *dad, double *out_ddf, double *out_lnL);
 
+    /** Phase G.8.2.1a: clean-room ALL-BRANCH df/ddf for a PROFILE MIXTURE (Ji-2020 linear-time: one postorder + one
+        preorder sweep -> every edge). Fills four parallel out-vectors per non-root node v (edge v->parent):
+        childNodes=v, parentNodes=parent, dfOut=d(lnL)/db_v, ddfOut=2nd deriv. Returns false on ineligibility/CUDA
+        error (same gate as the lnL mix path). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
+    bool gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
+                                             std::vector<double>& dfOut, std::vector<double>& ddfOut);
+
     /** Phase G.2.1a: one-shot (per process) GPU single-edge derivative cross-check. Picks an internal-internal
         edge and compares GPU df/ddf against IQ-TREE's own computeLikelihoodDerv. Pure read-only diagnostic;
         defined only under #ifdef IQTREE_GPU, call site guarded. */
@@ -2154,6 +2161,11 @@ public:
     /** Phase G.8.1b: one-shot PROFILE-MIXTURE derivative cross-check (getNMixtures()>1 only). INT-INT + LEAF
         edges; GPU mixture df/ddf vs CPU computeLikelihoodDerv. Read-only diagnostic; call site guarded. */
     void gpuMixDervCrossCheckOnce();
+
+    /** Phase G.8.2.1a: one-shot ALL-BRANCH derivative cross-check (getNMixtures()>1). INT-INT + LEAF edges; the
+        all-branch df/ddf vs the validated G.8.1b single-edge (gate a, rel<=1e-9) AND central FD of the clean-room
+        lnL (gate b, rel<=1e-5). Validates k7_pre_mix. Read-only (FD save/restores brlen); call site guarded. */
+    void gpuMixAllBranchDervCrossCheckOnce();
 
     /** Phase G.8.2.0: one-shot EM weight-optimiser kill-switch (getNMixtures()>1, non-fused, no +I). GPU EM weights
         from a uniform cold start (branches/α fixed) — monotone lnL climb to the weight-MLE — vs IQ-TREE's own

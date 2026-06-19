@@ -224,6 +224,45 @@ __global__ void k_leaf_eig_mix(int ns, int nptn, int ncat, int nmix,
     }
 }
 
+// G.8.2.1a — Ji-2020 top-down PREORDER eigen-space partial pre_v for PROFILE MIXTURES (kj_pre generalised to the
+// regime axis r = m*ncat + c). pre_v = "rest of tree above edge (parent u)->v", WITHOUT v's own branch b_v (the
+// per-edge derivative reapplies b_v once, via k2_derv_mix's dval). The PARENT branch b_u is applied here through
+// expfac_u[r][i] = exp(eval_m[i]·catRate_c·b_u). Within one regime r the class m is constant root-to-tip, so every
+// per-class array (U_m up-map / Uinv_m down-map / Urs_m for ambiguous leaf siblings) is indexed by m=r/ncat, and
+// the per-category rate is c=r%ncat — exactly as k1_node_mix. π_m is ABSORBED in the eigen-space partials (theta
+// trick), so this kernel must NOT re-apply d_freq[m]. Output layout matches k1_node_mix's non-root write
+// (out_pre[r*ns*nptn + j*nptn + ptn]) so k2_derv_mix reads pl_v (lower) and pre_v (upper) endpoints uniformly.
+//   pus[t]      = Σ_i U_m[t][i]·expfac_u[r][i]·pre_u[r][i]      (map UP with eigenvectors U_m)
+//   fsib[r][t]  = Π_{siblings of v} ( Σ_i echild_sib[r][t][i]·pl_sib[r][i] )    (accum_child_mix, per class m)
+//   pre_v[r][j] = Σ_t Uinv_m[j][t]·pus[t]·fsib[t]               (map back DOWN with Uinv_m)
+__global__ void k7_pre_mix(int ns, int nptn, int ncat, int nmix,
+        double* __restrict__ out_pre,
+        const double* __restrict__ pre_u,          // [R*ns*nptn]  parent's upper partial
+        const double* __restrict__ expfac_u,       // [R*ns]       exp(eval_m[i]*catRate_c*b_u)
+        const double* __restrict__ d_U,            // [nmix][ns*ns] eigenvectors (up-map)
+        const double* __restrict__ d_Uinv,         // [nmix][ns*ns] inverse eigenvectors (down-map)
+        const double* __restrict__ d_UinvRowSum,   // [nmix][ns]    leaf-sibling ambiguous
+        int nsib,
+        const double* ec0, const double* sp0, const unsigned char* st0,
+        const double* ec1, const double* sp1, const unsigned char* st1) {
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    int R = nmix*ncat;
+    for (int r=0;r<R;r++){ int m=r/ncat;
+        const double* U_m    = d_U          + (size_t)m*ns*ns;
+        const double* Uinv_m = d_Uinv       + (size_t)m*ns*ns;
+        const double* Urs_m  = d_UinvRowSum + (size_t)m*ns;
+        double fsib[NS_MAX]; for (int t=0;t<ns;t++) fsib[t]=1.0;
+        accum_child_mix(fsib,ns,r,ptn,nptn,ec0,sp0,st0,Uinv_m,Urs_m);
+        if (nsib>1) accum_child_mix(fsib,ns,r,ptn,nptn,ec1,sp1,st1,Uinv_m,Urs_m);
+        const double* puc = pre_u + (size_t)r*ns*nptn + ptn;
+        const double* ef  = expfac_u + (size_t)r*ns;
+        double pus[NS_MAX];
+        for (int t=0;t<ns;t++){ double v=0.0; for (int i=0;i<ns;i++) v += U_m[t*ns+i]*ef[i]*puc[(size_t)i*nptn]; pus[t]=v; }
+        double* o = out_pre + (size_t)r*ns*nptn + ptn;
+        for (int j=0;j<ns;j++){ double v=0.0; for (int t=0;t<ns;t++) v += Uinv_m[j*ns+t]*pus[t]*fsib[t]; o[(size_t)j*nptn]=v; }
+    }
+}
+
 // =============================== G.4.2 JOLT kernels (ported from gpu_k8b_jolt_alpha.cu, runtime-ns) ===============================
 // kj_theta — t-independent edge product theta[c*ns+x] = node_eig (.) dad_eig, materialised so kj_derv AND
 // kj_ratenum can both read it (k2_derv above fuses the product; JOLT needs theta cached for the rate gradient).
@@ -598,6 +637,153 @@ extern "C" double gpu_derv_crosscheck_mix(
     if (out_ddf) *out_ddf=ddf;
     if (out_lnL) *out_lnL=lnL;
     return df;
+}
+
+// G.8.2.1a — clean-room ALL-BRANCH derivative launcher for PROFILE MIXTURES (the Ji-2020 linear-time gradient: one
+// postorder + one preorder sweep yields df/ddf for EVERY edge, vs the single-edge gpu_derv_crosscheck_mix's two-
+// sub-root split per edge). Rooted at an internal node `root`; out_df[v]/out_ddf[v] hold d(lnL)/db_v and the 2nd
+// derivative for edge v->parent (the root entry stays 0). Reuses the validated mixture pieces: k1_node_mix
+// (postorder lower partials + root-child upper seeds), k7_pre_mix (preorder upper partials), k2_derv_mix (per-edge
+// reduction). NEW vs the lnL/single-edge path: the eigenvectors d_U (k7_pre_mix's up-map) AND the per-node per-
+// regime expfac = exp(eval_m[i]·catRate_c·b_u) are uploaded; the O(tree-height) preorder pool recycles slots.
+// Returns 0.0 on success (results in out_df/out_ddf), NaN on CUDA error.
+static DevBuf gb_mU, gb_expfac, gb_prepool;   // G.8.2.1a: eigenvectors (up-map), per-node expfac, O(depth) preorder pool
+extern "C" double gpu_allbranch_derv_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int root,
+    const double* Uinv, const double* U, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* evalC, const double* catRate,
+    const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
+    double* out_df, double* out_ddf)
+{
+    int ns = nstates;
+    if (ns > NS_MAX || nmix < 1 || ncat < 1) { fprintf(stderr,"[GPU-ALLDERV-MIX] unsupported ns=%d nmix=%d ncat=%d\n",ns,nmix,ncat); return (double)NAN; }
+    int R = nmix*ncat;
+
+    // ---- rebuild topology from flat arrays (node ids = caller's DFS index, rooted at `root`) ----
+    std::vector<std::vector<int>> child(nnodes);
+    std::vector<int> leaf(nnodes);
+    std::vector<double> brlen(node_parentLen, node_parentLen+nnodes);
+    for (int u=0;u<nnodes;u++){ leaf[u]=node_leaf[u];
+        for (int k=0;k<node_nchild[u] && k<3;k++){ int c=node_child[u*3+k]; if (c>=0) child[u].push_back(c); } }
+    std::vector<int> postorder; std::vector<int> slot(nnodes,-1);
+    std::function<void(int)> dfs=[&](int u){ for(int c:child[u]) dfs(c); if(leaf[u]<0){ slot[u]=(int)postorder.size(); postorder.push_back(u);} };
+    dfs(root); int nInternal=(int)postorder.size();
+    int treeH=0; std::function<void(int,int)> ddfs=[&](int u,int d){ if(d>treeH)treeH=d; for(int c:child[u]) ddfs(c,d+1); }; ddfs(root,0);
+    int nPool=treeH+2;   // O(depth): preorder holds one upper-partial slot per ancestor on the current path (peak == treeH)
+    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] entry ns=%d nptn=%d ncat=%d nmix=%d nnodes=%d root=%d nInternal=%d treeH=%d nPool=%d R=%d\n",ns,nptn,ncat,nmix,nnodes,root,nInternal,treeH,nPool,R);
+
+    size_t ecStride=(size_t)R*ns*ns, slotSz=(size_t)R*ns*nptn, exStride=(size_t)R*ns;
+
+    // ---- per-class eigen (Uinv down-map, U up-map) + per-regime weight -> GLOBAL ----
+    DEVB(gb_mUinv, (size_t)nmix*ns*ns*sizeof(double));
+    DEVB(gb_mU,    (size_t)nmix*ns*ns*sizeof(double));
+    DEVB(gb_mUrs,  (size_t)nmix*ns*sizeof(double));
+    DEVB(gb_mFreq, (size_t)nmix*ns*sizeof(double));     // k1_node_mix isRoot=0 ignores freq, but the signature needs it
+    DEVB(gb_mWreg, (size_t)R*sizeof(double));
+    GCK(cudaMemcpy(gb_mUinv.p, Uinv,       (size_t)nmix*ns*ns*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mU.p,    U,          (size_t)nmix*ns*ns*sizeof(double), cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mUrs.p,  UinvRowSum, (size_t)nmix*ns*sizeof(double),    cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mFreq.p, freq,       (size_t)nmix*ns*sizeof(double),    cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(gb_mWreg.p, wreg,       (size_t)R*sizeof(double),          cudaMemcpyHostToDevice));
+    double *d_Uinv=(double*)gb_mUinv.p, *d_U=(double*)gb_mU.p, *d_Urs=(double*)gb_mUrs.p, *d_Freq=(double*)gb_mFreq.p, *d_Wreg=(double*)gb_mWreg.p;
+
+    // ---- echild (per-node per-regime) + expfac (per-node per-regime, the parent-branch eigen factor) + tip ----
+    DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
+    DEVB(gb_expfac, (size_t)nnodes*exStride*sizeof(double));
+    DEVB(gb_tip,    (size_t)ntax*nptn);
+    DEVB(gb_partial,(size_t)(nInternal>0?nInternal:1)*slotSz*sizeof(double));
+    DEVB(gb_prepool,(size_t)nPool*slotSz*sizeof(double));
+    DEVB(gb_pdf,    (size_t)nptn*sizeof(double));
+    DEVB(gb_pddf,   (size_t)nptn*sizeof(double));
+    DEVB(gb_patlh,  (size_t)nptn*sizeof(double));
+    DEVB(gb_mDval0, (size_t)R*ns*sizeof(double)); DEVB(gb_mDval1,(size_t)R*ns*sizeof(double)); DEVB(gb_mDval2,(size_t)R*ns*sizeof(double));
+    DEVB(gb_nodeleaf, slotSz*sizeof(double));   // scratch for a leaf endpoint's lower eigen partial (k_leaf_eig_mix)
+    double *d_echild=(double*)gb_echild.p, *d_expfac=(double*)gb_expfac.p, *d_partial=(double*)gb_partial.p, *d_prepool=(double*)gb_prepool.p;
+    double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
+    double *d_v0=(double*)gb_mDval0.p, *d_v1=(double*)gb_mDval1.p, *d_v2=(double*)gb_mDval2.p, *d_tipeig=(double*)gb_nodeleaf.p;
+    unsigned char *d_tip=(unsigned char*)gb_tip.p;
+    GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
+    GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
+
+    int TB=256, GB=(nptn+TB-1)/TB;
+
+    // child-args helper (exclude `excl`, -1 for none): fills echild/partial/tip pointers for k1_node_mix
+    auto fillChild=[&](int u,int excl,int& nch,const double** ec,const double** p,const unsigned char** t){
+        nch=0; for(int k=0;k<3;k++){ec[k]=nullptr;p[k]=nullptr;t[k]=nullptr;}
+        for(int c:child[u]){ if(c==excl||nch>=3) continue; ec[nch]=d_echild+(size_t)c*ecStride;
+            if(leaf[c]>=0) t[nch]=d_tip+(size_t)leaf[c]*nptn; else p[nch]=d_partial+(size_t)slot[c]*slotSz; nch++; } };
+
+    // ---- POSTORDER: lower partial pl_u for every internal node (skip root: its lower partial is never used) ----
+    for (int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
+        int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
+        k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,d_partial+(size_t)slot[u]*slotSz,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,/*out_lhcat=*/nullptr,nch,
+            ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
+    GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] postorder done (%d internal)\n",nInternal);
+
+    // per-edge df/ddf reduction (ptn_freq-weighted Kahan, same channel order as gpu_derv_crosscheck_mix)
+    auto reduce=[&](double& df,double& ddf){
+        std::vector<double> pdf(nptn),pddf(nptn);
+        cudaMemcpy(pdf.data(),d_pdf,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        cudaMemcpy(pddf.data(),d_pddf,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost);
+        double D=0,kd=0,DD=0,kdd=0;
+        for(int p=0;p<nptn;p++){ double f=ptn_freq[p];
+            { double term=f*pdf[p],  y=term-kd,  s=D +y; kd =(s-D )-y; D =s; }
+            { double term=f*pddf[p], y=term-kdd, s=DD+y; kdd=(s-DD)-y; DD=s; } }
+        df=D; ddf=DD; };
+    // resolve v's lower partial (internal slot, or synthesise a leaf tip eigen into the scratch buffer)
+    auto edgeNodePtr=[&](int v)->const double*{
+        if(leaf[v]<0) return d_partial+(size_t)slot[v]*slotSz;
+        k_leaf_eig_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,d_tip+(size_t)leaf[v]*nptn,d_Uinv,d_Urs,d_tipeig); return d_tipeig; };
+    // central-edge coeffs for t=b_v: dval{0,1,2}[r*ns+x]=exp(eval_m[x]·rate_c·t)·wreg[r] (π_m absorbed in the partials)
+    auto setDval=[&](double t){ std::vector<double> v0((size_t)R*ns),v1((size_t)R*ns),v2((size_t)R*ns);
+        for(int m=0;m<nmix;m++) for(int c=0;c<ncat;c++){ int r=m*ncat+c; double rc=catRate[c], wr=wreg[r];
+            for(int x=0;x<ns;x++){ double cof=evalC[(size_t)m*ns+x]*rc, e=exp(cof*t)*wr; v0[(size_t)r*ns+x]=e; v1[(size_t)r*ns+x]=cof*e; v2[(size_t)r*ns+x]=cof*cof*e; } }
+        cudaMemcpy(d_v0,v0.data(),(size_t)R*ns*sizeof(double),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_v1,v1.data(),(size_t)R*ns*sizeof(double),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_v2,v2.data(),(size_t)R*ns*sizeof(double),cudaMemcpyHostToDevice); };
+
+    for(int v=0;v<nnodes;v++){ out_df[v]=0.0; out_ddf[v]=0.0; }
+
+    // ---- PREORDER: upper partial pre_v for every node, then per-edge derivative. O(depth) slot pool. ----
+    std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
+    bool poolUnderflow=false; int held=0, maxHeld=0;
+    auto acq=[&]()->int{ if(freeSlots.empty()){ poolUnderflow=true; fprintf(stderr,"[ALLDERV-DBG] PREPOOL UNDERFLOW (nPool=%d treeH=%d)\n",nPool,treeH); return 0; } held++; if(held>maxHeld)maxHeld=held; int s=freeSlots.back();freeSlots.pop_back();return s;};
+    auto rls=[&](int s){ held--; freeSlots.push_back(s);};
+    std::function<void(int,int)> proc=[&](int u,int su){
+        if(poolUnderflow) return (double)0;   // (double) to match GCK's return type in this lambda; value discarded by std::function<void>
+        for(int v:child[u]){
+            int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
+            if(u==root){   // root child: upper partial = lower partial of root EXCLUDING v (k1_node_mix isRoot=0; NO π/wreg)
+                int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,v,nch,ec,p,t);
+                k1_node_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,/*isRoot=*/0,pre,d_patlh,d_Uinv,d_Urs,d_Freq,d_Wreg,nullptr,nch,
+                    ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+            } else {       // internal parent: propagate pre_u through u with siblings-of-v and the parent branch b_u
+                const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
+                for(int w:child[u]){ if(w==v||nsb>=2) continue; ec[nsb]=d_echild+(size_t)w*ecStride;
+                    if(leaf[w]>=0) st[nsb]=d_tip+(size_t)leaf[w]*nptn; else sp[nsb]=d_partial+(size_t)slot[w]*slotSz; nsb++; }
+                k7_pre_mix<<<GB,TB>>>(ns,nptn,ncat,nmix,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*exStride,d_U,d_Uinv,d_Urs,nsb,
+                    ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
+            }
+            GCK(cudaDeviceSynchronize());
+            const double* plv=edgeNodePtr(v); GCK(cudaDeviceSynchronize());
+            setDval(brlen[v]);
+            k2_derv_mix<<<GB,TB>>>(ns,nptn,R,plv,pre,d_v0,d_v1,d_v2,d_pdf,d_pddf,d_patlh); GCK(cudaDeviceSynchronize());
+            double df,ddf; reduce(df,ddf); out_df[v]=df; out_ddf[v]=ddf;
+            if(leaf[v]<0) proc(v,sv); rls(sv);   // recurse THEN release (v's pre must stay live for its children)
+        }
+        return (double)0;   // EVERY control path must return: GCK injects `return (double)NAN`, so this lambda's
+                            // deduced return type is double — falling off the end (normal loop exit) was UB and
+                            // crashed the first frame to complete its loop (the deepest leaf-only parent).
+    };
+    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] entering proc(root)\n");
+    proc(root,-1);
+    if(getenv("ALLDERV_DBG")) fprintf(stderr,"[ALLDERV-DBG] proc done (underflow=%d maxHeld=%d treeH=%d nInternal=%d)\n",(int)poolUnderflow,maxHeld,treeH,nInternal);
+    if(poolUnderflow) return (double)NAN;
+    GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
+    return 0.0;
 }
 
 // G.2.1a — clean-room single-edge derivative launcher. The descriptor list covers BOTH subtrees split by the

@@ -661,6 +661,104 @@ double PhyloTree::gpuComputeEdgeDervCleanRoomMix(PhyloNeighbor *dad_branch, Phyl
         nodeSlot, nodeLeafTax, dadSlot, dadLeafTax, evalC.data(), catRate.data(), t, out_ddf, out_lnL);
 }
 
+// ============================================================================================================
+// G.8.2.1a — clean-room ALL-BRANCH derivative for PROFILE MIXTURES: df/ddf for EVERY edge in ONE postorder + ONE
+// preorder sweep (Ji-2020 linear-time), rooted at an internal node, vs the single-edge gpuComputeEdgeDervCleanRoomMix
+// (two-sub-root split, ONE edge). Fills four parallel out-vectors (one entry per NON-ROOT node v): the edge v->parent
+// gets childNodes[k]=v, parentNodes[k]=parent, dfOut[k]=d(lnL)/db_v, ddfOut[k]=d²(lnL)/db_v². Mirrors the eigen/echild
+// gather of gpuComputeEdgeDervCleanRoomMix and the single-root topology of optimizeParametersJOLT (additionally builds
+// the per-node expfac = exp(eval_m·rate_c·b_parent) the preorder kernel needs). Returns false on ineligibility/CUDA
+// error (same +I/fused/PMSF/nonrev/single-model gate as the lnL mix path). Read-only (no host/device state persists).
+// ============================================================================================================
+bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
+                                                    std::vector<double>& dfOut, std::vector<double>& ddfOut) {
+    childNodes.clear(); parentNodes.clear(); dfOut.clear(); ddfOut.clear();
+    if (!model || !site_rate || !aln) return false;
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) return false;
+    if (!model->isReversible()) return false;
+    int N = model->getNMixtures();
+    if (N <= 1) return false;
+    if (model->isSiteSpecificModel()) return false;
+    if (site_rate->getPInvar() > 0.0) return false;        // +I omitted in the clean-room sweep -> CPU
+    int ncat = site_rate->getNRate();
+    int nptn = (int)aln->size();
+    int ntax = (int)aln->getNSeq();
+    if (ncat < 1) return false;
+    int R = N*ncat;
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || (int)mix->size() != N || mix->isFused()) return false;
+    if (!root || !root->isLeaf() || root->neighbors.empty()) return false;
+    Node *Rt = root->neighbors[0]->node;   // internal root (IQ-TREE roots at a leaf; lnL is reversible-invariant)
+    if (!Rt || Rt->isLeaf()) return false;
+
+    // ---- per-class eigen (Uinv down-map, Uc up-map, evalC) + freq + per-regime weight (== gpuComputeEdgeDervCleanRoomMix) ----
+    std::vector<double> Uinv((size_t)N*ns*ns), UinvRowSum((size_t)N*ns), freqC((size_t)N*ns);
+    std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
+    std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
+    for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    for (int m = 0; m < N; m++) {
+        ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
+        double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
+        if (!ev || !U || !Ui) return false;
+        for (int i = 0; i < ns; i++) evalC[(size_t)m*ns+i] = ev[i];
+        for (int x = 0; x < ns*ns; x++) { Uc[(size_t)m*ns*ns+x] = U[x]; Uinv[(size_t)m*ns*ns+x] = Ui[x]; }
+        for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
+        double wf[64]; model->getStateFrequency(wf, m);
+        for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
+        double wm = model->getMixtureWeight(m);
+        for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+
+    // ---- single-root topology rooted at Rt (indexDfs), flat arrays (mirrors optimizeParametersJOLT) ----
+    std::map<Node*,int> nid; std::vector<Node*> nodes, parentNode; std::vector<double> parentLen; std::vector<int> leafTax;
+    std::vector<std::vector<int>> childList;
+    std::function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        int myi=(int)nodes.size(); nid[n]=myi; nodes.push_back(n); parentNode.push_back(dad); parentLen.push_back(lenToDad);
+        leafTax.push_back(n->isLeaf()?aln->getSeqID(n->name):-1); childList.push_back(std::vector<int>());
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; indexDfs(nb->node,n,nb->length); } };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    for (int i=0;i<nNodes;i++){ Node *n=nodes[i], *dad=parentNode[i];
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; childList[i].push_back(nid[nb->node]); }
+        if ((int)childList[i].size()>3) return false; }
+
+    // ---- tip states + pattern frequencies ----
+    std::vector<unsigned char> tip((size_t)ntax*nptn);
+    for (int i=0;i<nNodes;i++){ if(leafTax[i]<0) continue; int tax=leafTax[i]; if(tax<0||tax>=ntax) return false;
+        for (int p=0;p<nptn;p++){ int st=(int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p]=(unsigned char)((st<ns)?st:ns); } }
+    std::vector<double> ptnFreq(nptn); for (int p=0;p<nptn;p++) ptnFreq[p]=(double)aln->at(p).frequency;
+
+    // ---- echild[v][r][x][i]=U_m[x][i]*exp(eval_m[i]*rate_c*parentLen[v]) + expfac[v][r][i]=exp(...) (root: no parent edge) ----
+    size_t ecStride=(size_t)R*ns*ns, exStride=(size_t)R*ns;
+    std::vector<double> echild((size_t)nNodes*ecStride,0.0), expfac((size_t)nNodes*exStride,0.0);
+    for (int v=0;v<nNodes;v++){ if(parentNode[v]==nullptr) continue;
+        double len_v=parentLen[v];
+        for (int m=0;m<N;m++){ const double *ev=&evalC[(size_t)m*ns]; const double *U=&Uc[(size_t)m*ns*ns];
+            for (int c=0;c<ncat;c++){ double l=len_v*catRate[c]; int r=m*ncat+c;
+                double ex[20]; for(int i=0;i<ns;i++) ex[i]=exp(ev[i]*l);
+                double *e=&echild[(size_t)v*ecStride+(size_t)r*ns*ns];
+                for(int x=0;x<ns;x++) for(int i=0;i<ns;i++) e[x*ns+i]=U[x*ns+i]*ex[i];
+                double *ef=&expfac[(size_t)v*exStride+(size_t)r*ns]; for(int i=0;i<ns;i++) ef[i]=ex[i]; } } }
+
+    // ---- flat topology arrays for the launcher ----
+    std::vector<int> nodeNch(nNodes), nodeChild((size_t)nNodes*3,-1), nodeLeaf(nNodes); std::vector<double> nodeParentLen(nNodes);
+    for (int i=0;i<nNodes;i++){ nodeNch[i]=(int)childList[i].size(); nodeLeaf[i]=leafTax[i]; nodeParentLen[i]=parentLen[i];
+        for (int k=0;k<(int)childList[i].size()&&k<3;k++) nodeChild[(size_t)i*3+k]=childList[i][k]; }
+
+    std::vector<double> dfV(nNodes,0.0), ddfV(nNodes,0.0);
+    double rc = gpu_allbranch_derv_crosscheck_mix(ns,nptn,ncat,N,ntax,nNodes,/*root=*/nid[Rt],
+        Uinv.data(), Uc.data(), UinvRowSum.data(), freqC.data(), wreg.data(), evalC.data(), catRate.data(),
+        echild.data(), expfac.data(), tip.data(), ptnFreq.data(),
+        nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
+        dfV.data(), ddfV.data());
+    if (std::isnan(rc)) return false;
+
+    for (int v=0;v<nNodes;v++){ if(parentNode[v]==nullptr) continue;
+        childNodes.push_back(nodes[v]); parentNodes.push_back(parentNode[v]); dfOut.push_back(dfV[v]); ddfOut.push_back(ddfV[v]); }
+    return true;
+}
+
 // G.2.1a — one-shot derivative cross-check: pick an internal-internal edge (R=internal node adjacent to the
 // root leaf, C=an internal neighbour of R), compute GPU df/ddf clean-room and compare to IQ-TREE's OWN
 // computeLikelihoodDerv (CPU pointer — not yet overridden at G.2.1a). Read-only; saves/restores current_it.
@@ -767,6 +865,83 @@ void PhyloTree::gpuMixDervCrossCheckOnce() {
     if (!Lf) { for (auto nb : Rnode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; intNode = Rnode; break; } }
     if (Lf) checkEdge((PhyloNeighbor*)intNode->findNeighbor(Lf), intNode, "LEAF");
     else    printf("[GPU-DERV-XCHECK-MIX] LEAF skipped (no pendant edge found)\n");
+}
+
+// ============================================================================================================
+// G.8.2.1a — one-shot ALL-BRANCH derivative cross-check (profile mixtures). Validates the new k7_pre_mix preorder +
+// the linear-time all-branch sweep with TWO independent gates per representative edge (≥1 INT-INT, ≥1 LEAF):
+//   (a) DECISIVE — the all-branch df/ddf == the VALIDATED G.8.1b single-edge gpuComputeEdgeDervCleanRoomMix (which is
+//       bit-exact vs CPU computeLikelihoodDerv), rel<=1e-9 (expect ~1e-12). Catches the historical bugs: a U/Uinv
+//       transposition or a b_v double-count would diverge from the single-edge path (which has no `pre` at all).
+//   (b) INDEPENDENT — central finite-difference of the clean-room lnL (gpuComputeTreeLnLCleanRoomMix at b_v±ε),
+//       rel<=1e-5. Catches a sign error or an m=r/ncat vs c=r%ncat transposition shared by both GPU derivative paths.
+// Fires only for getNMixtures()>1 (leaves the one-shot unconsumed for single-model). Read-only: the FD perturbation
+// saves/restores both directed neighbour lengths. No host-partial seeding needed (both references are stateless GPU).
+// ============================================================================================================
+void PhyloTree::gpuMixAllBranchDervCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // not a mixture -> leave the one-shot unconsumed
+    done = true;
+    if (!site_rate || !aln || !root || !root->isLeaf() || root->neighbors.empty()) {
+        printf("[GPU-ALLDERV-XCHECK-MIX] skipped (tree/model not ready)\n"); return; }
+    Node *Rnode = root->neighbors[0]->node;
+    if (!Rnode || Rnode->isLeaf()) { printf("[GPU-ALLDERV-XCHECK-MIX] skipped (degenerate root)\n"); return; }
+
+    // run the all-branch sweep once (df/ddf for every edge); the per-edge gates below reuse these host-copied values
+    std::vector<Node*> childNodes, parentNodes; std::vector<double> dfAll, ddfAll;
+    if (!gpuComputeAllBranchDervCleanRoomMix(childNodes, parentNodes, dfAll, ddfAll)) {
+        printf("[GPU-ALLDERV-XCHECK-MIX] skipped (unsupported regime or CUDA error)\n"); return; }
+
+    auto lookupEdge = [&](Node *a, Node *b, double &df, double &ddf)->bool {
+        for (size_t k=0;k<childNodes.size();k++){
+            if ((childNodes[k]==a && parentNodes[k]==b) || (childNodes[k]==b && parentNodes[k]==a)) {
+                df=dfAll[k]; ddf=ddfAll[k]; return true; } }
+        return false; };
+
+    auto checkEdge = [&](PhyloNeighbor *db, Node *dadNode, const char *label) {
+        if (!db) { printf("[GPU-ALLDERV-XCHECK-MIX] %s skipped (neighbour not found)\n", label); return; }
+        Node *childN = db->node;
+        double dfA=0, ddfA=0;
+        if (!lookupEdge(childN, dadNode, dfA, ddfA)) { printf("[GPU-ALLDERV-XCHECK-MIX] %s skipped (edge not in sweep)\n", label); return; }
+        // gate (a): vs the validated G.8.1b single-edge derivative (independent two-sub-root path)
+        double ddf1=0, lnL1=0;
+        double df1 = gpuComputeEdgeDervCleanRoomMix(db, (PhyloNode*)dadNode, &ddf1, &lnL1);
+        if (std::isnan(df1)) { printf("[GPU-ALLDERV-XCHECK-MIX] %s skipped (single-edge ref unsupported)\n", label); return; }
+        double rdf  = (df1  != 0.0) ? fabs((dfA  - df1 )/df1 ) : fabs(dfA  - df1 );
+        double rddf = (ddf1 != 0.0) ? fabs((ddfA - ddf1)/ddf1) : fabs(ddfA - ddf1);
+        bool passA = (rdf <= 1e-9) && (rddf <= 1e-9);
+        // gate (b): central FD of the clean-room lnL (perturb BOTH directed neighbour lengths; save/restore)
+        PhyloNeighbor *back = (PhyloNeighbor*)dadNode->findNeighbor(childN);
+        double t0 = db->length;
+        double eps = 1e-4 * ((fabs(t0) > 1e-3) ? fabs(t0) : 1e-3);
+        db->length = t0 + eps; if (back) back->length = t0 + eps;
+        double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr);
+        db->length = t0 - eps; if (back) back->length = t0 - eps;
+        double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr);
+        db->length = t0; if (back) back->length = t0;
+        double fd = (lp - lm) / (2.0 * eps);
+        double rfd = fabs(dfA - fd) / (fabs(fd) + 1e-30);
+        bool passB = (rfd <= 1e-5);
+        printf("[GPU-ALLDERV-XCHECK-MIX] %s edge(node=%d,dad=%d) t=%.6g | df_all=%.6e df_1edge=%.6e rel=%.3e | "
+               "ddf_all=%.6e ddf_1edge=%.6e rel=%.3e | FD=%.6e rel=%.3e -> %s\n",
+               label, childN->id, dadNode->id, t0, dfA, df1, rdf, ddfA, ddf1, rddf, fd, rfd,
+               (passA && passB) ? "PASS (G.8.2.1a)" : "CHECK");
+    };
+
+    // (1) internal-internal edge: Rnode and an internal neighbour C.
+    Node *C = nullptr;
+    for (auto nb : Rnode->neighbors) if (!nb->node->isLeaf()) { C = nb->node; break; }
+    if (C) checkEdge((PhyloNeighbor*)Rnode->findNeighbor(C), Rnode, "INT-INT");
+    else   printf("[GPU-ALLDERV-XCHECK-MIX] INT-INT skipped (no internal-internal edge at root)\n");
+
+    // (2) leaf-internal (pendant) edge: validates the k_leaf_eig_mix lower endpoint + a leaf's pre_v.
+    Node *intNode = C ? C : Rnode;
+    Node *Lf = nullptr;
+    for (auto nb : intNode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; break; }
+    if (!Lf) { for (auto nb : Rnode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; intNode = Rnode; break; } }
+    if (Lf) checkEdge((PhyloNeighbor*)intNode->findNeighbor(Lf), intNode, "LEAF");
+    else    printf("[GPU-ALLDERV-XCHECK-MIX] LEAF skipped (no pendant edge found)\n");
 }
 
 // ============================================================================================================

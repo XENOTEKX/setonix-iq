@@ -125,6 +125,18 @@ double gpu_derv_crosscheck_mix(
     double* out_ddf,
     double* out_lnL);
 
+// Phase G.8.2.1a — clean-room ALL-BRANCH derivative launcher for profile mixtures (Ji-2020 linear-time gradient:
+// one postorder + one preorder sweep -> df/ddf for every edge). out_df[v]/out_ddf[v] = d(lnL)/db_v and 2nd deriv for
+// edge v->parent (root entry stays 0). Returns 0.0 on success, NaN on CUDA error. d_U (eigenvectors, k7_pre_mix's
+// up-map) and per-node expfac=exp(eval_m·rate_c·b_u) are new vs the lnL/single-edge mix launchers.
+double gpu_allbranch_derv_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int root,
+    const double* Uinv, const double* U, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* evalC, const double* catRate,
+    const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
+    double* out_df, double* out_ddf);
+
 // Phase G.4.2 — in-tree JOLT joint-gradient optimiser launcher. Runs the validated G.4.1b standalone driver
 // (gpu_k8b_jolt_alpha.cu) clean-room from host-prepared arrays built from the LIVE model/tree/alignment:
 // a SINGLE joint LM diagonal-Newton loop steps ALL branches AND (if optAlpha) the gamma shape alpha at once,
