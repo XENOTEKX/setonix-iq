@@ -70,6 +70,24 @@ double gpu_lnl_crosscheck(
     const int* desc_childSlot,   // nInternal*3 (partials slot if internal child)
     double* out_patlh);          // nptn (optional; per-pattern log|lh_ptn| if non-NULL) — G.2.0b
 
+// Phase G.8.0 — profile-mixture clean-room lnL (C20/C60/MEOW80). Same descriptor scheme as gpu_lnl_crosscheck but
+// with R = nmix*ncat regimes (r = m*ncat + c): per-class Uinv/UinvRowSum/freq are [nmix][...] arrays (GLOBAL on
+// device), wreg is [nmix*ncat] (= weight_m * catProp_c), echild is [nnodes][R][ns*ns], partial slots index in units
+// of (R*nstates*nptn). Each regime is an independent Felsenstein sweep; combined only at the root fold
+// L_p = Σ_r wreg_r·(freq_m · prod_r). Returns the whole-tree lnL; NaN on OOM/CUDA error.
+double gpu_lnl_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
+    const double* Uinv,          // nmix * nstates*nstates (per-class inverse eigenvectors)
+    const double* UinvRowSum,    // nmix * nstates
+    const double* freq,          // nmix * nstates (per-class state frequencies)
+    const double* wreg,          // nmix*ncat (weight_m * catProp_c)
+    const double* echild,        // nnodes * (nmix*ncat)*nstates*nstates
+    const unsigned char* tip,    // ntax * nptn
+    const double* ptn_freq,      // nptn
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    double* out_patlh, double* out_lhcat);   // out_lhcat (optional, G.8.1): per-class L_{p,m} = w_m*Σ_c catProp_c*L_{p,m,c}, [nmix][nptn]
+
 // Phase G.2.1a — clean-room single-edge branch-length derivative launcher (K2 in-tree). The descriptor list
 // covers BOTH subtrees split by the central edge (two sub-roots = the edge endpoints), all entries isRoot=0 so
 // every internal node (incl. the two endpoints) writes its eigen-space partial to its slot. nodeSlot/dadSlot
@@ -89,6 +107,39 @@ double gpu_derv_crosscheck(
     double t,                    // central branch length
     double* out_ddf,             // out: second derivative
     double* out_lnL);            // out: tree lnL at t
+
+// G.8.1b — profile-mixture single-edge derivative (df/ddf class-summed). Mirrors gpu_derv_crosscheck but the
+// sweep is per-regime (k1_node_mix), the central-edge coeffs are per-CLASS in global memory, and weights are
+// per-regime (wreg[r]=w_m*catProp_c). evalC = per-class eigenvalues [nmix*nstates].
+double gpu_derv_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int nInternal,
+    const double* Uinv, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* echild, const unsigned char* tip, const double* ptn_freq,
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    int nodeSlot, int nodeLeafTax,
+    int dadSlot,  int dadLeafTax,
+    const double* evalC,         // nmix*nstates (per-class eigenvalues)
+    const double* catRate,       // ncat
+    double t,
+    double* out_ddf,
+    double* out_lnL);
+
+// Phase G.8.2.1a — clean-room ALL-BRANCH derivative launcher for profile mixtures (Ji-2020 linear-time gradient:
+// one postorder + one preorder sweep -> df/ddf for every edge). out_df[v]/out_ddf[v] = d(lnL)/db_v and 2nd deriv for
+// edge v->parent (root entry stays 0). Returns 0.0 on success, NaN on CUDA error. d_U (eigenvectors, k7_pre_mix's
+// up-map) and per-node expfac=exp(eval_m·rate_c·b_u) are new vs the lnL/single-edge mix launchers.
+double gpu_allbranch_derv_crosscheck_mix(
+    int nstates, int nptn, int ncat, int nmix, int ntax, int nnodes, int root,
+    const double* Uinv, const double* U, const double* UinvRowSum, const double* freq, const double* wreg,
+    const double* evalC, const double* catRate,
+    const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
+    double* out_df, double* out_ddf);
+
+// Phase G.8.2.1b — host shim exposing the JOLT mean-1 discrete-gamma discretiser so the mixture joint-optimiser
+// kill-switch can recompute catRate[] at an iterate alpha (bit-identical to the live GAMMA_CUT_MEAN rates).
+void gpu_discrete_gamma_mean(double alpha, int K, double* rates);
 
 // Phase G.4.2 — in-tree JOLT joint-gradient optimiser launcher. Runs the validated G.4.1b standalone driver
 // (gpu_k8b_jolt_alpha.cu) clean-room from host-prepared arrays built from the LIVE model/tree/alignment:

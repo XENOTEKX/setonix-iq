@@ -30,6 +30,7 @@
 #include "phylonode.h"
 #include <cstring>   // G.6: memcpy in the free-Q decompose callback
 #include "model/modelsubst.h"
+#include "model/modelmixture.h"   // G.8.0: ModelMixture per-class component accessors (at(m)->getEigenvalues() etc.)
 #include "model/rateheterogeneity.h"
 #include "model/rategamma.h"   // G.4.3b: GAMMA_CUT_MEAN — the robust mean-gamma discriminator (isGammaRate())
 #include "alignment/alignment.h"
@@ -157,6 +158,131 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
 }
 
 // ============================================================================================================
+// G.8.0 — clean-room whole-tree lnL for a PROFILE MIXTURE (C20/C60/MEOW80). Reads the LIVE ModelMixture's per-class
+// eigen via the component accessors mix[m]->getEigenvalues()/...() (already offset into the AVX-padded packed array,
+// so NO manual m*480 stride math — sidesteps the #1 silent-bug risk), per-class freq via getStateFrequency(.,m),
+// weights via getMixtureWeight(m). Regime r = m*ncat + c; builds echild[node][r] and per-class Uinv/freq, then calls
+// gpu_lnl_crosscheck_mix. SILENT, returns NaN on any unsupported regime. CPU path byte-unchanged (additive).
+// ============================================================================================================
+double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat, const double *w_override,
+                                                const double *parentLenOverride, double alphaOverride) {
+    if (!model || !site_rate || !aln) return (double)NAN;
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) return (double)NAN;
+    if (!model->isReversible()) return (double)NAN;
+    int N = model->getNMixtures();
+    if (N <= 1) return (double)NAN;                       // single-model -> the non-mix path
+    if (model->isSiteSpecificModel()) return (double)NAN; // PMSF stays on CPU (per-site pi, no class sum)
+    if (site_rate->getPInvar() > 0.0) return (double)NAN;  // +I omitted in the clean-room sweep -> CPU
+
+    int ncat = site_rate->getNRate();
+    int nptn = (int)aln->size();
+    int ntax = (int)aln->getNSeq();
+    if (ncat < 1) return (double)NAN;
+    int R = N*ncat;
+
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || (int)mix->size() != N) return (double)NAN;
+    if (mix->isFused()) return (double)NAN;   // LG4M/LG4X = 1:1 class<->rate pairing, NOT the N*ncat cross-product
+                                              // this builds (weight from site_rate->getProp, not getMixtureWeight) -> CPU
+
+    // ---- per-class eigen (stride-safe via component pointers), freq, weight; per-regime weight = w_m*catProp_c ----
+    std::vector<double> Uinv((size_t)N*ns*ns), UinvRowSum((size_t)N*ns), freqC((size_t)N*ns);
+    std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
+    std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
+    for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    // G.8.2.1b: optional iterate-alpha override — recompute mean-1 discrete-gamma catRate[] at alphaOverride (catProp
+    // stays fixed 1/ncat). Used by the joint-optimiser's alpha FD-Newton; warm-run reproduces the live rates exactly.
+    if (alphaOverride > 0.0 && ncat > 1) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());
+    for (int m = 0; m < N; m++) {
+        ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
+        double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
+        if (!ev || !U || !Ui) return (double)NAN;
+        for (int i = 0; i < ns; i++) evalC[(size_t)m*ns+i] = ev[i];
+        for (int x = 0; x < ns*ns; x++) { Uc[(size_t)m*ns*ns+x] = U[x]; Uinv[(size_t)m*ns*ns+x] = Ui[x]; }
+        for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
+        double wf[64]; model->getStateFrequency(wf, m);   // ns<=20
+        for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
+        double wm = w_override ? w_override[m] : model->getMixtureWeight(m);   // G.8.2: optional EM-iterate weights
+        for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+
+    // ---- topology rooted at an internal node R (reversible-invariant) — identical to the single-model sweep ----
+    if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
+    Node *Rt = root->neighbors[0]->node;
+    if (Rt->isLeaf()) return (double)NAN;
+    map<Node*,int> nid; vector<Node*> nodes; vector<double> parentLen; vector<int> isLeafV, leafTax;
+    function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        int myi=(int)nodes.size(); nid[n]=myi; nodes.push_back(n); parentLen.push_back(lenToDad);
+        int lf=n->isLeaf()?1:0; isLeafV.push_back(lf); leafTax.push_back(lf?aln->getSeqID(n->name):-1);
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; indexDfs(nb->node,n,nb->length); }
+    };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes=(int)nodes.size();
+    // G.8.2.1b: optional iterate-branch override — replace the live edge lengths with parentLenOverride[v] (indexed by
+    // this function's DFS nid; root entry is 0.0). The echild build below consumes it transparently. nullptr => live tree.
+    if (parentLenOverride) for (int v = 0; v < nNodes; v++) parentLen[v] = parentLenOverride[v];
+    vector<int> postInternal; vector<int> slot(nNodes,-1);
+    function<void(Node*,Node*)> postDfs = [&](Node *n, Node *dad){
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; postDfs(nb->node,n); }
+        if (!n->isLeaf()){ slot[nid[n]]=(int)postInternal.size(); postInternal.push_back(nid[n]); }
+    };
+    postDfs(Rt, nullptr);
+    int nInternal=(int)postInternal.size();
+
+    // ---- echild[child][r=m*ncat+c][x][i] = U_m[x][i]*exp(eval_m[i]*rate_c*parentLen) ----
+    size_t ecStride = (size_t)R*ns*ns;
+    vector<double> echild((size_t)nNodes*ecStride, 0.0);
+    for (int v = 0; v < nNodes; v++) {
+        if (v == nid[Rt]) continue;
+        double len_v = parentLen[v];
+        for (int m = 0; m < N; m++) {
+            const double *ev = &evalC[(size_t)m*ns]; const double *U = &Uc[(size_t)m*ns*ns];
+            for (int c = 0; c < ncat; c++) {
+                double l = len_v * catRate[c]; int r = m*ncat + c;
+                double ex[20]; for (int i=0;i<ns;i++) ex[i]=exp(ev[i]*l);
+                double *e = &echild[(size_t)v*ecStride + (size_t)r*ns*ns];
+                for (int x=0;x<ns;x++) for (int i=0;i<ns;i++) e[x*ns+i] = U[x*ns+i]*ex[i];
+            }
+        }
+    }
+
+    // ---- compact tip states ; pattern frequencies (identical to single-model) ----
+    vector<unsigned char> tip((size_t)ntax*nptn);
+    for (int v = 0; v < nNodes; v++) {
+        if (!isLeafV[v]) continue;
+        int tax = leafTax[v]; if (tax<0 || tax>=ntax) return (double)NAN;
+        for (int p=0;p<nptn;p++){ int st=(int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p]=(unsigned char)((st<ns)?st:ns); }
+    }
+    vector<double> ptnFreq(nptn);
+    for (int p=0;p<nptn;p++) ptnFreq[p]=(double)aln->at(p).frequency;
+
+    // ---- per-internal-node descriptors (postorder) — identical to single-model ----
+    vector<int> dRoot(nInternal), dNch(nInternal), dOut(nInternal);
+    vector<int> dChildNode(nInternal*3,-1), dChildIsLeaf(nInternal*3,0), dChildLeaf(nInternal*3,-1), dChildSlot(nInternal*3,-1);
+    for (int idx=0; idx<nInternal; idx++){
+        int vi=postInternal[idx]; Node *n=nodes[vi]; Node *dad=nullptr;
+        if (n!=Rt){ for(auto nb:n->neighbors){ if(nid[nb->node]<vi){ dad=nb->node; break; } } }
+        dRoot[idx]=(n==Rt)?1:0; dOut[idx]=(n==Rt)?-1:slot[vi];
+        int k=0;
+        for (auto nb:n->neighbors){
+            if (nb->node==dad) continue; if (k>=3) return (double)NAN;
+            int cv=nid[nb->node]; dChildNode[idx*3+k]=cv;
+            if (isLeafV[cv]){ dChildIsLeaf[idx*3+k]=1; dChildLeaf[idx*3+k]=leafTax[cv]; }
+            else            { dChildIsLeaf[idx*3+k]=0; dChildSlot[idx*3+k]=slot[cv]; }
+            k++;
+        }
+        dNch[idx]=k;
+    }
+
+    return gpu_lnl_crosscheck_mix(ns, nptn, ncat, N, ntax, nNodes, nInternal,
+        Uinv.data(), UinvRowSum.data(), freqC.data(), wreg.data(), echild.data(), tip.data(), ptnFreq.data(),
+        dRoot.data(), dNch.data(), dOut.data(),
+        dChildNode.data(), dChildIsLeaf.data(), dChildLeaf.data(), dChildSlot.data(),
+        out_patlh, out_lhcat);
+}
+
+// ============================================================================================================
 // G.2.0a — one-shot clean-room cross-check. Compares the GPU sweep against an INDEPENDENT CPU reference: if the
 // GPU Branch override is installed (G.2.0b), curScore is itself the GPU value, so we recompute the CPU lnL via
 // the SAVED CPU Branch pointer for a genuine in-process GPU-vs-CPU comparison; otherwise we use the passed
@@ -179,6 +305,91 @@ void PhyloTree::gpuLnLCrossCheckOnce(double cpu_lnL) {
     double rel = (cpu_ref != 0.0) ? fabs((gpu - cpu_ref)/cpu_ref) : fabs(gpu - cpu_ref);
     printf("[GPU-XCHECK] GPU lnL = %.6f   CPU lnL = %.6f (%s)   |d|=%.4e   rel=%.3e   -> %s\n",
            gpu, cpu_ref, src, fabs(gpu - cpu_ref), rel, (rel < 1e-6 ? "PASS (bridge OK)" : "MISMATCH"));
+}
+
+// Set by gpuMixLnLCrossCheckOnce (G.8.0) iff the GPU mixture lnL ENGINE is validated this run: GPU lnL == CPU lnL
+// (rel<=1e-9) AND the per-class emission is self-consistent (Σ_m L_{p,m} == L_p). The G.8.2.0 EM weight check below
+// trusts the GPU per-class L_{p,m} only when this is true — closing the red-team's MINOR-3 (the EM check's engine-
+// isolation argument is sound *because* G.8.0 independently pinned the engine; this makes that dependency programmatic
+// instead of "they happen to both fire from the same hook").
+static bool s_gpuMixLnLEngineValidated = false;
+
+// ============================================================================================================
+// G.8.0 — one-shot PROFILE-MIXTURE lnL cross-check (C20/C60/MEOW80). Fires only for getNMixtures()>1 (does NOT
+// consume the one-shot for single-model runs). Compares the clean-room GPU mixture sweep vs an INDEPENDENT CPU
+// recompute (saved CPU Branch pointer) or curScore. Pure diagnostic; gate rel<=1e-9 (expect ~1e-12). The gate that
+// keeps mixtures off the production GPU path is unchanged — this only validates the kernel against the live model.
+// ============================================================================================================
+void PhyloTree::gpuMixLnLCrossCheckOnce(double cpu_lnL) {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // not a mixture -> leave the one-shot unconsumed
+    done = true;
+
+    int N = model->getNMixtures();
+    int nptn = (int)aln->size();
+    std::vector<double> glhcat((size_t)N*nptn);          // G.8.1: GPU per-class L_{p,m} = glhcat[m*nptn + p]
+    std::vector<double> gpatlh(nptn);                    // G.8.1 diag: GPU per-pattern log L_p (for self-consistency)
+    double gpu = gpuComputeTreeLnLCleanRoomMix(gpatlh.data(), glhcat.data());
+    if (std::isnan(gpu)) { printf("[GPU-XCHECK-MIX] skipped (unsupported regime or CUDA error)\n"); return; }
+
+    double cpu_ref = cpu_lnL;
+    const char *src = "curScore";
+    if (cpuComputeLikelihoodBranchPointer && current_it && current_it_back) {
+        cpu_ref = (this->*cpuComputeLikelihoodBranchPointer)(current_it, (PhyloNode*)current_it_back->node, false);
+        src = "CPU-recompute";
+    }
+    double rel = (cpu_ref != 0.0) ? fabs((gpu - cpu_ref)/cpu_ref) : fabs(gpu - cpu_ref);
+    bool lnL_ok = (rel <= 1e-9);
+    printf("[GPU-XCHECK-MIX] N=%d ncat=%d  GPU lnL = %.6f   CPU lnL = %.6f (%s)   |d|=%.4e   rel=%.3e   -> %s\n",
+           N, site_rate ? site_rate->getNRate() : -1, gpu, cpu_ref, src,
+           fabs(gpu - cpu_ref), rel, (lnL_ok ? "PASS (G.8.0)" : "MISMATCH"));
+
+    // G.8.1 diag — GPU SELF-CONSISTENCY (no CPU ref): Σ_m L_{p,m} must equal L_p = exp(patlh[p]). If this holds the
+    // per-class emission is correct by construction, and any CPU-ref mismatch below is a contaminated reference (the
+    // GPU branch override leaves CPU per-cat partials unpopulated), NOT a kernel bug.
+    bool self_ok = false;
+    {
+        double selfmax = 0.0; int pbad = -1;
+        for (int p = 0; p < nptn; p++) {
+            double s = 0.0; for (int m = 0; m < N; m++) s += glhcat[(size_t)m*nptn + p];
+            double Lp = exp(gpatlh[p]);
+            double r = fabs(s - Lp) / (fabs(Lp) + 1e-300);
+            if (r > selfmax) { selfmax = r; pbad = p; }
+        }
+        self_ok = (selfmax <= 1e-9);
+        printf("[GPU-XCHECK-MIX] GPU self-consistency Sum_m L_{p,m} vs L_p: max rel = %.3e (ptn %d)  -> %s\n",
+               selfmax, pbad, (self_ok ? "PASS (GPU per-class internally exact)" : "GPU EMISSION BUG"));
+    }
+
+    // G.8.1 — per-class POSTERIOR RESPONSIBILITY γ_{p,m} = L_{p,m}/Σ_m' L_{p,m'} (the EM E-step quantity the G.8.2
+    // weight M-step consumes: w_m_new = Σ_p f_p·γ_{p,m} / Σ_p f_p). This is the CORRECT cross-check metric because it is
+    // SCALE-INVARIANT: the CPU's _pattern_lh_cat is per-pattern SCALED (scale_num·LOG_SCALING_THRESHOLD underflow
+    // protection) while the GPU clean-room is raw/unscaled — they differ by exp(scale_p) per pattern (which is why the
+    // lnL still matches bit-exact: the factor is added back in the log domain). Self-normalising each side by its own
+    // per-pattern class sum cancels exp(scale_p), so γ_g and γ_c are directly comparable. Guarded: skip _pattern_lh_cat unalloc.
+    if (_pattern_lh_cat) {
+        computePatternLhCat(WSL_MIXTURE);                 // fills _pattern_lh_cat[ptn*N + m] (CPU, current state)
+        double mr = 0.0;
+        for (int p = 0; p < nptn; p++) {
+            double sg = 0.0, sc = 0.0;
+            for (int m = 0; m < N; m++) { sg += glhcat[(size_t)m*nptn + p]; sc += _pattern_lh_cat[(size_t)p*N + m]; }
+            if (sg <= 0.0 || sc <= 0.0) continue;        // fully-underflowed pattern carries no posterior information
+            for (int m = 0; m < N; m++) {
+                double gg = glhcat[(size_t)m*nptn + p] / sg, cc = _pattern_lh_cat[(size_t)p*N + m] / sc;
+                double r = fabs(gg - cc);                 // posteriors ∈ [0,1]; absolute diff is the right scale
+                if (r > mr) mr = r;
+            }
+        }
+        printf("[GPU-XCHECK-MIX] per-class posterior γ_{p,m} vs CPU _pattern_lh_cat (scale-invariant): max |Δγ| = %.3e  -> %s\n",
+               mr, (mr <= 1e-9 ? "PASS (G.8.1 per-class)" : "MISMATCH"));
+    } else {
+        printf("[GPU-XCHECK-MIX] per-class check skipped (_pattern_lh_cat not allocated)\n");
+    }
+
+    // The G.8.2.0 EM weight check (below) consumes the GPU per-class L_{p,m}; it may trust them only if the engine
+    // is validated this run: GPU lnL == CPU lnL AND the per-class emission reconstructs L_p (self-consistency).
+    s_gpuMixLnLEngineValidated = lnL_ok && self_ok;
 }
 
 // ============================================================================================================
@@ -328,6 +539,239 @@ double PhyloTree::gpuComputeEdgeDervCleanRoom(PhyloNeighbor *dad_branch, PhyloNo
         nodeSlot, nodeLeafTax, dadSlot, dadLeafTax, eval, catRate.data(), t, out_ddf, out_lnL);
 }
 
+// ============================================================================================================
+// G.8.1b — clean-room single-edge branch derivative for PROFILE MIXTURES: df/ddf SUMMED over the N*ncat regimes,
+// validated vs CPU computeLikelihoodDerv. Combines the two-sub-root central-edge split (gpuComputeEdgeDervCleanRoom)
+// with the per-class eigen assembly (gpuComputeTreeLnLCleanRoomMix). Returns df = d(lnL)/dt (un-negated, like the
+// single-model path; computeFuncDerv negates downstream); *out_ddf the 2nd derivative; *out_lnL the tree lnL at t.
+// Eligibility gate IDENTICAL to the mixture lnL path (+I/fused/PMSF/nonrev/single-model -> NaN -> CPU) so an edge
+// never gets a GPU lnL but a CPU derivative or vice versa.
+// ============================================================================================================
+double PhyloTree::gpuComputeEdgeDervCleanRoomMix(PhyloNeighbor *dad_branch, PhyloNode *dad, double *out_ddf, double *out_lnL) {
+    if (!model || !site_rate || !aln) return (double)NAN;
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) return (double)NAN;
+    if (!model->isReversible()) return (double)NAN;
+    int N = model->getNMixtures();
+    if (N <= 1) return (double)NAN;                       // single-model -> the non-mix derivative path
+    if (model->isSiteSpecificModel()) return (double)NAN; // PMSF stays on CPU
+    if (site_rate->getPInvar() > 0.0) return (double)NAN;  // +I omitted in the clean-room sweep -> CPU
+    int ncat = site_rate->getNRate();
+    int nptn = (int)aln->size();
+    int ntax = (int)aln->getNSeq();
+    if (ncat < 1) return (double)NAN;
+    int R = N*ncat;
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || (int)mix->size() != N) return (double)NAN;
+    if (mix->isFused()) return (double)NAN;               // LG4M/LG4X = 1:1 class<->rate, not the N*ncat product
+    Node *node = dad_branch->node;
+    Node *dadN = dad;
+    if (!node || !dadN) return (double)NAN;
+
+    // ---- per-class eigen (component pointers, AVX-padding intrinsic), freq, per-regime weight = w_m*catProp_c ----
+    std::vector<double> Uinv((size_t)N*ns*ns), UinvRowSum((size_t)N*ns), freqC((size_t)N*ns);
+    std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
+    std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
+    for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    for (int m = 0; m < N; m++) {
+        ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
+        double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
+        if (!ev || !U || !Ui) return (double)NAN;
+        for (int i = 0; i < ns; i++) evalC[(size_t)m*ns+i] = ev[i];
+        for (int x = 0; x < ns*ns; x++) { Uc[(size_t)m*ns*ns+x] = U[x]; Uinv[(size_t)m*ns*ns+x] = Ui[x]; }
+        for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
+        double wf[64]; model->getStateFrequency(wf, m);   // ns<=20
+        for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
+        double wm = model->getMixtureWeight(m);
+        for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+    double t = dad_branch->length;
+
+    // ---- two-sub-root DFS, central edge (node<->dadN) excluded from both (identical to single-model derivative) ----
+    map<Node*,int> nid; vector<Node*> nodes; vector<double> parentLen; vector<int> isLeafV, leafTax;
+    function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *par, double lenToPar) {
+        int myi = (int)nodes.size(); nid[n]=myi; nodes.push_back(n); parentLen.push_back(lenToPar);
+        int lf = n->isLeaf()?1:0; isLeafV.push_back(lf); leafTax.push_back(lf?aln->getSeqID(n->name):-1);
+        for (auto nb : n->neighbors) { if (nb->node==par) continue; indexDfs(nb->node, n, nb->length); }
+    };
+    indexDfs(node, dadN, 0.0);
+    indexDfs(dadN, node, 0.0);
+    int nNodes = (int)nodes.size();
+
+    vector<int> postInternal; vector<int> slot(nNodes, -1);
+    function<void(Node*,Node*)> postDfs = [&](Node *n, Node *par) {
+        for (auto nb : n->neighbors) { if (nb->node==par) continue; postDfs(nb->node, n); }
+        if (!n->isLeaf()) { slot[nid[n]]=(int)postInternal.size(); postInternal.push_back(nid[n]); }
+    };
+    postDfs(node, dadN);
+    postDfs(dadN, node);
+    int nInternal = (int)postInternal.size();
+    int nodeSlot = node->isLeaf() ? -1 : slot[nid[node]];
+    int nodeLeafTax = node->isLeaf() ? leafTax[nid[node]] : -1;
+    int dadSlot  = dadN->isLeaf() ? -1 : slot[nid[dadN]];
+    int dadLeafTax = dadN->isLeaf() ? leafTax[nid[dadN]] : -1;
+
+    // ---- per-regime echild[v][r=m*ncat+c][x][i] = U_m[x][i]*exp(eval_m[i]*rate_c*parentLen[v]); skip sub-roots ----
+    size_t ecStride = (size_t)R*ns*ns;
+    vector<double> echild((size_t)nNodes*ecStride, 0.0);
+    for (int v = 0; v < nNodes; v++) {
+        if (v == nid[node] || v == nid[dadN]) continue;
+        double len_v = parentLen[v];
+        for (int m = 0; m < N; m++) {
+            const double *ev = &evalC[(size_t)m*ns]; const double *U = &Uc[(size_t)m*ns*ns];
+            for (int c = 0; c < ncat; c++) {
+                double l = len_v * catRate[c]; int r = m*ncat + c;
+                double ex[20]; for (int i=0;i<ns;i++) ex[i]=exp(ev[i]*l);
+                double *e = &echild[(size_t)v*ecStride + (size_t)r*ns*ns];
+                for (int x=0;x<ns;x++) for (int i=0;i<ns;i++) e[x*ns+i] = U[x*ns+i]*ex[i];
+            }
+        }
+    }
+
+    vector<unsigned char> tip((size_t)ntax*nptn);
+    for (int v = 0; v < nNodes; v++) {
+        if (!isLeafV[v]) continue;
+        int tax = leafTax[v]; if (tax<0 || tax>=ntax) return (double)NAN;
+        for (int p=0;p<nptn;p++){ int st=(int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p]=(unsigned char)((st<ns)?st:ns); }
+    }
+    vector<double> ptnFreq(nptn);
+    for (int p=0;p<nptn;p++) ptnFreq[p]=(double)aln->at(p).frequency;
+
+    // ---- descriptors: ALL internal (isRoot=0); central edge excluded at the two sub-roots ----
+    vector<int> dRoot(nInternal,0), dNch(nInternal), dOut(nInternal);
+    vector<int> dChildNode(nInternal*3,-1), dChildIsLeaf(nInternal*3,0), dChildLeaf(nInternal*3,-1), dChildSlot(nInternal*3,-1);
+    for (int idx=0; idx<nInternal; idx++){
+        int vi=postInternal[idx]; Node *n=nodes[vi];
+        Node *par=nullptr;
+        if (n!=node && n!=dadN) {
+            for (auto nb:n->neighbors){ auto it=nid.find(nb->node); if(it!=nid.end() && it->second<vi){ par=nb->node; break; } }
+        }
+        dOut[idx]=slot[vi];
+        int k=0;
+        for (auto nb:n->neighbors){
+            if (nb->node==par) continue;
+            if (n==node && nb->node==dadN) continue;   // exclude central edge at sub-root node
+            if (n==dadN && nb->node==node) continue;   // exclude central edge at sub-root dadN
+            if (k>=3) return (double)NAN;
+            int cv=nid[nb->node]; dChildNode[idx*3+k]=cv;
+            if (isLeafV[cv]){ dChildIsLeaf[idx*3+k]=1; dChildLeaf[idx*3+k]=leafTax[cv]; }
+            else            { dChildIsLeaf[idx*3+k]=0; dChildSlot[idx*3+k]=slot[cv]; }
+            k++;
+        }
+        dNch[idx]=k;
+    }
+
+    return gpu_derv_crosscheck_mix(ns, nptn, ncat, N, ntax, nNodes, nInternal,
+        Uinv.data(), UinvRowSum.data(), freqC.data(), wreg.data(), echild.data(), tip.data(), ptnFreq.data(),
+        dRoot.data(), dNch.data(), dOut.data(),
+        dChildNode.data(), dChildIsLeaf.data(), dChildLeaf.data(), dChildSlot.data(),
+        nodeSlot, nodeLeafTax, dadSlot, dadLeafTax, evalC.data(), catRate.data(), t, out_ddf, out_lnL);
+}
+
+// ============================================================================================================
+// G.8.2.1a — clean-room ALL-BRANCH derivative for PROFILE MIXTURES: df/ddf for EVERY edge in ONE postorder + ONE
+// preorder sweep (Ji-2020 linear-time), rooted at an internal node, vs the single-edge gpuComputeEdgeDervCleanRoomMix
+// (two-sub-root split, ONE edge). Fills four parallel out-vectors (one entry per NON-ROOT node v): the edge v->parent
+// gets childNodes[k]=v, parentNodes[k]=parent, dfOut[k]=d(lnL)/db_v, ddfOut[k]=d²(lnL)/db_v². Mirrors the eigen/echild
+// gather of gpuComputeEdgeDervCleanRoomMix and the single-root topology of optimizeParametersJOLT (additionally builds
+// the per-node expfac = exp(eval_m·rate_c·b_parent) the preorder kernel needs). Returns false on ineligibility/CUDA
+// error (same +I/fused/PMSF/nonrev/single-model gate as the lnL mix path). Read-only (no host/device state persists).
+// ============================================================================================================
+bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
+                                                    std::vector<double>& dfOut, std::vector<double>& ddfOut,
+                                                    const double *parentLenOverride, double alphaOverride) {
+    childNodes.clear(); parentNodes.clear(); dfOut.clear(); ddfOut.clear();
+    if (!model || !site_rate || !aln) return false;
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) return false;
+    if (!model->isReversible()) return false;
+    int N = model->getNMixtures();
+    if (N <= 1) return false;
+    if (model->isSiteSpecificModel()) return false;
+    if (site_rate->getPInvar() > 0.0) return false;        // +I omitted in the clean-room sweep -> CPU
+    int ncat = site_rate->getNRate();
+    int nptn = (int)aln->size();
+    int ntax = (int)aln->getNSeq();
+    if (ncat < 1) return false;
+    int R = N*ncat;
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || (int)mix->size() != N || mix->isFused()) return false;
+    if (!root || !root->isLeaf() || root->neighbors.empty()) return false;
+    Node *Rt = root->neighbors[0]->node;   // internal root (IQ-TREE roots at a leaf; lnL is reversible-invariant)
+    if (!Rt || Rt->isLeaf()) return false;
+
+    // ---- per-class eigen (Uinv down-map, Uc up-map, evalC) + freq + per-regime weight (== gpuComputeEdgeDervCleanRoomMix) ----
+    std::vector<double> Uinv((size_t)N*ns*ns), UinvRowSum((size_t)N*ns), freqC((size_t)N*ns);
+    std::vector<double> evalC((size_t)N*ns), Uc((size_t)N*ns*ns);
+    std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
+    for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+    // G.8.2.1b: optional iterate-alpha override (joint-optimiser gradient at an FD-perturbed alpha) — see the lnL path.
+    if (alphaOverride > 0.0 && ncat > 1) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());
+    for (int m = 0; m < N; m++) {
+        ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
+        double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
+        if (!ev || !U || !Ui) return false;
+        for (int i = 0; i < ns; i++) evalC[(size_t)m*ns+i] = ev[i];
+        for (int x = 0; x < ns*ns; x++) { Uc[(size_t)m*ns*ns+x] = U[x]; Uinv[(size_t)m*ns*ns+x] = Ui[x]; }
+        for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
+        double wf[64]; model->getStateFrequency(wf, m);
+        for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
+        double wm = model->getMixtureWeight(m);
+        for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+
+    // ---- single-root topology rooted at Rt (indexDfs), flat arrays (mirrors optimizeParametersJOLT) ----
+    std::map<Node*,int> nid; std::vector<Node*> nodes, parentNode; std::vector<double> parentLen; std::vector<int> leafTax;
+    std::vector<std::vector<int>> childList;
+    std::function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        int myi=(int)nodes.size(); nid[n]=myi; nodes.push_back(n); parentNode.push_back(dad); parentLen.push_back(lenToDad);
+        leafTax.push_back(n->isLeaf()?aln->getSeqID(n->name):-1); childList.push_back(std::vector<int>());
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; indexDfs(nb->node,n,nb->length); } };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    // G.8.2.1b: optional iterate-branch override (joint-optimiser gradient at iterate b) — indexed by this function's
+    // DFS nid; the echild + nodeParentLen (preorder expfac) builds below consume it transparently. nullptr => live tree.
+    if (parentLenOverride) for (int v = 0; v < nNodes; v++) parentLen[v] = parentLenOverride[v];
+    for (int i=0;i<nNodes;i++){ Node *n=nodes[i], *dad=parentNode[i];
+        for (auto nb:n->neighbors){ if(nb->node==dad) continue; childList[i].push_back(nid[nb->node]); }
+        if ((int)childList[i].size()>3) return false; }
+
+    // ---- tip states + pattern frequencies ----
+    std::vector<unsigned char> tip((size_t)ntax*nptn);
+    for (int i=0;i<nNodes;i++){ if(leafTax[i]<0) continue; int tax=leafTax[i]; if(tax<0||tax>=ntax) return false;
+        for (int p=0;p<nptn;p++){ int st=(int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p]=(unsigned char)((st<ns)?st:ns); } }
+    std::vector<double> ptnFreq(nptn); for (int p=0;p<nptn;p++) ptnFreq[p]=(double)aln->at(p).frequency;
+
+    // ---- echild[v][r][x][i]=U_m[x][i]*exp(eval_m[i]*rate_c*parentLen[v]) + expfac[v][r][i]=exp(...) (root: no parent edge) ----
+    size_t ecStride=(size_t)R*ns*ns, exStride=(size_t)R*ns;
+    std::vector<double> echild((size_t)nNodes*ecStride,0.0), expfac((size_t)nNodes*exStride,0.0);
+    for (int v=0;v<nNodes;v++){ if(parentNode[v]==nullptr) continue;
+        double len_v=parentLen[v];
+        for (int m=0;m<N;m++){ const double *ev=&evalC[(size_t)m*ns]; const double *U=&Uc[(size_t)m*ns*ns];
+            for (int c=0;c<ncat;c++){ double l=len_v*catRate[c]; int r=m*ncat+c;
+                double ex[20]; for(int i=0;i<ns;i++) ex[i]=exp(ev[i]*l);
+                double *e=&echild[(size_t)v*ecStride+(size_t)r*ns*ns];
+                for(int x=0;x<ns;x++) for(int i=0;i<ns;i++) e[x*ns+i]=U[x*ns+i]*ex[i];
+                double *ef=&expfac[(size_t)v*exStride+(size_t)r*ns]; for(int i=0;i<ns;i++) ef[i]=ex[i]; } } }
+
+    // ---- flat topology arrays for the launcher ----
+    std::vector<int> nodeNch(nNodes), nodeChild((size_t)nNodes*3,-1), nodeLeaf(nNodes); std::vector<double> nodeParentLen(nNodes);
+    for (int i=0;i<nNodes;i++){ nodeNch[i]=(int)childList[i].size(); nodeLeaf[i]=leafTax[i]; nodeParentLen[i]=parentLen[i];
+        for (int k=0;k<(int)childList[i].size()&&k<3;k++) nodeChild[(size_t)i*3+k]=childList[i][k]; }
+
+    std::vector<double> dfV(nNodes,0.0), ddfV(nNodes,0.0);
+    double rc = gpu_allbranch_derv_crosscheck_mix(ns,nptn,ncat,N,ntax,nNodes,/*root=*/nid[Rt],
+        Uinv.data(), Uc.data(), UinvRowSum.data(), freqC.data(), wreg.data(), evalC.data(), catRate.data(),
+        echild.data(), expfac.data(), tip.data(), ptnFreq.data(),
+        nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
+        dfV.data(), ddfV.data());
+    if (std::isnan(rc)) return false;
+
+    for (int v=0;v<nNodes;v++){ if(parentNode[v]==nullptr) continue;
+        childNodes.push_back(nodes[v]); parentNodes.push_back(parentNode[v]); dfOut.push_back(dfV[v]); ddfOut.push_back(ddfV[v]); }
+    return true;
+}
+
 // G.2.1a — one-shot derivative cross-check: pick an internal-internal edge (R=internal node adjacent to the
 // root leaf, C=an internal neighbour of R), compute GPU df/ddf clean-room and compare to IQ-TREE's OWN
 // computeLikelihoodDerv (CPU pointer — not yet overridden at G.2.1a). Read-only; saves/restores current_it.
@@ -380,6 +824,455 @@ void PhyloTree::gpuDervCrossCheckOnce() {
     if (!Lf) { for (auto nb : R->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; intNode = R; break; } }
     if (Lf) checkEdge((PhyloNeighbor*)intNode->findNeighbor(Lf), intNode, "LEAF");
     else    printf("[GPU-DERV-XCHECK] LEAF skipped (no pendant edge found)\n");
+}
+
+// ============================================================================================================
+// G.8.1b — one-shot PROFILE-MIXTURE derivative cross-check. Fires only for getNMixtures()>1 (leaves the one-shot
+// unconsumed for single-model, mirroring gpuMixLnLCrossCheckOnce). For an INT-INT and a LEAF edge: seed host
+// partials via the saved CPU branch pointer (the stateless GPU path never wrote them), take the CPU reference from
+// the saved CPU Derv pointer (un-negated computeLikelihoodDerv), compute the GPU mixture clean-room df/ddf, compare
+// rel<=1e-9 on both. Read-only; saves/restores current_it/theta_computed.
+// ============================================================================================================
+void PhyloTree::gpuMixDervCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // not a mixture -> leave the one-shot unconsumed
+    done = true;
+    if (!site_rate || !aln || !root || !root->isLeaf() || root->neighbors.empty()) {
+        printf("[GPU-DERV-XCHECK-MIX] skipped (tree/model not ready)\n"); return; }
+    if (!cpuComputeLikelihoodBranchPointer) { printf("[GPU-DERV-XCHECK-MIX] skipped (no saved CPU branch pointer to seed host partials)\n"); return; }
+    Node *Rnode = root->neighbors[0]->node;
+    if (!Rnode || Rnode->isLeaf()) { printf("[GPU-DERV-XCHECK-MIX] skipped (degenerate root)\n"); return; }
+
+    auto checkEdge = [&](PhyloNeighbor *db, Node *dadNode, const char *label) {
+        if (!db) { printf("[GPU-DERV-XCHECK-MIX] %s skipped (neighbour not found)\n", label); return; }
+        PhyloNeighbor *save_it = current_it, *save_it_back = current_it_back;
+        bool save_theta = theta_computed;
+        (this->*cpuComputeLikelihoodBranchPointer)(db, (PhyloNode*)dadNode, false);  // CPU: fresh edge partials + theta
+        theta_computed = false;   // let Derv recompute theta from the fresh partials (mirrors optimizeOneBranch)
+        double cdf = 0.0, cddf = 0.0;
+        if (cpuComputeLikelihoodDervPointer) (this->*cpuComputeLikelihoodDervPointer)(db, (PhyloNode*)dadNode, &cdf, &cddf);
+        else                                 computeLikelihoodDerv(db, (PhyloNode*)dadNode, &cdf, &cddf);
+        current_it = save_it; current_it_back = save_it_back; theta_computed = save_theta;
+
+        double gddf = 0.0, glnL = 0.0;
+        double gdf = gpuComputeEdgeDervCleanRoomMix(db, (PhyloNode*)dadNode, &gddf, &glnL);
+        if (std::isnan(gdf)) { printf("[GPU-DERV-XCHECK-MIX] %s skipped (unsupported regime or CUDA error)\n", label); return; }
+        double rdf  = (cdf  != 0.0) ? fabs((gdf  - cdf )/cdf ) : fabs(gdf  - cdf );
+        double rddf = (cddf != 0.0) ? fabs((gddf - cddf)/cddf) : fabs(gddf - cddf);
+        bool pass = (rdf <= 1e-9) && (rddf <= 1e-9);
+        printf("[GPU-DERV-XCHECK-MIX] %s edge(node=%d,dad=%d) t=%.6g  df: GPU=%.6e CPU=%.6e rel=%.3e | ddf: GPU=%.6e CPU=%.6e rel=%.3e  -> %s\n",
+               label, db->node->id, dadNode->id, db->length, gdf, cdf, rdf, gddf, cddf, rddf, (pass ? "PASS (G.8.1b)" : "MISMATCH"));
+    };
+
+    // (1) internal-internal edge: Rnode and an internal neighbour C.
+    Node *C = nullptr;
+    for (auto nb : Rnode->neighbors) if (!nb->node->isLeaf()) { C = nb->node; break; }
+    if (C) checkEdge((PhyloNeighbor*)Rnode->findNeighbor(C), Rnode, "INT-INT");
+    else   printf("[GPU-DERV-XCHECK-MIX] INT-INT skipped (no internal-internal edge at root)\n");
+
+    // (2) leaf-internal (pendant) edge: validates k_leaf_eig_mix per-class tip synthesis.
+    Node *intNode = C ? C : Rnode;
+    Node *Lf = nullptr;
+    for (auto nb : intNode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; break; }
+    if (!Lf) { for (auto nb : Rnode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; intNode = Rnode; break; } }
+    if (Lf) checkEdge((PhyloNeighbor*)intNode->findNeighbor(Lf), intNode, "LEAF");
+    else    printf("[GPU-DERV-XCHECK-MIX] LEAF skipped (no pendant edge found)\n");
+}
+
+// ============================================================================================================
+// G.8.2.1a — one-shot ALL-BRANCH derivative cross-check (profile mixtures). Validates the new k7_pre_mix preorder +
+// the linear-time all-branch sweep with TWO independent gates per representative edge (≥1 INT-INT, ≥1 LEAF):
+//   (a) DECISIVE — the all-branch df/ddf == the VALIDATED G.8.1b single-edge gpuComputeEdgeDervCleanRoomMix (which is
+//       bit-exact vs CPU computeLikelihoodDerv), rel<=1e-9 (expect ~1e-12). Catches the historical bugs: a U/Uinv
+//       transposition or a b_v double-count would diverge from the single-edge path (which has no `pre` at all).
+//   (b) INDEPENDENT — central finite-difference of the clean-room lnL (gpuComputeTreeLnLCleanRoomMix at b_v±ε),
+//       rel<=1e-5. Catches a sign error or an m=r/ncat vs c=r%ncat transposition shared by both GPU derivative paths.
+// Fires only for getNMixtures()>1 (leaves the one-shot unconsumed for single-model). Read-only: the FD perturbation
+// saves/restores both directed neighbour lengths. No host-partial seeding needed (both references are stateless GPU).
+// ============================================================================================================
+void PhyloTree::gpuMixAllBranchDervCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // not a mixture -> leave the one-shot unconsumed
+    done = true;
+    if (!site_rate || !aln || !root || !root->isLeaf() || root->neighbors.empty()) {
+        printf("[GPU-ALLDERV-XCHECK-MIX] skipped (tree/model not ready)\n"); return; }
+    Node *Rnode = root->neighbors[0]->node;
+    if (!Rnode || Rnode->isLeaf()) { printf("[GPU-ALLDERV-XCHECK-MIX] skipped (degenerate root)\n"); return; }
+
+    // run the all-branch sweep once (df/ddf for every edge); the per-edge gates below reuse these host-copied values
+    std::vector<Node*> childNodes, parentNodes; std::vector<double> dfAll, ddfAll;
+    if (!gpuComputeAllBranchDervCleanRoomMix(childNodes, parentNodes, dfAll, ddfAll)) {
+        printf("[GPU-ALLDERV-XCHECK-MIX] skipped (unsupported regime or CUDA error)\n"); return; }
+
+    auto lookupEdge = [&](Node *a, Node *b, double &df, double &ddf)->bool {
+        for (size_t k=0;k<childNodes.size();k++){
+            if ((childNodes[k]==a && parentNodes[k]==b) || (childNodes[k]==b && parentNodes[k]==a)) {
+                df=dfAll[k]; ddf=ddfAll[k]; return true; } }
+        return false; };
+
+    auto checkEdge = [&](PhyloNeighbor *db, Node *dadNode, const char *label) {
+        if (!db) { printf("[GPU-ALLDERV-XCHECK-MIX] %s skipped (neighbour not found)\n", label); return; }
+        Node *childN = db->node;
+        double dfA=0, ddfA=0;
+        if (!lookupEdge(childN, dadNode, dfA, ddfA)) { printf("[GPU-ALLDERV-XCHECK-MIX] %s skipped (edge not in sweep)\n", label); return; }
+        // gate (a): vs the validated G.8.1b single-edge derivative (independent two-sub-root path)
+        double ddf1=0, lnL1=0;
+        double df1 = gpuComputeEdgeDervCleanRoomMix(db, (PhyloNode*)dadNode, &ddf1, &lnL1);
+        if (std::isnan(df1)) { printf("[GPU-ALLDERV-XCHECK-MIX] %s skipped (single-edge ref unsupported)\n", label); return; }
+        double rdf  = (df1  != 0.0) ? fabs((dfA  - df1 )/df1 ) : fabs(dfA  - df1 );
+        double rddf = (ddf1 != 0.0) ? fabs((ddfA - ddf1)/ddf1) : fabs(ddfA - ddf1);
+        bool passA = (rdf <= 1e-9) && (rddf <= 1e-9);
+        // gate (b): central FD of the clean-room lnL (perturb BOTH directed neighbour lengths; save/restore)
+        PhyloNeighbor *back = (PhyloNeighbor*)dadNode->findNeighbor(childN);
+        double t0 = db->length;
+        double eps = 1e-4 * ((fabs(t0) > 1e-3) ? fabs(t0) : 1e-3);
+        db->length = t0 + eps; if (back) back->length = t0 + eps;
+        double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr);
+        db->length = t0 - eps; if (back) back->length = t0 - eps;
+        double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr);
+        db->length = t0; if (back) back->length = t0;
+        double fd = (lp - lm) / (2.0 * eps);
+        double rfd = fabs(dfA - fd) / (fabs(fd) + 1e-30);
+        bool passB = (rfd <= 1e-5);
+        printf("[GPU-ALLDERV-XCHECK-MIX] %s edge(node=%d,dad=%d) t=%.6g | df_all=%.6e df_1edge=%.6e rel=%.3e | "
+               "ddf_all=%.6e ddf_1edge=%.6e rel=%.3e | FD=%.6e rel=%.3e -> %s\n",
+               label, childN->id, dadNode->id, t0, dfA, df1, rdf, ddfA, ddf1, rddf, fd, rfd,
+               (passA && passB) ? "PASS (G.8.2.1a)" : "CHECK");
+    };
+
+    // (1) internal-internal edge: Rnode and an internal neighbour C.
+    Node *C = nullptr;
+    for (auto nb : Rnode->neighbors) if (!nb->node->isLeaf()) { C = nb->node; break; }
+    if (C) checkEdge((PhyloNeighbor*)Rnode->findNeighbor(C), Rnode, "INT-INT");
+    else   printf("[GPU-ALLDERV-XCHECK-MIX] INT-INT skipped (no internal-internal edge at root)\n");
+
+    // (2) leaf-internal (pendant) edge: validates the k_leaf_eig_mix lower endpoint + a leaf's pre_v.
+    Node *intNode = C ? C : Rnode;
+    Node *Lf = nullptr;
+    for (auto nb : intNode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; break; }
+    if (!Lf) { for (auto nb : Rnode->neighbors) if (nb->node->isLeaf()) { Lf = nb->node; intNode = Rnode; break; } }
+    if (Lf) checkEdge((PhyloNeighbor*)intNode->findNeighbor(Lf), intNode, "LEAF");
+    else    printf("[GPU-ALLDERV-XCHECK-MIX] LEAF skipped (no pendant edge found)\n");
+}
+
+// ============================================================================================================
+// G.8.2.0 — one-shot EM WEIGHT-OPTIMISER kill-switch (profile mixtures). With branches+α FIXED at the current
+// state the mixture-weight sub-problem is concave (lnL = Σ_p f_p·log Σ_m w_m·a_{p,m}), so the EM M-step
+// w_m ← Σ_p f_p·γ_{p,m} / Σ_p f_p  (γ_{p,m}=L_{p,m}/Σ_m' L_{p,m'}) converges to the UNIQUE weight-MLE from any
+// interior start. This de-risks the G.8.2.1 joint optimiser by proving the GPU posterior-based M-step (a) climbs
+// lnL MONOTONICALLY and (b) reaches the SAME optimum as IQ-TREE's own EM `ModelMixture::optimizeWeights()`. The
+// GPU EM runs off the validated clean-room lnL+per-class (custom-weight override); both compared lnLs are
+// GPU-computed (at CPU-EM weights vs GPU-EM weights) so the gate measures only the WEIGHT optimum, not the engine.
+// CPU reference = optimizeWeights() with prop[] saved/restored (read-only net effect). Gated nmix>1, non-fused,
+// no +I (the EM denominator would need ptn_invar). Fires from computeLikelihood under --gpu (not --jolt).
+// ============================================================================================================
+void PhyloTree::gpuMixWeightEMCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;   // unconsumed for single-model
+    done = true;
+    if (!site_rate || !aln) { printf("[GPU-WEM] skipped (model/tree not ready)\n"); return; }
+    if (site_rate->getPInvar() > 0.0) { printf("[GPU-WEM] skipped (+I; EM denominator needs ptn_invar)\n"); return; }
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || mix->isFused()) { printf("[GPU-WEM] skipped (not a non-fused profile mixture)\n"); return; }
+    if (!cpuComputeLikelihoodBranchPointer || !current_it || !current_it_back) {
+        printf("[GPU-WEM] skipped (no CPU branch pointer to seed partials)\n"); return; }
+    if (!s_gpuMixLnLEngineValidated) {   // MINOR-3: only trust the GPU per-class L_{p,m} if G.8.0 pinned the engine
+        printf("[GPU-WEM] skipped (GPU mixture lnL engine NOT validated this run — G.8.0 lnL/self-consistency check did not PASS)\n");
+        return; }
+
+    int N = model->getNMixtures();
+    int nptn = (int)aln->size();
+    // Ftot = Σ_p frequency[p] == getAlnNSite() for a standard alignment (the denominator CPU optimizeWeights uses).
+    // We divide the M-step by Ftot rather than getNSite() so the GPU EM fixed point sums to 1 by construction; the
+    // two agree unless expected_num_sites is set (not the mixture case here).
+    std::vector<double> f(nptn); double Ftot = 0.0;
+    for (int p = 0; p < nptn; p++) { f[p] = (double)aln->at(p).frequency; Ftot += f[p]; }
+
+    // ---- CPU reference: IQ-TREE's own EM optimizeWeights() at the current (fixed) branches/α; save+restore prop ----
+    std::vector<double> w0(N), wCPU(N);
+    for (int m = 0; m < N; m++) w0[m] = model->getMixtureWeight(m);
+    (this->*cpuComputeLikelihoodBranchPointer)(current_it, (PhyloNode*)current_it_back->node, false);  // seed host partials
+    mix->optimizeWeights();                                              // CPU EM -> prop[] = weight-MLE (branches/α fixed)
+    for (int m = 0; m < N; m++) wCPU[m] = model->getMixtureWeight(m);
+    for (int m = 0; m < N; m++) model->setMixtureWeight(m, w0[m]);       // RESTORE prop[] exactly
+    // State-safety (red-team): restoring prop[] is sufficient TODAY only because mixture weights do not affect internal-
+    // node partials (weights enter only at the root sum), so the partials optimizeWeights left at CPU-EM weights are
+    // still valid for the restored weights. clearAllPartialLH() makes that UNCONDITIONAL — if a future change ever made
+    // partials weight-dependent, this prevents the one-shot from silently corrupting the subsequent real analysis. It is
+    // a one-shot; the cost is a single partial recompute on the next computeLikelihood.
+    clearAllPartialLH();
+    double lnL_cpuW = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wCPU.data());   // GPU lnL at CPU-EM weights (stateless sweep)
+    // Min weight is DIAGNOSTIC CONTEXT, not a gate: an over-parameterised mixture on a finite alignment legitimately
+    // drives weak classes toward 0 (a data-driven interior stationary point), so requiring "chunky" weights would
+    // spuriously fail correct runs. The real boundary case is FLOOR-CLAMPING (w pinned to the 1e-10 EM floor); both
+    // optimisers share that floor, so if they clamp the SAME class the lnL/Δw gates still hold, and if they disagree
+    // those gates catch it. We therefore only report it. (10× the floor => "essentially clamped".)
+    double wmin_cpu = 1.0; bool floorClampedCPU = false;
+    for (int m = 0; m < N; m++) { if (wCPU[m] < wmin_cpu) wmin_cpu = wCPU[m]; if (wCPU[m] <= 1e-9) floorClampedCPU = true; }
+
+    // ---- GPU EM: from a UNIFORM cold start (branches/α fixed), monotone climb to the weight-MLE ----
+    std::vector<double> lhcat((size_t)N*nptn), w(N, 1.0/N), wn(N);
+    auto emStep = [&](const std::vector<double>& lh, std::vector<double>& out) {
+        std::fill(out.begin(), out.end(), 0.0);
+        for (int p = 0; p < nptn; p++) {
+            double s = 0.0; for (int m = 0; m < N; m++) s += lh[(size_t)m*nptn + p];
+            if (s <= 0.0) continue; double fp = f[p];
+            for (int m = 0; m < N; m++) out[m] += fp * (lh[(size_t)m*nptn + p] / s);   // Σ_p f_p·γ_{p,m}
+        }
+        for (int m = 0; m < N; m++) { out[m] /= Ftot; if (out[m] < 1e-10) out[m] = 1e-10; }  // /Σf, floor (CPU EM floor)
+    };
+    // M1 (red-team): match CPU optimizeWeights' iteration budget = (getNDim()+1)*100 = N*100 (2000 for C20, 6000 for
+    // C60, 8000 for MEOW80) so the GPU is never capped before the CPU would be, and REQUIRE the GPU broke on the
+    // convergence condition (not cap-exhaustion) in the PASS gate — otherwise an under-converged high-N run could slip
+    // through on wErr/lnLErr alone. The loop still terminates on convergence (typically <100 iters; floored classes pin
+    // and stop moving), so the high cap is only a safety ceiling, not the expected count.
+    const int maxIters = N * 100;
+    double prev = -1e300, worst_drop = 0.0, lnL = (double)NAN; bool monotone = true, gpuConverged = false; int iters = 0;
+    for (int k = 0; k < maxIters; k++) {
+        iters = k + 1;
+        lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, lhcat.data(), w.data());     // lnL(w^k) + per-class L_{p,m}(w^k)
+        if (std::isnan(lnL)) { printf("[GPU-WEM] skipped (CUDA/unsupported on the EM sweep)\n"); return; }
+        if (k > 0 && lnL < prev - 1e-7) { monotone = false; if (prev - lnL > worst_drop) worst_drop = prev - lnL; }
+        double delta = lnL - prev; prev = lnL;
+        emStep(lhcat, wn);
+        double step = 0.0; for (int m = 0; m < N; m++) { double d = fabs(wn[m] - w[m]); if (d > step) step = d; }
+        w = wn;                                                                   // w^{k+1}
+        if (k > 0 && delta >= 0.0 && delta < 1e-9 && step < 1e-9) { gpuConverged = true; break; }
+    }
+    double lnL_gpuW = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data());  // GPU lnL at GPU-EM weights
+    double wErr = 0.0, wmin_gpu = 1.0;
+    for (int m = 0; m < N; m++) { double d = fabs(w[m] - wCPU[m]); if (d > wErr) wErr = d; if (w[m] < wmin_gpu) wmin_gpu = w[m]; }
+    double lnLErr = (lnL_cpuW != 0.0) ? fabs((lnL_gpuW - lnL_cpuW)/lnL_cpuW) : fabs(lnL_gpuW - lnL_cpuW);
+    // PASS criteria (the DECISIVE one is (b): the GPU EM reaches a likelihood at least as high as the CPU's own EM on
+    // the concave weight surface, so it cannot have under-climbed):
+    //   (a) monotone     — lnL non-decreasing across all iters (defining property of a correct EM M-step);
+    //   (b) gpuConverged — the GPU broke on the convergence condition, NOT cap-exhaustion (M1: an under-converged
+    //                      high-N run must not slip through on wErr/lnLErr alone);
+    //   (c) lnL_gpuW >= lnL_cpuW - 1e-6   — GPU climbs at least as high as CPU optimizeWeights;
+    //   (d) lnLErr <= 1e-7                — the two optima agree in lnL to ~1e-7 relative.
+    // wErr (max|Δw|) is reported but bounded only LOOSELY at 1e-3, NOT 1e-4: CPU stops at its own |Δprop|<1e-4
+    // tolerance while the GPU runs to 1e-9, so the two legitimately sit at slightly different points on the same
+    // near-flat concave ridge (C20/400-site shows 1.6e-4, the CPU early-stop, with GPU lnL actually +5.9e-4 BETTER).
+    // It is a sanity bound on weight-space agreement, not the primary gate — (b)+(c) are.
+    bool pass = monotone && gpuConverged && (lnLErr <= 1e-7) && (lnL_gpuW >= lnL_cpuW - 1e-6) && (wErr <= 1e-3);
+    printf("[GPU-WEM] N=%d EM weights (branches/α fixed): %d/%d iters from uniform, converged=%d, monotone=%d (worst drop %.2e); "
+           "min w: CPU=%.2e GPU=%.2e floor-clamped(CPU)=%d; GPU-EM vs CPU optimizeWeights: max|Δw|=%.3e, "
+           "lnL %.6f vs %.6f (GPU-CPU=%+.2e) rel=%.3e  -> %s\n",
+           N, iters, maxIters, (int)gpuConverged, (int)monotone, worst_drop, wmin_cpu, wmin_gpu, (int)floorClampedCPU,
+           wErr, lnL_gpuW, lnL_cpuW, (lnL_gpuW - lnL_cpuW), lnLErr,
+           (pass ? "PASS (G.8.2.0)" : "CHECK"));
+}
+
+// ============================================================================================================
+// G.8.2.1b — one-shot JOINT cold-start optimiser kill-switch (non-fused profile mixture, no +I, mean-gamma).
+// Host-driven block-coordinate ascent composing the THREE validated pieces at ITERATE (b,w,α) via the parentLen/
+// alpha overrides on the clean-room sweeps: (1) all-branch LM diagonal-Newton (k7_pre_mix, G.8.2.1a), (2) EM weight
+// M-step (G.8.2.0), (3) scalar-α central-FD Newton/secant (no new kernel; matches the validated dr_c/dα = host-FD).
+// Runs from a COLD (b=0.1,w=1/N,α=1) AND a WARM (live) start. The gate is NON-REENTRANT (no CPU optimiser is invoked
+// inside this computeLikelihood hook — the hook fires at the FIRST computeLikelihood, before IQ-TREE has optimised)
+// and self-contained: it proves the GPU joint optimiser is a consistent ascent method reaching the SAME stationary
+// MLE from both starts (cold==warm rel<=1e-9 — the decisive basin/convergence check), monotone, improving on the
+// start (the converged branch gradient |g|inf is reported for context). The end-to-end "GPU MLE == CPU joint MLE" tie is done at
+// VALIDATION time by comparing the printed cold/warm MLE to the run's own .iqtree CPU lnL on the same -te topology.
+// Read-only (the overrides mutate nothing; ends with clearAllPartialLH defensively). Mirrors the one-shot pattern.
+void PhyloTree::gpuMixJointOptimizeCrossCheckOnce() {
+    static bool done = false;
+    if (done) return;
+    if (!model || model->getNMixtures() <= 1) return;                  // single-model -> unconsumed
+    done = true;
+    if (!site_rate || !aln) { printf("[GPU-MIXJOINT] skipped (model/tree not ready)\n"); return; }
+    int ns = aln->num_states;
+    if (ns != 20 && ns != 4) { printf("[GPU-MIXJOINT] skipped (ns=%d)\n", ns); return; }
+    if (!model->isReversible()) { printf("[GPU-MIXJOINT] skipped (non-reversible)\n"); return; }
+    if (model->isSiteSpecificModel()) { printf("[GPU-MIXJOINT] skipped (PMSF)\n"); return; }
+    if (site_rate->getPInvar() > 0.0) { printf("[GPU-MIXJOINT] skipped (+I)\n"); return; }
+    ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
+    if (!mix || mix->isFused()) { printf("[GPU-MIXJOINT] skipped (not a non-fused profile mixture)\n"); return; }
+    int N = model->getNMixtures();
+    int ncat = site_rate->getNRate();
+    if (ncat < 1) { printf("[GPU-MIXJOINT] skipped (ncat<1)\n"); return; }
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) { printf("[GPU-MIXJOINT] skipped (non-mean-gamma)\n"); return; }
+    if (!s_gpuMixLnLEngineValidated) { printf("[GPU-MIXJOINT] skipped (GPU mixture lnL engine not validated this run)\n"); return; }
+    if (!root || !root->isLeaf() || root->neighbors.empty()) { printf("[GPU-MIXJOINT] skipped (bad root)\n"); return; }
+    Node *Rt = root->neighbors[0]->node;
+    if (!Rt || Rt->isLeaf()) { printf("[GPU-MIXJOINT] skipped (Rt leaf)\n"); return; }
+
+    int nptn = (int)aln->size();
+    bool DBG = getenv("MIXJOINT_DBG") != nullptr;
+
+    // canonical node ordering: REPLICATE the clean-room indexDfs (root at Rt, preorder, recurse neighbors skipping dad).
+    // b[] is indexed by this nid; b[v] = length of the edge above node v (b[root]=0). The SAME vector is a valid
+    // parentLenOverride for BOTH clean-room functions (identical indexDfs => identical nid). nidMap maps the all-branch
+    // derivative's returned childNodes back to this index. The warm-init self-test below confirms the index match.
+    std::map<Node*,int> nidMap; std::vector<Node*> nodes; std::vector<double> bLive;
+    std::function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        nidMap[n] = (int)nodes.size(); nodes.push_back(n); bLive.push_back(lenToDad);
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; indexDfs(nb->node, n, nb->length); }
+    };
+    indexDfs(Rt, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    int rootId = nidMap[Rt];
+
+    std::vector<double> f(nptn); double Ftot = 0.0;                    // EM denominator (Σ_p frequency[p])
+    for (int p = 0; p < nptn; p++) { f[p] = (double)aln->at(p).frequency; Ftot += f[p]; }
+    std::vector<double> w0(N); for (int m = 0; m < N; m++) w0[m] = model->getMixtureWeight(m);
+    double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : -1.0;
+
+    // engine reference at the LIVE state + the override self-test (live params THROUGH the overrides must reproduce it
+    // to ~1e-12, proving the iterate plumbing is transparent and this gate's nid matches the clean-room functions' nid).
+    double lnL_live = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, nullptr);
+    if (std::isnan(lnL_live)) { printf("[GPU-MIXJOINT] skipped (CUDA/unsupported on the live sweep)\n"); return; }
+    double lnL_warmInit = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w0.data(), bLive.data(), alpha0);
+    double selfRel = (lnL_live != 0.0) ? std::fabs((lnL_warmInit - lnL_live)/lnL_live) : std::fabs(lnL_warmInit - lnL_live);
+
+    // all-branch DERIVATIVE override self-test: central-FD one edge's df (from the all-branch sweep at bLive) against
+    // the VALIDATED lnL override at bLive±ε. The lnL selfRel above only exercises the lnL override; this index-checks
+    // the all-branch override seam (a divergent indexDfs there would corrupt the branch step but pass selfRel).
+    double selfRelDrv = (double)NAN;
+    { std::vector<Node*> cN0, pN0; std::vector<double> df0, ddf0;
+      if (gpuComputeAllBranchDervCleanRoomMix(cN0, pN0, df0, ddf0, bLive.data(), alpha0) && !cN0.empty()) {
+          int ev = nidMap.at(cN0[0]); double dfAll = df0[0];
+          double eps = 1e-4 * std::max(std::fabs(bLive[ev]), 1e-3);
+          std::vector<double> bp = bLive; bp[ev] = bLive[ev] + eps;
+          double Lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w0.data(), bp.data(), alpha0);
+          bp[ev] = bLive[ev] - eps;
+          double Lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w0.data(), bp.data(), alpha0);
+          if (!std::isnan(Lp) && !std::isnan(Lm)) { double dfFD = (Lp - Lm) / (2.0*eps);
+              selfRelDrv = std::fabs(dfAll - dfFD) / std::max(std::fabs(dfFD), 1.0); }
+      }
+    }
+
+    auto alphaArg = [&](double a){ return (ncat > 1) ? a : -1.0; };
+
+    // host-driven block-coordinate optimiser: branch LM -> EM weights -> α FD-Newton (each block monotone/accept-or-stay)
+    auto runOpt = [&](bool warm, double &outLnL, int &outIters, bool &outMono, bool &outConv, double &outGradInf, double &outFreeGradInf) {
+        std::vector<double> b(nNodes), w(N); double alpha;
+        if (warm) { b = bLive; w = w0; alpha = (ncat > 1 ? alpha0 : 1.0); }
+        else { std::fill(b.begin(), b.end(), 0.1); b[rootId] = 0.0; std::fill(w.begin(), w.end(), 1.0/N); alpha = 1.0; }
+        // ---- G.8.2.1d BLOCK-COORDINATE L-BFGS. The shared-μ diagonal-Newton (G.8.2.1c) floored cold/warm ~1e-8 on the
+        // ill-conditioned mixture ridge. Fix = curvature-aware L-BFGS, but its (s,y) secant pairs must be CLEAN: so
+        // L-BFGS runs as an INNER loop over (b,α) at FIXED weights w (consecutive inner gradients share w ⇒ y is a pure
+        // Hessian action, NOT contaminated by the EM weight move between samples), wrapped by an OUTER EM-weight cadence.
+        // x/g span the free branches (v≠root) + one α slot at index nNodes; H0 = diag 1/(|ddf|+ε), so the first inner
+        // step == the old diagonal-Newton step and later steps fold in the ridge curvature the scalar-μ could not.
+        const int nAi = nNodes, nX = nNodes + 1, mLB = 8, maxOuter = 80, maxInner = 80;
+        auto dotV = [](const std::vector<double>&A, const std::vector<double>&B){ double s=0.0;
+            for (size_t j=0;j<A.size();j++) s += A[j]*B[j]; return s; };
+        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha));
+        outMono = true; outConv = false; outIters = 0; outGradInf = (double)NAN; outFreeGradInf = (double)NAN;
+        int totalIters = 0;
+        for (int outer = 0; outer < maxOuter; outer++) {
+            double lnL0 = lnL;
+            // ===== INNER: L-BFGS on (b,α) at FIXED w. History resets each outer (the objective changed with w). =====
+            std::vector<std::vector<double>> sHist, yHist; std::vector<double> rhoHist;
+            std::vector<double> xPrev, gPrev; bool havePrev = false; double lastFreeG = (double)NAN;
+            for (int inner = 0; inner < maxInner; inner++) {
+                std::vector<Node*> cN, pN; std::vector<double> df, ddf;
+                if (!gpuComputeAllBranchDervCleanRoomMix(cN, pN, df, ddf, b.data(), alphaArg(alpha))) { outLnL = (double)NAN; return; }
+                std::vector<double> gdf(nNodes, 0.0), gddf(nNodes, 0.0); double gradInf = 0.0, freeGradInf = 0.0;
+                for (size_t i = 0; i < cN.size(); i++) { int v = nidMap.at(cN[i]); gdf[v] = df[i]; gddf[v] = ddf[i];
+                    if (std::fabs(df[i]) > gradInf) gradInf = std::fabs(df[i]);
+                    // FREE gradient excludes branches structurally pinned at a clamp bound (their |df| never vanishes).
+                    bool pinned = (b[v] <= 1e-6 + 1e-12 && df[i] < 0.0) || (b[v] >= 20.0 - 1e-12 && df[i] > 0.0);
+                    if (!pinned && std::fabs(df[i]) > freeGradInf) freeGradInf = std::fabs(df[i]); }
+                double ga = 0.0, curvA = 1e-12;
+                if (ncat > 1) { double e = 1e-3 * std::max(alpha, 1.0);
+                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alpha+e);
+                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alpha-e);
+                    if (std::isnan(lp) || std::isnan(lm)) { outLnL = (double)NAN; return; }
+                    ga = (lp - lm) / (2.0*e); curvA = std::fabs((lp - 2.0*lnL + lm) / (e*e)); if (curvA < 1e-12) curvA = 1e-12; }
+                outGradInf = gradInf; outFreeGradInf = freeGradInf; lastFreeG = freeGradInf;
+                // inner convergence: (b,α) optimum at THIS w — free gradient ~0 (valid now that clean L-BFGS reaches it).
+                if (inner > 0 && freeGradInf < 1e-5 && (ncat <= 1 || std::fabs(ga) < 1e-5)) break;
+                // joint gradient g=∇lnL, iterate x, diagonal H0 over [free branches, α]; root slot inert.
+                std::vector<double> g(nX, 0.0), x(nX, 0.0), h0(nX, 0.0);
+                for (int v = 0; v < nNodes; v++) { if (v == rootId) continue; x[v] = b[v]; g[v] = gdf[v]; h0[v] = 1.0/(std::fabs(gddf[v])+1e-3); }
+                if (ncat > 1) { x[nAi] = alpha; g[nAi] = ga; h0[nAi] = 1.0/(curvA+1e-3); }
+                // (s,y) from the previous INNER iterate (SAME w ⇒ clean). s=x-xPrev, y=∇f-∇fPrev=-(g-gPrev); push if s·y>0.
+                if (havePrev) { std::vector<double> s(nX), y(nX); double sy = 0.0;
+                    for (int j = 0; j < nX; j++) { s[j] = x[j]-xPrev[j]; y[j] = -(g[j]-gPrev[j]); sy += s[j]*y[j]; }
+                    if (sy > 1e-12) { sHist.push_back(s); yHist.push_back(y); rhoHist.push_back(1.0/sy);
+                        if ((int)sHist.size() > mLB) { sHist.erase(sHist.begin()); yHist.erase(yHist.begin()); rhoHist.erase(rhoHist.begin()); } } }
+                // two-loop recursion: dvec = H·g (ascent for lnL); q init = ∇f = -g.
+                std::vector<double> q(nX); for (int j=0;j<nX;j++) q[j] = -g[j];
+                int hk = (int)sHist.size(); std::vector<double> aLB(hk, 0.0);
+                for (int k = hk-1; k >= 0; k--) { double a = rhoHist[k] * dotV(sHist[k], q); aLB[k] = a;
+                    for (int j=0;j<nX;j++) q[j] -= a * yHist[k][j]; }
+                std::vector<double> r(nX); for (int j=0;j<nX;j++) r[j] = h0[j] * q[j];
+                for (int k = 0; k < hk; k++) { double bbeta = rhoHist[k] * dotV(yHist[k], r);
+                    for (int j=0;j<nX;j++) r[j] += (aLB[k]-bbeta) * sHist[k][j]; }
+                std::vector<double> dvec(nX); double gdotd = 0.0;
+                for (int j=0;j<nX;j++) { dvec[j] = -r[j]; gdotd += g[j]*dvec[j]; }
+                if (!(gdotd > 0.0)) { sHist.clear(); yHist.clear(); rhoHist.clear();   // non-ascent ⇒ diagonal fallback
+                    for (int j=0;j<nX;j++) dvec[j] = h0[j]*g[j]; }
+                // projected-Armijo: sufficient increase vs the REALIZED clamped step's first-order gain g·(x_new−x).
+                double tAcc = 0.0;
+                for (int ls = 0; ls < 30; ls++) { double t = std::ldexp(1.0, -ls);
+                    std::vector<double> bc = b; double ac = alpha; double realGain = 0.0;
+                    for (int v=0; v<nNodes; v++) { if (v==rootId) continue; double nb = b[v] + t*dvec[v];
+                        if (nb < 1e-6) nb = 1e-6; if (nb > 20.0) nb = 20.0; realGain += g[v]*(nb-b[v]); bc[v] = nb; }
+                    if (ncat > 1) { ac = alpha + t*dvec[nAi]; if (ac < 0.02) ac = 0.02; if (ac > 50.0) ac = 50.0; realGain += g[nAi]*(ac-alpha); }
+                    double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), bc.data(), alphaArg(ac));
+                    if (std::isnan(ln)) { outLnL = (double)NAN; return; }
+                    if (realGain > 0.0 && ln >= lnL + 1e-4 * realGain) { b = bc; alpha = ac; lnL = ln; tAcc = t; break; }
+                }
+                xPrev = x; gPrev = g; havePrev = true; totalIters++;
+                if (tAcc == 0.0) break;   // no improving (b,α) step at this w (FP floor) ⇒ inner converged
+            }
+            // ===== WEIGHT BLOCK — EM M-step at fixed (b,α) to full convergence. The per-class likelihood a_{p,m} is
+            // WEIGHT-INDEPENDENT, so one GPU sweep at uniform w gives lhc[m][p]=a_{p,m}/N (the 1/N cancels in the
+            // posterior) and the ENTIRE EM M-step runs on the host (γ=w_m·lhc/Σ w_m·lhc); one final sweep for exact lnL.
+            { std::vector<double> lhc((size_t)N*nptn), wunif(N, 1.0/N), wn(N);
+              double l1 = gpuComputeTreeLnLCleanRoomMix(nullptr, lhc.data(), wunif.data(), b.data(), alphaArg(alpha));
+              if (std::isnan(l1)) { outLnL = (double)NAN; return; }
+              for (int em = 0; em < 1000; em++) {
+                  std::fill(wn.begin(), wn.end(), 0.0);
+                  for (int p = 0; p < nptn; p++) { double s = 0.0; for (int m = 0; m < N; m++) s += w[m]*lhc[(size_t)m*nptn+p];
+                      if (s <= 0.0) continue; double fp = f[p];
+                      for (int m = 0; m < N; m++) wn[m] += fp * (w[m]*lhc[(size_t)m*nptn+p] / s); }
+                  double stepw = 0.0; for (int m = 0; m < N; m++) { wn[m] /= Ftot; if (wn[m] < 1e-10) wn[m] = 1e-10;
+                      double d = std::fabs(wn[m]-w[m]); if (d > stepw) stepw = d; }
+                  w = wn;
+                  if (em > 0 && stepw < 1e-12) break;
+              }
+              lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha)); }
+            if (lnL < lnL0 - 1e-7) outMono = false;
+            outIters = totalIters;
+            if (DBG) fprintf(stderr, "[MIXJOINT-DBG] %s outer=%d tot=%d lnL=%.6f alpha=%.4f |g|inf=%.2e free|g|=%.2e\n",
+                             warm ? "warm" : "cold", outer, totalIters, lnL, alpha, outGradInf, lastFreeG);
+            // ===== OUTER (joint) convergence: lnL plateau ABOVE FP noise. The inner L-BFGS solved (b,α) and EM solved
+            // w, so a sub-1e-8 outer gain == the block-coordinate joint optimum; both cold and warm reach the SAME
+            // plateau lnL ⇒ cold-vs-warm ≤ 1e-9. (1e-8 at lnL~3e4 is ~1e3 ULP — a real plateau, not FP noise.)
+            if (outer > 0 && std::fabs(lnL - lnL0) < 1e-8) { outConv = true; break; }
+        }
+        outLnL = lnL;
+    };
+
+    double lnL_warm, lnL_cold, gradWarm, gradCold, fgradWarm, fgradCold; int itWarm, itCold; bool monoWarm, monoCold, convWarm, convCold;
+    runOpt(true,  lnL_warm, itWarm, monoWarm, convWarm, gradWarm, fgradWarm);
+    runOpt(false, lnL_cold, itCold, monoCold, convCold, gradCold, fgradCold);
+    clearAllPartialLH();   // defensive read-only contract (the clean-room sweeps touch no live partials; cheap one-shot)
+
+    if (std::isnan(lnL_warm) || std::isnan(lnL_cold)) { printf("[GPU-MIXJOINT-XCHECK] skipped (CUDA/unsupported during optimise)\n"); return; }
+    double relCW = (lnL_warm != 0.0) ? std::fabs((lnL_cold - lnL_warm)/lnL_warm) : std::fabs(lnL_cold - lnL_warm);
+    // PASS criteria (decisive = (c): cold and warm converge to the SAME MLE => consistent ascent, no basin pathology):
+    //   (a) BOTH override self-tests transparent — lnL selfRel<=1e-12 AND all-branch-derivative selfRelDrv<=1e-4 (FD)
+    //       (NaN selfRelDrv => the derivative seam couldn't be checked => fails safe to CHECK);
+    //   (b) both monotone AND broke on convergence (not cap); (c) rel(cold,warm)<=1e-9; (d) both improve on the live
+    //   start. The total branch |g|inf (clamped-branch-dominated) and the FREE |g| (now driven to ~0 by L-BFGS) are
+    //   reported for context — (c) is decisive. THRESHOLD: G.8.2.1d restores 1e-9: the curvature-aware L-BFGS step
+    //   breaks the G.8.2.1c diagonal-LM ridge floor (which pinned cold/warm ~8.76e-9 apart at free|g|~1.56e-2), so cold
+    //   and warm now reach the SAME MLE to <=1e-9. GPU>=CPU (the VALIDATION tie vs the run's .iqtree CPU lnL) confirms it.
+    bool pass = (selfRel <= 1e-12) && (selfRelDrv <= 1e-4) && monoWarm && monoCold && convWarm && convCold
+                && (relCW <= 1e-9) && (lnL_cold >= lnL_live - 1e-6) && (lnL_warm >= lnL_live - 1e-6);
+    printf("[GPU-MIXJOINT-XCHECK] N=%d ncat=%d  lnL_live=%.6f -> cold=%.6f (%d it mono=%d conv=%d |g|inf=%.2e free|g|=%.2e) "
+           "warm=%.6f (%d it mono=%d conv=%d |g|inf=%.2e free|g|=%.2e); selfTest lnL rel=%.2e drv rel=%.2e; cold-vs-warm rel=%.3e  -> %s\n",
+           N, ncat, lnL_live, lnL_cold, itCold, (int)monoCold, (int)convCold, gradCold, fgradCold,
+           lnL_warm, itWarm, (int)monoWarm, (int)convWarm, gradWarm, fgradWarm, selfRel, selfRelDrv, relCW,
+           (pass ? "PASS (G.8.2.1d L-BFGS)" : "CHECK"));
 }
 
 // ============================================================================================================
