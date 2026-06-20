@@ -10,9 +10,9 @@
 #PBS -N meow-cpu-base
 #PBS -P dx61
 #PBS -q normalsr
-#PBS -l ncpus=104
-#PBS -l mem=480GB
-#PBS -l walltime=08:00:00
+#PBS -l ncpus=48
+#PBS -l mem=240GB
+#PBS -l walltime=10:00:00
 #PBS -l storage=scratch/dx61+scratch/rc29
 #PBS -l wd
 #PBS -j oe
@@ -31,7 +31,10 @@ echo "alignment: $(head -1 "$ALN")  | cores: $(nproc)  | BIN md5: $(md5sum "$BIN
 free -g | awk '/Mem:/{print "  host RAM total="$2" GB"}'
 
 t0=$(date +%s)
-"$BIN" -te "$TREE" -s "$ALN" -mdef "$NEX" -m LG+ESmodel+G4 -mwopt -nt AUTO -ntmax 104 -pre "$WB/meow_cpu" -redo \
+# NOTE: -nt 48 FIXED (not AUTO). The -nt AUTO benchmark wastes ~1 h running a full ~500-1100 s lnL eval per thread
+# count before optimizing, and MEOW80's 105 GB arena is memory-bandwidth-bound (68% efficiency at 2 threads), so
+# AUTO would over-test. 48 Sapphire Rapids cores is a generous, defensible "well-resourced CPU node" baseline.
+"$BIN" -te "$TREE" -s "$ALN" -mdef "$NEX" -m LG+ESmodel+G4 -mwopt -nt 48 -pre "$WB/meow_cpu" -redo \
    > "$WB/meow_cpu.console" 2>&1
 RC=$?
 WALL=$(( $(date +%s) - t0 ))
