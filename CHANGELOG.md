@@ -2,6 +2,47 @@
 
 ---
 
+## 🧬 G.8.2.1–2.5 — Profile-mixture JOLT in PRODUCTION: full-data LG+MEOW80+G4 runs on ONE GPU + the Williamson (Nature 2025) reproduction — ✅ — 2026-06-20
+
+The payoff of the G.8 arc: the profile-mixture optimiser is now wired into the **real `--jolt` path** (`optimizeParametersJOLTMix`, not just a kill-switch), tiled to full data, and validated on the actual eukaryote-root dataset. **LG+MEOW80+G4 — the Williamson et al. (Nature 2025) primary model, 100 taxa × 22,462 sites — fits end-to-end on ONE H200**, GPU≡CPU at machine precision. All commits local on `iqtree3-gpu` branch `gpu-kernel-clean` (HEAD `cca7dbc1`). **CPU path byte-unchanged; all GPU code purely additive.**
+
+### ⭐ Mixture-model coverage (what runs on the GPU vs CPU fallback) — read this first
+
+| Model class | On GPU (JOLTMix)? | Note |
+|---|---|---|
+| **Profile mixtures + G4** — C10–C60, **UDM64**, **MEOW80**/ESmodel, custom `FMIX{profiles}` (fixed OR EM-estimated weights) | ✅ **Yes** | the paper's MEOW80 / C60 / UDM64 |
+| Profile mixture, uniform rates (no +G) | ✅ Yes | |
+| **+I** (invariant sites) | ❌ → CPU | declined at the gate |
+| **+R / +Rk** FreeRate (incl. CAT-PMSF's +R4) | ❌ → CPU | only mean-Gamma on GPU |
+| **Fused** mixtures (LG4M, LG4X) | ❌ → CPU | 1:1 class↔rate pairing |
+| **Free per-class Q / freq** (`-mfopt`, GTR mixtures, linked-GTR) | ❌ → CPU | |
+| **PMSF** site-specific (CAT-PMSF) | ❌ not wired | per-site π, no class sum |
+| states ∉ {4 DNA, 20 AA} (codon / morphology) | ❌ unsupported | |
+
+**Everything that declines still runs correctly on the CPU** — nothing breaks, it just isn't accelerated. For the paper's four model types: **LG+MEOW80+G4, LG+C60+G4, LG+UDM64+G4 are GPU-accelerated; CAT-PMSF (GTR+PMSF+R4) is not.** Eligibility (`optimizeParametersJOLTMix`): non-fused mixture, `getNDim()==0` (fixed weights) **OR** `!isFixMixtureWeight() && Σ component.getNDim()==0 && !linked_gtr` (EM weights), mean-Gamma or uniform, **no +I**, ns∈{4,20}, rate-1 ρ==1.
+
+### The arc (commits, local on `gpu-kernel-clean`)
+- **G.8.2.1a–d** `0b49664d` / `41850fad` / `8d075a14` — all-branch mixture derivative (`k7_pre_mix` preorder) + host-driven JOINT cold-start optimiser **kill-switch** (`[GPU-MIXJOINT-XCHECK]`, cold→MLE, cold==warm rel 8.85e-9) + ridge-recognizing termination. (`dcef6ea0` L-BFGS variant tried + **reverted** `25459a01` — validated worse than diagonal-LM.)
+- **G.8.2.2** `f8923dc5` — `optimizeParametersJOLTMix` wired at the `ModelFactory::optimizeParameters` seam under `--jolt` when `getNMixtures()>1`. Gated behind env **`JOLT_MIX_HOSTDRIVEN`** (correct but launch-bound) → mixtures default to CPU until the perf/throughput story closes.
+- **G.8.2.3** `15f07acc` — **the lever: regime-axis 2D-grid kernels.** `k1_node_mix`/`k7_pre_mix` were gridded over patterns only (2 blocks on the 400-site subsample, ~0.3% V100 occupancy, each thread serial over R regimes). Fix: `dim3(GB,R)` (one regime per `blockIdx.y`) for non-root/preorder. Bit-exact; **9.3× (C20 520→56 s).** nsys *refuted* the "host echild rebuild is the bottleneck" hypothesis (kernels were 95% of wall) — the fix was ~20 lines of occupancy, not a device-resident rewrite. **Always profile before a big GPU rewrite.**
+- **G.8.2.4** `bb918c78` — **estimated-weight EM path (unblocks MEOW80).** ESmodel FMIX has no `:weight` ⇒ getNDim()=N−1 ⇒ the getNDim()==0 gate declined it. Widened gate + an interleaved EM weight block (weight-independent `a_{p,m}` → 1 GPU sweep at uniform w → host EM M-step). MEOW80 engages `weights=EM`, GPU-EM ≥ CPU-BFGS.
+- **G.8.2.5a** `1e03dd52` — **pattern tiling (full-data MEOW80 fits 1 GPU).** The all-branch gradient held `nInternal·R·ns·nptn` (postorder) + `nPool·R·ns·nptn` (preorder pool) **resident = ~149 GB for MEOW80+G4 → OOMs even the 141 GB H200 one-shot.** Mirror of single-model G.7.1: `mix_pick_ntile` auto-picks nTile from `cudaMemGetInfo` (80 % budget, `JOLT_NTILE` override); FULL postorder+preorder sweep per chunk; **continuous per-edge Kahan** carried across chunks ⇒ **BIT-IDENTICAL** to one-shot for any nTile (validated job 171731912 C20/V100: NTILE=4 == NTILE=1 char-for-char through the 136-cold + 100-warm trajectory). **Agent code-audit clean.**
+- **G.8.2.5b** `cca7dbc1` — **rate-1 scale guard (the "rescale" question RESOLVED).** Measured (jobs 171734557/171734946): profile-mixture classes are pure frequency profiles with **`total_num_subst=1`** each, so the live overall rate **ρ = Σ w_m·tns_m = Σ w_m = 1 IDENTICALLY** (C20 1.0000000000, MEOW80 1.0000000005, tns[min=max=1]). ⇒ branches are **already** in IQ-TREE's `Σprop·tns=1` convention — **no rescale needed** (the worry only applies to rate-varying mixtures, eligibility-excluded). Shipped a defensive guard: if |ρ−1|>1e-6 (a non-profile mixture past the gate) **decline to CPU** rather than write mis-scaled branches.
+
+### Headline results (REAL data)
+- **Full-data MEOW80 on 1 H200** (job 171733080, ~24 min): `weights=EM` 146 iters, GPU lnL **−1665670.996718 == CPU rel 2.463e-13**, auto-nTile (lnL launcher nTile=1, derivative nTile=5, adapted to live free VRAM), peak **107 / 141 GB**, util 88 %, exit 0.
+- **Williamson reproduction on the paper's OWN published ML trees** (job 171734995; via the Figshare `.fasta` whose labels match the trees — no relabeling): **Anae+** GPU −1665043.846751 == CPU rel 2.49e-13 (78 it); **Anae−** −1656373.186675 == CPU rel 2.55e-13 (80 it). Our likelihoods rank the paper's ML tree **+627 nats above** the FastTree guide tree (independent confirmation it's the better topology). The paper reports **no absolute lnL or runtime** (only topology lnL *differences*) — confirmed by full 24-page extract.
+- **GPU vs CPU walltime (same guide-tree fit) — HONEST 1.74×.** GPU H200 **1446 s** (lnL −1665670.997, BEST MLE) vs **CPU full node 104-core + numactl interleave 2510 s** (job 171745185, lnL −1665697.969) = **1.74×**; CPU 48-core 4692 s = 3.24× (the 2nd socket gave 1.87×, so the full-node 1.74× is the fair number). One CPU MEOW80 lnL eval ≈ 1100 s single-thread, 68 % eff at 2 threads — the 105 GB arena is **memory-bandwidth-bound** (the H200-HBM lever). At 22k sites a single fit is **modestly** faster (~1.7–2×), not "staggering".
+- **Scaling (AliSim under LG+MEOW80+G4) — the advantage GROWS with length.** **100k sites: GPU 1247 s, peak 99 GB** (one-shot derivative arena would be 547 GB; tiling auto-nTile 5/15), parity rel 4.5e-15, lnL −11540354.508 (BEST) vs **CPU 104-core 3412 s** (lnL −11540354.731) = **2.74× — up from 1.74× at 22k** (the GPU even got faster: 33 EM iters on clean sim data vs 146; the CPU got 1.4× slower per the bandwidth wall). **The CPU single-node RAM wall: arena ~935 GB at 200k > 503 GB node ⇒ a CPU node cannot run a 200k-site fit at all, while the GPU does (tiling keeps VRAM bounded).** That feasibility wall — not a per-fit ratio — is the GPU's strongest claim at scale. (200k pair in flight, job 171759796/7.)
+
+### Handoff notes for peers
+- **Activate:** `JOLT_MIX_HOSTDRIVEN=1 … --jolt -mdef MEOW6020.nex -m LG+ESmodel+G4 -mwopt` (mixtures stay gated behind this env until production un-gating). `JOLT_DEBUG=1` prints `[JOLTMIX]` / `[JOLTMIX-RATE1]` / `[MIX-TILE]`. `JOLT_NTILE=N` overrides auto-tiling.
+- The optimiser is **block-coordinate**: joint diagonal-LM over (197 branches + α) interleaved with an **EM** block for the mixture weights (each EM iter = one weight-independent GPU sweep + host M-step). C20/C60 = fixed weights (no EM); MEOW80/ESmodel = EM weights.
+- **OPEN for peers:** (1) production un-gating needs the aggregate-throughput story (mutex-serialised single GPU vs N-concurrent CPU — see MASTER §4 N/S); (2) **CAT-PMSF** (PMSF + R4 + GTR) is a separate track; (3) +I / +R mixtures inherit the single-model G.5.1b gap; (4) finish the larger-alignment scaling sweep (100k done, 200k in flight).
+- **Data + paper trees:** `/scratch/rc29/as1708/eukaryote_williamson2025/` (`MEOW6020.nex` = MEOW(60,20); `anae_minus/` has the `.fasta` + published trees with matching labels). **Scripts:** `setonix-iq/gadi-ci/gpu-modelfinder/run_g82*.sh` + `run_g825_*.sh` (branch `gpu-modelfinder-src`).
+
+---
+
 ## 🧬 G.8.2.0 — Profile-mixture EM weight-optimiser KILL-SWITCH on GPU — ✅ VALIDATED vs CPU optimizeWeights — 2026-06-19
 
 The de-risk before the G.8.2.1 joint optimiser: prove the GPU EM weight M-step **climbs lnL monotonically** and **converges to the weight-MLE**, cross-validated against IQ-TREE's own `ModelMixture::optimizeWeights()`. With branches+α FIXED the weight sub-problem `lnL = Σ_p f_p·log Σ_m w_m·a_{p,m}` is **concave**, so the M-step `w_m ← Σ_p f_p·γ_{p,m}/Σ_p f_p` (γ = the G.8.1a per-class posterior, floor 1e-10) ascends from a uniform cold start to the unique max. **Purely additive; CPU path byte-unchanged.** Commit `9f3fee28` (iqtree3-gpu, local).

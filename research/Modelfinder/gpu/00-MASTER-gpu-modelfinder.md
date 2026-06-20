@@ -109,7 +109,13 @@ path); a process-wide `std::mutex` serialises JOLT on the 1 GPU (ModelFinder is 
 | **G.8.1a** | **Mixture per-class** for EM numerator: GPU self-consistency Σ_m L_{p,m}=L_p **1.4e-14** (×3); posterior γ_{p,m} vs CPU `_pattern_lh_cat` **\|Δγ\|=6.84e-13/4.32e-12/1.00e-12** (C20/C60/MEOW80) — scale-invariant metric (CPU per-pattern scaled, GPU clean-room unscaled) | 171633488 | `2277273d` |
 | **G.8.1b** | **Mixture branch DERIVATIVE** df/ddf == CPU `computeLikelihoodDerv` ~machine-eps: INT-INT **df 8.1e-14/4.8e-14/1.1e-13** ddf ~1e-14; LEAF **df 1.5e-14/3.2e-14/1.2e-13** ddf ~1e-15 (C20/C60/MEOW80, both edge types). `k2_derv_mix` regime-axis + per-class global-mem coeffs; π_m absorbed via theta trick. Red-team clean | 171637224/171637348 | `b855c3fe` |
 | **G.8.2.0** | **Mixture EM weight-optimiser KILL-SWITCH**: GPU EM weights (M-step `w_m←Σf_p·γ_{p,m}/Σf_p`, uniform cold start) **monotone + converged** to the weight-MLE, **≥ CPU `optimizeWeights`** in every case (C20/C60/MEOW80 GPU−CPU lnL **+4.2e-4/+1.8e-2/+1.6e-2**, conv 33/126/59 iters). Decisive = converged+monotone+lnL≥CPU (max\|Δw\|/rel measure CPU's `\|Δprop\|<1e-4` early-stop, not GPU error). Red-team: M1 cap→N·100 + converged-gate, engine-validated guard, `clearAllPartialLH` safety | 171644621 | `9f3fee28` |
-| **G.8 →** | next: G.8.2.1 full cold-start joint optimiser (G.8.2.0 EM weights + G.8.1b gradient in joint diagonal-LM, MLE==CPU rel≤1e-9) → G.8.3 seam+gate relax → G.8.4 eukaryote LG+MEOW80+G4 payoff (part9 §IX.11); production still declines mixtures to CPU | — | — |
+| **G.8.2.1** | Host-driven JOINT cold-start mixture optimiser **kill-switch** (EM weights + all-branch gradient `k7_pre_mix` in diagonal-LM); cold→MLE, cold==warm rel **8.85e-9** (L-BFGS variant `dcef6ea0` reverted, worse) | — | `0b49664d`/`41850fad`/`8d075a14` |
+| **G.8.2.2** | `optimizeParametersJOLTMix` wired in-tree at the `--jolt` seam (`getNMixtures()>1`); gated behind env **`JOLT_MIX_HOSTDRIVEN`** (correct but launch-bound) | — | `f8923dc5` |
+| **G.8.2.3** | **Regime-axis 2D-grid kernels** (`dim3(GB,R)`): the **9.3×** lever (C20 520→56 s); nsys *refuted* the host-echild hypothesis (kernels 95% of wall ⇒ occupancy, ~20 lines not a rewrite) | — | `15f07acc` |
+| **G.8.2.4** | **Estimated-weight EM path unblocks MEOW80** (ESmodel `getNDim()=N−1`, widened gate); GPU-EM ≥ CPU-BFGS, engages `weights=EM` | — | `bb918c78` |
+| **G.8.2.5** | **Pattern tiling** (149 GB MEOW80 derivative arena → fits 1 H200; **NTILE=4==1 bit-identical** through 136+100-iter trajectory, job 171731912) + **rate-1 guard** (measured ρ=Σw·tns=**1 identically** ⇒ no rescale; decline if ρ≠1) | 171731912 | `1e03dd52`/`cca7dbc1` |
+| **G.8.2.x payoff** | **Full-data LG+MEOW80+G4 (100×22,462) runs on 1 H200, 24 min, GPU lnL −1665670.997 == CPU rel 2.46e-13** (peak 107/141 GB). Paper's OWN published trees reproduced (Anae+ rel 2.49e-13, Anae− 2.55e-13; ML tree +627 nat > guide). **Walltime 1.74× vs full CPU node**, GROWS to **2.74× @100k**; CPU OOMs @200k (935 GB > 503 GB node) where GPU tiles. GPU finds best MLE. **Production stays env-gated** pending aggregate throughput | 171733080, 171734995, 171745185, 171755718 | `cca7dbc1` |
+| **G.8 →** | next for peers: production un-gating (N/S aggregate-throughput story) → CAT-PMSF track → +I/+R mixtures (inherit G.5.1b) → finish scaling sweep (100k done, 200k in flight) | — | — |
 
 ---
 
@@ -193,7 +199,17 @@ LG+G4→LG+I+G4 = +14.3.)
   freqs (excludes +FO `FREQ_ESTIMATE` AND tied DNA freqs `FREQ_DNA_*` — RISK-1 fix); AA +FO/GTR20 still decline.
 - `isGammaRate()!=GAMMA_CUT_MEAN → "non-mean-gamma"` — declines ALL +R/+I+R (median-gamma). **This is the gate G.5.1b would
   flip for +R.** Currently UNFLIPPED (R6 multimodality).
-- pure-`+I` declines; `getNMixtures()!=1 || isSiteSpecificModel()` declines (the **G.8 target** — profile mixtures + PMSF).
+- pure-`+I` declines; `isSiteSpecificModel()` (PMSF) declines. **`getNMixtures()>1` (profile mixtures) NOW ENGAGES under `--jolt` + env `JOLT_MIX_HOSTDRIVEN`** via the separate `optimizeParametersJOLTMix` path (G.8.2.x) — see the mixture coverage table below. (The stateless single-model GPU overrides still decline mixtures; the mixture path is the host-driven JOLTMix.)
+
+**Mixture-model coverage (G.8.2.x, `optimizeParametersJOLTMix`) — what runs on GPU vs CPU fallback:**
+
+| Mixture model class | On GPU? | |
+|---|---|---|
+| **Profile mixtures + G4** — C10–C60, **UDM64**, **MEOW80**/ESmodel, custom `FMIX{profiles}`, fixed OR EM-estimated weights | ✅ | the paper's MEOW80/C60/UDM64 |
+| Profile mixture, uniform rates (no +G) | ✅ | |
+| +I / +R / +Rk (incl. CAT-PMSF's +R4) / fused (LG4M/LG4X) / free per-class Q-freq (`-mfopt`, GTR mix, linked-GTR) / PMSF / ns∉{4,20} | ❌ → CPU | all run correctly, just not accelerated |
+
+Mixture eligibility: non-fused, `getNDim()==0` (fixed weights) **OR** `!isFixMixtureWeight() && Σ component.getNDim()==0 && !linked_gtr` (EM weights), mean-Gamma/uniform, **no +I**, ns∈{4,20}, **rate-1 ρ=Σw·tns==1** (always true for profile mixtures; guard declines otherwise). So 3 of the paper's 4 model types (MEOW80/C60/UDM64) are GPU; CAT-PMSF (PMSF+R4+GTR) is not. Optimiser is block-coordinate: diagonal-LM (branches+α) ⊕ EM (weights). Full CHANGELOG entry: G.8.2.1–2.5 (2026-06-20).
 - Safety: write-back rel > 1e-6 ⇒ NaN→CPU fallback (RISK-3 fix: `if(!(rel<=1e-6))` so NaN trips it, not `>1e-6`).
 
 **Correctness discipline (every phase):** standalone FD/clean-room cross-check BEFORE the gate flips; **CPU-optimum
@@ -220,9 +236,15 @@ comparison gate** (JOLT lnL ≥ CPU−eps else NaN→CPU); deterministic FP64 re
    posterior |Δγ| ~1e-12; df/ddf vs CPU `computeLikelihoodDerv` ~1e-13/1e-14 INT-INT + LEAF; **GPU EM weights monotone +
    converged + ≥ CPU `optimizeWeights`** in all three, GPU−CPU lnL +4.2e-4/+1.8e-2/+1.6e-2; 320-regime MEOW80 via global-mem
    per-regime arrays, so the 64-entry `__constant__` cap was NOT hit by the clean-room path — it WILL bind a production
-   `k1_node`). **NEXT: G.8.2.1 full cold-start joint optimiser** (the G.8.2.0 EM weight M-step + G.8.1b branch gradient ride
-   the joint diagonal-LM, MLE==CPU rel≤1e-9) → G.8.3 seam + gate relax (`phylotreegpu.cpp:573`) → G.8.4 eukaryote payoff. **Watch (still ahead):** low-register class map, the `__constant__`
-   cap when the kernel goes in-tree, EM near-zero-weight overfitting floor. ~12 days remaining.
+   `k1_node`). **✅ G.8.2.1–2.5 DONE (2026-06-20) — PROFILE-MIXTURE JOLT IS IN PRODUCTION (env-gated).** Wired `optimizeParametersJOLTMix`
+   at the `--jolt` seam (`f8923dc5`); regime-axis kernels `15f07acc` (9.3×); EM-weight path for MEOW80 `bb918c78`; pattern
+   tiling `1e03dd52` + rate-1 guard `cca7dbc1`. **Full-data LG+MEOW80+G4 (100×22,462) runs on 1 H200 in 24 min, GPU lnL
+   −1665670.997 == CPU rel 2.46e-13;** paper's own published Anae+/Anae− trees reproduced (rel ~2.5e-13, ML tree +627 nat >
+   guide); **walltime 1.74× vs a full CPU node, growing to 2.74× @100k**, and a CPU node can't even run 200k (arena 935 GB >
+   503 GB) where the GPU tiles. Coverage = profile mixtures + G (C20/C60/UDM64/MEOW80), fixed or EM weights; +I/+R/fused/
+   free-Q/PMSF decline to CPU (§6 table). **OPEN for peers:** (a) **production un-gating** (off `JOLT_MIX_HOSTDRIVEN`) needs the
+   N/S aggregate-throughput story (§4) — the single-fit win is real but modest at small N; (b) **CAT-PMSF** (item 3); (c)
+   +I/+R mixtures inherit G.5.1b; (d) the `__constant__` 64-cat cap if/when the clean-room kernels go fully in-tree.
 3. **CAT-PMSF** (site-specific `ModelSet`, +R4) — separate later track (per-site π, no class sum).
 4. **10M throughput follow-up** — the host self-check at extreme nptn dominates wall (a HOST cost after GPU optimise);
    sample/skip it. Capability (JOLT engages, lnL-exact) is shipped (G.7.1).
