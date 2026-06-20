@@ -1822,9 +1822,32 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     }
 
     // ---- write-back. optWeights: set the FINAL EM weights live (the last EM updated w AFTER the per-outer sync, so
-    // the live weights are one EM-step stale). NO rate-1 rescale in this v1: the lnL is rescale-invariant, so the
-    // self-check and the GPU>=CPU selection are exact; the written branch lengths sit in the live total_num_subst
-    // scale (a global factor off IQ-TREE's Sum prop*tns=1 convention) — branch-scale fidelity is the next increment.
+    // the live weights are one EM-step stale).
+    // G.8.2.5 — RATE-1 SCALE GUARD (red-teamed; resolves the "rate-1 rescale write-back" question). IQ-TREE writes
+    // branch lengths in the Sum_m prop_m*total_num_subst_m = 1 convention. For PROFILE mixtures (C20/C60/MEOW80)
+    // every class is a pure frequency profile sharing the LG exchangeabilities, individually normalised to
+    // total_num_subst = 1, so rho = Sum_m w_m*tns_m = Sum_m w_m = 1 IDENTICALLY for any weights (MEASURED job
+    // 171734557: C20 fixed rho=1.0000000000, MEOW80 EM rho=1.0000000005, tns[min=max=1]). The branches are therefore
+    // ALREADY in convention => NO rescale is needed (the earlier "off-convention" worry only applies to RATE-varying
+    // mixtures, which eligibility already excludes). The ONLY way rho != 1 is a class with tns != 1 (a non-profile /
+    // rate mixture) slipping past the gate — we have NOT validated a branch rescale for that, so DECLINE to CPU
+    // rather than silently write globally mis-scaled branch lengths. computeTransMatrix uses time/total_num_subst.
+    {
+        double rho = 0.0, tmin = 1e300, tmax = -1e300;
+        for (int m = 0; m < N; m++) {
+            double tns = ((ModelMarkov*)((*mix)[m]))->total_num_subst;
+            double wm = optWeights ? w[m] : model->getMixtureWeight(m);
+            rho += wm * tns; if (tns < tmin) tmin = tns; if (tns > tmax) tmax = tns;
+        }
+        if (JOLT_DBG) fprintf(stderr, "[JOLTMIX-RATE1] rho=Sum w*tns=%.10f  tns[min=%.6f max=%.6f]  -> %s\n",
+                rho, tmin, tmax, (std::fabs(rho-1.0) <= 1e-6 ? "in-convention (no rescale)" : "OFF-CONVENTION -> DECLINE"));
+        if (std::fabs(rho - 1.0) > 1e-6) {
+            static bool warned_r1 = false;
+            if (!warned_r1) { warned_r1 = true;
+                printf("[JOLTMIX] rate-1 guard: overall rate rho=%.6f != 1 (tns[min=%.4f max=%.4f]) -> branch scale unvalidated -> CPU fallback\n", rho, tmin, tmax); }
+            return (double)NAN;
+        }
+    }
     if (optWeights) for (int m = 0; m < N; m++) model->setMixtureWeight(m, w[m]);
     // ---- write the optimised branch lengths (both directed neighbours) + alpha back ----
     for (int v = 0; v < nNodes; v++) {
