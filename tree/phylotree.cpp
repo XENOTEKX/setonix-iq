@@ -1307,12 +1307,11 @@ double PhyloTree::computeLikelihood(double *pattern_lh, bool save_log_value) {
          }*/
     }
     curScore = score;
-#ifdef IQTREE_GPU
-    // Phase G.2.0a: one-shot clean-room GPU lnL cross-check (proves the eigen/tip/weights/pi-fold bridge
-    // before the seam is wired in G.2.0b). Phase G.2.1a: one-shot single-edge derivative cross-check (GPU
-    // df/ddf vs IQ-TREE's own computeLikelihoodDerv). Both run once per process; pure read-only diagnostics.
-    // G.4.2: skip the G.2.x one-shot cross-checks under --jolt — ModelFinder is across-model OpenMP-parallel
-    // (phylotesting.cpp:4097), so these GPU-constant-touching diagnostics would race concurrent JOLT calls.
+#if defined(IQTREE_GPU) && defined(JOLT_DEBUG_BUILD)
+    // Dev-only one-shot clean-room GPU cross-checks (lnL / single-edge & all-branch derivatives / mixture /
+    // free-Q gradient). They are PURE read-only diagnostics and already runtime-gated off under --jolt, but a
+    // production build compiles them out entirely (JOLT_DEBUG_BUILD=OFF) so they cannot run and add no weight.
+    // Build with -DJOLT_DEBUG_BUILD=ON to re-enable; they then fire once per process under a plain --gpu run.
     if (params && params->gpu && !params->jolt) { gpuLnLCrossCheckOnce(score); gpuMixLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); gpuMixDervCrossCheckOnce(); gpuMixAllBranchDervCrossCheckOnce(); gpuMixWeightEMCrossCheckOnce(); gpuMixJointOptimizeCrossCheckOnce(); gpuFreeQGradCheckOnce(); }
 #endif
     return score;

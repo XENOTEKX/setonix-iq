@@ -5551,6 +5551,46 @@ void parseArg(int argc, char *argv[], Params &params) {
                 params.gpu = true;
                 continue;
             }
+            if (strcmp(argv[cnt], "--ctf") == 0 || strcmp(argv[cnt], "-ctf") == 0) {
+                params.ctf = true;    // native coarse-to-fine ModelFinder (implies --jolt --gpu)
+                params.jolt = true;
+                params.gpu = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ctf-subsample") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --ctf-subsample <num_sites>";
+                params.ctf_subsample = convert_int(argv[cnt]);
+                if (params.ctf_subsample < 1)
+                    throw "--ctf-subsample must be positive";
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ctf-topk") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --ctf-topk <num_models>";
+                params.ctf_topk = convert_int(argv[cnt]);
+                if (params.ctf_topk < 1)
+                    throw "--ctf-topk must be positive";
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ctf-seed") == 0) {
+                cnt++;
+                if (cnt >= argc)
+                    throw "Use --ctf-seed <seed>";
+                params.ctf_seed = convert_int(argv[cnt]);
+                continue;
+            }
+            if (strcmp(argv[cnt], "--no-jolt") == 0 || strcmp(argv[cnt], "--cpu") == 0
+                || strcmp(argv[cnt], "--no-gpu") == 0) {
+                // Force the CPU path in a GPU-enabled build (A/B parity). Overrides the GPU default-on.
+                params.no_gpu = true;
+                params.gpu = false;
+                params.jolt = false;
+                params.ctf = false;
+                continue;
+            }
             if (argv[cnt][0] == '-') {
                 string err = "Invalid \"";
                 err += argv[cnt];
@@ -7654,6 +7694,11 @@ void Params::setDefault() {
     cmaple_output_MAT = false;
     gpu = false;
     jolt = false;
+    ctf = false;
+    ctf_subsample = 5000;
+    ctf_topk = 3;
+    ctf_seed = -1;
+    no_gpu = false;
 }
 
 int countPhysicalCPUCores() {

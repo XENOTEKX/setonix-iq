@@ -3451,7 +3451,15 @@ void startTreeReconstruction(Params &params, IQTree* &iqtree, ModelCheckpoint &m
     params.start_real_time = getRealTime();
     string best_subst_name, best_rate_name;
     map <string, vector<string> > nest_network;
-    runModelFinder(params, *iqtree, model_info, best_subst_name, best_rate_name, nest_network);
+    // Phase 4: native CTF (coarse-to-fine) ModelFinder. When --ctf is set,
+    // runCTFModelFinder() does the whole coarse-rank + top-k full-data refine in
+    // one process and leaves iqtree holding the winner (returns true). Otherwise
+    // fall back to the standard monolithic ModelFinder.
+    if (params.ctf && runCTFModelFinder(params, *iqtree, model_info, best_subst_name, best_rate_name, nest_network)) {
+        // CTF set the winner (iqtree now holds the winner's optimized tree+params)
+    } else {
+        runModelFinder(params, *iqtree, model_info, best_subst_name, best_rate_name, nest_network);
+    }
     
     runMixtureFinder(params, iqtree, model_info);
     

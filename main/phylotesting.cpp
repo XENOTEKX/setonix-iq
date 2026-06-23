@@ -1324,6 +1324,454 @@ void getRateHet(SeqType seq_type, string model_name, double frac_invariant_sites
     reorderModelNames(ratehet, rate_options, sizeof(rate_options) / sizeof(rate_options[0]));
 }
 
+// ============================================================================
+// CTF (coarse-to-fine) ModelFinder — Phase 4
+// ============================================================================
+
+/**
+ The CTF JOLT eligibility gate, mirroring ctf_rerank.py ineligible():
+ FreeRate (+R / +I+R) and pure-+I decline to CPU; everything else (incl. +I+G,
+ free-Q DNA) engages JOLT. MUST stay in lockstep with the in-tree JOLT
+ eligibility gate (phylotreegpu.cpp).
+ */
+static inline bool ctfIneligible(const string &name) {
+    return (name.find("+R") != string::npos) ||
+           (name.find("+I") != string::npos && name.find("+G") == string::npos);
+}
+
+/**
+ Faithful C++ port of ctf_rerank.py rerank() — the CTF coarse-stage gate.
+ Ranks ALL candidates ascending by their NATIVE subsample BIC (the value
+ getOrderedModels already filled in BIC_score at subsample N), then for the
+ top-K emits a refine/skip action. We use CandidateModel.df directly (NO
+ p-recovery from BIC — we have the exact param count from the checkpoint).
+
+ ineligible(name)         := name has "+R" OR ("+I" without "+G")
+ be := eligible candidate with min BIC ; bi := ineligible with min BIC (either may be null)
+ per top-K:  skip = ineligible(name) AND (be != null) AND (BIC > be.BIC + |df - be.df|/2)
+             else refine.
+ The skip gates on ineligible(name) ONLY — a skipped ELIGIBLE model would
+ silently corrupt selection.
+
+ Detector (diagnostic, logged): margin = |bi.df - be.df|/2, lead = be.BIC - bi.BIC,
+ flag = lead > margin (a +R/+I model genuinely leads the eligible best on the
+ subsample => eligible-refine may MISS the true winner).
+
+ Self-check below reproduces ctf_rerank fixtures A (LG+G4 native#1 refined,
+ LG+R5 skipped) and B (LG+R4 leads => refined). Returns top-K as
+ (full model name, skip-flag) pairs in BIC-ascending order.
+ */
+static vector<pair<string,bool> > selectCTFTopK(CandidateModelSet &ordered, int K, bool verbose) {
+    // ----- rank ALL candidates ascending by native subsample BIC -----
+    // (index into `ordered`; ordered[i].subst_name holds the FULL model name and
+    //  ordered[i].BIC_score / .df are the native-subsample values getOrderedModels filled in.)
+    vector<int> idx(ordered.size());
+    for (int i = 0; i < (int)ordered.size(); i++)
+        idx[i] = i;
+    std::stable_sort(idx.begin(), idx.end(),
+                     [&ordered](int a, int b) { return ordered[a].BIC_score < ordered[b].BIC_score; });
+
+    // ----- best eligible (be) and best ineligible (bi) by BIC -----
+    int be = -1, bi = -1;
+    for (int i = 0; i < (int)ordered.size(); i++) {
+        bool inel = ctfIneligible(ordered[i].getName());
+        if (!inel) {
+            if (be < 0 || ordered[i].BIC_score < ordered[be].BIC_score) be = i;
+        } else {
+            if (bi < 0 || ordered[i].BIC_score < ordered[bi].BIC_score) bi = i;
+        }
+    }
+
+    // ----- detector (diagnostic only — does NOT change selection) -----
+    if (be >= 0 && bi >= 0) {
+        double margin = fabs((double)(ordered[bi].df - ordered[be].df)) / 2.0;
+        double lead   = ordered[be].BIC_score - ordered[bi].BIC_score;  // >0 => an ineligible model LEADS
+        bool flag = lead > margin;
+        // verbose=false suppresses ALL detector output (used by ctfSelfTest so the
+        // fixtures never leak [CTF detector] lines into a production --ctf run; note
+        // NDEBUG is not defined in IQ-TREE's Release build, so the self-test runs).
+        if (verbose && getenv("JOLT_DEBUG"))
+            cout << "  [CTF detector] best_elig=" << ordered[be].getName()
+                 << "(" << ordered[be].BIC_score << ") best_inel=" << ordered[bi].getName()
+                 << "(" << ordered[bi].BIC_score << ") inel_lead=" << lead
+                 << " margin=" << margin << " RATE_HET_FLAG=" << (flag ? "true" : "false") << endl;
+        if (verbose && flag)
+            cout << "  [CTF detector] *** WARNING: a +R/+I model genuinely leads on the subsample — "
+                    "eligible-refine may MISS the true winner; needs +R JOLT or CPU full-refine ***" << endl;
+    }
+
+    // ----- per top-K refine/skip action -----
+    vector<pair<string,bool> > out;
+    int topk = min(K, (int)idx.size());
+    for (int r = 0; r < topk; r++) {
+        int i = idx[r];
+        bool inel = ctfIneligible(ordered[i].getName());
+        // refine eligible always; refine an ineligible model only if it could plausibly
+        // win (within the overfit margin of the best eligible); else SKIP it.
+        bool skip = inel && (be >= 0) &&
+                    (ordered[i].BIC_score > ordered[be].BIC_score
+                                            + fabs((double)(ordered[i].df - ordered[be].df)) / 2.0);
+        out.push_back(make_pair(ordered[i].getName(), skip));
+    }
+    return out;
+}
+
+#ifndef NDEBUG
+/**
+ Compile-time-cheap regression pinning ctf_rerank fixtures A and B for
+ selectCTFTopK. Runs once (static guard) the first time runCTFModelFinder is
+ entered. A: LG+G4 native#1 -> refine, LG+R5 ineligible & behind -> skip.
+ B: LG+R4 leads native BIC by > margin -> refined (leader never skipped).
+ */
+static void ctfSelfTest() {
+    auto mk = [](const string &name, double bic, int df) {
+        CandidateModel c;
+        c.subst_name = name;  // full name lives in subst_name (rate_name empty), matching getOrderedModels
+        c.rate_name = "";
+        c.BIC_score = bic; c.df = df;
+        return c;
+    };
+    // BIC values chosen so the natural BIC ordering equals fixture intent
+    // (smaller BIC = better). Fixture A: native #1 = LG+G4.
+    {
+        CandidateModelSet A;
+        // subsample m=5000: bic = -2*logL + df*ln(m). Mirror ctf_rerank fixture A.
+        double lm = log(5000.0);
+        A.push_back(mk("LG+G4",   -2*(-300000.000) + 198*lm, 198));
+        A.push_back(mk("LG+I+G4", -2*(-299999.500) + 199*lm, 199));
+        A.push_back(mk("LG+R5",   -2*(-299999.000) + 206*lm, 206));
+        A.push_back(mk("LG+I+R5", -2*(-299998.800) + 207*lm, 207));
+        A.push_back(mk("WAG+G4",  -2*(-300500.000) + 198*lm, 198));
+        vector<pair<string,bool> > top = selectCTFTopK(A, 4, false);
+        ASSERT(!top.empty() && top[0].first == "LG+G4" && top[0].second == false
+               && "CTF self-test A: LG+G4 must be native #1 and refined");
+        bool found_R5_skip = false;
+        for (auto &p : top) if (p.first == "LG+R5") { ASSERT(p.second == true && "CTF self-test A: LG+R5 must be skipped"); found_R5_skip = true; }
+        ASSERT(found_R5_skip && "CTF self-test A: LG+R5 must appear in top-4");
+    }
+    // Fixture B: LG+R4 leads native BIC => refined (leader never skipped).
+    {
+        CandidateModelSet B;
+        double lm = log(5000.0);
+        B.push_back(mk("LG+G4", -2*(-300100.000) + 198*lm, 198));
+        B.push_back(mk("LG+R4", -2*(-300000.000) + 204*lm, 204));
+        vector<pair<string,bool> > top = selectCTFTopK(B, 2, false);
+        ASSERT(!top.empty() && top[0].first == "LG+R4" && top[0].second == false
+               && "CTF self-test B: LG+R4 must lead native BIC and be refined");
+    }
+}
+#endif
+
+bool runCTFModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info,
+                       string &best_subst_name, string &best_rate_name,
+                       map<string, vector<string> > nest_network)
+{
+    // CTF coverage guard: the coarse pass builds a plain Alignment/IQTree from
+    // iqtree.aln, so partitioned (SuperAlignment / PhyloSuperTree) and codon data
+    // are unsupported. Fall through to standard ModelFinder (return false) — params
+    // are untouched at this point, so the hand-off to runModelFinder is clean.
+    if (iqtree.isSuperTree() || iqtree.aln->seq_type == SEQ_CODON) {
+        cout << "NOTE: --ctf does not support "
+             << (iqtree.isSuperTree() ? "partitioned" : "codon")
+             << " data; using standard ModelFinder instead." << endl;
+        return false;
+    }
+#ifndef NDEBUG
+    {
+        static bool ran_selftest = false;
+        if (!ran_selftest) { ctfSelfTest(); ran_selftest = true; }
+    }
+#endif
+
+    double cpu_time = getCPUTime();
+    double real_time = getRealTime();
+
+    cout << endl << "=================== CTF (coarse-to-fine) ModelFinder ===================" << endl;
+
+    // --- bookkeeping that mirrors runModelFinder's setup ---
+    params.dating_mf = true;
+    model_info.setFileName((string)params.out_prefix + ".model.gz");
+    model_info.setDumpInterval(params.checkpoint_dump_interval);
+
+    // DNA nest network (mirrors runModelFinder lines 1339-1349)
+    if (nest_network.size() == 0 && iqtree.aln->seq_type == SEQ_DNA) {
+        StrVector model_names, freq_names;
+        getModelSubst(iqtree.aln->seq_type, iqtree.aln->isStandardGeneticCode(), params.model_name,
+                      params.model_set, params.model_subset, model_names);
+        getStateFreqs(iqtree.aln->seq_type, params.state_freq_set, freq_names);
+        nest_network = generateNestNetwork(model_names, freq_names);
+    }
+
+    Checkpoint *orig_checkpoint = iqtree.getCheckpoint();
+    ModelsBlock *models_block = readModelsDefinition(params);
+
+    // ---- save the params we mutate so they can be restored on the way out ----
+    string  saved_model_name      = params.model_name;
+    int     saved_min_iterations  = params.min_iterations;
+    STOP_CONDITION saved_stop_cond = params.stop_condition;
+
+    // ========================================================================
+    // STEP 1 — Subsample: pick min(ctf_subsample, nsite) DISTINCT seeded sites
+    // ========================================================================
+    size_t nsite = iqtree.aln->getNSite();
+    int Ksub = (int)min((size_t)params.ctf_subsample, nsite);
+    int seed = (params.ctf_seed >= 0) ? params.ctf_seed : params.ran_seed;
+
+    // seed a private permutation of [0,nsite) and take the first Ksub indices,
+    // then sort so extracted sites keep ascending order (REUSE init_random /
+    // my_random_shuffle; restore the global RNG afterwards so CTF does not
+    // perturb the rest of the run).
+    // Use a PRIVATE RNG stream (m1: don't overwrite / leak the global randstream).
+    int *ctf_rng = nullptr;
+    init_random(seed, false, &ctf_rng);
+    IntVector perm(nsite);
+    for (size_t i = 0; i < nsite; i++) perm[i] = (int)i;
+    my_random_shuffle(perm.begin(), perm.end(), ctf_rng);
+    finish_random(ctf_rng);
+
+    IntVector site_id(perm.begin(), perm.begin() + Ksub);
+    std::sort(site_id.begin(), site_id.end());
+
+    Alignment *sub_aln = new Alignment();
+    sub_aln->extractSites(iqtree.aln, site_id);
+    cout << "CTF: coarse-ranking " << "all candidate models on a "
+         << sub_aln->getNSite() << "-site subsample (seed " << seed << ") of "
+         << nsite << " sites" << endl;
+
+    // ========================================================================
+    // STEP 2 — Coarse pass on the subsample (GPU JOLT). Its OWN in-memory
+    // checkpoint (empty filename => never writes/clobbers the run's .model.gz).
+    // evaluateAll() has its OWN across-model OpenMP — we do NOT add our own.
+    // ========================================================================
+    // STEPS 2-4 are scoped in an inner block so coarse_tree / coarse_info /
+    // coarse_set / ordered (which all reference sub_aln) DESTRUCT before sub_aln
+    // is freed below (M1 use-after-free fix). Only `topk` (copied names + flags)
+    // and the coarse topology file escape the block.
+    vector<pair<string,bool> > topk;
+    string coarse_tree_file = (string)params.out_prefix + ".ctf_coarse.treefile";
+    bool coarse_ok = true;
+    {
+        IQTree coarse_tree(sub_aln);
+        coarse_tree.setParams(&params);
+        coarse_tree.setLikelihoodKernel(params.SSE);
+        coarse_tree.optimize_by_newton = params.optimize_by_newton;
+        coarse_tree.setNumThreads(params.num_threads);
+
+        ModelCheckpoint coarse_info;            // in-memory only — no setFileName()
+        coarse_tree.setCheckpoint(&coarse_info);
+        // PLL-based start trees (the default STT_PLL_PARSIMONY, also STT_RANDOM_TREE
+        // and any -pll run) need the PLL instance built first — mirror the main flow
+        // at phyloanalysis.cpp:3432. Without this, computeInitialTree dereferences a
+        // null pllInst (SIGSEGV "Create initial parsimony tree by PLL...").
+        if (params.start_tree == STT_PLL_PARSIMONY ||
+            params.start_tree == STT_RANDOM_TREE || params.pll)
+            coarse_tree.initializePLL(params);
+        coarse_tree.computeInitialTree(params.SSE);
+        coarse_tree.saveCheckpoint();
+
+        CandidateModelSet coarse_set;
+        coarse_set.nest_network = nest_network;
+        coarse_set.evaluateAll(params, &coarse_tree, coarse_info, models_block,
+                               params.num_threads, BRLEN_OPTIMIZE);
+
+        // ---- STEP 3: rerank + per-model refine/skip action (ctf_rerank gate) ----
+        CandidateModelSet ordered;
+        if (!coarse_info.getOrderedModels(&coarse_tree, ordered)) {
+            coarse_ok = false;
+        } else {
+            topk = selectCTFTopK(ordered, params.ctf_topk, true);
+            cout << "CTF: coarse native subsample-BIC ranking (top " << topk.size() << "):" << endl;
+            for (auto &p : topk)
+                cout << "    " << (p.second ? "SKIP   " : "refine ") << p.first << endl;
+            // ---- STEP 4: write the coarse topology ONCE (refines reuse it) ----
+            coarse_tree.printTree(coarse_tree_file.c_str(), WT_BR_LEN | WT_NEWLINE);
+        }
+    }   // coarse_tree/coarse_info/coarse_set/ordered destruct here (sub_aln still alive)
+
+    if (!coarse_ok) {
+        // coarse pass produced no ordered model list — fall back to monolithic MF
+        cout << "CTF: coarse pass produced no model list; falling back to standard ModelFinder" << endl;
+        delete models_block;
+        delete sub_aln;
+        params.model_name = saved_model_name;
+        params.min_iterations = saved_min_iterations;
+        params.stop_condition = saved_stop_cond;
+        return false;
+    }
+
+    // ========================================================================
+    // STEP 5 — Refine each non-skipped top-k model on the FULL data with the
+    // coarse topology fixed. STRICTLY SERIAL (one GPU). The WINNER's refine is
+    // run directly on &iqtree (R7 hand-off) and must be LAST.
+    // ========================================================================
+    // Fixed-topology, parameters-only optimisation: 0 tree-search iterations.
+    params.min_iterations = 0;
+    params.stop_condition = SC_FIXED_ITERATION;
+
+    int    best_idx = -1;          // index into topk of the full-data winner (by configured criterion)
+    double best_crit = DBL_MAX;    // winner's score under params.model_test_criterion
+    double best_logl = 0.0;
+    int    best_df = 0;
+    size_t full_ssize = iqtree.aln->getNSite();
+
+    // track best-by-each-IC NAME for the honest 3-line summary print
+    string best_name_AIC, best_name_AICc, best_name_BIC;
+    double best_AIC = DBL_MAX, best_AICc = DBL_MAX, best_BIC = DBL_MAX;
+
+    for (int t = 0; t < (int)topk.size(); t++) {
+        const string &mname = topk[t].first;
+        bool skip = topk[t].second;
+        if (skip) {
+            cout << "CTF: skipping full-data refine of " << mname << " (ineligible & behind best eligible)" << endl;
+            continue;
+        }
+
+        cout << "CTF: refining " << mname << " on full data (fixed coarse topology)..." << endl;
+
+        // Temp tree on the FULL alignment, with its OWN in-memory checkpoint so a
+        // non-winner refine never touches the run's model_info.
+        ModelCheckpoint refine_info;
+        IQTree *rtree = new IQTree(iqtree.aln);
+        rtree->setParams(&params);
+        rtree->setLikelihoodKernel(params.SSE);
+        rtree->optimize_by_newton = params.optimize_by_newton;
+        rtree->setNumThreads(params.num_threads);
+        rtree->setCheckpoint(&refine_info);
+        bool is_rooted = params.is_rooted;
+        rtree->readTree(coarse_tree_file.c_str(), is_rooted);
+        rtree->setAlignment(iqtree.aln);          // map leaf names -> alignment seq IDs
+        rtree->setRootNode(params.root);
+        rtree->initializeModel(params, mname, models_block);
+        rtree->getModelFactory()->restoreCheckpoint();
+        rtree->ensureNumberOfThreadsIsSet(&params);
+        rtree->initializeAllPartialLh();
+        rtree->optimizeModelParameters(false, params.modelfinder_eps);
+
+        double logl = rtree->getCurScore();
+        int    df   = rtree->getModelFactory()->getNParameters(BRLEN_OPTIMIZE);
+        double aic, aicc, bic;
+        computeInformationScores(logl, df, full_ssize, aic, aicc, bic);
+        cout << "CTF:   " << mname << "  logL=" << logl << "  df=" << df
+             << "  AIC=" << aic << "  AICc=" << aicc << "  BIC=" << bic << endl;
+
+        if (aic  < best_AIC)  { best_AIC  = aic;  best_name_AIC  = mname; }
+        if (aicc < best_AICc) { best_AICc = aicc; best_name_AICc = mname; }
+        if (bic  < best_BIC)  { best_BIC  = bic;  best_name_BIC  = mname; }
+
+        // winner = best under the configured criterion (BIC by default)
+        double crit = computeInformationScore(logl, df, full_ssize, params.model_test_criterion);
+        if (crit < best_crit) {
+            best_crit = crit; best_idx = t; best_logl = logl; best_df = df;
+        }
+        delete rtree;
+    }
+
+    if (best_idx < 0) {
+        // every top-k model was skipped (pathological) — fall back.
+        cout << "CTF: no model was refined on full data; falling back to standard ModelFinder" << endl;
+        delete models_block;
+        delete sub_aln;
+        params.model_name = saved_model_name;
+        params.min_iterations = saved_min_iterations;
+        params.stop_condition = saved_stop_cond;
+        return false;
+    }
+
+    string winner_name = topk[best_idx].first;
+    cout << "CTF: full-data winner (min " << criterionName(params.model_test_criterion) << ") = "
+         << winner_name << "  logL=" << best_logl << "  df=" << best_df << endl;
+
+    // ========================================================================
+    // STEP 6 — Run the WINNER's full-data refine DIRECTLY on &iqtree so iqtree
+    // ends holding the winner's optimized tree+params (R7), then replicate the
+    // runModelFinder tail (lines 1555-1584) exactly.
+    // ========================================================================
+    // Re-set the main iqtree's tree-eval state to match a fresh refine-loop rtree
+    // EXACTLY (that path is validated above). The main iqtree carries stale
+    // params/kernel/thread state from the main pipeline:
+    //  - missing setLikelihoodKernel/optimize_by_newton -> optimizeModelParameters
+    //    (JOLT) dereferences a stale likelihood kernel -> SIGSEGV;
+    //  - missing setNumThreads (num_threads<=0, since the main pipeline resolves
+    //    threads only AFTER ModelFinder) -> ensureNumberOfThreadsIsSet fires the
+    //    topology-mutating testNumThreads on the half-built winner tree -> SIGSEGV.
+    // params.num_threads is concrete here (explicit -nt, or resolved by the first
+    // refine in the AUTO case), so setNumThreads is a clean no-op then.
+    iqtree.setParams(&params);
+    iqtree.setLikelihoodKernel(params.SSE);
+    iqtree.optimize_by_newton = params.optimize_by_newton;
+    iqtree.setNumThreads(params.num_threads);
+    iqtree.setCheckpoint(&model_info);
+    {
+        bool is_rooted = params.is_rooted;
+        iqtree.readTree(coarse_tree_file.c_str(), is_rooted);
+        iqtree.setAlignment(iqtree.aln);          // map leaf names -> alignment seq IDs
+        iqtree.setRootNode(params.root);
+        iqtree.initializeModel(params, winner_name, models_block);
+        iqtree.getModelFactory()->restoreCheckpoint();
+        iqtree.ensureNumberOfThreadsIsSet(&params);
+        iqtree.initializeAllPartialLh();
+        iqtree.optimizeModelParameters(false, params.modelfinder_eps);
+        iqtree.saveCheckpoint();
+        iqtree.getModelFactory()->saveCheckpoint();
+    }
+
+    // Build the winner CandidateModel for the hand-off (subst/rate split). We
+    // re-evaluate IC scores at FULL N for the printed lines.
+    CandidateModel winner(winner_name, "", iqtree.aln);
+    winner.subst_name = iqtree.getSubstName();
+    winner.rate_name  = iqtree.getRateName();
+    winner.logl = iqtree.getCurScore();
+    winner.df   = best_df;
+    winner.computeICScores(iqtree.aln->getNSite());
+
+    // --- runModelFinder tail (lines 1555-1584), replicated ---
+    iqtree.aln->model_name = winner.getName();
+    best_subst_name = winner.subst_name;
+    best_rate_name  = winner.rate_name;
+
+    {
+        // print the best model NAME per criterion across the refined set (mirrors
+        // runModelFinder, which prints best_model_AIC/AICc/BIC = model names).
+        cout << "Akaike Information Criterion:           " << best_name_AIC  << endl;
+        cout << "Corrected Akaike Information Criterion: " << best_name_AICc << endl;
+        cout << "Bayesian Information Criterion:         " << best_name_BIC  << endl;
+        cout << "Best-fit model: " << iqtree.aln->model_name << " chosen according to "
+             << criterionName(params.model_test_criterion) << endl;
+    }
+
+    delete models_block;
+
+    // force to dump all checkpointing information
+    model_info.dump(true);
+
+    // transfer models parameters (reads Model/Rate/PhyloTree from iqtree's
+    // checkpoint == model_info, which now holds the winner) and restore the
+    // run's original checkpoint.
+    transferModelFinderParameters(&iqtree, orig_checkpoint);
+    iqtree.setCheckpoint(orig_checkpoint);
+
+    // ---- free temporaries & restore mutated params ----
+    delete sub_aln;
+    params.model_name     = saved_model_name;
+    params.min_iterations = saved_min_iterations;
+    params.stop_condition = saved_stop_cond;
+
+    params.startCPUTime = cpu_time;
+    params.start_real_time = real_time;
+    cpu_time = getCPUTime() - cpu_time;
+    real_time = getRealTime() - real_time;
+    cout << endl;
+    cout << "All model information printed to " << model_info.getFileName() << endl;
+    cout << "CPU time for CTF ModelFinder: " << cpu_time << " seconds (" << convert_time(cpu_time) << ")" << endl;
+    cout << "Wall-clock time for CTF ModelFinder: " << real_time << " seconds (" << convert_time(real_time) << ")" << endl;
+    cout << "========================================================================" << endl << endl;
+
+    // mirror runModelFinder test_only behaviour: CTF is a model-selection-only
+    // pass, so leave min_iterations consistent with -m MF/MFP semantics by
+    // honouring the saved value (already restored above).
+    return true;
+}
+
 void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info, string &best_subst_name, string &best_rate_name, map<string, vector<string> > nest_network, bool under_mix_finder)
 {
     if (params.model_name.find("+T") != string::npos) {

@@ -1638,7 +1638,12 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len) {
     // dropped +F, mislabelling LG+F+G4 as "LG+G4" and making +F JOLT-coverage invisible/uncountable. Cap raised so a
     // full -m TESTONLY logs every engagement (coverage is now measurable).
     string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
-    if (report_count < 1000) { report_count++;
+    // The per-model GPU-vs-CPU validation line is dev diagnostics (fires once per
+    // candidate -> ~60-90 lines on an AA coarse pass). Gate behind JOLT_DEBUG so a
+    // production --jolt/--ctf run shows only the standard ModelFinder output + the
+    // JOLT banner. The CPU recompute + safety gate below are NOT gated — they are the
+    // load-bearing write-back coherence check that falls back to CPU on a bad result.
+    if (getenv("JOLT_DEBUG") && report_count < 1000) { report_count++;
         printf("[JOLT] model=%s ns=%d ncat=%d: %d joint iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f | pinv %.6f->%.6f%s\n",
                joltModelName.c_str(), ns, ncat, outIters,
                joltLnL, cpuLnL, rel, (rel <= 1e-9 ? "PASS" : (rel <= 1e-6 ? "OK(gamma-resid)" : "MISMATCH")),
@@ -1865,7 +1870,8 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     double rel = (cpuLnL != 0.0) ? std::fabs((finalLnL - cpuLnL) / cpuLnL) : std::fabs(finalLnL - cpuLnL);
     static int report_count = 0;
     string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
-    if (report_count < 1000) { report_count++;
+    // dev diagnostics — gate behind JOLT_DEBUG (the CPU recompute + safety gate below stay)
+    if (getenv("JOLT_DEBUG") && report_count < 1000) { report_count++;
         printf("[JOLTMIX] model=%s N=%d ns=%d ncat=%d weights=%s: %d iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
                joltModelName.c_str(), N, ns, ncat, (optWeights ? "EM" : "fixed"), outIters, finalLnL, cpuLnL, rel,
                (rel <= 1e-6 ? "OK" : "MISMATCH"), alpha0, (ncat > 1 ? site_rate->getGammaShape() : 0.0)); }

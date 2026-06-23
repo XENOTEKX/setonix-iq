@@ -893,6 +893,24 @@ string criterionName(ModelTestCriterion mtc);
 void runModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info, string &best_subst_name, string &best_rate_name, map<string, vector<string> > nest_network, bool under_mix_finder = false);
 
 /**
+ perform native CTF (coarse-to-fine) ModelFinder (Phase 4).
+ Ranks ALL candidate models on a small seeded subsample (native subsample-BIC),
+ reranks/skips +R / pure-+I models with the ctf_rerank gate, then refines the
+ top-k on the FULL data with the coarse topology fixed and picks the best
+ full-data BIC. The winner's full-data refine is run directly on @param iqtree
+ so the caller ends holding the winner's optimized tree+params (R7 hand-off,
+ mirrors runModelFinder's tail). Only invoked when params.ctf is set.
+ @param params program parameters
+ @param iqtree phylogenetic tree (full-data; ends holding the winner)
+ @param model_info (IN/OUT) information for all models considered
+ @param best_subst_name (OUT) winner substitution name
+ @param best_rate_name (OUT) winner rate name
+ @param nest_network (IN) nest relationships of all DNA models considered
+ @return true if CTF ran (always true once reached; caller skips runModelFinder)
+ */
+bool runCTFModelFinder(Params &params, IQTree &iqtree, ModelCheckpoint &model_info, string &best_subst_name, string &best_rate_name, map<string, vector<string> > nest_network);
+
+/**
  perform MixtureFinder algorithm to find best-fit Q-Mixture model,
  including estimation of best number of classes in the mixture
  @param params program parameters

@@ -2926,6 +2926,30 @@ public:
      *  (fixed-Q reversible model, ns in {4,20}, no +I, gamma-only or no rate het). Default false.
      */
     bool jolt;
+
+    /**
+     *  TRUE to run native CTF (coarse-to-fine) ModelFinder (set by --ctf; implies --jolt --gpu).
+     *  Ranks ALL candidate models on a small subsample (native subsample-BIC), then refines the
+     *  top-k on the full data with the coarse topology fixed, and picks the best full-data BIC.
+     *  Default false.
+     */
+    bool ctf;
+
+    /** CTF coarse-pass subsample size in sites (default 5000). */
+    int ctf_subsample;
+
+    /** CTF number of top models refined on full data (default 3). */
+    int ctf_topk;
+
+    /** CTF subsample RNG seed; -1 = use params.ran_seed (default -1). */
+    int ctf_seed;
+
+    /**
+     *  TRUE to force the CPU path in a GPU-enabled (IQTREE_GPU=ON) build (set by --no-jolt / --cpu).
+     *  In the GPU build, GPU/JOLT is default-ON unless this is set; lets the GPU binary run the
+     *  CPU path for A/B parity. No effect in the CPU-only build. Default false.
+     */
+    bool no_gpu;
 };
 
 /**

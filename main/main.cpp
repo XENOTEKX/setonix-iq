@@ -2282,18 +2282,31 @@ int main(int argc, char *argv[]) {
 
     parseArg(argc, argv, Params::getInstance());
 
-    // --- GPU diagnostic hook (Phase G.1.0) -----------------------------------
-    // Runs only with --gpu. Launches a hello-world CUDA kernel, prints device
-    // info + a success banner, and checks cudaGetLastError(). It then RETURNS so
-    // the normal CPU analysis continues undisturbed (no GPU kernels are wired
-    // into the likelihood path yet). Built without -DIQTREE_GPU=ON, it prints a
-    // clear "built without GPU support" message instead — so --gpu never errors.
+#ifdef IQTREE_GPU
+    // Production GPU build: the GPU JOLT path is the DEFAULT. A plain invocation (no GPU flag)
+    // runs JOLT; opt out with --no-jolt / --cpu (sets no_gpu, clearing gpu/jolt/ctf during parse).
+    // An explicit --gpu (alone) is respected as-is. Ineligible models still fall back to CPU.
+    if (!Params::getInstance().no_gpu && !Params::getInstance().gpu) {
+        Params::getInstance().gpu = true;
+        Params::getInstance().jolt = true;
+    }
+#endif
+
+    // --- GPU diagnostic hook (Phase G.1.0, opt-in) ---------------------------
+    // The verbose build-scaffold self-test (hello-world kernel + device dump) now runs ONLY
+    // when IQTREE_GPU_DIAG is set in the environment, so production runs stay clean (the GPU
+    // device line is printed in the startup banner instead). A CPU-only build still warns if
+    // --gpu/--jolt is passed explicitly.
     if (Params::getInstance().gpu) {
 #ifdef IQTREE_GPU
-        iqtree_gpu_diag();
+        if (getenv("IQTREE_GPU_DIAG"))
+            iqtree_gpu_diag();
 #else
-        cout << "GPU: this binary was built WITHOUT GPU support "
-                "(reconfigure with -DIQTREE_GPU=ON)." << endl;
+        cout << "NOTE: this binary was built WITHOUT GPU support (reconfigure with "
+                "-DIQTREE_GPU=ON); --gpu/--jolt/--ctf are disabled, using the standard CPU path." << endl;
+        // Clear the GPU flags so the banner reports the real (SIMD) kernel and --ctf
+        // falls through to standard ModelFinder instead of claiming "JOLT + CTF".
+        Params::getInstance().gpu = Params::getInstance().jolt = Params::getInstance().ctf = false;
 #endif
     }
     // -------------------------------------------------------------------------
@@ -2434,13 +2447,31 @@ int main(int argc, char *argv[]) {
 
     Params::getInstance().SSE = min(Params::getInstance().SSE, (LikelihoodKernel)instruction_set);
 
+#ifdef IQTREE_GPU
+    // Clean GPU info line (mirrors the CPU "Host:" line) when the GPU path is active.
+    if (Params::getInstance().gpu) {
+        char gpu_name[256] = {0};
+        double gpu_vram = 0.0; int cuda_maj = 0, cuda_min = 0;
+        if (iqtree_gpu_info(gpu_name, sizeof(gpu_name), &gpu_vram, &cuda_maj, &cuda_min) == 0) {
+            char gpu_line[320];
+            snprintf(gpu_line, sizeof(gpu_line), "GPU:     %s, %.1f GB, CUDA %d.%d",
+                     gpu_name, gpu_vram, cuda_maj, cuda_min);
+            cout << gpu_line << endl;
+        }
+    }
+#endif
+
     cout << "Kernel:  ";
 
     if (Params::getInstance().lk_safe_scaling) {
         cout << "Safe ";
     }
 
-    if (Params::getInstance().pll) {
+    if (Params::getInstance().ctf) {
+        cout << "JOLT + CTF";
+    } else if (Params::getInstance().jolt) {
+        cout << "JOLT";
+    } else if (Params::getInstance().pll) {
 #ifdef __AVX__
         cout << "PLL-AVX";
 #else
@@ -3588,13 +3619,31 @@ char* build_phylogenetic(StringArray& cnames, StringArray& cseqs, const char* cm
 
     Params::getInstance().SSE = min(Params::getInstance().SSE, (LikelihoodKernel)instruction_set);
 
+#ifdef IQTREE_GPU
+    // Clean GPU info line (mirrors the CPU "Host:" line) when the GPU path is active.
+    if (Params::getInstance().gpu) {
+        char gpu_name[256] = {0};
+        double gpu_vram = 0.0; int cuda_maj = 0, cuda_min = 0;
+        if (iqtree_gpu_info(gpu_name, sizeof(gpu_name), &gpu_vram, &cuda_maj, &cuda_min) == 0) {
+            char gpu_line[320];
+            snprintf(gpu_line, sizeof(gpu_line), "GPU:     %s, %.1f GB, CUDA %d.%d",
+                     gpu_name, gpu_vram, cuda_maj, cuda_min);
+            cout << gpu_line << endl;
+        }
+    }
+#endif
+
     cout << "Kernel:  ";
 
     if (Params::getInstance().lk_safe_scaling) {
         cout << "Safe ";
     }
 
-    if (Params::getInstance().pll) {
+    if (Params::getInstance().ctf) {
+        cout << "JOLT + CTF";
+    } else if (Params::getInstance().jolt) {
+        cout << "JOLT";
+    } else if (Params::getInstance().pll) {
 #ifdef __AVX__
         cout << "PLL-AVX";
 #else

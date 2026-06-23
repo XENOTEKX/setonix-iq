@@ -23,6 +23,29 @@ __global__ void iqtree_gpu_hello_kernel(int *flag) {
     }
 }
 
+extern "C" int iqtree_gpu_info(char *name, int name_len, double *vram_gb,
+                               int *rt_major, int *rt_minor) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+        return -1;
+    int dev = 0;
+    cudaGetDevice(&dev);
+    cudaDeviceProp prop;
+    if (cudaGetDeviceProperties(&prop, dev) != cudaSuccess)
+        return -1;
+    if (name && name_len > 0) {
+        std::snprintf(name, name_len, "%s", prop.name);
+        name[name_len - 1] = '\0';
+    }
+    if (vram_gb)
+        *vram_gb = prop.totalGlobalMem / 1073741824.0;
+    int rt = 0;
+    cudaRuntimeGetVersion(&rt);
+    if (rt_major) *rt_major = rt / 1000;
+    if (rt_minor) *rt_minor = (rt % 1000) / 10;
+    return 0;
+}
+
 extern "C" void iqtree_gpu_diag() {
     std::printf("GPU: ===== IQ-TREE GPU diagnostic (Phase G.1.0 scaffold) =====\n");
 

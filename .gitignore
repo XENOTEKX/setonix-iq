@@ -35,3 +35,25 @@ zlib-1.2.7/
 /.direnv/
 /.envrc
 softwipe_build
+
+# --- GPU/JOLT/CTF dev: build trees, job output, benches, frozen binaries ---
+build-gpu-on/
+build-gpu-off/
+bench_*/
+ctf*/
+*.gadi-pbs/
+*.o[0-9]*
+*.e[0-9]*
+frozen-binaries/
+g[0-9]*_*/
+prof_*/
+smb_*/
+*_diag*/
+jolt_*/
+tile*/
+*.fa
+tree/gpu/tc_decider
+beagle_vs_jolt*/
+euk_*/
+rtest/
+tc_decider_*/

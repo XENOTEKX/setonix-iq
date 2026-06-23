@@ -31,6 +31,12 @@ typedef void (*jolt_qdecompose_fn)(void* ctx, const double* q, double* eval, dou
 // failure path just prints a message if no device is present.
 void iqtree_gpu_diag();
 
+// Lightweight device-info query for the startup banner (no kernel launch, no allocation).
+// Fills `name` (caller buffer of `name_len` bytes) with the active device name, *vram_gb with its
+// total VRAM in GiB, and *rt_major/*rt_minor with the CUDA runtime version. Returns 0 on success,
+// -1 if no CUDA device is present (caller then prints nothing). Never throws.
+int iqtree_gpu_info(char *name, int name_len, double *vram_gb, int *rt_major, int *rt_minor);
+
 // Phase G.2.0a — clean-room GPU log-likelihood cross-check launcher.
 //
 // Runs the validated K1 eigen-space postorder partial-likelihood sweep on the GPU from host-prepared,
