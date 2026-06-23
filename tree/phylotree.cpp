@@ -1307,13 +1307,6 @@ double PhyloTree::computeLikelihood(double *pattern_lh, bool save_log_value) {
          }*/
     }
     curScore = score;
-#if defined(IQTREE_GPU) && defined(JOLT_DEBUG_BUILD)
-    // Dev-only one-shot clean-room GPU cross-checks (lnL / single-edge & all-branch derivatives / mixture /
-    // free-Q gradient). They are PURE read-only diagnostics and already runtime-gated off under --jolt, but a
-    // production build compiles them out entirely (JOLT_DEBUG_BUILD=OFF) so they cannot run and add no weight.
-    // Build with -DJOLT_DEBUG_BUILD=ON to re-enable; they then fire once per process under a plain --gpu run.
-    if (params && params->gpu && !params->jolt) { gpuLnLCrossCheckOnce(score); gpuMixLnLCrossCheckOnce(score); gpuDervCrossCheckOnce(); gpuMixDervCrossCheckOnce(); gpuMixAllBranchDervCrossCheckOnce(); gpuMixWeightEMCrossCheckOnce(); gpuMixJointOptimizeCrossCheckOnce(); gpuFreeQGradCheckOnce(); }
-#endif
     return score;
 }
 

@@ -2084,17 +2084,6 @@ public:
 #endif
     virtual void setLikelihoodKernelSSE();
 
-    /** Phase G.2.0a: one-shot (per process) GPU log-likelihood cross-check. Rebuilds the validated K1
-        eigen-space postorder sweep clean-room from the live model/tree/alignment, runs it on the GPU, and
-        compares the total lnL against `cpu_lnL` (= curScore). Defined only in tree/phylotreegpu.cpp under
-        #ifdef IQTREE_GPU; the call site (PhyloTree::computeLikelihood) is likewise guarded, so a CPU-only
-        build never odr-uses this declaration. Pure read-only diagnostic. */
-    void gpuLnLCrossCheckOnce(double cpu_lnL);
-
-    /** Phase G.8.0: one-shot profile-mixture (C20/C60/MEOW80) lnL cross-check. Fires only for getNMixtures()>1;
-        validates the clean-room GPU mixture sweep against the CPU reference (rel<=1e-9). Pure diagnostic. */
-    void gpuMixLnLCrossCheckOnce(double cpu_lnL);
-
     /** Phase G.8.0/G.8.1: clean-room GPU whole-tree lnL for a PROFILE MIXTURE (regimes r=m*ncat+c, per-class eigen via
         the ModelMixture component accessors). If out_lhcat != nullptr it is filled with the per-class likelihood
         L_{p,m} = w_m·Σ_c catProp_c·L_{p,m,c} laid out [nmix][nptn] (G.8.1, the EM-weight numerator). Returns NaN for
@@ -2163,39 +2152,6 @@ public:
                                              std::vector<double>& dfOut, std::vector<double>& ddfOut,
                                              const double *parentLenOverride = nullptr, double alphaOverride = -1.0);
 
-    /** Phase G.2.1a: one-shot (per process) GPU single-edge derivative cross-check. Picks an internal-internal
-        edge and compares GPU df/ddf against IQ-TREE's own computeLikelihoodDerv. Pure read-only diagnostic;
-        defined only under #ifdef IQTREE_GPU, call site guarded. */
-    void gpuDervCrossCheckOnce();
-
-    /** Phase G.8.1b: one-shot PROFILE-MIXTURE derivative cross-check (getNMixtures()>1 only). INT-INT + LEAF
-        edges; GPU mixture df/ddf vs CPU computeLikelihoodDerv. Read-only diagnostic; call site guarded. */
-    void gpuMixDervCrossCheckOnce();
-
-    /** Phase G.8.2.1a: one-shot ALL-BRANCH derivative cross-check (getNMixtures()>1). INT-INT + LEAF edges; the
-        all-branch df/ddf vs the validated G.8.1b single-edge (gate a, rel<=1e-9) AND central FD of the clean-room
-        lnL (gate b, rel<=1e-5). Validates k7_pre_mix. Read-only (FD save/restores brlen); call site guarded. */
-    void gpuMixAllBranchDervCrossCheckOnce();
-
-    /** Phase G.8.2.0: one-shot EM weight-optimiser kill-switch (getNMixtures()>1, non-fused, no +I). GPU EM weights
-        from a uniform cold start (branches/α fixed) — monotone lnL climb to the weight-MLE — vs IQ-TREE's own
-        ModelMixture::optimizeWeights(). Read-only (prop[] saved/restored); call site guarded. */
-    void gpuMixWeightEMCrossCheckOnce();
-
-    /** Phase G.8.2.1b: one-shot JOINT cold-start optimiser kill-switch (getNMixtures()>1, non-fused, no +I, mean-gamma).
-        Host-driven block-coordinate ascent — all-branch LM (k7_pre_mix) + EM weights (G.8.2.0) + scalar-α FD-Newton —
-        composing the validated clean-room sweeps at ITERATE (b,w,α) via the parentLen/alpha overrides. Runs from a COLD
-        start (b=0.1, w=1/N, α=1.0) AND a WARM start (live MLE), and gates both converged lnLs against the GPU lnL at the
-        CPU MLE (rel<=1e-9, monotone, GPU>=CPU). Warm iter-0 reproducing lnL_gpu@cpuMLE doubles as the override
-        index-consistency self-test. Read-only (overrides mutate nothing; ends with clearAllPartialLH). Call site guarded. */
-    void gpuMixJointOptimizeCrossCheckOnce();
-
-    /** Phase G.6.0a: one-shot (per process) GPU free-Q gradient cross-check (env JOLT_QGRADCHECK). For a reversible
-        DNA free-Q model (HKY..GTR, fixed freqs, no +I), perturbs each free exchangeability (in rate-class space via
-        the model's param_spec) and checks GPU clean-room lnL == CPU lnL at every perturbed Q, plus FD-grad agreement.
-        Proves the eigendecompose->reupload->resweep pipeline that the G.6.0b optimiser will drive. Read-only (restores
-        the model); defined only under #ifdef IQTREE_GPU, call site guarded. */
-    void gpuFreeQGradCheckOnce();
 
     /** Phase G.2.1b: GPU override for computeLikelihoodDervPointer (byte-matches ComputeLikelihoodDervType).
         Stateless clean-room single-edge df/ddf via gpuComputeEdgeDervCleanRoom; un-negated; CPU fallback on NaN. */
