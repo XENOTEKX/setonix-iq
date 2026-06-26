@@ -2127,12 +2127,17 @@ public:
         brlens, clearAllPartialLH flag-flip, trust the device lnL — NO full CPU computeLikelihood() self-check, the
         ModelFinder-only D4 gain-eraser). NOT bit-exact (JOLT converges harder than a single CPU sweep). Returns the
         device lnL, or NaN -> caller falls back to optimizeAllBranches(1). Defined only under #ifdef IQTREE_GPU.
-        DEFAULT maxiter=2 (was 12): the per-round reopt of an INTERMEDIATE NNI topology does NOT need to converge to
-        1e-7 (the topology changes next round; the FINAL best tree is converged by the CPU optimizeModelParameters ->
-        optimizeAllBranches, iqtree.cpp:990/2462 — NOT JOLT). Job 172400909 sweep (AA-100K) + 172409440 (AA-200tx,
-        DNA-200tx): maxiter {12,4,2,1} all RF==0 vs mi12; maxiter=2 holds the TIGHT gate (dlnL<=1e-3) on ALL THREE
-        datasets (mi1 missed DNA-200tx by 0.0016, same topology). maxiter=2 ⇒ ~2.5× wall (AA-100K 1712→690s, beats
-        Hashara 812s). JOLT_BRLEN_MAXITER env overrides (>0 caps, <0 skips→CPU). The 4 fused callers use this default. */
+        DEFAULT maxiter=2 (was 12) — for the --ts-fused GPU search path only (the 4 callers; CPU search unaffected).
+        An INTERMEDIATE NNI topology's reopt need not converge to 1e-7 (the topology changes next round). VALIDATED
+        (RF==0 + dlnL<=1e-3 vs maxiter=12): AA-100K (sweep 172400909) + DNA-200tx GTR+G (172409440) DIRECTLY; AA-200tx
+        LG+G4 INFERRED (mi1 tied at +0.0000, mi2⊆mi1 in convergence — the mi2 arm was not run). ~2.5× wall (AA-100K
+        1712→690s, beats Hashara 812s). HONEST CAVEATS: (1) the final best tree is CPU-reconverged
+        (optimizeModelParameters->optimizeAllBranches) ONLY on modelEps-improving rounds (iqtree.cpp:3565); on other
+        rounds the registered lnL is the JOLT-capped value, so a lower cap can shift the FINAL lnL by O(1e-3) at FIXED
+        topology — DNA-200tx mi2 dlnL=-0.0008 (RF==0). Scientifically negligible (~7e-11 rel, << any BIC threshold),
+        but real. (2) UNTESTED: trajectory-divergence (no escape dataset escaped in validation) + multi-seed (all
+        seed 1). Owed before this graduates beyond the --ts-fused research path. JOLT_BRLEN_MAXITER env overrides
+        (>0 caps, <0 skips→CPU; default-2 is byte-identical to env=2). */
     double optimizeAllBranchesJOLT(int maxiter = 2);
 
     /** Phase G.8.2.2: GPU JOLT optimiser for NON-FUSED PROFILE-MIXTURE models (C20/C30/C60/MEOW...). The mixture
