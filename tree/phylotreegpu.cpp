@@ -2158,6 +2158,10 @@ double PhyloTree::optimizeAllBranchesJOLT(int maxiter) {
     // topology (the tree changes next round anyway); standard search / Hashara do 1 loose sweep/round
     // (optimizeAllBranches(1)). JOLT_BRLEN_MAXITER=N caps the LM iterations to find the work-vs-rounds sweet spot.
     static const int env = []{ const char* e = getenv("JOLT_BRLEN_MAXITER"); return e ? atoi(e) : 0; }();
+    if (env < 0) return (double)NAN;   // PROFILE-ONLY: JOLT_BRLEN_MAXITER<0 => skip the GPU reopt entirely => CPU
+                                       // optimizeAllBranches(1) fallback => the nsys GPU timeline is PURE SCREENER (no
+                                       // kj_pre/k1_node from gpu_jolt_optimize colliding with the screener kernels). UNSET
+                                       // => env=0 => this branch never taken => byte-identical production.
     if (env > 0) maxiter = env;
     return optimizeParametersJOLT(BRLEN_OPTIMIZE, /*brlenOnly=*/true, /*leanTail=*/true, /*brlenMaxIter=*/maxiter);
 }
