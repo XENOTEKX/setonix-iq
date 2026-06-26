@@ -1302,6 +1302,12 @@ bool PhyloTree::gpuScreenNNIRank(std::map<int,double> &branchBest,
                                  std::map<int,std::pair<double,double> > *branchBoth,
                                  int *out_ntile, double *out_wall_screen) {
     branchBest.clear(); if (branchBoth) branchBoth->clear();
+    // TS_SCREEN_SPLIT (2026-06-26): host-rebuild vs GPU-launch split of the screener's per-round wall. The
+    // out_wall_screen timer (:1462) covers ONLY the gpu_screen_nni_tile_crosscheck launch; the DFS reindex +
+    // echild/expfac exp-table + tip gather BELOW (the per-round stateless rebuild, P2) is untimed. env-gated => off=byte-identical.
+    static bool g_scrsplit_init=false; static bool g_scrsplit=false; static double g_scr_hostbuild=0.0,g_scr_launch=0.0; static long g_scr_calls=0;
+    if(!g_scrsplit_init){ g_scrsplit=(getenv("TS_SCREEN_SPLIT")!=nullptr); g_scrsplit_init=true; }
+    double _scr_entry = g_scrsplit ? getRealTime() : 0.0;
     if (!model || !site_rate || !aln) return false;
     int ns = aln->num_states;
     if (ns != 4 && ns != 20) return false;
@@ -1470,8 +1476,14 @@ bool PhyloTree::gpuScreenNNIRank(std::map<int,double> &branchBest,
         n2a_ec.data(),n2a_sl.data(),n2a_lf.data(), n2b_ec.data(),n2b_sl.data(),n2b_lf.data(),
         /*forced_ntile=*/0, moveLnL.data(), &treeLnL, &ntileAuto,
         base_invar.data(), pinvScreen);   // A3 (+I): pinv<=0 -> non-+I (bit-identical)
-    if (out_wall_screen) *out_wall_screen = getRealTime() - t0;
+    double _scr_launch_s = getRealTime() - t0;
+    if (out_wall_screen) *out_wall_screen = _scr_launch_s;
     if (rc != rc) return false;   // CUDA error
+    if (g_scrsplit) {   // TS_SCREEN_SPLIT: per-round host-rebuild vs GPU-launch (host_build = the untimed P2 stateless rebuild)
+        g_scr_hostbuild += (t0 - _scr_entry); g_scr_launch += _scr_launch_s; g_scr_calls++;
+        printf("TS-SCRSPLIT call %ld host_build_s %.4f gpu_launch_s %.4f M %d cum_host %.3f cum_launch %.3f\n",
+               g_scr_calls, t0-_scr_entry, _scr_launch_s, M, g_scr_hostbuild, g_scr_launch); fflush(stdout);
+    }
 
     // GROUND-TRUTH DUMP (TS_SCREEN_DUMP=1): per move, the ACTUAL swapped/stayed subtree PhyloNode ids + lengths +
     // leaf-flags + the GPU move lnL, keyed by branch id. Joined offline with the CPU per-move dump (val[].node?Nei_it)
