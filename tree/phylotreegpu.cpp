@@ -2142,6 +2142,11 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
 // hazard). maxiter is low (warm-started near the optimum after doNNIs). Returns the device lnL, or NaN (ineligible
 // regime / CUDA error / write-back mismatch) -> the caller falls back to the exact CPU optimizeAllBranches(1).
 double PhyloTree::optimizeAllBranchesJOLT(int maxiter) {
+    // EXPERIMENT KNOB (bottleneck audit): the per-round LM cap. Default 12 over-converges each INTERMEDIATE
+    // topology (the tree changes next round anyway); standard search / Hashara do 1 loose sweep/round
+    // (optimizeAllBranches(1)). JOLT_BRLEN_MAXITER=N caps the LM iterations to find the work-vs-rounds sweet spot.
+    static const int env = []{ const char* e = getenv("JOLT_BRLEN_MAXITER"); return e ? atoi(e) : 0; }();
+    if (env > 0) maxiter = env;
     return optimizeParametersJOLT(BRLEN_OPTIMIZE, /*brlenOnly=*/true, /*leanTail=*/true, /*brlenMaxIter=*/maxiter);
 }
 
