@@ -5,12 +5,12 @@
 #PBS -l ncpus=104
 #PBS -l mem=480GB
 #PBS -l jobfs=100GB
-#PBS -l walltime=10:00:00
+#PBS -l walltime=06:00:00
 #PBS -l storage=scratch/dx61+scratch/rc29
 #PBS -l wd
 #PBS -j oe
 set -x
-module load gcc/12.2.0
+module load gcc/12.2.0 eigen/3.3.7
 SRC=/scratch/rc29/as1708/iqtree3-l2search
 BLD=$SRC/build-gpu-off
 AA=/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy
@@ -28,7 +28,8 @@ mkdir -p "$BLD"; cd "$BLD"
 if [ ! -x "$BLD/iqtree3" ]; then
   cmake -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_COMPILER=/apps/gcc/12.2.0/wrappers/g++ \
-        -DCMAKE_C_COMPILER=/apps/gcc/12.2.0/wrappers/gcc "$SRC" 2>&1 | tail -5
+        -DCMAKE_C_COMPILER=/apps/gcc/12.2.0/wrappers/gcc \
+        -DEIGEN3_INCLUDE_DIR=/apps/eigen/3.3.7/include/eigen3 "$SRC" 2>&1 | tail -8
   make -j"${PBS_NCPUS:-104}" iqtree3 2>&1 | tail -15; echo "MAKE_EXIT=${PIPESTATUS[0]}"
 fi
 [ -x "$BLD/iqtree3" ] || { echo "FATAL: build-gpu-off iqtree3 missing (build failed)"; exit 1; }
@@ -36,7 +37,7 @@ echo "LBR G1 binary: $(md5sum $BLD/iqtree3)"; IQ=$BLD/iqtree3; cd "$R"
 
 run(){ local tag=$1; shift; local t0=$(date +%s); "$@" > "$tag.stdout" 2>&1; echo "$tag exit=$? wall=$(($(date +%s)-t0))s"; }
 echo "===== LBR G1 run (AA-100K LG+G4, --ts-shadow-converge --ts-lbr-measure) ====="
-run lbr_g1  $IQ -s "$AA" -m LG+G4 -seed 1 -nt 104 -ninit 2 -redo --ts-shadow-converge --ts-lbr-measure --prefix lbr_g1
+run lbr_g1  $IQ -s "$AA" -m LG+G4 -seed 1 -nt 104 -ninit 1 -redo --ts-shadow-converge --ts-lbr-measure --prefix lbr_g1
 
 echo "===== LBR G1 VERDICT ====="
 python3 - <<'PY'
