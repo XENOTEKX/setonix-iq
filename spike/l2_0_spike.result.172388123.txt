@@ -1,0 +1,214 @@
++ module load cuda/12.5.1 gcc/12.2.0
++ unset _mlshdbg
++ '[' 0 = 1 ']'
++ unset _mlre _mlIFS
++ '[' -n x ']'
++ _mlIFS=' 	
+'
++ IFS=' '
++ '[' -n '' ']'
+++ /usr/bin/tclsh /opt/Modules/v4.3.0/libexec/modulecmd.tcl bash load cuda/12.5.1 gcc/12.2.0
++ eval 'CPATH=/apps/cuda/12.5.1/include;' export 'CPATH;
+CPLUS_INCLUDE_PATH_modshare=/apps/cuda/12.5.1/include:1;' export 'CPLUS_INCLUDE_PATH_modshare;
+LD_LIBRARY_PATH=/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:/apps/gcc/12.2.0/lib64:/apps/cuda/12.5.1/extras/CUPTI/lib64:/apps/cuda/12.5.1/lib64;' export 'LD_LIBRARY_PATH;
+LD_RUN_PATH=/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:/apps/gcc/12.2.0/lib64:/apps/cuda/12.5.1/extras/CUPTI/lib64:/apps/cuda/12.5.1/lib64;' export 'LD_RUN_PATH;
+MANPATH=/apps/gcc/12.2.0/share/man:/apps/cuda/12.5.1/doc/man:/opt/pbs/default/share/man:::/local/pbs/share/man;' export 'MANPATH;
+LIBRARY_PATH=/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:/apps/gcc/12.2.0/lib64:/apps/cuda/12.5.1/extras/CUPTI/lib64:/apps/cuda/12.5.1/lib64;' export 'LIBRARY_PATH;
+_LMFILES_=/apps/Modules/modulefiles/cuda/12.5.1:/apps/Modules/modulefiles/gcc/12.2.0;' export '_LMFILES_;
+LOADEDMODULES=cuda/12.5.1:gcc/12.2.0;' export 'LOADEDMODULES;
+CXX=g++;' export 'CXX;
+MODULES_LMCONFLICT=cuda/12.5.1\&cuda\&o/ld_library_path\&o/yes-ld_library_path\&o/use-ld_library_path\&o/enable-ld_library_path\&o/with-ld_library_path\&o/no-ld_library_path\&o/not-ld_library_path\&o/disable-ld_library_path\&o/without-ld_library_path\&o/ld_run_path\&o/yes-ld_run_path\&o/use-ld_run_path\&o/enable-ld_run_path\&o/with-ld_run_path\&o/no-ld_run_path\&o/not-ld_run_path\&o/disable-ld_run_path\&o/without-ld_run_path\&o/show-debug\&o/yes-show-debug\&o/use-show-debug\&o/enable-show-debug\&o/with-show-debug\&o/no-show-debug\&o/not-show-debug\&o/disable-show-debug\&o/without-show-debug\&o/append-paths\&o/yes-append-paths\&o/use-append-paths\&o/enable-append-paths\&o/with-append-paths\&o/no-append-paths\&o/not-append-paths\&o/disable-append-paths\&o/without-append-paths\&o/library_path\&o/yes-library_path\&o/use-library_path\&o/enable-library_path\&o/with-library_path\&o/no-library_path\&o/not-library_path\&o/disable-library_path\&o/without-library_path\&o/packaged-envvars\&o/yes-packaged-envvars\&o/use-packaged-envvars\&o/enable-packaged-envvars\&o/with-packaged-envvars\&o/no-packaged-envvars\&o/not-packaged-envvars\&o/disable-packaged-envvars\&o/without-packaged-envvars:gcc/12.2.0\&gcc\&o/wrappers\&o/yes-wrappers\&o/use-wrappers\&o/enable-wrappers\&o/with-wrappers\&o/no-wrappers\&o/not-wrappers\&o/disable-wrappers\&o/without-wrappers\&o/ld_library_path\&o/yes-ld_library_path\&o/use-ld_library_path\&o/enable-ld_library_path\&o/with-ld_library_path\&o/no-ld_library_path\&o/not-ld_library_path\&o/disable-ld_library_path\&o/without-ld_library_path\&o/ld_run_path\&o/yes-ld_run_path\&o/use-ld_run_path\&o/enable-ld_run_path\&o/with-ld_run_path\&o/no-ld_run_path\&o/not-ld_run_path\&o/disable-ld_run_path\&o/without-ld_run_path\&o/show-debug\&o/yes-show-debug\&o/use-show-debug\&o/enable-show-debug\&o/with-show-debug\&o/no-show-debug\&o/not-show-debug\&o/disable-show-debug\&o/without-show-debug\&o/append-paths\&o/yes-append-paths\&o/use-append-paths\&o/enable-append-paths\&o/with-append-paths\&o/no-append-paths\&o/not-append-paths\&o/disable-append-paths\&o/without-append-paths\&o/library_path\&o/yes-library_path\&o/use-library_path\&o/enable-library_path\&o/with-library_path\&o/no-library_path\&o/not-library_path\&o/disable-library_path\&o/without-library_path\&o/packaged-envvars\&o/yes-packaged-envvars\&o/use-packaged-envvars\&o/enable-packaged-envvars\&o/with-packaged-envvars\&o/no-packaged-envvars\&o/not-packaged-envvars\&o/disable-packaged-envvars\&o/without-packaged-envvars;' export 'MODULES_LMCONFLICT;
+NVHPC_CUDA_HOME=/apps/cuda/12.5.1;' export 'NVHPC_CUDA_HOME;
+MANPATH_modshare=/apps/gcc/12.2.0/share/man:1::1:/apps/cuda/12.5.1/doc/man:1:/opt/pbs/default/share/man:1:/local/pbs/share/man:1;' export 'MANPATH_modshare;
+PKG_CONFIG_PATH=/apps/cuda/12.5.1/pkgconfig:/half-root/usr/lib64/pkgconfig;' export 'PKG_CONFIG_PATH;
+LIBRARY_PATH_modshare=/apps/cuda/12.5.1/extras/CUPTI/lib64:1:/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:1:/apps/gcc/12.2.0/lib64:1:/apps/cuda/12.5.1/lib64:1;' export 'LIBRARY_PATH_modshare;
+C_INCLUDE_PATH_modshare=/apps/cuda/12.5.1/include:1;' export 'C_INCLUDE_PATH_modshare;
+MODULES_LMCONFLICT_modshare=gcc/12.2.0\&gcc\&o/wrappers\&o/yes-wrappers\&o/use-wrappers\&o/enable-wrappers\&o/with-wrappers\&o/no-wrappers\&o/not-wrappers\&o/disable-wrappers\&o/without-wrappers\&o/ld_library_path\&o/yes-ld_library_path\&o/use-ld_library_path\&o/enable-ld_library_path\&o/with-ld_library_path\&o/no-ld_library_path\&o/not-ld_library_path\&o/disable-ld_library_path\&o/without-ld_library_path\&o/ld_run_path\&o/yes-ld_run_path\&o/use-ld_run_path\&o/enable-ld_run_path\&o/with-ld_run_path\&o/no-ld_run_path\&o/not-ld_run_path\&o/disable-ld_run_path\&o/without-ld_run_path\&o/show-debug\&o/yes-show-debug\&o/use-show-debug\&o/enable-show-debug\&o/with-show-debug\&o/no-show-debug\&o/not-show-debug\&o/disable-show-debug\&o/without-show-debug\&o/append-paths\&o/yes-append-paths\&o/use-append-paths\&o/enable-append-paths\&o/with-append-paths\&o/no-append-paths\&o/not-append-paths\&o/disable-append-paths\&o/without-append-paths\&o/library_path\&o/yes-library_path\&o/use-library_path\&o/enable-library_path\&o/with-library_path\&o/no-library_path\&o/not-library_path\&o/disable-library_path\&o/without-library_path\&o/packaged-envvars\&o/yes-packaged-envvars\&o/use-packaged-envvars\&o/enable-packaged-envvars\&o/with-packaged-envvars\&o/no-packaged-envvars\&o/not-packaged-envvars\&o/disable-packaged-envvars\&o/without-packaged-envvars:1:cuda/12.5.1\&cuda\&o/ld_library_path\&o/yes-ld_library_path\&o/use-ld_library_path\&o/enable-ld_library_path\&o/with-ld_library_path\&o/no-ld_library_path\&o/not-ld_library_path\&o/disable-ld_library_path\&o/without-ld_library_path\&o/ld_run_path\&o/yes-ld_run_path\&o/use-ld_run_path\&o/enable-ld_run_path\&o/with-ld_run_path\&o/no-ld_run_path\&o/not-ld_run_path\&o/disable-ld_run_path\&o/without-ld_run_path\&o/show-debug\&o/yes-show-debug\&o/use-show-debug\&o/enable-show-debug\&o/with-show-debug\&o/no-show-debug\&o/not-show-debug\&o/disable-show-debug\&o/without-show-debug\&o/append-paths\&o/yes-append-paths\&o/use-append-paths\&o/enable-append-paths\&o/with-append-paths\&o/no-append-paths\&o/not-append-paths\&o/disable-append-paths\&o/without-append-paths\&o/library_path\&o/yes-library_path\&o/use-library_path\&o/enable-library_path\&o/with-library_path\&o/no-library_path\&o/not-library_path\&o/disable-library_path\&o/without-library_path\&o/packaged-envvars\&o/yes-packaged-envvars\&o/use-packaged-envvars\&o/enable-packaged-envvars\&o/with-packaged-envvars\&o/no-packaged-envvars\&o/not-packaged-envvars\&o/disable-packaged-envvars\&o/without-packaged-envvars:1;' export 'MODULES_LMCONFLICT_modshare;
+PKG_CONFIG_PATH_modshare=/apps/cuda/12.5.1/pkgconfig:1:/half-root/usr/lib64/pkgconfig:1;' export 'PKG_CONFIG_PATH_modshare;
+CPLUS_INCLUDE_PATH=/apps/cuda/12.5.1/include;' export 'CPLUS_INCLUDE_PATH;
+F90=gfortran;' export 'F90;
+GCC_ROOT=/apps/gcc/12.2.0;' export 'GCC_ROOT;
+CUDA_ROOT=/apps/cuda/12.5.1;' export 'CUDA_ROOT;
+FC=gfortran;' export 'FC;
+GCC_VERSION=12.2.0;' export 'GCC_VERSION;
+CUDA_VERSION=12.5.1;' export 'CUDA_VERSION;
+CPATH_modshare=/apps/cuda/12.5.1/include:1;' export 'CPATH_modshare;
+LD_LIBRARY_PATH_modshare=/apps/cuda/12.5.1/extras/CUPTI/lib64:1:/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:1:/apps/gcc/12.2.0/lib64:1:/apps/cuda/12.5.1/lib64:1;' export 'LD_LIBRARY_PATH_modshare;
+LD_RUN_PATH_modshare=/apps/cuda/12.5.1/extras/CUPTI/lib64:1:/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:1:/apps/gcc/12.2.0/lib64:1:/apps/cuda/12.5.1/lib64:1;' export 'LD_RUN_PATH_modshare;
+C_INCLUDE_PATH=/apps/cuda/12.5.1/include;' export 'C_INCLUDE_PATH;
+F77=gfortran;' export 'F77;
+_LMFILES__modshare=/apps/Modules/modulefiles/gcc/12.2.0:1:/apps/Modules/modulefiles/cuda/12.5.1:1;' export '_LMFILES__modshare;
+LOADEDMODULES_modshare=gcc/12.2.0:1:cuda/12.5.1:1;' export 'LOADEDMODULES_modshare;
+CUDA_HOME=/apps/cuda/12.5.1;' export 'CUDA_HOME;
+PATH=/apps/gcc/12.2.0/wrappers:/apps/gcc/12.2.0/bin:/apps/cuda/12.5.1/bin:/scratch/rc29/as1708/tools/node-v22.15.0-linux-x64/bin:/scratch/rc29/as1708/tools/claude-code/bin:/opt/pbs/default/bin:/opt/nci/bin:/opt/bin:/opt/Modules/v4.3.0/bin:/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/local/pbs/bin;' export 'PATH;
+CC=gcc;' export 'CC;
+GCC_BASE=/apps/gcc/12.2.0;' export 'GCC_BASE;
+CUDA_BASE=/apps/cuda/12.5.1;' export 'CUDA_BASE;
+PATH_modshare=/usr/bin:1:/apps/gcc/12.2.0/wrappers:1:/opt/bin:1:/opt/Modules/v4.3.0/bin:1:/apps/cuda/12.5.1/bin:1:/scratch/rc29/as1708/tools/node-v22.15.0-linux-x64/bin:1:/local/pbs/bin:1:/bin:1:/opt/pbs/default/bin:1:/opt/nci/bin:1:/usr/sbin:1:/scratch/rc29/as1708/tools/claude-code/bin:1:/usr/local/sbin:1:/apps/gcc/12.2.0/bin:1;' export 'PATH_modshare;
+test' '0;'
+++ CPATH=/apps/cuda/12.5.1/include
+++ export CPATH
+++ CPLUS_INCLUDE_PATH_modshare=/apps/cuda/12.5.1/include:1
+++ export CPLUS_INCLUDE_PATH_modshare
+++ LD_LIBRARY_PATH=/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:/apps/gcc/12.2.0/lib64:/apps/cuda/12.5.1/extras/CUPTI/lib64:/apps/cuda/12.5.1/lib64
+++ export LD_LIBRARY_PATH
+++ LD_RUN_PATH=/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:/apps/gcc/12.2.0/lib64:/apps/cuda/12.5.1/extras/CUPTI/lib64:/apps/cuda/12.5.1/lib64
+++ export LD_RUN_PATH
+++ MANPATH=/apps/gcc/12.2.0/share/man:/apps/cuda/12.5.1/doc/man:/opt/pbs/default/share/man:::/local/pbs/share/man
+++ export MANPATH
+++ LIBRARY_PATH=/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:/apps/gcc/12.2.0/lib64:/apps/cuda/12.5.1/extras/CUPTI/lib64:/apps/cuda/12.5.1/lib64
+++ export LIBRARY_PATH
+++ _LMFILES_=/apps/Modules/modulefiles/cuda/12.5.1:/apps/Modules/modulefiles/gcc/12.2.0
+++ export _LMFILES_
+++ LOADEDMODULES=cuda/12.5.1:gcc/12.2.0
+++ export LOADEDMODULES
+++ CXX=g++
+++ export CXX
+++ MODULES_LMCONFLICT='cuda/12.5.1&cuda&o/ld_library_path&o/yes-ld_library_path&o/use-ld_library_path&o/enable-ld_library_path&o/with-ld_library_path&o/no-ld_library_path&o/not-ld_library_path&o/disable-ld_library_path&o/without-ld_library_path&o/ld_run_path&o/yes-ld_run_path&o/use-ld_run_path&o/enable-ld_run_path&o/with-ld_run_path&o/no-ld_run_path&o/not-ld_run_path&o/disable-ld_run_path&o/without-ld_run_path&o/show-debug&o/yes-show-debug&o/use-show-debug&o/enable-show-debug&o/with-show-debug&o/no-show-debug&o/not-show-debug&o/disable-show-debug&o/without-show-debug&o/append-paths&o/yes-append-paths&o/use-append-paths&o/enable-append-paths&o/with-append-paths&o/no-append-paths&o/not-append-paths&o/disable-append-paths&o/without-append-paths&o/library_path&o/yes-library_path&o/use-library_path&o/enable-library_path&o/with-library_path&o/no-library_path&o/not-library_path&o/disable-library_path&o/without-library_path&o/packaged-envvars&o/yes-packaged-envvars&o/use-packaged-envvars&o/enable-packaged-envvars&o/with-packaged-envvars&o/no-packaged-envvars&o/not-packaged-envvars&o/disable-packaged-envvars&o/without-packaged-envvars:gcc/12.2.0&gcc&o/wrappers&o/yes-wrappers&o/use-wrappers&o/enable-wrappers&o/with-wrappers&o/no-wrappers&o/not-wrappers&o/disable-wrappers&o/without-wrappers&o/ld_library_path&o/yes-ld_library_path&o/use-ld_library_path&o/enable-ld_library_path&o/with-ld_library_path&o/no-ld_library_path&o/not-ld_library_path&o/disable-ld_library_path&o/without-ld_library_path&o/ld_run_path&o/yes-ld_run_path&o/use-ld_run_path&o/enable-ld_run_path&o/with-ld_run_path&o/no-ld_run_path&o/not-ld_run_path&o/disable-ld_run_path&o/without-ld_run_path&o/show-debug&o/yes-show-debug&o/use-show-debug&o/enable-show-debug&o/with-show-debug&o/no-show-debug&o/not-show-debug&o/disable-show-debug&o/without-show-debug&o/append-paths&o/yes-append-paths&o/use-append-paths&o/enable-append-paths&o/with-append-paths&o/no-append-paths&o/not-append-paths&o/disable-append-paths&o/without-append-paths&o/library_path&o/yes-library_path&o/use-library_path&o/enable-library_path&o/with-library_path&o/no-library_path&o/not-library_path&o/disable-library_path&o/without-library_path&o/packaged-envvars&o/yes-packaged-envvars&o/use-packaged-envvars&o/enable-packaged-envvars&o/with-packaged-envvars&o/no-packaged-envvars&o/not-packaged-envvars&o/disable-packaged-envvars&o/without-packaged-envvars'
+++ export MODULES_LMCONFLICT
+++ NVHPC_CUDA_HOME=/apps/cuda/12.5.1
+++ export NVHPC_CUDA_HOME
+++ MANPATH_modshare=/apps/gcc/12.2.0/share/man:1::1:/apps/cuda/12.5.1/doc/man:1:/opt/pbs/default/share/man:1:/local/pbs/share/man:1
+++ export MANPATH_modshare
+++ PKG_CONFIG_PATH=/apps/cuda/12.5.1/pkgconfig:/half-root/usr/lib64/pkgconfig
+++ export PKG_CONFIG_PATH
+++ LIBRARY_PATH_modshare=/apps/cuda/12.5.1/extras/CUPTI/lib64:1:/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:1:/apps/gcc/12.2.0/lib64:1:/apps/cuda/12.5.1/lib64:1
+++ export LIBRARY_PATH_modshare
+++ C_INCLUDE_PATH_modshare=/apps/cuda/12.5.1/include:1
+++ export C_INCLUDE_PATH_modshare
+++ MODULES_LMCONFLICT_modshare='gcc/12.2.0&gcc&o/wrappers&o/yes-wrappers&o/use-wrappers&o/enable-wrappers&o/with-wrappers&o/no-wrappers&o/not-wrappers&o/disable-wrappers&o/without-wrappers&o/ld_library_path&o/yes-ld_library_path&o/use-ld_library_path&o/enable-ld_library_path&o/with-ld_library_path&o/no-ld_library_path&o/not-ld_library_path&o/disable-ld_library_path&o/without-ld_library_path&o/ld_run_path&o/yes-ld_run_path&o/use-ld_run_path&o/enable-ld_run_path&o/with-ld_run_path&o/no-ld_run_path&o/not-ld_run_path&o/disable-ld_run_path&o/without-ld_run_path&o/show-debug&o/yes-show-debug&o/use-show-debug&o/enable-show-debug&o/with-show-debug&o/no-show-debug&o/not-show-debug&o/disable-show-debug&o/without-show-debug&o/append-paths&o/yes-append-paths&o/use-append-paths&o/enable-append-paths&o/with-append-paths&o/no-append-paths&o/not-append-paths&o/disable-append-paths&o/without-append-paths&o/library_path&o/yes-library_path&o/use-library_path&o/enable-library_path&o/with-library_path&o/no-library_path&o/not-library_path&o/disable-library_path&o/without-library_path&o/packaged-envvars&o/yes-packaged-envvars&o/use-packaged-envvars&o/enable-packaged-envvars&o/with-packaged-envvars&o/no-packaged-envvars&o/not-packaged-envvars&o/disable-packaged-envvars&o/without-packaged-envvars:1:cuda/12.5.1&cuda&o/ld_library_path&o/yes-ld_library_path&o/use-ld_library_path&o/enable-ld_library_path&o/with-ld_library_path&o/no-ld_library_path&o/not-ld_library_path&o/disable-ld_library_path&o/without-ld_library_path&o/ld_run_path&o/yes-ld_run_path&o/use-ld_run_path&o/enable-ld_run_path&o/with-ld_run_path&o/no-ld_run_path&o/not-ld_run_path&o/disable-ld_run_path&o/without-ld_run_path&o/show-debug&o/yes-show-debug&o/use-show-debug&o/enable-show-debug&o/with-show-debug&o/no-show-debug&o/not-show-debug&o/disable-show-debug&o/without-show-debug&o/append-paths&o/yes-append-paths&o/use-append-paths&o/enable-append-paths&o/with-append-paths&o/no-append-paths&o/not-append-paths&o/disable-append-paths&o/without-append-paths&o/library_path&o/yes-library_path&o/use-library_path&o/enable-library_path&o/with-library_path&o/no-library_path&o/not-library_path&o/disable-library_path&o/without-library_path&o/packaged-envvars&o/yes-packaged-envvars&o/use-packaged-envvars&o/enable-packaged-envvars&o/with-packaged-envvars&o/no-packaged-envvars&o/not-packaged-envvars&o/disable-packaged-envvars&o/without-packaged-envvars:1'
+++ export MODULES_LMCONFLICT_modshare
+++ PKG_CONFIG_PATH_modshare=/apps/cuda/12.5.1/pkgconfig:1:/half-root/usr/lib64/pkgconfig:1
+++ export PKG_CONFIG_PATH_modshare
+++ CPLUS_INCLUDE_PATH=/apps/cuda/12.5.1/include
+++ export CPLUS_INCLUDE_PATH
+++ F90=gfortran
+++ export F90
+++ GCC_ROOT=/apps/gcc/12.2.0
+++ export GCC_ROOT
+++ CUDA_ROOT=/apps/cuda/12.5.1
+++ export CUDA_ROOT
+++ FC=gfortran
+++ export FC
+++ GCC_VERSION=12.2.0
+++ export GCC_VERSION
+++ CUDA_VERSION=12.5.1
+++ export CUDA_VERSION
+++ CPATH_modshare=/apps/cuda/12.5.1/include:1
+++ export CPATH_modshare
+++ LD_LIBRARY_PATH_modshare=/apps/cuda/12.5.1/extras/CUPTI/lib64:1:/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:1:/apps/gcc/12.2.0/lib64:1:/apps/cuda/12.5.1/lib64:1
+++ export LD_LIBRARY_PATH_modshare
+++ LD_RUN_PATH_modshare=/apps/cuda/12.5.1/extras/CUPTI/lib64:1:/apps/gcc/12.2.0/lib/gcc/x86_64-pc-linux-gnu/12.2.0:1:/apps/gcc/12.2.0/lib64:1:/apps/cuda/12.5.1/lib64:1
+++ export LD_RUN_PATH_modshare
+++ C_INCLUDE_PATH=/apps/cuda/12.5.1/include
+++ export C_INCLUDE_PATH
+++ F77=gfortran
+++ export F77
+++ _LMFILES__modshare=/apps/Modules/modulefiles/gcc/12.2.0:1:/apps/Modules/modulefiles/cuda/12.5.1:1
+++ export _LMFILES__modshare
+++ LOADEDMODULES_modshare=gcc/12.2.0:1:cuda/12.5.1:1
+++ export LOADEDMODULES_modshare
+++ CUDA_HOME=/apps/cuda/12.5.1
+++ export CUDA_HOME
+++ PATH=/apps/gcc/12.2.0/wrappers:/apps/gcc/12.2.0/bin:/apps/cuda/12.5.1/bin:/scratch/rc29/as1708/tools/node-v22.15.0-linux-x64/bin:/scratch/rc29/as1708/tools/claude-code/bin:/opt/pbs/default/bin:/opt/nci/bin:/opt/bin:/opt/Modules/v4.3.0/bin:/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/local/pbs/bin
+++ export PATH
+++ CC=gcc
+++ export CC
+++ GCC_BASE=/apps/gcc/12.2.0
+++ export GCC_BASE
+++ CUDA_BASE=/apps/cuda/12.5.1
+++ export CUDA_BASE
+++ PATH_modshare=/usr/bin:1:/apps/gcc/12.2.0/wrappers:1:/opt/bin:1:/opt/Modules/v4.3.0/bin:1:/apps/cuda/12.5.1/bin:1:/scratch/rc29/as1708/tools/node-v22.15.0-linux-x64/bin:1:/local/pbs/bin:1:/bin:1:/opt/pbs/default/bin:1:/opt/nci/bin:1:/usr/sbin:1:/scratch/rc29/as1708/tools/claude-code/bin:1:/usr/local/sbin:1:/apps/gcc/12.2.0/bin:1
+++ export PATH_modshare
+++ test 0
++ _mlstatus=0
++ '[' -n x ']'
++ IFS=' 	
+'
++ unset _mlre _mlv _mlrv _mlIFS
++ '[' -n '' ']'
++ unset _mlshdbg
++ return 0
++ SP=/scratch/rc29/as1708/iqtree3-l2search/spike
++ cd /scratch/rc29/as1708/iqtree3-l2search/spike
++ tee build.log
++ nvcc -O3 -std=c++17 '--generate-code=arch=compute_90,code=[compute_90,sm_90]' -Xptxas -v l2_0_spike.cu -o l2_0_spike
+l2_0_spike.cu(241): warning #550-D: variable "base_batched1" was set but never used
+      double base_batched1=0; double best8=0;
+             ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_Z6fill_kPdmd' for 'sm_90'
+ptxas info    : Function properties for _Z6fill_kPdmd
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 8 registers
+ptxas info    : Compiling entry function '_Z15kj_derv_fused_ziiiPKdS0_dS0_PdS1_S1_S1_S1_' for 'sm_90'
+ptxas info    : Function properties for _Z15kj_derv_fused_ziiiPKdS0_dS0_PdS1_S1_S1_S1_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers
+ptxas info    : Compiling entry function '_Z9k1_node_ziiiiPdS_iPKdS1_PKhS1_S1_S3_S1_S1_S3_' for 'sm_90'
+ptxas info    : Function properties for _Z9k1_node_ziiiiPdS_iPKdS1_PKhS1_S1_S3_S1_S1_S3_
+    160 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, 160 bytes cumulative stack size
+ptxas info    : Compiling entry function '_Z13kj_derv_fusediiiPKdS0_dS0_PdS1_S1_S1_S1_' for 'sm_90'
+ptxas info    : Function properties for _Z13kj_derv_fusediiiPKdS0_dS0_PdS1_S1_S1_S1_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers
+ptxas info    : Compiling entry function '_Z7k1_nodeiiiiPdS_iPKdS1_PKhS1_S1_S3_S1_S1_S3_' for 'sm_90'
+ptxas info    : Function properties for _Z7k1_nodeiiiiPdS_iPKdS1_PKhS1_S1_S3_S1_S1_S3_
+    160 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, 160 bytes cumulative stack size
++ echo NVCC_EXIT=0
+NVCC_EXIT=0
++ '[' -x ./l2_0_spike ']'
++ nvidia-smi
++ head -4
+Fri Jun 26 20:39:28 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.126.20             Driver Version: 580.126.20     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
++ echo '===== L2.0 SPIKE RUN ====='
+===== L2.0 SPIKE RUN =====
++ ./l2_0_spike 128 5
+=== L2.0 SPIKE on NVIDIA H200 : 132 SMs, 150 GB ===
+AA-100K shape: ns=20 ncat=4 nptn=100000  TB=256  GB=ceil(nptn/TB)=391 blocks/launch  L=128 steps R=5 reps
+
+-- MEASURED occupancy --
+k1_node       : 40 regs/thread, 6 blocks/SM -> capacity 792 blocks ; K-to-fill = 2.03
+kj_derv_fused : 32 regs/thread, 8 blocks/SM -> capacity 1056 blocks ; K-to-fill = 2.70
+(K-to-fill = device block capacity / one tree's 391 blocks. If <2, one tree already fills the GPU
+ and grid.z=K just time-slices => batching can only recover per-launch overhead.)
+
+-- THROUGHPUT (ms per K-tree sweep; speedup = serial/variant) --
+   K    serial_ms   batched_ms   streams_ms   sp_batch    sp_strm
+   1        61.46        64.81        61.56      0.95x      1.00x
+   2       122.86       105.46       107.80      1.16x      1.14x
+   4       246.82       211.99       202.37      1.16x      1.22x
+   8       490.67       440.86       403.79      1.11x      1.22x
+  12       737.12       674.43       601.44      1.09x      1.23x
+
+batched scaling: batched_ms(K)/batched_ms(1) ~ K => time-sliced (no concurrency win); ~1 => fully concurrent
+
+================ VERDICT ================
+Best K=8 throughput speedup (batched or streams) vs serial = 1.22x
+DECISION GATE: GO to full L2 iff >= 3.00x.  -> NO-GO (pivot to GPU+MPI hybrid)
+Interpretation: the speedup ceiling ~ 1 + T_overhead/T_compute. >=3x means kernels are launch-bound
+(batching wins). ~1.1-1.5x means one tree already saturates the GPU (red-team Blocker 1 confirmed).
++ echo DONE
+DONE
+
+======================================================================================
+                  Resource Usage on 2026-06-26 20:39:59:
+   Job Id:             172388123.gadi-pbs
+   Project:            dx61
+   Exit Status:        0
+   Service Units:      0.85
+   NCPUs Requested:    12                  CPU Time Used: 00:00:32        
+   Memory Requested:   90.0GB                Memory Used: 303.57MB        
+   NGPUs Requested:    1                 GPU Utilisation: 74%             
+                                         GPU Memory Used: 3.45GB          
+   Walltime Requested: 00:20:00            Walltime Used: 00:00:34        
+   JobFS Requested:    10.0GB                 JobFS Used: 0B              
+======================================================================================

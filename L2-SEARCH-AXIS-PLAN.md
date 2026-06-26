@@ -5,6 +5,16 @@
 **Date:** 2026-06-26. Built with agents (2× code-map, 1× Plan, 1× hostile red-team) under "ultracode".
 
 ---
+## ⚠️ DECISION: NO-GO — measured by the L2.0 spike (job 172388123, 2026-06-26)
+Single-GPU K-batching is falsified. On a real H200, `cudaOccupancy` on the verbatim kernels:
+`k1_node` 40 regs → 6 blk/SM → **K-to-fill 2.03**; `kj_derv_fused` 32 regs → 8 blk/SM → **K-to-fill 2.70**.
+One AA-100K tree (391 blocks) already saturates the GPU; K=8–12 oversubscribes 3–4×.
+Throughput at K=8: serial 490.7ms / batched 440.9ms (1.11×) / streams 403.8ms (**1.22×**); `batched_ms(K)/batched_ms(1)≈K` = time-sliced.
+**Best K=8 = 1.22× vs the 3.0× gate → NO-GO.** Do NOT build L2.1–L2.5. **Pivot to GPU+MPI hybrid** (R ranks × 1 GPU, MPI search-axis scaling on top of per-GPU Fix-B). The staged plan below is retained as the record of *why* the single-GPU path was rejected.
+
+---
+
+---
 
 ## 0. The problem & the two axes
 
