@@ -2050,6 +2050,9 @@ extern "C" double gpu_jolt_optimize(
     if(out_pinv)  *out_pinv = optPinv ? curPinv : pinv0;
     if(nFreeQ>0 && out_q) for(int k=0;k<nFreeQ;k++) out_q[k]=qcur[k];
     if(out_iters) *out_iters=it;
-    if(g_jdiag) printf("JOLT-DIAG-CU echild=%.6f n=%ld iters=%d nptn=%d\n", g_jd_echild_sec-_jd_ech0, g_jd_echild_n-_jd_echn0, it, nptn);   // --jolt-diag (A3)
+    // --jolt-diag (A3) + LINE-SEARCH WASTE (red-team C1, 2026-06-26): nRej = rejected backtracks (each a WASTED full
+    // postorder over all internal nodes, discarded), nLnLEval = total evalLnL postorders. reject_frac = nRej/nLnLEval
+    // measures the line-search-efficiency lever (the 2nd exact-ish surface on the 94% partials, distinct from maxiter).
+    if(g_jdiag) printf("JOLT-DIAG-CU echild=%.6f n=%ld iters=%d nRej=%d nLnLEval=%ld nptn=%d\n", g_jd_echild_sec-_jd_ech0, g_jd_echild_n-_jd_echn0, it, nRej, nLnLEval, nptn);
     return lnL;
 }
