@@ -10,7 +10,7 @@
 #PBS -l wd
 #PBS -j oe
 set -x
-module load gcc/12.2.0 eigen/3.3.7
+module load cmake/3.24.2 gcc/12.2.0 eigen/3.3.7 boost/1.84.0
 SRC=/scratch/rc29/as1708/iqtree3-l2search
 BLD=$SRC/build-gpu-off
 AA=/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy
@@ -24,14 +24,13 @@ R=/scratch/rc29/as1708/treesearch-profiling/results/lbrg1_${PBS_JOBID%%.*}; mkdi
 # GATE G1: median af <= 0.30 (=> >= ~2.7x reopt headroom for localized batch reopt). The DECAY CURVE (moved-
 # fraction by distance bin) is the decisive read: if moved branches concentrate at small bd, localizing wins.
 # ============================================================================================================
-mkdir -p "$BLD"; cd "$BLD"
-if [ ! -x "$BLD/iqtree3" ]; then
-  cmake -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_COMPILER=/apps/gcc/12.2.0/wrappers/g++ \
-        -DCMAKE_C_COMPILER=/apps/gcc/12.2.0/wrappers/gcc \
-        -DEIGEN3_INCLUDE_DIR=/apps/eigen/3.3.7/include/eigen3 "$SRC" 2>&1 | tail -8
-  make -j"${PBS_NCPUS:-104}" iqtree3 2>&1 | tail -15; echo "MAKE_EXIT=${PIPESTATUS[0]}"
-fi
+rm -rf "$BLD"; mkdir -p "$BLD"; cd "$BLD"   # clean configure (prior failed runs left a stale partial CMakeCache)
+cmake -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER=/apps/gcc/12.2.0/wrappers/g++ \
+      -DCMAKE_C_COMPILER=/apps/gcc/12.2.0/wrappers/gcc \
+      -DEIGEN3_INCLUDE_DIR=/apps/eigen/3.3.7/include/eigen3 \
+      -DBOOST_ROOT=/apps/boost/1.84.0 "$SRC" 2>&1 | tail -10
+make -j"${PBS_NCPUS:-104}" iqtree3 2>&1 | tail -20; echo "MAKE_EXIT=${PIPESTATUS[0]}"
 [ -x "$BLD/iqtree3" ] || { echo "FATAL: build-gpu-off iqtree3 missing (build failed)"; exit 1; }
 echo "LBR G1 binary: $(md5sum $BLD/iqtree3)"; IQ=$BLD/iqtree3; cd "$R"
 
