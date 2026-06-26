@@ -3036,6 +3036,14 @@ public:
     bool ts_shadow;
     bool ts_shadow_converge;
 
+    /** LBR G1 measurement (--ts-lbr-measure, read-only): rides the --ts-shadow apply path to measure, per
+        accepted NNI round, the fraction of branches whose optimal length actually moves (>delta) during the
+        all-branch reopt, bucketed by graph distance to the nearest applied NNI. PURELY READ-ONLY (only calls
+        saveBranchLengths + reads neighbors/ids; never mutates lengths/partials/score), gated so production
+        builds stay byte-identical. Sets ts_reopt_split (for getBestNNIForBran preloglh); does NOT imply
+        ts_shadow — the canonical run is `--ts-shadow --ts-lbr-measure`. Off by default. */
+    bool ts_lbr_measure;
+
     /** TS.6 FUSED loop (GPU): replace per-move nni5 with screener-positive selection + ONE global optimizeAllBranchesJOLT.
         --ts-fused-check = VALIDATION-ONLY (proves enumerateNNIGeometry + the screener mi==cnt mapping per branch via
         indexed g[cnt]==preloglh[cnt]; applies NOTHING, trajectory byte-identical = the FM-1 gate). --ts-fused = the

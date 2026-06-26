@@ -32,6 +32,9 @@
 //#include "phylotreemixlen.h"
 //#include "model/modelfactorymixlen.h"
 #include <numeric>
+#include <queue>       // LBR G1: multi-source BFS over node->neighbors
+#include <climits>     // LBR G1: INT_MAX BFS-unvisited sentinel
+#include <algorithm>   // LBR G1: sort/median over per-round af
 #include "utils/tools.h"
 #include "utils/MPIHelper.h"
 #include "utils/pllnni.h"
@@ -39,6 +42,23 @@
 Params *globalParams;
 Alignment *globalAlignment;
 extern StringIntMap pllTreeCounter;
+
+// ===== LBR G1 (--ts-lbr-measure): read-only branch-edge enumeration helper =====
+// Mirrors PhyloTree::saveBranchLengths' FOR_NEIGHBOR_IT-from-root traversal so each branch is visited EXACTLY
+// once, recovering its stable id (shared by both half-edges, set in MTree::initializeTree) and its two endpoint
+// node ids (u = (*it)->node, v = node = dad). Index strictly by id; do NOT assume traversal order matches it.
+// PURELY READ-ONLY: reads neighbors/ids only; never mutates lengths, partials, or score.
+struct LBREdge { int id, u, v; };
+static void lbrCollectEdges(vector<LBREdge> &edges, Node *node, Node *dad) {
+    FOR_NEIGHBOR_IT(node, dad, it) {
+        LBREdge e;
+        e.id = (*it)->id;          // branch id (== both half-edges)
+        e.u  = (*it)->node->id;    // child endpoint
+        e.v  = node->id;           // dad endpoint
+        edges.push_back(e);
+        lbrCollectEdges(edges, (*it)->node, node);
+    }
+}
 
 IQTree::IQTree() : PhyloTree() {
     IQTree::init();
@@ -2509,6 +2529,7 @@ double IQTree::doTreeSearch() {
         tsc2_vs_gpu_n = tsc2_vs_gpu_pass = tsc2_vs_gpu_bitexact = 0; tsc2_vs_gpu_max_rel = 0.0;
         tsc3_n = tsc3_elig = tsc3_pass = tsc3_bitexact = 0; tsc3_max_rel = 0.0;
         tsdrv_rounds = tsdrv_fallback = tsdrv_branch = tsdrv_pass = 0; tsdrv_max_rel = 0.0; tsdrv_wall = 0.0;
+        lbr_af.clear();   // LBR G1: reset per-round af so the verdict reflects the MAIN search loop only
     }
     if ((params->ts_diag || params->ts_reopt_split) && isSuperTree())
         outWarning("--ts-diag/--ts-reopt-split counters accumulate on per-partition trees and are NOT "
@@ -2802,6 +2823,28 @@ double IQTree::doTreeSearch() {
         // faithful final result is the best registered tree score (also the BEST SCORE FOUND line). [review #1]
         cout << "TS-SHADOW final_lnL         " << candidateTrees.getBestScore() << "   (compare to nni5 baseline; PASS if within 0.5 on HARD data)" << endl;
         cout << "TS-SHADOW =====================================================" << endl;
+    }
+    // ===== LBR G1 (E-report): affected-fraction distribution over ACCEPTED rounds + the G1 verdict.
+    if (params->ts_lbr_measure && !lbr_af.empty()) {
+        vector<double> v = lbr_af;
+        sort(v.begin(), v.end());
+        size_t n = v.size();
+        double median = (n % 2) ? v[n/2] : 0.5 * (v[n/2 - 1] + v[n/2]);
+        double sum = 0.0; for (size_t i = 0; i < n; i++) sum += v[i];
+        double mean = sum / (double)n;
+        size_t p90i = (size_t)(0.90 * (n - 1));          // nearest-rank p90 on the sorted array
+        double p90 = v[p90i];
+        long le030 = 0; for (size_t i = 0; i < n; i++) if (v[i] <= 0.30) le030++;
+        double frac_le030 = (double)le030 / (double)n;
+        cout << "LBR-G1 ===== affected-fraction af = #{|Δlen|>delta}/branchNum over ACCEPTED rounds =====" << endl;
+        cout << "LBR-G1 rounds       " << n << endl;
+        cout << "LBR-G1 median_af    " << median << endl;
+        cout << "LBR-G1 mean_af      " << mean << endl;
+        cout << "LBR-G1 p90_af       " << p90 << endl;
+        cout << "LBR-G1 frac(af<=0.30) " << frac_le030 << endl;
+        cout << "LBR-G1 CEILING median_af=" << median << " -> " << (median <= 0.30 ? "promising" : "weak")
+             << "   (af = SPEEDUP-CEILING estimate ~G/(1+(G-1)*af); NOT a correctness gate -> G2 lnL+RF is the real test)" << endl;
+        cout << "LBR-G1 ===========================================================================" << endl;
     }
     if (params->ts_fused_check) {
         bool fm1 = (tsf_two_sided > 0 && tsf_geom_pass == tsf_two_sided && tsf_index_pass == tsf_two_sided && tsf_argmax_pass == tsf_two_sided);
@@ -3735,11 +3778,100 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
             appliedNNIs.clear();
             getCompatibleNNIs(shadowPos, appliedNNIs);
             if (appliedNNIs.empty()) break;   // no old-length-positive move -> TS.6 stops (late-bloomers uncaught)
+            // ===== LBR G1 (A+B): doNNIs uses changeBran=false (lengths unchanged by the swap, only re-labeled),
+            // so we capture the reopt baseline lbr_lenBefore AFTER doNNIs -> its branch-ids are CONSISTENT with
+            // lbr_lenAfter for the |Δlen| diff (red-team MINOR-5: avoids comparing two DIFFERENT physical edges for
+            // the swapped pendant branches). Then multi-source BFS over node->neighbors on the post-swap topology:
+            // seed dist=0 at every applied-NNI endpoint, relax neighbors +1 (dist indexed by node id). READ-ONLY.
+            DoubleVector lbr_lenBefore;
+            vector<int>  lbr_dist;   // BFS graph distance (node id -> dist to nearest applied NNI)
             doNNIs(appliedNNIs, /*changeBran=*/false);   // TOPOLOGY ONLY (no per-move newLen)
+            if (params->ts_lbr_measure) {
+                saveBranchLengths(lbr_lenBefore);   // post-swap, id-consistent with lbr_lenAfter (reopt baseline)
+                lbr_dist.assign(nodeNum, INT_MAX);
+                queue<Node*> lbr_q;
+                for (size_t a = 0; a < appliedNNIs.size(); a++) {
+                    Node *n1 = appliedNNIs[a].node1, *n2 = appliedNNIs[a].node2;
+                    if (lbr_dist[n1->id] != 0) { lbr_dist[n1->id] = 0; lbr_q.push(n1); }
+                    if (lbr_dist[n2->id] != 0) { lbr_dist[n2->id] = 0; lbr_q.push(n2); }
+                }
+                while (!lbr_q.empty()) {
+                    Node *cur = lbr_q.front(); lbr_q.pop();
+                    int nd = lbr_dist[cur->id] + 1;
+                    FOR_NEIGHBOR_IT(cur, NULL, it) {
+                        Node *nb = (*it)->node;
+                        if (lbr_dist[nb->id] > nd) { lbr_dist[nb->id] = nd; lbr_q.push(nb); }
+                    }
+                }
+            }
             curScore = optimizeAllBranches(sweepIter, params->loglh_epsilon, PLL_NEWZPERCYCLE);    // global reopt = JOLT stand-in
+            // ===== LBR G1 (C): post-reopt lengths + per-branch |Δlen| and bucket-distance. Traverse the tree ONCE
+            // (lbrCollectEdges mirrors saveBranchLengths) to recover each branch id + its two endpoint node ids.
+            // dlen[id] indexed strictly by branch id (shared by both half-edges); bd[id] = min endpoint BFS dist.
+            DoubleVector lbr_lenAfter;
+            vector<double> lbr_dlen;  // |Δlen| per branch id (reopt-attributable displacement)
+            vector<int>    lbr_bd;    // graph distance of each branch to nearest applied NNI
+            if (params->ts_lbr_measure) {
+                saveBranchLengths(lbr_lenAfter);
+                int mix = getMixlen();
+                lbr_dlen.assign(branchNum, 0.0);
+                lbr_bd.assign(branchNum, INT_MAX);
+                vector<LBREdge> lbr_edges;
+                lbrCollectEdges(lbr_edges, root, NULL);
+                for (size_t e = 0; e < lbr_edges.size(); e++) {
+                    int id = lbr_edges[e].id;
+                    double d = 0.0;
+                    for (int c = 0; c < mix; c++)   // mix==1 for LG+G4; sum components if mixlen>1
+                        d += fabs(lbr_lenAfter[id*mix + c] - lbr_lenBefore[id*mix + c]);
+                    lbr_dlen[id] = d;
+                    int du = lbr_dist[lbr_edges[e].u], dv = lbr_dist[lbr_edges[e].v];
+                    lbr_bd[id]   = (du < dv) ? du : dv;
+                }
+            }
             shadow_applied_total += appliedNNIs.size();
             if (curScore > oldScore + params->loglh_epsilon) {
                 totalNNIApplied += appliedNNIs.size();   // ACCEPT the batch
+                // ===== LBR G1 (D): per-round aggregate, ACCEPTED rounds ONLY (the trajectory keeps this swap).
+                if (params->ts_lbr_measure) {
+                    double delta = params->min_branch_length;   // the optimizer's own tolerance (= 1e-6 for AA-100K)
+                    long nMoved = 0;
+                    // 8 distance bins: {0,1,2,3,4,5,6-8,9+}
+                    long   binN[8]     = {0,0,0,0,0,0,0,0};
+                    long   binMoved[8] = {0,0,0,0,0,0,0,0};
+                    double binSum[8]   = {0,0,0,0,0,0,0,0};
+                    for (int id = 0; id < branchNum; id++) {
+                        double d = lbr_dlen[id];
+                        if (d > delta) nMoved++;
+                        int bd = lbr_bd[id];
+                        int b;
+                        if (bd >= 9) b = 7; else if (bd >= 6) b = 6; else b = bd;   // 0..5 direct, 6-8 -> 6, 9+ -> 7
+                        binN[b]++;
+                        binSum[b] += d;
+                        if (d > delta) binMoved[b]++;
+                    }
+                    double af = branchNum ? (double)nMoved / (double)branchNum : 0.0;
+                    lbr_af.push_back(af);
+                    cout << "LBR-ROUND step=" << numSteps << " applied=" << appliedNNIs.size()
+                         << " branchNum=" << branchNum << " af=" << af << " moved=" << nMoved << endl;
+                    for (int b = 0; b < 8; b++) {
+                        double mean_dlen = binN[b] ? binSum[b] / (double)binN[b] : 0.0;
+                        cout << "LBR-DIST step=" << numSteps << " bin=" << b << " n=" << binN[b]
+                             << " moved=" << binMoved[b] << " mean_dlen=" << mean_dlen << endl;
+                    }
+                    // af-sensitivity: re-threshold the SAME |Δlen| array at delta in {1e-6,1e-5,1e-4}
+                    long m6 = 0, m5 = 0, m4 = 0;
+                    for (int id = 0; id < branchNum; id++) {
+                        double d = lbr_dlen[id];
+                        if (d > 1e-6) m6++;
+                        if (d > 1e-5) m5++;
+                        if (d > 1e-4) m4++;
+                    }
+                    double bn = branchNum ? (double)branchNum : 1.0;
+                    cout << "LBR-AF-SENS step=" << numSteps
+                         << " af_1e6=" << (double)m6 / bn
+                         << " af_1e5=" << (double)m5 / bn
+                         << " af_1e4=" << (double)m4 / bn << endl;
+                }
             } else {
                 shadow_rejects++;                        // batch regressed -> round-level rollback
                 doNNIs(appliedNNIs, /*changeBran=*/false);   // revert (doNNI is its own inverse)

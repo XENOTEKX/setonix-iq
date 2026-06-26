@@ -5688,6 +5688,19 @@ void parseArg(int argc, char *argv[], Params &params) {
                 setenv("TS_CLEAN_PRE", "1", 1);   // pristine old-length scores (de-contaminate cnt=1)
                 continue;
             }
+            if (strcmp(argv[cnt], "--ts-lbr-measure") == 0) {
+                // LBR G1 (read-only): rides the --ts-shadow-converge apply path to measure af + affected-vs-distance.
+                // IMPLIES ts_shadow + ts_shadow_converge so the instrument can't silently no-op if the user forgets
+                // them (red-team MINOR-6), and ts_reopt_split (getBestNNIForBran preloglh). The shadow per-round reopt
+                // = optimizeAllBranches(100) = the brlen-only CONVERGED stand-in for the GPU optimizeAllBranchesJOLT,
+                // which is ALSO brlen-only (brlenOnly=true => optAlpha=optPinv=nFreeQ=0, phylotreegpu.cpp:2030/2145 --
+                // VERIFIED; the proxy is faithful, red-team BLOCKER-1 that "JOLT co-optimizes alpha" is REFUTED).
+                params.ts_lbr_measure = true;
+                params.ts_shadow = true;
+                params.ts_shadow_converge = true;
+                params.ts_reopt_split = true;
+                continue;
+            }
             if (strcmp(argv[cnt], "--ts-shadow-converge") == 0) {
                 // TS.6 SHADOW with a CONVERGED global reopt (optimizeAllBranches(100)) -> brackets JOLT's reopt strength.
                 params.ts_shadow = true;
@@ -7845,6 +7858,7 @@ void Params::setDefault() {
     ts_jolt_allbr = false;      // TS.1: lean in-loop JOLT all-branch reopt for optallbranches; off = stock CPU sweep
     ts_shadow = false;          // TS.6 SHADOW: CPU falsification of FM-5 (committed TS.6-rule counterfactual)
     ts_shadow_converge = false; // TS.6 SHADOW with converged optimizeAllBranches(100) reopt bracket
+    ts_lbr_measure = false;     // LBR G1: read-only af/distance instrument riding the --ts-shadow apply path
     ts_fused = false;           // TS.6 production fused apply (screener-positive + global JOLT reopt)
     ts_fused_check = false;     // TS.6 FM-1 gate: validation-only geometry + mi==cnt mapping check
     ts_fused_nni5_topm = 0;     // TS.6 hybrid: nni5 on top-M screener branches (0 = pure fused)

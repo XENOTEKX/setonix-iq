@@ -1,0 +1,93 @@
+#!/bin/bash
+#PBS -N lbrg1
+#PBS -P dx61
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=10:00:00
+#PBS -l storage=scratch/dx61+scratch/rc29
+#PBS -l wd
+#PBS -j oe
+set -x
+module load gcc/12.2.0
+SRC=/scratch/rc29/as1708/iqtree3-l2search
+BLD=$SRC/build-gpu-off
+AA=/scratch/dx61/sa0557/iqtree2/poc_builds/complex_data_shared/AA/LG+I+G4/taxa_100/len_100000/tree_1/alignment_100000.phy
+R=/scratch/rc29/as1708/treesearch-profiling/results/lbrg1_${PBS_JOBID%%.*}; mkdir -p $R
+
+# ============================================================================================================
+# LBR G1 — measure af = #{|Δlen|>delta}/branchNum per ACCEPTED round + the |Δlen|-vs-distance decay curve, on a
+# REAL AA-100K LG+G4 search, via the read-only --ts-lbr-measure instrument riding the --ts-shadow-converge path
+# (CPU optimizeAllBranches(100) = faithful CONVERGED stand-in for the GPU JOLT all-branch reopt). CPU-only,
+# build-gpu-off (no CUDA), isolated tree => zero contention with the gpu-on validation jobs.
+# GATE G1: median af <= 0.30 (=> >= ~2.7x reopt headroom for localized batch reopt). The DECAY CURVE (moved-
+# fraction by distance bin) is the decisive read: if moved branches concentrate at small bd, localizing wins.
+# ============================================================================================================
+mkdir -p "$BLD"; cd "$BLD"
+if [ ! -x "$BLD/iqtree3" ]; then
+  cmake -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_COMPILER=/apps/gcc/12.2.0/wrappers/g++ \
+        -DCMAKE_C_COMPILER=/apps/gcc/12.2.0/wrappers/gcc "$SRC" 2>&1 | tail -5
+  make -j"${PBS_NCPUS:-104}" iqtree3 2>&1 | tail -15; echo "MAKE_EXIT=${PIPESTATUS[0]}"
+fi
+[ -x "$BLD/iqtree3" ] || { echo "FATAL: build-gpu-off iqtree3 missing (build failed)"; exit 1; }
+echo "LBR G1 binary: $(md5sum $BLD/iqtree3)"; IQ=$BLD/iqtree3; cd "$R"
+
+run(){ local tag=$1; shift; local t0=$(date +%s); "$@" > "$tag.stdout" 2>&1; echo "$tag exit=$? wall=$(($(date +%s)-t0))s"; }
+echo "===== LBR G1 run (AA-100K LG+G4, --ts-shadow-converge --ts-lbr-measure) ====="
+run lbr_g1  $IQ -s "$AA" -m LG+G4 -seed 1 -nt 104 -ninit 2 -redo --ts-shadow-converge --ts-lbr-measure --prefix lbr_g1
+
+echo "===== LBR G1 VERDICT ====="
+python3 - <<'PY'
+import re,statistics as st
+s=open("lbr_g1.stdout",encoding='latin-1').read()
+af=[float(m) for m in re.findall(r"LBR-ROUND .* af=([0-9.eE+-]+)",s)]
+print(f"accepted rounds measured: {len(af)}")
+if af:
+    af_s=sorted(af); n=len(af_s)
+    med=af_s[n//2] if n%2 else 0.5*(af_s[n//2-1]+af_s[n//2])
+    print(f"af  median={med:.4f}  mean={sum(af)/n:.4f}  p90={af_s[int(0.9*(n-1))]:.4f}  min={af_s[0]:.4f}  max={af_s[-1]:.4f}")
+    print(f"frac(af<=0.30) = {sum(1 for x in af if x<=0.30)/n:.3f}")
+    # MAJOR-4: pooled median can hide a high-af early phase (big rearrangements) that DOMINATES wall time.
+    def med(xs):
+        xs=sorted(xs); k=len(xs)
+        return (xs[k//2] if k%2 else 0.5*(xs[k//2-1]+xs[k//2])) if xs else float('nan')
+    t=max(1,n//3)
+    print(f"af by phase (rounds in arrival order): early median={med(af[:t]):.4f}  mid={med(af[t:2*t]):.4f}  late={med(af[2*t:]):.4f}")
+    print("  (if early >> late, the expensive big-rearrangement phase is NOT local even if the pooled median is low)")
+# decay curve: aggregate moved/n by distance bin over all rounds
+binN={}; binM={}; binS={}
+for b,n_,m_,md in re.findall(r"LBR-DIST .* bin=(\d+) n=(\d+) moved=(\d+) mean_dlen=([0-9.eE+-]+)",s):
+    b=int(b); binN[b]=binN.get(b,0)+int(n_); binM[b]=binM.get(b,0)+int(m_)
+lbl={0:'0',1:'1',2:'2',3:'3',4:'4',5:'5',6:'6-8',7:'9+'}
+print("\ndistance-decay curve (aggregated over rounds):")
+print(f"{'bd':>4} {'branches':>10} {'moved':>10} {'moved_frac':>11}")
+for b in sorted(binN):
+    print(f"{lbl.get(b,b):>4} {binN[b]:>10} {binM[b]:>10} {binM[b]/binN[b] if binN[b] else 0:>11.4f}")
+# the cumulative reopt fraction if we localize to radius d (branches with bd<=d):
+tot=sum(binN.values())
+cum=0
+print("\nlocalize-to-radius-d reopt fraction + residual moved beyond d:")
+movedBeyond=sum(binM.values())
+for b in sorted(binN):
+    cum+=binN[b]; movedBeyond-=binM[b]
+    print(f"  d={lbl.get(b,b):>3}: reopt_frac={cum/tot:.3f}  moved_beyond_d={movedBeyond}  (==0 => localizing to d is EXACT)")
+g=re.search(r"LBR-G1 CEILING median_af=([0-9.eE+-]+) -> (\w+)",s)
+print(f"\nIN-BINARY CEILING: {g.group(0) if g else 'NONE'}")
+# af-sensitivity: if af collapses 1e-6 -> 1e-5, the 1e-6 headline was optimizer threshold noise (MAJOR-2).
+sens=re.findall(r"LBR-AF-SENS .* af_1e6=([0-9.eE+-]+) af_1e5=([0-9.eE+-]+) af_1e4=([0-9.eE+-]+)",s)
+if sens:
+    import statistics
+    a6=statistics.median(float(x[0]) for x in sens); a5=statistics.median(float(x[1]) for x in sens); a4=statistics.median(float(x[2]) for x in sens)
+    print(f"af-sensitivity (median over rounds): af@1e-6={a6:.4f}  af@1e-5={a5:.4f}  af@1e-4={a4:.4f}")
+    print("  (big drop 1e-6->1e-5 => the 1e-6 af is convergence-jitter noise; trust the decay curve, not the headline)")
+print("\nHOW TO READ (red-team-calibrated):")
+print(" - G1 af is a SPEEDUP-CEILING estimate, NOT a correctness gate. The DECISIVE number is the smallest d")
+print("   where moved_beyond_d==0 with a SMALL reopt_frac -> realized localized-reopt speedup ~ G/(1+(G-1)*reopt_frac).")
+print(" - Proxy is FAITHFUL: optimizeAllBranches(100) is brlen-only = the GPU optimizeAllBranchesJOLT (brlenOnly,")
+print("   optAlpha=0) -> same operator, same moved branches (BLOCKER-1 refuted in code).")
+print(" - GO to G2 (hold-far-fixed + 1 final full reopt; lnL within eps + RF=0) ONLY if the decay curve is steep")
+print("   (moved concentrates at small bd) AND early-phase af is not pathological. G2, not G1, is the real gate.")
+PY
+echo DONE

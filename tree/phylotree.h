@@ -2340,6 +2340,9 @@ public:
 	long long tsk_applied, tsk_applied_prepos, tsk_rounds, tsk_recall[6];
 	// TS.6 SHADOW (--ts-shadow): committed TS.6-rule counterfactual diagnostics
 	long long shadow_rounds, shadow_rejects, shadow_applied_total, shadow_fallbacks, shadow_latebloom_dropped;
+	// LBR G1 (--ts-lbr-measure; read-only): per-ACCEPTED-round affected-fraction af = #{|Δlen|>delta}/branchNum.
+	// Aggregated (median over rounds) into the G1 verdict in the ts_shadow report block. Zero-cost when off.
+	std::vector<double> lbr_af;
 	// TS.6 --ts-fused-check (FM-1 gate): per-branch geometry + screener mi==cnt mapping validation
 	long long tsf_branches, tsf_checked, tsf_two_sided, tsf_geom_pass, tsf_index_pass, tsf_argmax_pass;
 	double tsf_max_rel;
