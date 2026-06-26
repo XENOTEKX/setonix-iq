@@ -1,0 +1,25 @@
+#!/bin/bash
+#PBS -N l2spike
+#PBS -P dx61
+#PBS -q gpuhopper
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l jobfs=10GB
+#PBS -l walltime=00:20:00
+#PBS -l storage=scratch/dx61+scratch/rc29
+#PBS -l wd
+#PBS -j oe
+set -x
+module load cuda/12.5.1 gcc/12.2.0
+SP=/scratch/rc29/as1708/iqtree3-l2search/spike
+cd "$SP"
+# Standalone compile — NO build-gpu-on make, cannot contend with item4a / ts6fixb.
+nvcc -O3 -std=c++17 --generate-code=arch=compute_90,code=[compute_90,sm_90] \
+     -Xptxas -v l2_0_spike.cu -o l2_0_spike 2>&1 | tee build.log
+echo "NVCC_EXIT=${PIPESTATUS[0]}"
+[ -x ./l2_0_spike ] || { echo "FATAL: spike build failed"; exit 1; }
+nvidia-smi | head -4
+echo "===== L2.0 SPIKE RUN ====="
+./l2_0_spike 128 5
+echo DONE
