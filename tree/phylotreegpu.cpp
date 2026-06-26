@@ -2154,9 +2154,11 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
 // hazard). maxiter is low (warm-started near the optimum after doNNIs). Returns the device lnL, or NaN (ineligible
 // regime / CUDA error / write-back mismatch) -> the caller falls back to the exact CPU optimizeAllBranches(1).
 double PhyloTree::optimizeAllBranchesJOLT(int maxiter) {
-    // EXPERIMENT KNOB (bottleneck audit): the per-round LM cap. Default 12 over-converges each INTERMEDIATE
-    // topology (the tree changes next round anyway); standard search / Hashara do 1 loose sweep/round
-    // (optimizeAllBranches(1)). JOLT_BRLEN_MAXITER=N caps the LM iterations to find the work-vs-rounds sweet spot.
+    // PER-ROUND LM CAP. Default is now 2 (phylotree.h:2130; was 12 — see that doc for the Job 172400909/172409440
+    // validation). 12 over-converged each INTERMEDIATE topology (the tree changes next round; the final best tree is
+    // converged by CPU optimizeModelParameters, NOT JOLT). maxiter=2 holds the tight gate (RF==0 + dlnL<=1e-3) on
+    // AA-100K/AA-200tx/DNA-200tx at ~2.5× wall. JOLT_BRLEN_MAXITER env: >0 caps the LM iters; <0 skips the GPU reopt
+    // entirely (CPU fallback) for pure-screener nsys profiling.
     static const int env = []{ const char* e = getenv("JOLT_BRLEN_MAXITER"); return e ? atoi(e) : 0; }();
     if (env < 0) return (double)NAN;   // PROFILE-ONLY: JOLT_BRLEN_MAXITER<0 => skip the GPU reopt entirely => CPU
                                        // optimizeAllBranches(1) fallback => the nsys GPU timeline is PURE SCREENER (no

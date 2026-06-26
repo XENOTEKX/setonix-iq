@@ -2126,8 +2126,14 @@ public:
         (model params held FIXED: optAlpha=optPinv=nFreeQ=0; only branch lengths move) and leanTail=true (write back
         brlens, clearAllPartialLH flag-flip, trust the device lnL — NO full CPU computeLikelihood() self-check, the
         ModelFinder-only D4 gain-eraser). NOT bit-exact (JOLT converges harder than a single CPU sweep). Returns the
-        device lnL, or NaN -> caller falls back to optimizeAllBranches(1). Defined only under #ifdef IQTREE_GPU. */
-    double optimizeAllBranchesJOLT(int maxiter = 12);
+        device lnL, or NaN -> caller falls back to optimizeAllBranches(1). Defined only under #ifdef IQTREE_GPU.
+        DEFAULT maxiter=2 (was 12): the per-round reopt of an INTERMEDIATE NNI topology does NOT need to converge to
+        1e-7 (the topology changes next round; the FINAL best tree is converged by the CPU optimizeModelParameters ->
+        optimizeAllBranches, iqtree.cpp:990/2462 — NOT JOLT). Job 172400909 sweep (AA-100K) + 172409440 (AA-200tx,
+        DNA-200tx): maxiter {12,4,2,1} all RF==0 vs mi12; maxiter=2 holds the TIGHT gate (dlnL<=1e-3) on ALL THREE
+        datasets (mi1 missed DNA-200tx by 0.0016, same topology). maxiter=2 ⇒ ~2.5× wall (AA-100K 1712→690s, beats
+        Hashara 812s). JOLT_BRLEN_MAXITER env overrides (>0 caps, <0 skips→CPU). The 4 fused callers use this default. */
+    double optimizeAllBranchesJOLT(int maxiter = 2);
 
     /** Phase G.8.2.2: GPU JOLT optimiser for NON-FUSED PROFILE-MIXTURE models (C20/C30/C60/MEOW...). The mixture
         analogue of optimizeParametersJOLT, dispatched from ModelFactory::optimizeParameters under --jolt when
