@@ -2486,6 +2486,33 @@ double IQTree::doTreeSearch() {
     cout << "Finish initializing candidate tree set (" << candidateTrees.size() << ")" << endl;
 
 
+    if (params->ts_diag) {
+        // initcand = candidate-set init wall; reset the per-phase accumulators so they reflect the
+        // main search loop only (clears any ModelFinder/init-phase contributions to the counters).
+        tsd_t_initcand = getRealTime() - initCPUTime;
+        tsd_t_perturb = tsd_t_nnisearch = tsd_t_evalnni = tsd_t_optallbr = tsd_t_optmodel = tsd_t_mpi = 0.0;
+        tsd_n_iter = tsd_n_branches_eval = tsd_n_positive = tsd_n_applied = tsd_n_derv = 0;
+    }
+    if (params->ts_reopt_split) {
+        // reset B6 accumulators so they reflect the MAIN search loop only (getBestNNIForBran also
+        // fires during initCandidateTreeSet, which we exclude here).
+        tsr_n_moves = tsr_sign_agree = tsr_false_neg = tsr_false_pos = tsr_argmax_agree = tsr_argmax_calls = 0;
+        tsr_gain_sum = tsr_gain_abs_sum = 0.0;
+        tsr_gain_max = -DBL_MAX;
+        tsk_applied = tsk_applied_prepos = tsk_rounds = 0;
+        shadow_rounds = shadow_rejects = shadow_applied_total = shadow_fallbacks = shadow_latebloom_dropped = 0;
+        tsf_branches = tsf_checked = tsf_two_sided = tsf_geom_pass = tsf_index_pass = tsf_argmax_pass = 0; tsf_max_rel = 0.0;
+        tsfused_rounds = tsfused_applied_total = tsfused_rejects = tsfused_fallbacks = tsfused_surfaced = tsfused_hybrid = tsfused_onesided = 0;
+        for (int _k = 0; _k < 6; _k++) tsk_recall[_k] = 0;
+        tsc_n = tsc_elig = tsc_pass = 0; tsc_max_rel = 0.0;
+        tsc2_n = tsc2_elig = tsc2_pass = 0; tsc2_max_rel = 0.0;
+        tsc2_vs_gpu_n = tsc2_vs_gpu_pass = tsc2_vs_gpu_bitexact = 0; tsc2_vs_gpu_max_rel = 0.0;
+        tsc3_n = tsc3_elig = tsc3_pass = tsc3_bitexact = 0; tsc3_max_rel = 0.0;
+        tsdrv_rounds = tsdrv_fallback = tsdrv_branch = tsdrv_pass = 0; tsdrv_max_rel = 0.0; tsdrv_wall = 0.0;
+    }
+    if ((params->ts_diag || params->ts_reopt_split) && isSuperTree())
+        outWarning("--ts-diag/--ts-reopt-split counters accumulate on per-partition trees and are NOT "
+                   "aggregated for partitioned analyses; the printed totals will read 0. Use on single-partition data.");
     cout << "Current best tree score: " << candidateTrees.getBestScore() << " / CPU time: " <<
     getRealTime() - initCPUTime << endl;
     cout << "Number of iterations: " << stop_rule.getCurIt() << endl;
@@ -2561,13 +2588,17 @@ double IQTree::doTreeSearch() {
         /*----------------------------------------
          * Perturb the tree
          *---------------------------------------*/
+        double _tsd0 = params->ts_diag ? getRealTime() : 0.0;
         doTreePerturbation();
+        if (params->ts_diag) { tsd_t_perturb += getRealTime() - _tsd0; tsd_n_iter++; }
 
         /*----------------------------------------
          * Optimize tree with NNI
          *----------------------------------------*/
         pair<int, int> nniInfos; // <num_NNIs, num_steps>
+        if (params->ts_diag) _tsd0 = getRealTime();
         nniInfos = doNNISearch();
+        if (params->ts_diag) tsd_t_nnisearch += getRealTime() - _tsd0;
         curTree = getTreeString();
         int pos = addTreeToCandidateSet(curTree, curScore, true, MPIHelper::getInstance().getProcessID());
         if (pos != -2 && pos != -1 && (Params::getInstance().fixStableSplits || Params::getInstance().adaptPertubation)) {
@@ -2575,7 +2606,9 @@ double IQTree::doTreeSearch() {
         }
 
         if (MPIHelper::getInstance().isWorker() || MPIHelper::getInstance().gotMessage()) {
+            double _tsdm = params->ts_diag ? getRealTime() : 0.0;
             syncCurrentTree();
+            if (params->ts_diag) tsd_t_mpi += getRealTime() - _tsdm;
         }
 
 
@@ -2663,6 +2696,8 @@ double IQTree::doTreeSearch() {
 
     }
 
+    double tsd_search_end = params->ts_diag ? getRealTime() : 0.0;  // main-loop end, BEFORE refineBootTrees/UFBoot
+
     // 2019-06-03: check convergence here to avoid effect of refineBootTrees
     if (boot_splits.size() >= 2 && MPIHelper::getInstance().isMaster()) {
         // check the stopping criterion for ultra-fast bootstrap
@@ -2707,6 +2742,240 @@ double IQTree::doTreeSearch() {
 
     cout << "TREE SEARCH COMPLETED AFTER " << stop_rule.getCurIt() << " ITERATIONS"
     << " / Time: " << convert_time(getRealTime() - params->start_real_time) << endl << endl;
+
+    if (params->ts_diag) {
+        double total = tsd_search_end - initCPUTime;  // init + main-loop wall (EXCLUDES refineBootTrees/UFBoot)
+        cout << "TS-DIAG ============ tree-search phase breakdown (seconds) ============" << endl;
+        cout << "TS-DIAG total_wall          " << total << endl;
+        cout << "TS-DIAG initcand            " << tsd_t_initcand << "   (candidate-set init; sub-phases below are MAIN-LOOP only)" << endl;
+        cout << "TS-DIAG perturb             " << tsd_t_perturb << endl;
+        cout << "TS-DIAG nnisearch           " << tsd_t_nnisearch << "   (nested: evalnni+optallbr+optmodel)" << endl;
+        cout << "TS-DIAG   evalnni           " << tsd_t_evalnni << endl;
+        cout << "TS-DIAG   optallbranches    " << tsd_t_optallbr << endl;
+        cout << "TS-DIAG   optmodel          " << tsd_t_optmodel << endl;
+        cout << "TS-DIAG mpi_sync            " << tsd_t_mpi << endl;
+        cout << "TS-DIAG iters               " << tsd_n_iter << endl;
+        cout << "TS-DIAG branches_evaluated  " << tsd_n_branches_eval << endl;
+        cout << "TS-DIAG positive_nnis       " << tsd_n_positive << endl;
+        cout << "TS-DIAG applied_nnis        " << tsd_n_applied << endl;
+        cout << "TS-DIAG derv_calls          " << tsd_n_derv << endl;
+        cout << "TS-DIAG ====================================================================" << endl;
+    }
+    if (params->ts_reopt_split) {
+        double mean_gain = tsr_n_moves ? tsr_gain_sum / (double)tsr_n_moves : 0.0;
+        double sign_frac = tsr_n_moves ? (double)tsr_sign_agree / (double)tsr_n_moves : 0.0;
+        double argmax_frac = tsr_argmax_calls ? (double)tsr_argmax_agree / (double)tsr_argmax_calls : 0.0;
+        cout << "TS-REOPT-SPLIT ===== nni5 reopt vs screener (B6): pre=swapped@old-lengths, post=post-reopt =====" << endl;
+        cout << "TS-REOPT-SPLIT moves_scored      " << tsr_n_moves << endl;
+        cout << "TS-REOPT-SPLIT mean_reopt_gain   " << mean_gain << "   (post - pre)" << endl;
+        cout << "TS-REOPT-SPLIT max_reopt_gain    " << (tsr_n_moves ? tsr_gain_max : 0.0) << endl;
+        cout << "TS-REOPT-SPLIT sign_agreement    " << sign_frac << "   (" << tsr_sign_agree << "/" << tsr_n_moves << ")" << endl;
+        cout << "TS-REOPT-SPLIT false_negatives   " << tsr_false_neg << "   (screener DROPS an accepted move -- recall killer)" << endl;
+        cout << "TS-REOPT-SPLIT false_positives   " << tsr_false_pos << "   (screener KEEPS a rejected move)" << endl;
+        cout << "TS-REOPT-SPLIT argmax_agreement  " << argmax_frac << "   (" << tsr_argmax_agree << "/" << tsr_argmax_calls << ")" << endl;
+        cout << "TS-REOPT-SPLIT =================================================================================" << endl;
+
+        // recall@k of the applied set under a top-k pre-reopt screener (the L2 / TS-C3 gate)
+        static const int KS[6] = {1, 2, 4, 8, 16, 32};
+        double ceil_frac = tsk_applied ? (double)tsk_applied_prepos / (double)tsk_applied : 0.0;
+        cout << "TS-RECALL ===== top-k screener recall of the APPLIED set (rank by preloglh) =====" << endl;
+        cout << "TS-RECALL rounds                 " << tsk_rounds << endl;
+        cout << "TS-RECALL applied_measured       " << tsk_applied << endl;
+        cout << "TS-RECALL ceiling(preΔ>0)        " << ceil_frac << "   (" << tsk_applied_prepos << "/" << tsk_applied
+             << ")   <- max achievable recall for a pre-reopt screener" << endl;
+        for (int ki = 0; ki < 6; ki++) {
+            double r = tsk_applied ? (double)tsk_recall[ki] / (double)tsk_applied : 0.0;
+            cout << "TS-RECALL recall@" << KS[ki] << (KS[ki] < 10 ? "                " : "               ")
+                 << r << "   (" << tsk_recall[ki] << "/" << tsk_applied << ")" << endl;
+        }
+        cout << "TS-RECALL =======================================================================" << endl;
+    }
+    if (params->ts_shadow) {
+        cout << "TS-SHADOW ===== TS.6 committed counterfactual (CPU JOLT stand-in) =====" << endl;
+        cout << "TS-SHADOW rounds            " << shadow_rounds << endl;
+        cout << "TS-SHADOW applied_total     " << shadow_applied_total << endl;
+        cout << "TS-SHADOW batch_rejects     " << shadow_rejects   << "   (whole-batch reopt regressed -> rolled back)" << endl;
+        cout << "TS-SHADOW single_fallbacks  " << shadow_fallbacks << "   (rejected batch -> single nni5-best)" << endl;
+        cout << "TS-SHADOW latebloom_dropped " << shadow_latebloom_dropped << "   (newloglh-positive moves DROPPED by the old-length gate = the FM-5 mechanism)" << endl;
+        cout << "TS-SHADOW reopt_mode        " << (params->ts_shadow_converge ? "optimizeAllBranches(100) converged" : "optimizeAllBranches(1) single-sweep") << endl;
+        // NOTE: curScore is reset to -DBL_MAX by readTreeString->resetCurScore before this summary print; the
+        // faithful final result is the best registered tree score (also the BEST SCORE FOUND line). [review #1]
+        cout << "TS-SHADOW final_lnL         " << candidateTrees.getBestScore() << "   (compare to nni5 baseline; PASS if within 0.5 on HARD data)" << endl;
+        cout << "TS-SHADOW =====================================================" << endl;
+    }
+    if (params->ts_fused_check) {
+        bool fm1 = (tsf_two_sided > 0 && tsf_geom_pass == tsf_two_sided && tsf_index_pass == tsf_two_sided && tsf_argmax_pass == tsf_two_sided);
+        long long unverif = tsf_checked - tsf_two_sided;
+        cout << "TS-FUSED-CHECK ===== TS.6 FM-1 gate: geometry + screener mi==cnt mapping =====" << endl;
+        cout << "TS-FUSED-CHECK branches_seen     " << tsf_branches << endl;
+        cout << "TS-FUSED-CHECK gpu_mapped        " << tsf_checked << "   (" << tsf_branches - tsf_checked << " unmapped: NaN/ineligible swaps)" << endl;
+        cout << "TS-FUSED-CHECK two_sided_verif   " << tsf_two_sided << "   (both swaps finite both-sides = genuinely verifiable; " << unverif << " unverifiable)" << endl;
+        cout << "TS-FUSED-CHECK   index_pass      " << tsf_index_pass << "/" << tsf_two_sided << "   (g[cnt]==preloglh[cnt] BOTH => mi==cnt; THE load-bearing check)" << endl;
+        cout << "TS-FUSED-CHECK   argmax_pass     " << tsf_argmax_pass << "/" << tsf_two_sided << "   (screener winner index == CPU winner index)" << endl;
+        cout << "TS-FUSED-CHECK   geom_pass       " << tsf_geom_pass << "/" << tsf_two_sided << "   (copy-fidelity regression test, NOT independent proof)" << endl;
+        cout << "TS-FUSED-CHECK max_rel           " << tsf_max_rel << endl;
+        cout << "TS-FUSED-CHECK FM-1 VERDICT      " << (fm1 ? "PASS over two-sided branches (fused apply uses the screener winner; ties benign)"
+                                                            : "FAIL/INSUFFICIENT (mapping mismatch or zero two-sided branches)") << endl;
+        cout << "TS-FUSED-CHECK NOTE: unverifiable (one/zero-sided) branches are NOT counted as pass; the robust hardening" << endl;
+        cout << "TS-FUSED-CHECK       is identity-based (screener returns swapped-child node id, assert by node identity)." << endl;
+        cout << "TS-FUSED-CHECK =============================================================" << endl;
+    }
+    if (params->ts_fused) {
+        cout << "TS-FUSED ===== TS.6 Increment 2 production fused apply (--ts-fused) =====" << endl;
+        cout << "TS-FUSED rounds            " << tsfused_rounds << endl;
+        cout << "TS-FUSED applied_total     " << tsfused_applied_total << "   (compatible screener-positive moves applied topology-only)" << endl;
+        cout << "TS-FUSED surfaced_fused    " << tsfused_surfaced << "   (geometry moves from the screener, NO per-move nni5 = the 78.6% surface)" << endl;
+        cout << "TS-FUSED onesided_skipped  " << tsfused_onesided << "   (one-NaN branches skipped: geometry not FM-1-verifiable, outside certified envelope)" << endl;
+        cout << "TS-FUSED hybrid_nni5       " << tsfused_hybrid   << "   (top-M branches that still took exact nni5; --ts-fused-topm " << params->ts_fused_nni5_topm << ")" << endl;
+        cout << "TS-FUSED batch_rejects     " << tsfused_rejects   << "   (whole-batch JOLT reopt regressed -> rolled back)" << endl;
+        cout << "TS-FUSED single_fallbacks  " << tsfused_fallbacks << "   (rejected batch -> single nni5-best)" << endl;
+        cout << "TS-FUSED final_lnL         " << candidateTrees.getBestScore() << "   (compare to nni5 baseline; PASS if within 0.5)" << endl;
+        cout << "TS-FUSED =====================================================" << endl;
+    }
+    if (params->ts_screen_check) {
+        double pass_frac = tsc_elig ? (double)tsc_pass / (double)tsc_elig : 0.0;
+        cout << "TS-SCREEN ===== GPU clean-room screener lnL vs CPU pre-reopt (TS.2-I1) =====" << endl;
+        cout << "TS-SCREEN moves_checked   " << tsc_n << endl;
+        cout << "TS-SCREEN gpu_eligible    " << tsc_elig << "   (non-NaN; NaN = +I/mixture/non-rev/ns -> CPU)" << endl;
+        cout << "TS-SCREEN max_rel_err     " << tsc_max_rel << endl;
+        cout << "TS-SCREEN pass@1e-9       " << pass_frac << "   (" << tsc_pass << "/" << tsc_elig << ")" << endl;
+        cout << "TS-SCREEN ==================================================================" << endl;
+    }
+    if (params->ts_screen2_check) {
+        double pass_frac = tsc2_elig ? (double)tsc2_pass / (double)tsc2_elig : 0.0;
+        double bit_frac  = tsc2_vs_gpu_n ? (double)tsc2_vs_gpu_bitexact / (double)tsc2_vs_gpu_n : 0.0;
+        cout << "TS-SCREEN2 === NON-MUTATING GPU screener (virtual swap) cross-check (TS.2-I2) ===" << endl;
+        cout << "TS-SCREEN2 moves_checked    " << tsc2_n << endl;
+        cout << "TS-SCREEN2 gpu_eligible     " << tsc2_elig << "   (non-NaN; NaN = +I/mixture/non-rev/ns -> CPU)" << endl;
+        cout << "TS-SCREEN2 --- (a) vs CPU pre-reopt oracle tsr_pre (the gate) ---" << endl;
+        cout << "TS-SCREEN2 max_rel_err      " << tsc2_max_rel << endl;
+        cout << "TS-SCREEN2 pass@1e-9        " << pass_frac << "   (" << tsc2_pass << "/" << tsc2_elig << ")" << endl;
+        double vsgpu_frac = tsc2_vs_gpu_n ? (double)tsc2_vs_gpu_pass / (double)tsc2_vs_gpu_n : 0.0;
+        cout << "TS-SCREEN2 --- (b) vs in-situ post-swap GPU helper (encoding-vs-GPU-path isolation) ---" << endl;
+        cout << "TS-SCREEN2 vs_gpu_checked   " << tsc2_vs_gpu_n << endl;
+        cout << "TS-SCREEN2 vs_gpu_max_rel   " << tsc2_vs_gpu_max_rel << endl;
+        cout << "TS-SCREEN2 vs_gpu_pass@1e-9 " << vsgpu_frac << "   (" << tsc2_vs_gpu_pass << "/" << tsc2_vs_gpu_n << ")   <- robust bar" << endl;
+        cout << "TS-SCREEN2 vs_gpu_bitexact  " << bit_frac << "   (" << tsc2_vs_gpu_bitexact << "/" << tsc2_vs_gpu_n << ")   <- info: <1.0 w/ rel<=~1e-13 = benign child-order FP" << endl;
+        cout << "TS-SCREEN2 =====================================================================" << endl;
+    }
+    if (params->ts_screen3_check) {
+        double pass_frac = tsc3_elig ? (double)tsc3_pass / (double)tsc3_elig : 0.0;
+        double bit_frac  = tsc3_elig ? (double)tsc3_bitexact / (double)tsc3_elig : 0.0;
+        cout << "TS-SCREEN3 == resident-postorder + RE-PAIRING-FOLD screener vs I2 oracle (TS.2-I3a) ==" << endl;
+        cout << "TS-SCREEN3 moves_checked    " << tsc3_n << endl;
+        cout << "TS-SCREEN3 gpu_eligible     " << tsc3_elig << "   (both g3 & g2 non-NaN; NaN = +I/mixture/non-rev/ns -> CPU)" << endl;
+        cout << "TS-SCREEN3 max_rel_err      " << tsc3_max_rel << endl;
+        cout << "TS-SCREEN3 pass@1e-9        " << pass_frac << "   (" << tsc3_pass << "/" << tsc3_elig << ")   <- THE GATE (fold == I2 oracle)" << endl;
+        cout << "TS-SCREEN3 bitexact         " << bit_frac << "   (" << tsc3_bitexact << "/" << tsc3_elig << ")   <- info: <1.0 w/ rel<=~1e-13 = benign fold-order FP" << endl;
+        cout << "TS-SCREEN3 =====================================================================" << endl;
+    }
+#ifdef IQTREE_GPU
+    if (params->ts_upper_check && !tsu_done) {
+        tsu_done = true;   // one-shot per process (the invariant holds for any fitted tree+model)
+        double maxrel=0.0, treeLnL=0.0; long long nedge=0, npass=0, nbit=0;
+        bool ok = gpuAllBranchUpperCheckCleanRoom(&maxrel, &nedge, &npass, &nbit, &treeLnL);
+        cout << "TS-UPPER == persistent-upper preorder: per-edge lnL == tree lnL invariant (TS.2-I3b-i) ==" << endl;
+        if (!ok) {
+            cout << "TS-UPPER  INELIGIBLE   (+I/mixture/non-rev/ns -> CPU; no check run)" << endl;
+        } else {
+            double pass_frac = nedge ? (double)npass/(double)nedge : 0.0;
+            double bit_frac  = nedge ? (double)nbit /(double)nedge : 0.0;
+            cout.precision(10);
+            cout << "TS-UPPER  tree_lnL        " << treeLnL << endl;
+            cout << "TS-UPPER  edges_checked   " << nedge << "   (every non-root edge: k2_derv(lower_v, pre_v) @ b_v)" << endl;
+            cout << "TS-UPPER  max_rel_err     " << maxrel << endl;
+            cout << "TS-UPPER  pass@1e-9       " << pass_frac << "   (" << npass << "/" << nedge << ")   <- THE GATE (all edges == tree lnL)" << endl;
+            cout << "TS-UPPER  bitexact        " << bit_frac << "   (" << nbit << "/" << nedge << ")" << endl;
+        }
+        cout << "TS-UPPER ======================================================================" << endl;
+    }
+    if (params->ts_batch_check && !tsb_done) {
+        tsb_done = true;   // one-shot per process
+        double maxrel=0.0, treeLnL=0.0, wallB=0.0, wallO=0.0; long long nmove=0, npass=0;
+        bool ok = gpuScreenNNIBatchCleanRoom(&maxrel, &nmove, &npass, &treeLnL, &wallB, &wallO);
+        cout << "TS-BATCH == batched re-pairing NNI screener vs 3a oracle + perf (TS.2-I3b-ii) ==" << endl;
+        if (!ok) {
+            cout << "TS-BATCH  INELIGIBLE / no moves   (+I/mixture/non-rev/ns -> CPU)" << endl;
+        } else {
+            double pass_frac = nmove ? (double)npass/(double)nmove : 0.0;
+            double ratio = (wallB > 0.0) ? wallO/wallB : 0.0;
+            cout.precision(10);
+            cout << "TS-BATCH  tree_lnL          " << treeLnL << endl;
+            cout << "TS-BATCH  --- correctness (THE GATE): batched move lnL vs 3a per-move oracle ---" << endl;
+            cout << "TS-BATCH  moves_checked     " << nmove << "   (every inner-branch x 2 NNI moves)" << endl;
+            cout << "TS-BATCH  max_rel_err       " << maxrel << endl;
+            cout << "TS-BATCH  pass@1e-9         " << pass_frac << "   (" << npass << "/" << nmove << ")   <- batched == 3a == CPU" << endl;
+            cout.precision(6);
+            cout << "TS-BATCH  --- perf (example-scale = LAUNCH-BOUND; scale-free claim = 1:M postorders) ---" << endl;
+            cout << "TS-BATCH  postorders        1 (batched)  vs  " << nmove << " (M x per-move 3a)   <- scale-free structural win" << endl;
+            cout << "TS-BATCH  wall_batched_s    " << wallB << "   (1 postorder + 1 preorder + M cheap folds)" << endl;
+            cout << "TS-BATCH  wall_oracle_s     " << wallO << "   (M x full-postorder gpuScreenNNIFoldCleanRoom)" << endl;
+            cout << "TS-BATCH  wall_ratio        " << ratio << "x   (launch-bound at example scale; bandwidth win scales w/ nptn,ns -> 3c AA-1M)" << endl;
+        }
+        cout << "TS-BATCH ======================================================================" << endl;
+    }
+    if (params->ts_tile_check && !tst_done) {
+        tst_done = true;   // one-shot per process
+        double maxrel=0.0, treeLnL=0.0, wallT=0.0, wallO=0.0; long long nmove=0, npass=0, bitexact=0, Mtot=0; int ntile=1;
+        bool ok = gpuScreenNNITileCleanRoom(&maxrel, &nmove, &npass, &treeLnL, &wallT, &wallO, &ntile, &bitexact, &Mtot);
+        cout << "TS-TILE == pattern-tiled batched NNI screener vs 3a oracle + AA-scale fit (TS.2-I3c) ==" << endl;
+        if (!ok) {
+            cout << "TS-TILE  INELIGIBLE / no moves   (+I/mixture/non-rev/ns -> CPU)" << endl;
+        } else {
+            double pass_frac = nmove ? (double)npass/(double)nmove : 0.0;
+            double ratio = (wallT > 0.0) ? wallO/wallT : 0.0;
+            bool tiled = (ntile > 1);
+            cout.precision(10);
+            cout << "TS-TILE  tree_lnL          " << treeLnL << endl;
+            cout << "TS-TILE  nTile             " << ntile << "   (auto-picked from free VRAM; persistent upper sized to chunk0)" << endl;
+            cout << "TS-TILE  --- correctness (THE GATE): tiled move lnL vs 3a per-move oracle ---" << endl;
+            cout << "TS-TILE  moves_total       " << Mtot << "   (every inner-branch x 2 NNI moves)" << endl;
+            cout << "TS-TILE  moves_checked     " << nmove << "   (oracle-eligible subset; gate denominator)" << endl;
+            cout << "TS-TILE  max_rel_err       " << maxrel << endl;
+            if (nmove == 0)
+                cout << "TS-TILE  pass@1e-9         VACUOUS   (0 oracle-eligible moves; gate did NOT run)" << endl;
+            else
+                cout << "TS-TILE  pass@1e-9         " << pass_frac << "   (" << npass << "/" << nmove << ")   <- tiled == 3a == CPU" << endl;
+            cout << "TS-TILE  --- tiling-invariance (BONUS, example scale: nTile=1 fits) ---" << endl;
+            if (bitexact < 0)
+                cout << "TS-TILE  bit_identity      SKIPPED   (nTile=1 OOMs at this scale; auto-tiled only)" << endl;
+            else if (bitexact >= Mtot && Mtot > 0)
+                cout << "TS-TILE  bit_identity      PASS  (" << bitexact << "/" << Mtot << ")   <- auto == forced nTile{3,7} == frozen 3b-ii batch (bitwise)" << endl;
+            else
+                cout << "TS-TILE  bit_identity      FAIL  (" << bitexact << "/" << Mtot << ")   <- tiling changed the answer! (bitwise mismatch)" << endl;
+            cout.precision(6);
+            cout << "TS-TILE  --- perf (" << (tiled ? "AA-scale = BANDWIDTH-BOUND" : "example-scale = LAUNCH-BOUND") << ") ---" << endl;
+            cout << "TS-TILE  postorders        1 (tiled sweep)  vs  " << nmove << " (M x per-move 3a)   <- scale-free structural win" << endl;
+            cout << "TS-TILE  wall_tiled_s      " << wallT << "   (nTile sweeps + M cheap folds/chunk)" << endl;
+            cout << "TS-TILE  wall_oracle_s     " << wallO << "   (M x full-postorder gpuScreenNNIFoldCleanRoom)" << endl;
+            cout << "TS-TILE  wall_ratio        " << ratio << "x   (" << (tiled ? "bandwidth-bound: the real win" : "launch-bound at example scale") << ")" << endl;
+        }
+        cout << "TS-TILE ======================================================================" << endl;
+    }
+    if (params->ts_screen_drive || params->ts_screen_topk > 0 || params->ts_screen_adaptive) {
+        cout << "TS-DRIVE == GPU-screener-driven NNI front-end (TS.2 Integration "
+             << (params->ts_screen_adaptive ? "adaptive-K)" : (params->ts_screen_topk > 0 ? "Step 2: top-k)" : "Step 1: side-validator)")) << " ==" << endl;
+        long long totr = tsdrv_rounds + tsdrv_fallback;
+        if (totr == 0) {
+            cout << "TS-DRIVE  no NNI rounds ran" << endl;
+        } else {
+            double pass_frac = tsdrv_branch ? (double)tsdrv_pass/(double)tsdrv_branch : 0.0;
+            cout.precision(10);
+            cout << "TS-DRIVE  nni_rounds        " << tsdrv_rounds << " screened   " << tsdrv_fallback << " CPU-fallback (ineligible)" << endl;
+            cout << "TS-DRIVE  --- per-round validation: CPU winner preloglh vs one of the GPU's 2 swap lnLs ---" << endl;
+            cout << "TS-DRIVE  branches_checked  " << tsdrv_branch << "   (preloglh set & GPU-mapped, summed over rounds)" << endl;
+            cout << "TS-DRIVE  max_rel_err       " << tsdrv_max_rel << endl;
+            cout << "TS-DRIVE  pass@1e-9         " << pass_frac << "   (" << tsdrv_pass << "/" << tsdrv_branch << ")   <- GPU preloglh == CPU each round" << endl;
+            cout.precision(6);
+            cout << "TS-DRIVE  screener_wall_s   " << tsdrv_wall << "   (total gpuScreenNNIRank over " << tsdrv_rounds << " rounds; the in-loop cost)" << endl;
+            if (params->ts_screen_topk > 0)
+                cout << "TS-DRIVE  top-k             " << params->ts_screen_topk << "   (Step 2: trajectory may differ; gate = final lnL within 0.5 + recall>=0.95)" << endl;
+            else
+                cout << "TS-DRIVE  mode              Step 1 side-validator: ranking DISCARDED => trajectory BYTE-IDENTICAL to CPU (gate = cmp treefile)" << endl;
+        }
+        cout << "TS-DRIVE ======================================================================" << endl;
+    }
+#endif
 
     return candidateTrees.getBestScore();
 
@@ -3252,7 +3521,9 @@ pair<int, int> IQTree::doNNISearch(bool write_info) {
         // Better tree or score is found
         if (getCurScore() > curBestScore + params->modelEps) {
             // Re-optimize model parameters (the sNNI algorithm)
+            double _tsdom = params->ts_diag ? getRealTime() : 0.0;
             optimizeModelParameters(write_info, params->modelEps * 10);
+            if (params->ts_diag) tsd_t_optmodel += getRealTime() - _tsdom;
 #ifdef _OPENMP
 #pragma omp critical
 #endif
@@ -3363,11 +3634,20 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
         }
 
         positiveNNIs.clear();
+        double _tsde = params->ts_diag ? getRealTime() : 0.0;
+#ifdef IQTREE_GPU
+        if (params->ts_screen_drive || params->ts_screen_topk > 0 || params->ts_screen_adaptive)
+            evaluateNNIsScreened(nniBranches, positiveNNIs);
+        else
+#endif
         evaluateNNIs(nniBranches, positiveNNIs);
+        if (params->ts_diag) tsd_t_evalnni += getRealTime() - _tsde;
 
         if (positiveNNIs.size() == 0) {
             if (!nonNNIBranches.empty() && totalNNIApplied == 0) {
+                double _tsde2 = params->ts_diag ? getRealTime() : 0.0;
                 evaluateNNIs(nonNNIBranches, positiveNNIs);
+                if (params->ts_diag) tsd_t_evalnni += getRealTime() - _tsde2;
                 if (positiveNNIs.size() == 0) {
                     break;
                 }
@@ -3379,13 +3659,145 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
         /* sort all positive NNI moves (ASCENDING) */
         sort(positiveNNIs.begin(), positiveNNIs.end());
 
+        if (params->ts_fused) {
+            // ===== TS.6 INCREMENT 2 (--ts-fused): the PRODUCTION fused apply. positiveNNIs already carry screener
+            // geometry + score (built in evaluateNNIsScreened with NO per-move nni5). This is the shadow-certified
+            // SELECTION rule (easy+hard PASS) over the FM-1-gated GEOMETRY source, with the JOLT-stand-in replaced by
+            // the real GPU optimizeAllBranchesJOLT. Select old-length-positive (already filtered to gbest>curScore in
+            // evaluateNNIsScreened), apply the compatible node-disjoint subset TOPOLOGY-ONLY, ONE global JOLT reopt,
+            // round-level accept-or-rollback + single-best nni5 fallback (guarantees progress/termination via the stop
+            // rule below). NaN JOLT (ineligible regime / CUDA error) -> exact CPU optimizeAllBranches(1) fallback.
+            tsfused_rounds++;
+            sort(positiveNNIs.begin(), positiveNNIs.end(),
+                 [](const NNIMove &a, const NNIMove &b) { return a.preloglh > b.preloglh; });   // rank by screener score DESC
+            appliedNNIs.clear();
+            getCompatibleNNIs(positiveNNIs, appliedNNIs);
+            if (appliedNNIs.empty()) break;            // no surfaced old-length-positive move -> TS.6 stops (== shadow)
+            doNNIs(appliedNNIs, /*changeBran=*/false); // TOPOLOGY ONLY (swapped subtree keeps OLD length = JOLT warm start)
+#ifdef IQTREE_GPU
+            double _jf = optimizeAllBranchesJOLT();    // ONE global GPU reopt over ALL branches
+            curScore = (_jf == _jf) ? _jf : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+#else
+            curScore = optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);   // CPU build: no JOLT (portability stub; --ts-fused is a GPU feature)
+#endif
+            tsfused_applied_total += appliedNNIs.size();
+            if (curScore > oldScore + params->loglh_epsilon) {
+                totalNNIApplied += appliedNNIs.size(); // ACCEPT the batch
+            } else {
+                tsfused_rejects++;                     // batch regressed -> round-level rollback
+                doNNIs(appliedNNIs, /*changeBran=*/false);   // revert (doNNI is its own inverse)
+                restoreBranchLengths(lenvec);          // lenvec captured at round top (3570), BEFORE doNNIs -> pristine
+                clearAllPartialLH();
+                curScore = oldScore;
+                // single-best fallback WITH a real nni5 reopt (valid newLen) -> guarantees progress or a clean stop:
+                NNIMove best = getBestNNIForBran(positiveNNIs[0].node1, positiveNNIs[0].node2, nullptr);
+                if (best.newloglh > oldScore + params->loglh_epsilon) {
+                    vector<NNIMove> one(1, best);
+                    doNNIs(one, /*changeBran=*/true);  // topology + nni5 newLen
+#ifdef IQTREE_GPU
+                    double _jf2 = optimizeAllBranchesJOLT();
+                    curScore = (_jf2 == _jf2) ? _jf2 : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+#else
+                    curScore = optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);   // CPU build: no JOLT (portability stub)
+#endif
+                    // RED-TEAM F1: re-check the POST-reopt lnL (the non-fused path ASSERTs "1 NNI can't worsen"; we must
+                    // not commit on the screener/nni5 ESTIMATE alone). If JOLT under-converges / device-lnL dips on this
+                    // far-from-optimum tree, revert -> the fused branch is monotone-or-stop, never returns below oldScore.
+                    if (curScore > oldScore + params->loglh_epsilon) {
+                        totalNNIApplied++;
+                        tsfused_fallbacks++;
+                    } else {
+                        doNNIs(one, /*changeBran=*/false);   // revert the single move (involution)
+                        restoreBranchLengths(lenvec);
+                        clearAllPartialLH();
+                        curScore = oldScore;                 // stop rule breaks the loop (clean termination)
+                    }
+                }
+                // else: curScore stays oldScore -> the stop rule (curScore-oldScore<eps) breaks the loop (correct termination)
+            }
+        } else if (params->ts_shadow) {
+            // ===== TS.6 SHADOW (CPU emulation, --ts-shadow): FALSIFY red-team FM-5 BEFORE building TS.6 =====
+            // Select by OLD-LENGTH preloglh (the TS.6 apply gate that DROPS nni5 "late-bloomers"), apply the
+            // compatible node-disjoint subset TOPOLOGY-ONLY, ONE global optimizeAllBranches (the JOLT stand-in;
+            // sweepIter=100 under --ts-shadow-converge brackets JOLT's converged strength), then a round-level
+            // accept-or-rollback + single-best nni5 fallback (guarantees progress/termination via the stop rule
+            // below). COMMITS the rule => the final tree is a true TS.6 counterfactual whose final lnL is compared
+            // to the nni5 baseline. Does NOT test FM-1 (GPU geometry): node1Nei_it/node2Nei_it come CPU-correct
+            // from getBestNNIForBran (already in positiveNNIs).
+            shadow_rounds++;
+            int sweepIter = params->ts_shadow_converge ? 100 : 1;
+            vector<NNIMove> shadowPos;
+            for (size_t i = 0; i < positiveNNIs.size(); i++)
+                if (positiveNNIs[i].preloglh > curScore) shadowPos.push_back(positiveNNIs[i]);   // the OLD-LENGTH gate
+            shadow_latebloom_dropped += (long long)(positiveNNIs.size() - shadowPos.size());      // = newloglh-positive but old-length-flat (FM-5)
+            sort(shadowPos.begin(), shadowPos.end(),
+                 [](const NNIMove &a, const NNIMove &b) { return a.preloglh > b.preloglh; });      // rank by preloglh DESC
+            appliedNNIs.clear();
+            getCompatibleNNIs(shadowPos, appliedNNIs);
+            if (appliedNNIs.empty()) break;   // no old-length-positive move -> TS.6 stops (late-bloomers uncaught)
+            doNNIs(appliedNNIs, /*changeBran=*/false);   // TOPOLOGY ONLY (no per-move newLen)
+            curScore = optimizeAllBranches(sweepIter, params->loglh_epsilon, PLL_NEWZPERCYCLE);    // global reopt = JOLT stand-in
+            shadow_applied_total += appliedNNIs.size();
+            if (curScore > oldScore + params->loglh_epsilon) {
+                totalNNIApplied += appliedNNIs.size();   // ACCEPT the batch
+            } else {
+                shadow_rejects++;                        // batch regressed -> round-level rollback
+                doNNIs(appliedNNIs, /*changeBran=*/false);   // revert (doNNI is its own inverse)
+                restoreBranchLengths(lenvec);
+                clearAllPartialLH();
+                curScore = oldScore;
+                // single-best fallback WITH a real nni5 reopt (valid newLen) -> guarantees progress or a clean stop:
+                NNIMove best = getBestNNIForBran(shadowPos[0].node1, shadowPos[0].node2, nullptr);
+                if (best.newloglh > oldScore + params->loglh_epsilon) {
+                    vector<NNIMove> one(1, best);
+                    doNNIs(one, /*changeBran=*/true);    // topology + nni5 newLen
+                    curScore = optimizeAllBranches(sweepIter, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+                    totalNNIApplied++;
+                    shadow_fallbacks++;
+                }
+                // else: curScore stays oldScore -> the stop rule (curScore-oldScore<eps) breaks the loop (correct termination)
+            }
+        } else {
         /* remove conflicting NNIs */
         appliedNNIs.clear();
         getCompatibleNNIs(positiveNNIs, appliedNNIs);
 
+        // --ts-reopt-split recall@k (TS-C3 gate): would a top-k pre-reopt screener recover the APPLIED set?
+        // Rank candidates by screener score (preloglh); for each applied move count how many positives the
+        // screener ranks strictly above it. tsk_applied_prepos (preΔ>0) is the recall CEILING for a pre-reopt
+        // screener (false_pos≡0 makes "preΔ>0 ⇒ true positive" exact). curScore here = round baseline.
+        // Caveat: ranks are over positiveNNIs not all branches; for preΔ≤0 applied moves this is a lower
+        // bound on the true rank (slightly optimistic), but those moves sit below every preΔ>0 positive anyway.
+        if (params->ts_reopt_split && !appliedNNIs.empty()) {
+            static const int KS[6] = {1, 2, 4, 8, 16, 32};
+            bool any = false;
+            for (size_t a = 0; a < appliedNNIs.size(); a++) {
+                double mpre = appliedNNIs[a].preloglh;
+                if (mpre <= -DBL_MAX) continue;            // pre not computed (e.g. LM_MEM_SAVE) -> exclude
+                any = true;
+                tsk_applied++;
+                if (mpre > curScore) tsk_applied_prepos++; // screener-surfaceable; the recall ceiling
+                long long rank = 0;
+                for (size_t p = 0; p < positiveNNIs.size(); p++)
+                    if (positiveNNIs[p].preloglh > mpre) rank++;
+                for (int ki = 0; ki < 6; ki++) if (rank < KS[ki]) tsk_recall[ki]++;
+            }
+            if (any) tsk_rounds++;
+        }
+
         // do non-conflicting positive NNIs
         doNNIs(appliedNNIs);
+        double _tsda = params->ts_diag ? getRealTime() : 0.0;
+#ifdef IQTREE_GPU
+        // TS.1 (reborn / L1): lean in-loop JOLT all-branch reopt. NaN (ineligible regime / CUDA error) -> exact CPU fallback.
+        if (params->ts_jolt_allbr) {
+            double _jlnl = optimizeAllBranchesJOLT();
+            curScore = (_jlnl == _jlnl) ? _jlnl
+                     : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+        } else
+#endif
         curScore = optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+        if (params->ts_diag) tsd_t_optallbr += getRealTime() - _tsda;
 
         if (curScore < appliedNNIs.at(0).newloglh - params->loglh_epsilon) {
             //cout << "Tree getting worse: curScore = " << curScore << " / best score = " <<  appliedNNIs.at(0).newloglh << endl;
@@ -3398,7 +3810,16 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
                 // only do the best NNI
                 appliedNNIs.resize(1);
                 doNNIs(appliedNNIs);
+                double _tsda2 = params->ts_diag ? getRealTime() : 0.0;
+#ifdef IQTREE_GPU
+                if (params->ts_jolt_allbr) {
+                    double _jlnl2 = optimizeAllBranchesJOLT();
+                    curScore = (_jlnl2 == _jlnl2) ? _jlnl2
+                             : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+                } else
+#endif
                 curScore = optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+                if (params->ts_diag) tsd_t_optallbr += getRealTime() - _tsda2;
                 ASSERT(curScore > appliedNNIs.at(0).newloglh - 0.1);
             } else {
                 ASSERT(curScore > appliedNNIs.at(0).newloglh - 0.1 && "Using one NNI reduces LogL");
@@ -3407,6 +3828,7 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
         } else {
             totalNNIApplied += appliedNNIs.size();
         }
+        }   // end else (non-shadow select+apply); shadow path falls through to the stop rule below
 
         if(curScore < oldScore - params->loglh_epsilon){
             hideProgress();
@@ -3449,6 +3871,7 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
         cout << "AAAAAAAAAAAAAAAAAAA: " << curScore << "\t" << originalScore << "\t" << curScore - originalScore << endl;
 
     }
+    if (params->ts_diag) tsd_n_applied += totalNNIApplied;
     return make_pair(numSteps, totalNNIApplied);
 }
 
@@ -3723,10 +4146,12 @@ int IQTree::getDelete() const {
 }*/
 
 void IQTree::evaluateNNIs(Branches &nniBranches, vector<NNIMove>  &positiveNNIs) {
+    if (params->ts_diag) tsd_n_branches_eval += nniBranches.size();
     for (Branches::iterator it = nniBranches.begin(); it != nniBranches.end(); it++) {
         NNIMove nni = getBestNNIForBran((PhyloNode*) it->second.first, (PhyloNode*) it->second.second, nullptr);
         if (nni.newloglh > curScore) {
             positiveNNIs.push_back(nni);
+            if (params->ts_diag) tsd_n_positive++;
         }
 
         // synchronize tree during optimization step
@@ -3736,6 +4161,229 @@ void IQTree::evaluateNNIs(Branches &nniBranches, vector<NNIMove>  &positiveNNIs)
         }
     }
 }
+
+#ifdef IQTREE_GPU
+// TS.2 Integration Step 1 (--ts-screen-drive) / Step 2 (--ts-screen-topk): the GPU-screener-driven NNI front-end.
+// Step 1 (side-validator, BYTE-IDENTICAL): run the lean per-round screener once, then refine getBestNNIForBran on
+// EVERY branch in nniBranches in the SAME ORDER as evaluateNNIs (the screener ranking is computed but DISCARDED),
+// validating per branch that the CPU winner preloglh == one of the GPU's 2 swap lnLs. Step 2 (ts_screen_topk>0):
+// refine only the top-k branches by GPU score; skip the rest (trajectory may differ — gated by recall + final lnL).
+// On screener ineligibility/CUDA error -> pure CPU evaluateNNIs (byte-identical). evaluateNNIs is left untouched
+// (it is also called for nonNNIBranches and from other paths); the dispatch is only at the main optimizeNNI site.
+void IQTree::evaluateNNIsScreened(Branches &nniBranches, vector<NNIMove> &positiveNNIs) {
+    // ROOT-CAUSE FIX (ground-truth 172201742): the GPU screener roots its own DFS at root->neighbors[0]->node,
+    // but getBestNNIForBran orients node1 via the `direction` field — which is STALE relative to the current root
+    // (setRootNode does not recompute it for unrooted trees), so the two rootings are INVERTED for ~all branches and
+    // the upper-folding move reconstructs the mirror rearrangement. Re-rooting `direction` at the current root makes
+    // getBestNNIForBran's node1 == the GPU's u (root->neighbors[0] side). SAFE on the reversible path: `direction`
+    // is read only by NNI orientation (4209/4306) + the non-reversible kernel (phylokernelnew.h:942, under
+    // !useRevKernel); reorientPartialLh keys on partial_lh pointers, not direction. Move choice is newloglh-driven
+    // (orientation-invariant) so the search trajectory is unchanged. Guard on useRevKernel() to leave the
+    // -kernel_nonrev path (where direction couples to likelihood) untouched.
+    if (model && model->useRevKernel()) { clearBranchDirection(); computeBranchDirection(); }
+    std::map<int,double> branchBest;
+    std::map<int,std::pair<double,double> > branchBoth;
+    int ntile = 0; double wall = 0.0;
+    bool ok = gpuScreenNNIRank(branchBest, &branchBoth, &ntile, &wall);
+    if (!ok) {                                   // ineligible -> pure CPU, byte-identical
+        tsdrv_fallback++;
+        evaluateNNIs(nniBranches, positiveNNIs);
+        return;
+    }
+    tsdrv_rounds++;
+    tsdrv_wall += wall;
+    if (params->ts_diag) tsd_n_branches_eval += nniBranches.size();
+
+    // Step 2 / ADAPTIVE-K: pick the top-k branches by GPU best-of-2 score (deterministic tie-break by branchID).
+    std::set<int> topkSet; bool useTopk = (params->ts_screen_topk > 0) || params->ts_screen_adaptive;
+    if (useTopk) {
+        std::vector<std::pair<double,int> > rk;   // (-score, branchID): ascending sort = score desc, id asc
+        for (Branches::iterator it = nniBranches.begin(); it != nniBranches.end(); it++) {
+            int id = pairInteger(((PhyloNode*)it->second.first)->id, ((PhyloNode*)it->second.second)->id);
+            std::map<int,double>::iterator bit = branchBest.find(id);
+            double sc = (bit != branchBest.end()) ? bit->second : -DBL_MAX;   // unmapped -> ranked last
+            rk.push_back(std::make_pair(-sc, id));
+        }
+        std::sort(rk.begin(), rk.end());
+        int k;
+        if (params->ts_screen_adaptive) {
+            // ADAPTIVE-K: K = #branches whose best old-length swap (near-)improves the current tree, clamped
+            // [kmin,kmax]. The screener already scored every move this round, so the signal is FREE. After a
+            // perturbation many branches improve => K rises (recovery breadth, preserves the escape phase);
+            // near convergence few do => K shrinks (cheap). curScore = current-tree lnL at the present (old)
+            // lengths, the same lengths the screener scored at, so branchBest > curScore == "improving swap".
+            int impcount = 0; double thr = curScore - params->ts_adaptive_delta;
+            for (std::map<int,double>::iterator b = branchBest.begin(); b != branchBest.end(); ++b)
+                if (b->second > thr) impcount++;
+            k = impcount;
+            if (k < params->ts_adaptive_kmin) k = params->ts_adaptive_kmin;
+            int kmax = (params->ts_adaptive_kmax > 0) ? params->ts_adaptive_kmax : (int)rk.size();
+            if (k > kmax) k = kmax;
+            if (getenv("TS_ADAPTIVE_DIAG"))
+                printf("TS-ADAPT round=%ld impcount=%d K=%d nbr=%d curScore=%.3f\n",
+                       (long)tsdrv_rounds, impcount, k, (int)rk.size(), curScore);
+        } else {
+            k = params->ts_screen_topk;
+        }
+        if (k > (int)rk.size()) k = (int)rk.size();
+        for (int i = 0; i < k; i++) topkSet.insert(rk[i].second);
+    }
+
+    // ===== TS.6 INCREMENT 2 (--ts-fused): build positiveNNIs from the SCREENER, NO per-move nni5 (the 78.6% surface). =====
+    // For each top-k-surfaced branch: geometry from enumerateNNIGeometry, winning side w = the screener's argmax(g0,g1)
+    // (FM-1-gated: the screener's g0/g1 map to cnt0/cnt1), score = max(g0,g1). The OLD-LENGTH-positive gate max(g0,g1)>
+    // curScore matches the shadow's preloglh>curScore (the SELECTION rule certified easy+hard). HYBRID (--ts-fused-topm M>0):
+    // the M highest-scoring surfaced branches still take EXACT nni5 (getBestNNIForBran) -> recovers late-bloomers (FM-5
+    // insurance); M=0 = pure fused. RETURNS before the refine loop, so per-move nni5 is eliminated for the fused set.
+    if (params->ts_fused) {
+        int M = params->ts_fused_nni5_topm;
+        std::set<int> hybridSet;
+        if (M > 0) {                                   // pick the M highest screener scores among surfaced branches
+            std::vector<std::pair<double,int> > hk;
+            for (Branches::iterator it = nniBranches.begin(); it != nniBranches.end(); it++) {
+                int hid = pairInteger(((PhyloNode*)it->second.first)->id, ((PhyloNode*)it->second.second)->id);
+                if (useTopk && !topkSet.count(hid)) continue;
+                std::map<int,double>::iterator bit = branchBest.find(hid);
+                hk.push_back(std::make_pair(-((bit != branchBest.end()) ? bit->second : -DBL_MAX), hid));
+            }
+            std::sort(hk.begin(), hk.end());
+            for (int i = 0; i < M && i < (int)hk.size(); i++) hybridSet.insert(hk[i].second);
+        }
+        for (Branches::iterator it = nniBranches.begin(); it != nniBranches.end(); it++) {
+            PhyloNode *fn1 = (PhyloNode*) it->second.first;
+            PhyloNode *fn2 = (PhyloNode*) it->second.second;
+            int fid = pairInteger(fn1->id, fn2->id);
+            if (useTopk && !topkSet.count(fid)) continue;
+            if (M > 0 && hybridSet.count(fid)) {       // HYBRID: exact nni5 on this top-M branch (late-bloomer recovery)
+                NNIMove hn = getBestNNIForBran(fn1, fn2, nullptr);
+                if (hn.newloglh > curScore) { positiveNNIs.push_back(hn); tsfused_hybrid++; if (params->ts_diag) tsd_n_positive++; }
+                continue;
+            }
+            std::map<int,std::pair<double,double> >::iterator bb = branchBoth.find(fid);
+            if (bb == branchBoth.end()) continue;      // unmapped: screener has no score -> skip (CPU owns nothing here)
+            double g0 = bb->second.first, g1 = bb->second.second;
+            // RED-TEAM F2: require BOTH swaps finite. The FM-1 gate PROVES the g<->cnt index mapping only on TWO-SIDED
+            // branches; a one-sided (single-NaN) branch's geometry is UNVERIFIED (could be the mirror), and one-sided
+            // moves are outside the shadow-certified envelope (the shadow scored both swaps via CPU nni5). Skip them ->
+            // never apply unverified geometry. (Rare: one-sided = a GPU-ineligible swap; recoverable via later rounds.)
+            if (g0 != g0 || g1 != g1) { tsfused_onesided++; continue; }
+            int w = (g0 >= g1) ? 0 : 1;                  // matches the FM-1 gate's argmax (g0>=g1)?0:1 exactly
+            double gbest = (w == 0) ? g0 : g1;
+            if (gbest <= curScore) continue;            // OLD-LENGTH-positive gate (== shadow preloglh>curScore)
+            NNIMove geo[2]; enumerateNNIGeometry(fn1, fn2, geo);
+            geo[w].newloglh = geo[w].preloglh = gbest;  // screener score; the real post-reopt lnL comes from the global JOLT
+            positiveNNIs.push_back(geo[w]);
+            tsfused_surfaced++;
+            if (params->ts_diag) tsd_n_positive++;
+        }
+        return;
+    }
+
+    // refine in the SAME ORDER as evaluateNNIs (so Step 1 / k=all is byte-identical: same calls, same push order)
+    for (Branches::iterator it = nniBranches.begin(); it != nniBranches.end(); it++) {
+        PhyloNode *n1 = (PhyloNode*) it->second.first;
+        PhyloNode *n2 = (PhyloNode*) it->second.second;
+        int id = pairInteger(n1->id, n2->id);
+        if (useTopk && !topkSet.count(id)) continue;   // Step 2: skipped branch assumed non-positive
+
+        NNIMove nni = getBestNNIForBran(n1, n2, nullptr);
+
+        // TS.6 FM-1 GATE (--ts-fused-check): prove enumerateNNIGeometry reconstructs the SAME 2 swaps as nni5 AND that
+        // the screener's g0/g1 map to cnt0/cnt1 (so a fused apply of out[g0>=g1?0:1] is the screener's WINNING swap,
+        // not the mirror). Validation only: applies nothing, the search proceeds on the CPU 'nni' winner as normal.
+        if (params->ts_fused_check) {
+            tsf_branches++;
+            std::map<int,std::pair<double,double> >::iterator fb = branchBoth.find(id);
+            if (fb != branchBoth.end()) {
+                tsf_checked++;
+                double g0 = fb->second.first, g1 = fb->second.second;
+                NNIMove val[2]; val[0].ptnlh = val[1].ptnlh = nullptr; val[0].node1 = nullptr;
+                getBestNNIForBran(n1, n2, val);                       // both cnts: geometry + preloglh (TS_CLEAN_PRE pristine)
+                // RED-TEAM FIX: only a branch with BOTH swaps finite on BOTH sides is genuinely verifiable. A one/zero-
+                // sided branch cannot distinguish identity from mirror, so it is UNVERIFIABLE (tsf_checked - tsf_two_sided)
+                // and must NOT silently pass (the old idxOK=true default was a false-PASS). Ties (g0==g1) DO pass the
+                // indexed check, which is BENIGN: a tie-hidden mirror scores equally, so the apply is unharmed; only
+                // score-DIFFERING mirrors are dangerous, and those the two-sided index check catches.
+                bool twoSided = (g0==g0 && g1==g1 && val[0].preloglh > -DBL_MAX && val[1].preloglh > -DBL_MAX);
+                if (twoSided) {
+                    tsf_two_sided++;
+                    NNIMove geo[2]; enumerateNNIGeometry(n1, n2, geo);   // the production helper (copy-fidelity check only)
+                    if (geo[0].node1Nei_it == val[0].node1Nei_it && geo[0].node2Nei_it == val[0].node2Nei_it &&
+                        geo[1].node1Nei_it == val[1].node1Nei_it && geo[1].node2Nei_it == val[1].node2Nei_it)
+                        tsf_geom_pass++;
+                    double r0 = fabs((g0 - val[0].preloglh)/(val[0].preloglh!=0.0?val[0].preloglh:1.0));
+                    double r1 = fabs((g1 - val[1].preloglh)/(val[1].preloglh!=0.0?val[1].preloglh:1.0));
+                    if (r0 > tsf_max_rel) tsf_max_rel = r0;
+                    if (r1 > tsf_max_rel) tsf_max_rel = r1;
+                    if (r0 <= 1e-9 && r1 <= 1e-9) tsf_index_pass++;     // g[cnt]==preloglh[cnt] BOTH sides => mi==cnt (load-bearing)
+                    int gWin = (g0>=g1)?0:1, cWin = (val[0].preloglh>=val[1].preloglh)?0:1;
+                    if (gWin == cWin) tsf_argmax_pass++;
+                }
+            }
+        }
+
+        // Step-1 per-round validation: CPU winner preloglh must equal one of the GPU's 2 swap lnLs (1e-9).
+        // (preloglh == -DBL_MAX under LM_MEM_SAVE / unset -> skip; unmapped branch -> skip, CPU is the truth.)
+        if (nni.preloglh > -DBL_MAX) {
+            std::map<int,std::pair<double,double> >::iterator bbit = branchBoth.find(id);
+            if (bbit != branchBoth.end()) {
+                double g0 = bbit->second.first, g1 = bbit->second.second;
+                // min relative error over the FINITE GPU swap(s); a both-NaN branch is GPU-ineligible for this
+                // move (not a validation failure) -> skip it. (NaN compares false, so we test finiteness first.)
+                double rel = HUGE_VAL;
+                if (g0 == g0) { double r = (nni.preloglh != 0.0) ? fabs((g0 - nni.preloglh)/nni.preloglh) : fabs(g0 - nni.preloglh); if (r < rel) rel = r; }
+                if (g1 == g1) { double r = (nni.preloglh != 0.0) ? fabs((g1 - nni.preloglh)/nni.preloglh) : fabs(g1 - nni.preloglh); if (r < rel) rel = r; }
+                if (rel != HUGE_VAL) {   // at least one finite GPU swap to compare against
+                    tsdrv_branch++;
+                    if (rel > tsdrv_max_rel) tsdrv_max_rel = rel;
+                    if (rel <= 1e-9) tsdrv_pass++;
+                    // CHARACTERIZATION (TS_SCREEN_CHAR=1): emit BOTH CPU swap pre-scores + BOTH GPU swap lnLs + the
+                    // central length b_v + the round id, so offline we can measure RANKING fidelity (does the GPU
+                    // preloglh rank moves like the CPU?) and whether the error concentrates in low-pre (bad) moves
+                    // (ranking of the good moves preserved -> batched fine for Step 2) vs high-pre (good) moves.
+                    if (getenv("TS_SCREEN_CHAR")) {
+                        PhyloNeighbor *cnei = (PhyloNeighbor*) n1->findNeighbor(n2);
+                        double bv = cnei ? cnei->length : -1.0;
+                        NNIMove val[2]; val[0].ptnlh = val[1].ptnlh = nullptr; val[0].node1 = nullptr;
+                        getBestNNIForBran(n1, n2, val);   // extra call (char-only) to expose BOTH CPU pre-scores
+                        // GROUND-TRUTH DUMP (TS_SCREEN_DUMP=1): CPU per-move swapped subtree ids + lengths, to JOIN
+                        // with TS-GDUMP and see whether the broken GPU swap uses a different subtree/length than CPU.
+                        if (getenv("TS_SCREEN_DUMP") && tsdrv_rounds == 1) {
+                            for (int cc = 0; cc < 2; cc++) {
+                                Node *u = val[cc].node1, *vv = val[cc].node2;            // re-oriented (u=rootward)
+                                Node *fixw = (*val[cc].node1Nei_it)->node;               // fixed neighbor (w)
+                                Node *swc  = (*val[cc].node2Nei_it)->node;               // swapped child (varies)
+                                double bsw = (*val[cc].node2Nei_it)->length;
+                                int bid = (u && vv) ? pairInteger(((PhyloNode*)u)->id, ((PhyloNode*)vv)->id) : -1;
+                                printf("TS-CDUMP cc=%d bid=%d u=%d v=%d w=%d swapc=%d swapLeaf=%d bswap=%.6f pre=%.6f\n",
+                                    cc, bid, u?u->id:-1, vv?vv->id:-1, fixw?fixw->id:-1, swc?swc->id:-1,
+                                    (swc&&swc->isLeaf())?1:0, bsw, val[cc].preloglh);
+                            }
+                            fflush(stdout);
+                        }
+                        double cpu0 = val[0].preloglh, cpu1 = val[1].preloglh;
+                        double cbest = (cpu0 > cpu1) ? cpu0 : cpu1;
+                        double gbest = (g0 == g0 && (g1 != g1 || g0 > g1)) ? g0 : g1;
+                        cout << "TS-CHAR round=" << tsdrv_rounds << " cpu0=" << cpu0 << " cpu1=" << cpu1
+                             << " g0=" << g0 << " g1=" << g1 << " cbest=" << cbest << " gbest=" << gbest
+                             << " bv=" << bv << " rel=" << rel << endl;
+                    }
+                }
+            }
+        }
+
+        if (nni.newloglh > curScore) {
+            positiveNNIs.push_back(nni);
+            if (params->ts_diag) tsd_n_positive++;
+        }
+
+        if (MPIHelper::getInstance().isMaster() && candidateset_changed.size() > 0
+            && MPIHelper::getInstance().gotMessage()) {
+            syncCurrentTree();
+        }
+    }
+}
+#endif
 
 //Branches IQTree::getReducedListOfNNIBranches(Branches &previousNNIBranches) {
 //    Branches resBranches;

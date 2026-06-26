@@ -345,6 +345,31 @@ __global__ void kj_derv_fused(int ns, int nptn, int ncat,
     double Lp=fabs(lh)+pinv*baseinvar[ptn]; double inv=1.0/Lp, r=d1*inv;
     patlh[ptn]=log(Lp); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
 }
+// Fix B — kj_derv_fused_arr: BIT-IDENTICAL to kj_derv_fused but the per-edge coeffs (val0/val1/val2/rscale) come from
+// passed __global__ device arrays for ONE edge (host-precomputed once per gradient, H2D in bulk) instead of the shared
+// __constant__ g_val0/g_val1/g_val2/g_rscale that force per-edge serialization (one cudaMemcpyToSymbol overwrite +
+// cudaDeviceSynchronize per edge). Arithmetic, evaluation order and the fabs/log/inv expressions are UNCHANGED.
+__global__ void kj_derv_fused_arr(int ns, int nptn, int ncat,
+        const double* __restrict__ node, const double* __restrict__ dad,
+        double pinv, const double* __restrict__ baseinvar,
+        const double* __restrict__ val0, const double* __restrict__ val1,
+        const double* __restrict__ val2, const double* __restrict__ rscale,
+        double* __restrict__ patlh, double* __restrict__ pdf, double* __restrict__ pddf,
+        double* __restrict__ rnum, double* __restrict__ wnum){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    double lh=0.0,d1=0.0,d2=0.0;
+    for (int c=0;c<ncat;c++){
+        double rc=0.0, lcc=0.0;
+        for (int x=0;x<ns;x++){ int k=c*ns+x; size_t o=(size_t)k*nptn+ptn;
+            double th=node[o]*dad[o];
+            lcc+=val0[k]*th; rc+=val1[k]*th; d2+=val2[k]*th; }
+        lh+=lcc; d1+=rc;
+        if (rnum) rnum[(size_t)c*nptn+ptn]+=rscale[c]*rc;
+        if (wnum) wnum[(size_t)c*nptn+ptn]=lcc;
+    }
+    double Lp=fabs(lh)+pinv*baseinvar[ptn]; double inv=1.0/Lp, r=d1*inv;
+    patlh[ptn]=log(Lp); pdf[ptn]=r; pddf[ptn]=d2*inv-r*r;
+}
 // kj_pre — Ji-2020 top-down PREORDER eigen-space partial pre_v ("rest of tree" above edge u->v), WITHOUT v's
 // own branch (the gradient's g_val0/1(b_v) reapply it once). The PARENT branch b_u (expfac_u) is applied here.
 //   pus[t]  = Sum_i U[t][i]*expfac_u[i]*pre_u[c][i]
@@ -1631,7 +1656,9 @@ extern "C" void gpu_discrete_gamma_mean(double alpha, int K, double* rates){ jol
 static DevBuf gbj_echild, gbj_partial, gbj_patlh, gbj_pdf, gbj_pddf,
               gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip, gbj_baseinvar,
               gbj_ptnfreq, gbj_redpart,   // G.5.0: on-device ptn_freq + per-block reduction partials
-              gbj_invlbase, gbj_redR;     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
+              gbj_invlbase, gbj_redR,     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
+              // Fix B — per-edge derivative coeff arrays (one bulk H2D/gradient, not 197 cudaMemcpyToSymbol+sync)
+              gbj_val0all, gbj_val1all, gbj_val2all, gbj_rscaleall, gbj_redpartall;
 
 // --jolt-diag (A3): per-eval HOST echild-rebuild tax (host loop + 2 blocking H2D in rebuildEchild). Gated by env
 // JOLT_DIAG (set by --jolt-diag; the CUDA TU cannot see Params). Accumulated across the LM loop; reported per call.
@@ -1786,6 +1813,18 @@ extern "C" double gpu_jolt_optimize(
     DEVB(gbj_invlbase, (size_t)chunk0*sizeof(double)); double* d_invLbase=(double*)gbj_invlbase.p;  // G.5.0 Part B
     DEVB(gbj_redR,     (size_t)ncat*GBmax*sizeof(double)); double* d_redR=(double*)gbj_redR.p;
     std::vector<double> h_redR((size_t)ncat*GBmax);
+    // Fix B — per-edge coeff arrays for ALL nodes (filled once per gradient, one bulk H2D each) + batched per-edge
+    // reduction partials. val* hold setVal's {v0,v1,v2}[c*ns+x] per node v at length brlen[v]; rscaleall holds the
+    // per-edge g_rscale[c]. redpartall stocks each edge's kj_reduce3 output (3*GBmax slot/node) for one batched D2H.
+    DEVB(gbj_val0all,   (size_t)nnodes*ncat*ns*sizeof(double)); double* d_val0All=(double*)gbj_val0all.p;
+    DEVB(gbj_val1all,   (size_t)nnodes*ncat*ns*sizeof(double)); double* d_val1All=(double*)gbj_val1all.p;
+    DEVB(gbj_val2all,   (size_t)nnodes*ncat*ns*sizeof(double)); double* d_val2All=(double*)gbj_val2all.p;
+    DEVB(gbj_rscaleall, (size_t)nnodes*ncat*sizeof(double));    double* d_rscaleAll=(double*)gbj_rscaleall.p;
+    DEVB(gbj_redpartall,(size_t)nnodes*3*GBmax*sizeof(double)); double* d_redpartAll=(double*)gbj_redpartall.p;
+    cudaMemset(d_redpartAll,0,(size_t)nnodes*3*GBmax*sizeof(double));   // Fix B: zero unvisited slots once (never read; keeps compute-sanitizer initcheck quiet — numerically inert)
+    std::vector<double> h_val0((size_t)nnodes*ncat*ns), h_val1((size_t)nnodes*ncat*ns), h_val2((size_t)nnodes*ncat*ns);
+    std::vector<double> h_rscaleAll((size_t)nnodes*ncat);
+    std::vector<double> h_redpartAll((size_t)nnodes*3*GBmax);
     std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
     std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
     std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
@@ -1911,10 +1950,14 @@ extern "C" double gpu_jolt_optimize(
         for(int t=0;t<nTile;t++){
             setChunk(t); postorderFill();
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
-            k1_node<<<GB,TB>>>(ns,Pn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
-            const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
-            setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,Pn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,nullptr); cudaDeviceSynchronize();
-            double l,d,dd; reduceDerv(l,d,dd);
+            // Fix B (evalLnL): the 3 per-chunk cudaDeviceSynchronize were redundant on the legacy default stream
+            // (k1_node -> k_leaf_eig -> setVal's cudaMemcpyToSymbol -> kj_derv_fused -> reduceDerv all serialize in
+            // issue order; reduceDerv's synchronous D2H is the only needed barrier). Dropping them = bit-identical,
+            // removes ~3 host stalls per evalLnL (~15 evalLnL/LM-iter, the 2nd latency surface after the gradient).
+            k1_node<<<GB,TB>>>(ns,Pn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]);
+            const double* pl0=edgeNodePtr(c0);   // part8 #3: fused — no theta materialisation
+            setVal(brlen[c0]); kj_derv_fused<<<GB,TB>>>(ns,Pn,ncat,pl0,d_pretmp,cand_pinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,nullptr);
+            double l,d,dd; reduceDerv(l,d,dd);   // kj_reduce3 + synchronous D2H = the chunk's single drain point
             double y=l-Lk, s=Lacc+y; Lk=(s-Lacc)-y; Lacc=s;   // Kahan add this chunk's lnL contribution
         }
         devB=cand_b; devA=cand_a; devP=cand_pinv; devValid=true;   // part8 #2: echild matches this base (full postorder present on device only when nTile==1)
@@ -1934,6 +1977,22 @@ extern "C" double gpu_jolt_optimize(
         if(!devMatch) rebuildEchild();
         bool postValid = devMatch && (nTile==1);
         nGradSweeps++;
+        // Fix B — precompute every edge's derivative coeffs ONCE (one bulk H2D each), replacing the per-edge
+        // cudaMemcpyToSymbol(g_val0/1/2,g_rscale)+cudaDeviceSynchronize inside proc. The coeffs depend only on
+        // brlen[v] (the edge's CURRENT length during the gradient = base) and catRate/catProp_v/evalP (fixed by the
+        // applyPinv(curPinv) above) — pattern- and chunk-INDEPENDENT. Formulas are IDENTICAL to setVal/:rs per edge
+        // (same rc/pcw/e/re evaluation order), so kj_derv_fused_arr is bit-identical to the kj_derv_fused path.
+        for(int v=0;v<nnodes;v++){
+            double t=brlen[v];
+            for(int c=0;c<ncat;c++){ double rc=catRate[c],pcw=catProp_v[c];
+                for(int x=0;x<ns;x++){ double re=rc*evalP[x],e=exp(evalP[x]*rc*t)*pcw;
+                    h_val0[(size_t)v*ncat*ns+c*ns+x]=e; h_val1[(size_t)v*ncat*ns+c*ns+x]=re*e; h_val2[(size_t)v*ncat*ns+c*ns+x]=re*re*e; }
+                h_rscaleAll[(size_t)v*ncat+c]=t/(catRate[c]*catProp_v[c]); }
+        }
+        cudaMemcpy(d_val0All,  h_val0.data(),      (size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_val1All,  h_val1.data(),      (size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_val2All,  h_val2.data(),      (size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_rscaleAll,h_rscaleAll.data(), (size_t)nnodes*ncat*sizeof(double),   cudaMemcpyHostToDevice);
         // G.7.1: cross-chunk Kahan accumulators for the per-pattern sums (df_e, ddf_e, lnL, and the raw rate-grad
         // numerator per category). Deterministic chunk order 0..nTile-1 => reproducible; rel<=1e-12 vs the one-shot sum.
         std::vector<double> accDf(nedge,0.0),accDfK(nedge,0.0),accDdf(nedge,0.0),accDdfK(nedge,0.0);
@@ -1946,6 +2005,11 @@ extern "C" double gpu_jolt_optimize(
             std::vector<int> freeSlots; for(int s=nPool-1;s>=0;s--) freeSlots.push_back(s);
             auto acq=[&](){int s=freeSlots.back();freeSlots.pop_back();return s;}; auto rls=[&](int s){freeSlots.push_back(s);};
             std::vector<double> dfC(nnodes,0.0),ddfC(nnodes,0.0); bool gotL=false; double lnLfirst=0;
+            // Fix B — drop the per-edge host-blocking ops (3x cudaDeviceSynchronize + 4x cudaMemcpyToSymbol + the
+            // reduceDerv D2H). Each edge now: kj_pre/k1_node -> kj_derv_fused_arr (coeffs from the pre-uploaded
+            // d_val*All/d_rscaleAll slice) -> kj_reduce3 into the edge's own d_redpartAll slot, ALL on the default
+            // stream in launch order (no sync). The reduction partials are batched-D2H'd once after the whole sweep.
+            int firstV=-1; std::vector<int> visited;
             std::function<void(int,int)> proc=[&](int u,int su){
                 for(int v:child[u]){
                     int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
@@ -1954,18 +2018,36 @@ extern "C" double gpu_jolt_optimize(
                     else { const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
                         for(int w:child[u]){ if(w==v||nsb>=2) continue; sibArg(w,ec[nsb],sp[nsb],st[nsb]); nsb++; }
                         kj_pre<<<GB,TB>>>(ns,Pn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
-                    cudaDeviceSynchronize();
                     const double* plv=edgeNodePtr(v);   // part8 #3: fused theta+derv+ratenum, no d_theta round-trip
-                    double bv=brlen[v]; std::vector<double> rs(ncat); for(int c=0;c<ncat;c++) rs[c]=bv/(catRate[c]*catProp_v[c]);
-                    cudaMemcpyToSymbol(g_rscale,rs.data(),sizeof(double)*ncat); setVal(bv); cudaDeviceSynchronize();
-                    kj_derv_fused<<<GB,TB>>>(ns,Pn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,d_rnum,nullptr); cudaDeviceSynchronize();
-                    double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
-                    if(!gotL){ lnLfirst=l;
-                        // G.5.0 Part B: 1/L_p on-device from the base-edge patlh (was a host D2H + exp loop over nptn).
+                    // Fix B: coeffs from this edge's pre-uploaded slice (val*All+v*ncat*ns, rscaleAll+v*ncat); no setVal / g_rscale upload / sync
+                    kj_derv_fused_arr<<<GB,TB>>>(ns,Pn,ncat,plv,pre,curPinv,d_baseinvar,
+                        d_val0All+(size_t)v*ncat*ns, d_val1All+(size_t)v*ncat*ns, d_val2All+(size_t)v*ncat*ns, d_rscaleAll+(size_t)v*ncat,
+                        d_patlh,d_pdf,d_pddf,d_rnum,nullptr);
+                    // Fix B: per-edge block reduction into v's own redpartAll slot (3*GB used of the 3*GBmax slot); batched D2H after the sweep.
+                    kj_reduce3<<<GB,TB,(size_t)3*TB*sizeof(double)>>>(Pn,d_patlh,d_pdf,d_pddf,d_ptnfreq,GB,d_redpartAll+(size_t)v*3*GB);
+                    if(firstV<0) firstV=v;
+                    visited.push_back(v);
+                    if(!gotL){
+                        // G.5.0 Part B: 1/L_p on-device from the base-edge (firstV) patlh — reads d_patlh in stream order
+                        // BEFORE the next edge's kj_derv_fused_arr overwrites it (no sync needed). lnLfirst is filled
+                        // post-sweep from firstV's reduction slot.
                         kj_invl<<<GB,TB>>>(Pn,d_patlh,d_invLbase); gotL=true; }
                     if(leaf[v]<0) proc(v,sv); rls(sv);
                 } };
-            proc(root,-1); cudaDeviceSynchronize();
+            proc(root,-1);
+            // Fix B — ONE sync for the whole sweep, then ONE batched D2H of all visited reduction slots; per-edge host
+            // Kahan combine (UNCHANGED order: b=0..GB-1, channels L/D/DD within v's 3*GB slot) reproduces reduceDerv.
+            cudaDeviceSynchronize();
+            cudaMemcpy(h_redpartAll.data(),d_redpartAll,(size_t)nnodes*3*GB*sizeof(double),cudaMemcpyDeviceToHost);
+            for(int v : visited){
+                const double* slotp=h_redpartAll.data()+(size_t)v*3*GB;   // layout matches kj_reduce3: [0,GB)=L, [GB,2GB)=D, [2GB,3GB)=DD
+                double L=0,kc=0,D=0,kd=0,DD=0,kdd=0;
+                for(int b=0;b<GB;b++){
+                    { double term=slotp[b],            y=term-kc, s=L +y; kc =(s-L )-y; L =s; }
+                    { double term=slotp[(size_t)GB+b], y=term-kd, s=D +y; kd =(s-D )-y; D =s; }
+                    { double term=slotp[(size_t)2*GB+b],y=term-kdd,s=DD+y; kdd=(s-DD)-y; DD=s; } }
+                dfC[v]=D; ddfC[v]=DD; if(v==firstV) lnLfirst=L;
+            }
             // accumulate this chunk's per-edge df/ddf and base-edge lnL (Kahan):
             for(int e=0;e<nedge;e++){
                 double td=dfC[edgeV[e]];  { double y=td-accDfK[e],  s=accDf[e] +y; accDfK[e] =(s-accDf[e]) -y; accDf[e] =s; }

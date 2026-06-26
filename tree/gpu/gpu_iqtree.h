@@ -114,6 +114,77 @@ double gpu_derv_crosscheck(
     double* out_ddf,             // out: second derivative
     double* out_lnL);            // out: tree lnL at t
 
+// TS.2 Increment 3a — score an NNI-swapped topology @ OLD lengths from ONE resident postorder over the PHYSICAL
+// tree + a re-pairing fold (no swap-aware DFS, no new kernel). The desc_* arrays are the physical two-sub-root
+// postorder (as for gpu_derv_crosscheck). The 4 re-pairing children (node1's swapped {n1a,n1b}, node2's {n2a,n2b})
+// each carry (ec = echild node index for that child's UNCHANGED length, slot>=0 internal | leaf>=0 tip taxon).
+// Two k1_node(isRoot=0,nchild=2) folds build the swapped endpoint partials; k2_derv combines them at central
+// length t. *out_lnL = swapped-topology lnL (== gpuScreenNNICleanRoom). Returns df; NaN on CUDA error.
+double gpu_screen_nni_fold_crosscheck(
+    int nstates, int nptn, int ncat, int ntax, int nnodes, int nInternal,
+    const double* Uinv, const double* UinvRowSum, const double* freq, const double* catProp,
+    const double* echild, const unsigned char* tip, const double* ptn_freq,
+    const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
+    const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    int n1a_ec, int n1a_slot, int n1a_leaf,   int n1b_ec, int n1b_slot, int n1b_leaf,
+    int n2a_ec, int n2a_slot, int n2a_leaf,   int n2b_ec, int n2b_slot, int n2b_leaf,
+    const double* eval, const double* catRate, double t,
+    double* out_ddf, double* out_lnL);
+
+// TS.2 Increment 3b-i — ONE fixed-root postorder (resident lowers) + ONE preorder with a PERSISTENT per-node upper
+// buffer (slot = node id, not the O(depth) pool); for EVERY internal edge runs k2_derv(lower_v, pre_v, b_v) -> its
+// lnL into out_edge_lnL[v]; returns the whole-tree lnL (independent root reduction) in *out_tree_lnL. The invariant
+// (every edge lnL == tree lnL) validates the persistent-upper machinery. Single-model, nTile=1. Reuses k1_node /
+// kj_pre / k2_derv; NO new kernel. node_* arrays index the fixed-root DFS; post_internal = postorder internal ids.
+double gpu_allbranch_upper_check(
+    int nstates, int nptn, int ncat, int ntax, int nnodes, int nInternal, int root,
+    const double* Uinv, const double* U, const double* UinvRowSum, const double* freq, const double* catProp,
+    const double* eval, const double* catRate,
+    const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const int* node_slot,
+    const double* node_parentLen, const int* post_internal,
+    double* out_edge_lnL, double* out_tree_lnL);
+
+// TS.2 Increment 3b-ii — BATCHED re-pairing NNI screener. Same fixed-root postorder + persistent-upper preorder
+// as gpu_allbranch_upper_check (built ONCE), then scores nMoves NNI moves as cheap folds off the resident lowers +
+// persistent uppers (kj_pre with swapped sibling for the parent endpoint / k1_node for the child / k2_derv at b_v).
+// out_move_lnL[m] = swapped-topology lnL (== gpuScreenNNIFoldCleanRoom, the 3a oracle, to 1e-9). NO new kernel.
+double gpu_screen_nni_batch_crosscheck(
+    int nstates, int nptn, int ncat, int ntax, int nnodes, int nInternal, int root,
+    const double* Uinv, const double* U, const double* UinvRowSum, const double* freq, const double* catProp,
+    const double* eval, const double* catRate,
+    const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const int* node_slot,
+    const double* node_parentLen, const int* post_internal,
+    int nMoves,
+    const int* mv_u, const int* mv_uIsRoot, const double* mv_bv,
+    const int* n1a_ec, const int* n1a_slot, const int* n1a_leaf,
+    const int* n1b_ec, const int* n1b_slot, const int* n1b_leaf,
+    const int* n2a_ec, const int* n2a_slot, const int* n2a_leaf,
+    const int* n2b_ec, const int* n2b_slot, const int* n2b_leaf,
+    double* out_move_lnL, double* out_tree_lnL);
+
+// TS.2 Increment 3c — PATTERN-TILED batched NNI screener. Identical math to gpu_screen_nni_batch_crosscheck but
+// nptn is split into nTile chunks so the persistent per-node upper (the AA-1M OOM surface) is sized to chunk0, not
+// nptn. Per-move lnL is a continuous carried Kahan sum over chunks => bit-identical to nTile=1 for any nTile.
+// forced_ntile>0 forces nTile (0=auto via free VRAM; JOLT_NTILE env overrides auto). out_ntile = chosen nTile.
+double gpu_screen_nni_tile_crosscheck(
+    int nstates, int nptn, int ncat, int ntax, int nnodes, int nInternal, int root,
+    const double* Uinv, const double* U, const double* UinvRowSum, const double* freq, const double* catProp,
+    const double* eval, const double* catRate,
+    const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
+    const int* node_nchild, const int* node_child, const int* node_leaf, const int* node_slot,
+    const double* node_parentLen, const int* post_internal,
+    int nMoves,
+    const int* mv_u, const int* mv_uIsRoot, const double* mv_bv,
+    const int* n1a_ec, const int* n1a_slot, const int* n1a_leaf,
+    const int* n1b_ec, const int* n1b_slot, const int* n1b_leaf,
+    const int* n2a_ec, const int* n2a_slot, const int* n2a_leaf,
+    const int* n2b_ec, const int* n2b_slot, const int* n2b_leaf,
+    int forced_ntile,
+    double* out_move_lnL, double* out_tree_lnL, int* out_ntile,
+    const double* baseinvar = nullptr, double pinv = 0.0);   // A3 (+I): default keeps non-+I callers unchanged
+
 // G.8.1b — profile-mixture single-edge derivative (df/ddf class-summed). Mirrors gpu_derv_crosscheck but the
 // sweep is per-regime (k1_node_mix), the central-edge coeffs are per-CLASS in global memory, and weights are
 // per-regime (wreg[r]=w_m*catProp_c). evalC = per-class eigenvalues [nmix*nstates].

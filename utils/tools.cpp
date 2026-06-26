@@ -5591,6 +5591,134 @@ void parseArg(int argc, char *argv[], Params &params) {
                 params.ctf = false;
                 continue;
             }
+            if (strcmp(argv[cnt], "--ts-diag") == 0) {
+                // TS.0 tree-search diagnostics: per-phase wall + counters (result-invariant; off by default)
+                params.ts_diag = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-reopt-split") == 0) {
+                // B6: per-NNI-move nni5-reopt-vs-screener stats (adds 1 extra LH eval/move; result-invariant)
+                params.ts_reopt_split = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--jolt-diag") == 0) {
+                // A3: price the optimizeParametersJOLT host-rebuild (H1 + per-eval echild tax) vs device.
+                params.jolt_diag = true;
+                setenv("JOLT_DIAG", "1", 1);   // gate the CUDA-TU echild timer (it cannot see Params)
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-screen-check") == 0) {
+                // TS.2-I1: cross-check GPU clean-room screener lnL vs CPU pre-reopt (needs the CPU oracle)
+                params.ts_screen_check = true;
+                params.ts_reopt_split = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-screen2-check") == 0) {
+                // TS.2-I2: cross-check the NON-MUTATING GPU screener vs CPU pre-reopt (needs the CPU oracle)
+                params.ts_screen2_check = true;
+                params.ts_reopt_split = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-screen3-check") == 0) {
+                // TS.2-I3a: cross-check the resident-postorder + re-pairing-fold screener vs the I2 oracle
+                params.ts_screen3_check = true;
+                params.ts_reopt_split = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-upper-check") == 0) {
+                // TS.2-I3b-i: persistent-upper preorder validator (every edge lnL == tree lnL). No CPU oracle needed.
+                params.ts_upper_check = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-batch-check") == 0) {
+                // TS.2-I3b-ii: batched re-pairing screener vs the 3a oracle + wall timing (the first perf number)
+                params.ts_batch_check = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-tile-check") == 0) {
+                // TS.2-I3c: pattern-tiled batched screener vs the 3a oracle + bit-identity to nTile=1 (AA-scale fit)
+                params.ts_tile_check = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-screen-drive") == 0) {
+                // TS.2 Integration Step 1: GPU screener as the NNI front-end, pure side-validator (byte-identical).
+                params.ts_screen_drive = true;
+                params.ts_reopt_split = true;   // so getBestNNIForBran populates preloglh for the per-round assertion
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-screen-topk") == 0) {
+                // TS.2 Integration Step 2: exact-refine only the top-k branches by GPU screener score
+                cnt++;
+                if (cnt >= argc) throw "Use --ts-screen-topk <k>";
+                params.ts_screen_topk = convert_int(argv[cnt]);
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-screen-adaptive") == 0) {
+                // TS.2 ADAPTIVE-K: phase-aware top-k from the screener's own scores (recovery-safe).
+                params.ts_screen_adaptive = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-adaptive-kmin") == 0) {
+                cnt++;
+                if (cnt >= argc) throw "Use --ts-adaptive-kmin <n>";
+                params.ts_adaptive_kmin = convert_int(argv[cnt]);
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-adaptive-kmax") == 0) {
+                cnt++;
+                if (cnt >= argc) throw "Use --ts-adaptive-kmax <n>";
+                params.ts_adaptive_kmax = convert_int(argv[cnt]);
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-adaptive-delta") == 0) {
+                cnt++;
+                if (cnt >= argc) throw "Use --ts-adaptive-delta <x>";
+                params.ts_adaptive_delta = convert_double(argv[cnt]);
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-jolt-allbr") == 0) {
+                // TS.1 (reborn / L1): lean in-loop JOLT all-branch reopt replaces the post-NNI CPU optimizeAllBranches(1).
+                params.ts_jolt_allbr = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-shadow") == 0) {
+                // TS.6 SHADOW (CPU falsification of FM-5): commit TS.6's old-length-select + global-reopt rule.
+                params.ts_shadow = true;
+                params.ts_reopt_split = true;     // so getBestNNIForBran populates preloglh (the select key)
+                setenv("TS_CLEAN_PRE", "1", 1);   // pristine old-length scores (de-contaminate cnt=1)
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-shadow-converge") == 0) {
+                // TS.6 SHADOW with a CONVERGED global reopt (optimizeAllBranches(100)) -> brackets JOLT's reopt strength.
+                params.ts_shadow = true;
+                params.ts_shadow_converge = true;
+                params.ts_reopt_split = true;
+                setenv("TS_CLEAN_PRE", "1", 1);
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-fused-check") == 0) {
+                // TS.6 FM-1 GATE (validation-only): prove enumerateNNIGeometry + the screener mi==cnt mapping per branch.
+                params.ts_fused_check = true;
+                params.ts_screen_drive = true;    // run the screener side-validator on EVERY branch (trajectory unchanged)
+                params.ts_reopt_split = true;     // getBestNNIForBran populates preloglh per cnt (the indexed compare)
+                setenv("TS_CLEAN_PRE", "1", 1);   // pristine per-cnt preloglh so g[cnt]==preloglh[cnt] is exact
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-fused") == 0) {
+                // TS.6 PRODUCTION fused apply (Increment 2): screener-positive select + ONE global JOLT reopt.
+                params.ts_fused = true;
+                params.ts_screen_adaptive = true; // adaptive-K selection over the screener
+                params.ts_jolt_allbr = true;      // the global JOLT reopt (TS.1 keystone)
+                params.ts_reopt_split = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--ts-fused-topm") == 0) {
+                // HYBRID knob: keep exact nni5 on the top-M screener branches (catch FM-5 late-bloomers), fuse the rest.
+                cnt++;
+                if (cnt >= argc) throw "Use --ts-fused-topm <num>";
+                params.ts_fused_nni5_topm = convert_int(argv[cnt]);
+                continue;
+            }
             if (argv[cnt][0] == '-') {
                 string err = "Invalid \"";
                 err += argv[cnt];
@@ -7699,6 +7827,27 @@ void Params::setDefault() {
     ctf_topk = 3;
     ctf_seed = -1;
     no_gpu = false;
+    ts_diag = false;
+    ts_reopt_split = false;
+    jolt_diag = false;
+    ts_screen_check = false;
+    ts_screen2_check = false;
+    ts_screen3_check = false;
+    ts_upper_check = false;
+    ts_batch_check = false;
+    ts_tile_check = false;
+    ts_screen_drive = false;
+    ts_screen_topk = 0;
+    ts_screen_adaptive = false;
+    ts_adaptive_kmin = 8;       // always refine at least the top-8 (settled-phase floor == flat topk8)
+    ts_adaptive_kmax = 0;       // 0 => all branches (full breadth allowed during recovery)
+    ts_adaptive_delta = 0.0;    // count strictly-improving swaps; >0 widens the net (safer for late-bloomers)
+    ts_jolt_allbr = false;      // TS.1: lean in-loop JOLT all-branch reopt for optallbranches; off = stock CPU sweep
+    ts_shadow = false;          // TS.6 SHADOW: CPU falsification of FM-5 (committed TS.6-rule counterfactual)
+    ts_shadow_converge = false; // TS.6 SHADOW with converged optimizeAllBranches(100) reopt bracket
+    ts_fused = false;           // TS.6 production fused apply (screener-positive + global JOLT reopt)
+    ts_fused_check = false;     // TS.6 FM-1 gate: validation-only geometry + mi==cnt mapping check
+    ts_fused_nni5_topm = 0;     // TS.6 hybrid: nni5 on top-M screener branches (0 = pure fused)
 }
 
 int countPhysicalCPUCores() {
