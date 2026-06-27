@@ -12,11 +12,12 @@ Everything else is superseded and archived (see §5 — no work was lost).
 | **Repo / tree** | `/scratch/rc29/as1708/iqtree3-l2search` |
 | **Branch** | `gpu-kernel-prod` == `l2-batched-nni` @ **`5551dc23`** (identical refs) |
 | **GitHub** | `setonix-iq` = github.com/XENOTEKX/setonix-iq, branch **`gpu-kernel-prod`** (pushed 2026-06-27, `6fce15de..5551dc23`, clean FF) |
-| **Canonical binary (GPU)** | `build-gpu-on/iqtree3` — md5 **`d711a4f93bc37bf304647d6f0312985c`** (built 2026-06-27 12:17 from `587e5ba8`; tip `5551dc23` adds only this+the K1 doc) |
-| **Companion binary (CPU / no-GPU)** | `build-gpu-off/iqtree3` — md5 `3a18a3190279992bf3680a5fe127a07d` (for `--jolt`-off / OLD-vs-NEW bit-identity comparison) |
+| **Canonical binary (GPU)** | `build-gpu-on/iqtree3` — md5 **`5606db007d6fc6edbd517f8f4932fe36`** (built 2026-06-27 from `f7198d73`, the +R-ladder tip) |
+| **Companion binary (CPU / no-GPU)** | `build-gpu-off/iqtree3` (for `--jolt`-off / OLD-vs-NEW bit-identity comparison) |
 
-`587e5ba8` = the +R (FreeRate) Phase-1 + shelved-L-BFGS code commit; `5551dc23` = doc-only
-(K1/Fix-B rationale + this file). The two binaries differ only by `-DIQTREE_GPU`.
+History: `587e5ba8` = +R Phase-1 (fixed-Q pure +R) + shelved L-BFGS; `5551dc23` = consolidation doc; then the
+**+R ladder** — `0ec14119` = 2a (free-Q+R / GTR+R), `f7198d73` = 2b+2c (+I+R and free-Q⊗+I⊗+R = GTR+F+I+R2).
+The two binaries differ only by `-DIQTREE_GPU`.
 
 ## 2. Build recipe
 
@@ -36,8 +37,8 @@ auto-detected and the likelihood memory is sized to the allocation.
 |---|---|---|---|
 | JOLT single-matrix **DNA** (JC…GTR) base/+G/+I+G | `--jolt` (default-on) | covR audit (job **172444810**), DNA `-m MF` | **73 models engage, ALL PASS**, worst GPU==CPU rel 6.2e-12 |
 | JOLT single-matrix **AA** (empirical Q) base/+G/+I+G | `--jolt` | covR audit, AA `-m MF` | **119 models engage, ALL PASS**, worst rel 1.8e-10 |
-| **+R (FreeRate)** Phase-1 — fixed-Q, pure +R, R≤4 | `-m …+R{2,3,4}` `--jolt` | p1Rval2 (job **172444201**) | **3/3 PASS**: no-regression bit-identical; JC/F81+R, LG+R engage rel≤1e-15; GTR+R4 / LG+R5 / LG+I+R4 correctly decline |
-| **+R live in ModelFinder** | `-m MF` `--jolt` | covR audit | DNA: JC+R2/R3/R4 · AA: LG+R2/R3/R4 now engage on GPU |
+| **+R (FreeRate) — FULL LADDER**, R≤4 | `-m …+R{2,3,4}` (and `+I+R`) `--jolt` | p1Rval2 (**172444201**) · lad2a (**172450392**) · lad2bc (**172451291**) | **complete & exact**: fixed-Q pure +R (JC/F81/LG) · **2a** free-Q+R (GTR/HKY/TN+R) · **2b** +I+R · **2c** GTR+F+I+R2 — all engage, GPU lnL==CPU rel≤5e-16, GPU≥CPU, pinv==CPU exact; LG+R5/ncat>4 decline |
+| **+R live in ModelFinder** | `-m MF` `--jolt` | covR audit | DNA: JC+R2/R3/R4 · AA: LG+R2/R3/R4 (free-Q+R and +I+R now also engage) |
 | Free-Q (GTR), +I+G | `--jolt` | p1Rval2 no-regression | OLD==NEW bit-identical |
 | **GPU profile-mixtures** (JOLTMix, e.g. MEOW80) | `JOLT_MIX_HOSTDRIVEN=1 … --jolt --gpu` | uniMEOW (job **172448018**), LG+MEOW80+G4, 21,798 ptns | **N=80 engages (weights=EM), GPU lnL==CPU rel 2.463e-13**, lnL −1,665,670.997 |
 | Native **CTF** ModelFinder | `--ctf` | (prior G.6.x, in-tree) | wired |
