@@ -1,0 +1,81 @@
+# Canonical GPU IQ-TREE 3 — the ONE tree, the ONE binary (consolidation 2026-06-27)
+
+This file ends the "too many binaries" problem. There is now a single unified line that
+carries **every** validated GPU capability (JOLT likelihood/optimizer, +R FreeRate,
+GPU profile-mixtures, native CTF ModelFinder, and the full TS.0–TS.6 GPU tree search).
+Everything else is superseded and archived (see §5 — no work was lost).
+
+## 1. The canonical tree + binary
+
+| | |
+|---|---|
+| **Repo / tree** | `/scratch/rc29/as1708/iqtree3-l2search` |
+| **Branch** | `gpu-kernel-prod` == `l2-batched-nni` @ **`5551dc23`** (identical refs) |
+| **GitHub** | `setonix-iq` = github.com/XENOTEKX/setonix-iq, branch **`gpu-kernel-prod`** (pushed 2026-06-27, `6fce15de..5551dc23`, clean FF) |
+| **Canonical binary (GPU)** | `build-gpu-on/iqtree3` — md5 **`d711a4f93bc37bf304647d6f0312985c`** (built 2026-06-27 12:17 from `587e5ba8`; tip `5551dc23` adds only this+the K1 doc) |
+| **Companion binary (CPU / no-GPU)** | `build-gpu-off/iqtree3` — md5 `3a18a3190279992bf3680a5fe127a07d` (for `--jolt`-off / OLD-vs-NEW bit-identity comparison) |
+
+`587e5ba8` = the +R (FreeRate) Phase-1 + shelved-L-BFGS code commit; `5551dc23` = doc-only
+(K1/Fix-B rationale + this file). The two binaries differ only by `-DIQTREE_GPU`.
+
+## 2. Build recipe
+
+```bash
+module load cmake/3.24.2 gcc/12.2.0 cuda/12.5.1 eigen/3.3.7 boost/1.84.0
+cmake -DIQTREE_GPU=ON -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_HOST_COMPILER=/apps/gcc/12.2.0/wrappers/g++ ..   # nvcc 12.5.1, -O3
+make -j   # -> build-gpu-on/iqtree3   (use -DIQTREE_GPU=OFF for the CPU companion)
+```
+
+Run GPU jobs on a `gpuhopper` H200 node. NOTE: a cgroup memory limit < physical RAM is
+auto-detected and the likelihood memory is sized to the allocation.
+
+## 3. Validated capability matrix (this session, on the canonical binary)
+
+| Capability | How to invoke | Validation | Result |
+|---|---|---|---|
+| JOLT single-matrix **DNA** (JC…GTR) base/+G/+I+G | `--jolt` (default-on) | covR audit (job **172444810**), DNA `-m MF` | **73 models engage, ALL PASS**, worst GPU==CPU rel 6.2e-12 |
+| JOLT single-matrix **AA** (empirical Q) base/+G/+I+G | `--jolt` | covR audit, AA `-m MF` | **119 models engage, ALL PASS**, worst rel 1.8e-10 |
+| **+R (FreeRate)** Phase-1 — fixed-Q, pure +R, R≤4 | `-m …+R{2,3,4}` `--jolt` | p1Rval2 (job **172444201**) | **3/3 PASS**: no-regression bit-identical; JC/F81+R, LG+R engage rel≤1e-15; GTR+R4 / LG+R5 / LG+I+R4 correctly decline |
+| **+R live in ModelFinder** | `-m MF` `--jolt` | covR audit | DNA: JC+R2/R3/R4 · AA: LG+R2/R3/R4 now engage on GPU |
+| Free-Q (GTR), +I+G | `--jolt` | p1Rval2 no-regression | OLD==NEW bit-identical |
+| **GPU profile-mixtures** (JOLTMix, e.g. MEOW80) | `JOLT_MIX_HOSTDRIVEN=1 … --jolt --gpu` | uniMEOW (job **172448018**), LG+MEOW80+G4, 21,798 ptns | **N=80 engages (weights=EM), GPU lnL==CPU rel 2.463e-13**, lnL −1,665,670.997 |
+| Native **CTF** ModelFinder | `--ctf` | (prior G.6.x, in-tree) | wired |
+| **GPU tree search** TS.0–TS.6 | `--ts-fused` (+ `--jolt`) | avianTENT (job **172437363**, in flight) | screener + JOLT reopt, `maxiter=2` (validated, beats Hashara 812s) |
+
+Hard exactness bar held throughout: every engaged model self-checks GPU lnL == CPU lnL.
+
+## 4. Environment flags (all default to the validated behavior)
+
+| Flag | Default | Effect |
+|---|---|---|
+| `JOLT_MIX_HOSTDRIVEN` | unset (off) | `=1` engages the GPU profile-mixture optimizer (JOLTMix) |
+| `JOLT_BRLEN_MAXITER` | 2 | per-round LM brlen reopt cap (validated win); `<0` ⇒ skip GPU reopt (CPU fallback, profiling) |
+| `JOLT_LBFGS_M` | 0 (off) | L-BFGS reopt — **shelved** (honest-negative: converges worse; OFF kept as insurance) |
+| `JOLT_K1_HOIST` | (not wired) | Fix-B val-table hoist — perf-FALSIFIED (~1.001×); source preserved in `staging/*.fixb`, see `staging/README_K1_FIXB.md` |
+| `JOLT_DEBUG` | 0 | `=1` prints `[JOLT]`/`[JOLT-GATE]`/`[JOLTMIX]` engage+coherence lines |
+| `JOLT_RGRADCHECK` | 0 | `+R` gradient-check-only mode (gate-test) |
+
+## 5. Retired / superseded trees — and exactly where their content now lives
+
+- **`/scratch/rc29/as1708/iqtree3-gpu`** (branch `tree-search-ts0` @ `6fce15de`) — **SUPERSEDED**.
+  Verified 2026-06-27 that **100% of its content is in canonical history**:
+  - committed tip `6fce15de` is a strict **ancestor** of canonical `5551dc23`;
+  - its 6 uncommitted tree-search files (gpu_iqtree.h, iqtree.cpp, phylotree.h, phylotreegpu.cpp,
+    tools.cpp, tools.h) are byte-identical to canonical commit **`37a63740`**
+    ("snapshot of tree-search-ts0 working tree");
+  - its one drifted file, `gpu_lnl_intree.cu` (the K1/Fix-B version), is byte-identical to
+    canonical **`staging/gpu_lnl_intree.cu.fixb`**.
+  Its 7 stale `build-*/` dirs are obsolete; nothing there is unique. Safe to delete to reclaim
+  disk (not done automatically — non-destructive retirement).
+- **`/scratch/rc29/as1708/iqtree3-mf-iso/src/iqtree3`** — this is the shared bare `origin` /
+  the **MF-Isolation harness** (a separate ModelFinder-dispatch debugging project), *not* part of
+  the GPU consolidation. Left as-is.
+
+## 6. Provenance tags (on setonix-iq)
+
+- `archive/pre-consolidation-l2-2026-06-27` → `587e5ba8` (pushed) — the +R code state pre-doc.
+- `archive/gpu-kernel-{a972cefc,backup-6d7f7483,clean-cca7dbc1}` — prior validated GPU-kernel states.
+
+---
+*One tree, one binary: `gpu-kernel-prod@5551dc23` → `build-gpu-on/iqtree3` (d711a4f9). Use it.*
