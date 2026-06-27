@@ -255,7 +255,8 @@ double gpu_jolt_optimize(
     // G.6 — DNA free-Q (the exchangeabilities are optimised; the eigensystem MOVES). nFreeQ free params q0[0..nFreeQ-1]
     // (the model's getVariables()[1..nFreeQ], raw rates), perturbed by FD inside the LM loop; each change re-decomposes
     // the rate matrix via the host callback (which applies param_spec + the gauge) and re-uploads eval/U/Uinv. nFreeQ==0
-    // => fixed-Q (AA / DNA JC,F81), the launcher is byte-unchanged. freeRate and nFreeQ are mutually exclusive.
+    // => fixed-Q (AA / DNA JC,F81), the launcher is byte-unchanged. G.5.1c (ladder 2a): freeRate and nFreeQ may now BOTH
+    // be active (GTR+R) — independent diagonal-LM axes (free-Q FD grad ⟂ the log-rate/softmax-weight arms).
     int nFreeQ,                  // number of free exchangeabilities (0 = fixed-Q; 1..5 for DNA HKY..GTR)
     const double* q0,            // nFreeQ initial free params (nullptr if nFreeQ==0)
     jolt_qdecompose_fn qdecompose, void* qctx,   // ctx-bound host callback: q[nFreeQ] -> eval[ns],U[ns*ns],Uinv[ns*ns]

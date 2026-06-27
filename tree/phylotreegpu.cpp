@@ -1922,12 +1922,15 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // (isGammaRate()==0), +R+I, and the MEDIAN gamma variant +Gm/+I+Gm (isGammaRate()==GAMMA_CUT_MEDIAN).
     // G.5.1a: let PURE +R (FreeRate, no +I) through to the launcher ONLY under JOLT_RGRADCHECK — it runs the
     // weight-gradient FD self-check then declines to CPU (the +R optimiser branch is G.5.1b, not yet wired).
-    // G.5.1b: ENGAGE the in-tree +R joint LM for the VALIDATED regime only — PURE +R (no +I), FIXED Q (nFreeQ==0;
-    // freeRate and free-Q are mutually exclusive, gpu_iqtree.h), both rates+weights FREE (getNDim()==2*ncat-2; a
-    // user-fixed +R{...} or a mid-EM substep -> CPU), ncat<=JOLT_FREERATE_MAXCAT (harness: R4 reproducible / R6
-    // multimodal => conservative <=4, R5 unvalidated), and the FULL model-param path only (brlenOnly/lean holds +R FIXED).
+    // G.5.1b / G.5.1c (ladder 2a): ENGAGE the in-tree +R joint LM. Regime: +R with NO +I yet (pinv<=0; +I+R is ladder
+    // 2b), Q either FIXED (AA / JC,F81: nFreeQ==0) OR FREE (2a — HKY..GTR+R: the diagonal-LM optimises the free-Q axis
+    // (gradQ/ddQ, :2094) JOINTLY with the rate/weight axes (g_y/g_z), which are independent — no pinv coupling when
+    // optPinv==0, so applyPinv(0) is identity and the +R seeding/gauge are unchanged). Both rates+weights FREE
+    // (getNDim()==2*ncat-2; a user-fixed +R{...} or a mid-EM substep -> CPU), ncat<=JOLT_FREERATE_MAXCAT (harness: R4
+    // reproducible / R6 multimodal => conservative <=4, R5 unvalidated), FULL model-param path only (brlenOnly/lean
+    // holds +R FIXED). (Was: `&& nFreeQ == 0` — that XOR was a gate restriction only; the LM never enforced it.)
     static const int JOLT_FREERATE_MAXCAT = 4;
-    bool freeRateOK = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && nFreeQ == 0
+    bool freeRateOK = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0
                        && site_rate->getNDim() == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && !brlenOnly);
     bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
     if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !freeRateOK && !rgcheck) JOLT_DECLINE("non-mean-gamma");
