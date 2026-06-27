@@ -1922,8 +1922,15 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // (isGammaRate()==0), +R+I, and the MEDIAN gamma variant +Gm/+I+Gm (isGammaRate()==GAMMA_CUT_MEDIAN).
     // G.5.1a: let PURE +R (FreeRate, no +I) through to the launcher ONLY under JOLT_RGRADCHECK — it runs the
     // weight-gradient FD self-check then declines to CPU (the +R optimiser branch is G.5.1b, not yet wired).
+    // G.5.1b: ENGAGE the in-tree +R joint LM for the VALIDATED regime only — PURE +R (no +I), FIXED Q (nFreeQ==0;
+    // freeRate and free-Q are mutually exclusive, gpu_iqtree.h), both rates+weights FREE (getNDim()==2*ncat-2; a
+    // user-fixed +R{...} or a mid-EM substep -> CPU), ncat<=JOLT_FREERATE_MAXCAT (harness: R4 reproducible / R6
+    // multimodal => conservative <=4, R5 unvalidated), and the FULL model-param path only (brlenOnly/lean holds +R FIXED).
+    static const int JOLT_FREERATE_MAXCAT = 4;
+    bool freeRateOK = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && nFreeQ == 0
+                       && site_rate->getNDim() == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && !brlenOnly);
     bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
-    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !rgcheck) JOLT_DECLINE("non-mean-gamma");
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !freeRateOK && !rgcheck) JOLT_DECLINE("non-mean-gamma");
     // G.4.3b — +I (proportion of invariant sites) is now JOINTLY optimised by JOLT, but ONLY for +I+G
     // (RateGammaInvar: getProp(c)=(1-pinv)/K, standard mean-1 discrete-gamma rates). Pure +I (RateInvar, ncat==1)
     // rescales getRate=1/(1-pinv) -> out of JOLT scope -> CPU. A user-FIXED pinv, or no constant sites (pinvMax->0
@@ -2040,19 +2047,22 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
 
     double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : 1.0;
     int optAlpha = (!brlenOnly && ncat > 1 && !site_rate->isFixGammaShape()) ? 1 : 0;   // TS.1: brlen-only holds alpha FIXED
+    if (freeRateOK) optAlpha = 0;   // G.5.1b / red-team CRITICAL-1: +R has no alpha; setGammaShape(outAlpha) would recompute (clobber) the FreeRate rates
 
     // ---- run the JOLT optimiser on the GPU ----
     vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0; double outPinv = pinv0; int outIters = 0;
+    vector<double> outRates(freeRateOK ? ncat : 0), outProps(freeRateOK ? ncat : 0);   // G.5.1b: +R optimised rates/weights (writeback below)
     double _jd_dev_t0 = params->jolt_diag ? getRealTime() : 0.0;   // --jolt-diag: device-call wall start
     double joltLnL = gpu_jolt_optimize(ns, nptn, ncat, ntax, nNodes, /*root=*/nid[R],
         Uinv, UinvRowSum.data(), U, eval, catProp.data(), tip.data(), ptnFreq.data(),
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
         alpha0, optAlpha, /*maxiter=*/brlenMaxIter,
         base_invar.data(), pinv0, optPinv, JOLT_MIN_PINVAR, pinvMax,
-        catRate0.data(), rgcheck ? 1 : 0,   // G.5.1: +R FreeRate seeding + gated FD-check
+        catRate0.data(), (freeRateOK ? 1 : (rgcheck ? 2 : 0)),   // G.5.1b: 1=ENGAGE the +R joint LM; 2=RGRADCHECK-only then decline to CPU
         nFreeQ, (nFreeQ > 0 ? q0vec.data() : nullptr), jolt_qdecompose_intree, &qctx,   // G.6: DNA free-Q
         (nFreeQ > 0 ? outQ.data() : nullptr),
-        outBrlen.data(), &outAlpha, &outPinv, &outIters);
+        outBrlen.data(), &outAlpha, &outPinv, &outIters,
+        (freeRateOK ? outRates.data() : nullptr), (freeRateOK ? outProps.data() : nullptr));   // G.5.1b: optimised +R rates/weights
     if (params->jolt_diag) {   // --jolt-diag (A3): per-call H1 (host rebuild) vs device wall; echild tax printed by the CU TU
         double jd_dev = getRealTime() - _jd_dev_t0;
         printf("JOLT-DIAG-HOST H1=%.6f device=%.6f iters=%d ntax=%d nptn=%d\n", jd_h1, jd_dev, outIters, ntax, nptn);
@@ -2109,7 +2119,11 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     if (nFreeQ > 0) model->gpuSetFreeParamsDecompose(outQ.data());
     if (optPinv) site_rate->setPInvar(outPinv);                 // G.4.3b: sets p_invar + recomputes rates (RateGammaInvar::setPInvar)
     if (optAlpha) site_rate->setGammaShape(outAlpha);           // sets gamma_shape + recomputes the discrete rates
-    clearAllPartialLH();                                        // brlen + alpha + pinv + Q changed -> partials, theta & ptn_invar stale
+    if (freeRateOK) {   // G.5.1b: write the JOLT-optimised FreeRate rates + weights (gauged Σ w·r=1 == RateFree's
+        for (int c = 0; c < ncat; c++) {   // meanRates()==1 convention) via the public setters. optAlpha forced 0 above => setGammaShape did NOT run.
+            site_rate->setRate(c, outRates[c]); site_rate->setProp(c, outProps[c]); }
+    }
+    clearAllPartialLH();                                        // brlen + alpha + pinv + Q + (R) changed -> partials, theta & ptn_invar stale
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
     double cpuLnL = computeLikelihood();
@@ -2118,7 +2132,7 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // G.4.3a: use model->getName() (includes the +F/+FO freq suffix) not model->name (matrix only) — the old print
     // dropped +F, mislabelling LG+F+G4 as "LG+G4" and making +F JOLT-coverage invisible/uncountable. Cap raised so a
     // full -m TESTONLY logs every engagement (coverage is now measurable).
-    string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
+    string joltModelName = model->getName() + (ncat > 1 ? ((freeRateOK ? "+R" : "+G") + std::to_string(ncat)) : string(""));
     // The per-model GPU-vs-CPU validation line is dev diagnostics (fires once per
     // candidate -> ~60-90 lines on an AA coarse pass). Gate behind JOLT_DEBUG so a
     // production --jolt/--ctf run shows only the standard ModelFinder output + the

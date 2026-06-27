@@ -250,7 +250,8 @@ double gpu_jolt_optimize(
     double pinv0, int optPinv,   // initial pinv; optimise it jointly if optPinv (else held at pinv0; 0 => no +I)
     double pinvMin, double pinvMax, // clamp bounds (MIN_PINVAR, aln->frac_const_sites)
     const double* catRate0,      // G.5.1: ncat FreeRate rates[c] (nullptr unless freeRate); seeds rates directly
-    int freeRate,                // G.5.1: 1 => +R FreeRate mode (catRate=catRate0, catProp=weights, no alpha)
+    int freeRate,                // G.5.1b: 0=off; 1=ENGAGE the +R joint LM (catRate/catProp free, gaugeFix Σwr=1, no alpha);
+                                 //         2=RGRADCHECK-only diagnostic then decline to CPU (high-ncat FD validation path)
     // G.6 — DNA free-Q (the exchangeabilities are optimised; the eigensystem MOVES). nFreeQ free params q0[0..nFreeQ-1]
     // (the model's getVariables()[1..nFreeQ], raw rates), perturbed by FD inside the LM loop; each change re-decomposes
     // the rate matrix via the host callback (which applies param_spec + the gauge) and re-uploads eval/U/Uinv. nFreeQ==0
@@ -262,7 +263,9 @@ double gpu_jolt_optimize(
     double* out_brlen,           // nnodes (out: optimised parentLen per node; root entry untouched)
     double* out_alpha,           // out: optimised alpha (unchanged if !optAlpha)
     double* out_pinv,            // out: optimised pinv (unchanged if !optPinv)
-    int* out_iters);             // out: joint-iteration count (the headline)
+    int* out_iters,              // out: joint-iteration count (the headline)
+    double* out_rates = nullptr, // G.5.1b: ncat optimised +R rates (gauged Σ w·r=1; nullptr unless freeRate==1)
+    double* out_props = nullptr);// G.5.1b: ncat optimised +R weights (nullptr unless freeRate==1)
 
 #ifdef __cplusplus
 }  // extern "C"

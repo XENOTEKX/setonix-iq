@@ -1631,7 +1631,8 @@ extern "C" void gpu_discrete_gamma_mean(double alpha, int K, double* rates){ jol
 static DevBuf gbj_echild, gbj_partial, gbj_patlh, gbj_pdf, gbj_pddf,
               gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip, gbj_baseinvar,
               gbj_ptnfreq, gbj_redpart,   // G.5.0: on-device ptn_freq + per-block reduction partials
-              gbj_invlbase, gbj_redR;     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
+              gbj_invlbase, gbj_redR,     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
+              gbj_wnum, gbj_redW;         // G.5.1b: +R per-category Lc(p) (weight-grad numerator) + its block-reduction partials
 
 // --jolt-diag (A3): per-eval HOST echild-rebuild tax (host loop + 2 blocking H2D in rebuildEchild). Gated by env
 // JOLT_DIAG (set by --jolt-diag; the CUDA TU cannot see Params). Accumulated across the LM loop; reported per call.
@@ -1639,6 +1640,14 @@ static bool   g_jdiag_init = false;
 static bool   g_jdiag = false;
 static double g_jd_echild_sec = 0.0;
 static long   g_jd_echild_n = 0;
+
+// JOLT_LBFGS_M (int env, default 0 = OFF): L-BFGS memory size for the per-round brlen reopt. 0 => the diagonal
+// LM path below is BYTE-IDENTICAL. >0 replaces ONLY the brlen step DIRECTION with an m-pair L-BFGS two-loop
+// recursion (initial Hessian H0 = diag(1/(|g_ddf|+eps)) — i.e. the SAME per-edge curvature the diagonal step uses,
+// not gamma*I), capturing the off-diagonal branch coupling the Jacobi/diagonal step ignores (rho~0.6 => ~12 iters).
+// Same MLE (same grad=0 stationary point), ~3-5 iters, ZERO new GPU work (the two-loop is host-side O(m*nedge)).
+static bool   g_lbfgs_init = false;
+static int    g_lbfgs_m = 0;
 
 extern "C" double gpu_jolt_optimize(
     int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
@@ -1649,7 +1658,8 @@ extern "C" double gpu_jolt_optimize(
     const double* base_invar, double pinv0, int optPinv, double pinvMin, double pinvMax,
     const double* catRate0, int freeRate,   // G.5.1: +R FreeRate — catRate0=rates[c] (else nullptr); freeRate=1 seeds rates directly (no alpha)
     int nFreeQ, const double* q0, jolt_qdecompose_fn qdecompose, void* qctx, double* out_q,   // G.6: DNA free-Q (eigensystem moves)
-    double* out_brlen, double* out_alpha, double* out_pinv, int* out_iters)
+    double* out_brlen, double* out_alpha, double* out_pinv, int* out_iters,
+    double* out_rates, double* out_props)   // G.5.1b: +R optimised rates/weights (nullptr unless freeRate==1)
 {
     int ns = nstates;
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[JOLT] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
@@ -1665,6 +1675,7 @@ extern "C" double gpu_jolt_optimize(
     // --jolt-diag (A3): init the gate + snapshot the per-call echild baseline INSIDE the lock, so the
     // across-model OpenMP concurrency (ModelFinder) can't tear the baseline read or race g_jdiag_init.
     if (!g_jdiag_init) { g_jdiag = (std::getenv("JOLT_DIAG") != nullptr); g_jdiag_init = true; }
+    if (!g_lbfgs_init) { const char* e=std::getenv("JOLT_LBFGS_M"); int m=e?atoi(e):0; g_lbfgs_m=(m<0)?0:((m>32)?32:m); g_lbfgs_init=true; }
     double _jd_ech0 = g_jd_echild_sec; long _jd_echn0 = g_jd_echild_n;
 
     // alpha-independent eigen constants — upload once (the BASE-Q eigensystem). For free-Q (nFreeQ>0) qApply()
@@ -1786,6 +1797,11 @@ extern "C" double gpu_jolt_optimize(
     DEVB(gbj_invlbase, (size_t)chunk0*sizeof(double)); double* d_invLbase=(double*)gbj_invlbase.p;  // G.5.0 Part B
     DEVB(gbj_redR,     (size_t)ncat*GBmax*sizeof(double)); double* d_redR=(double*)gbj_redR.p;
     std::vector<double> h_redR((size_t)ncat*GBmax);
+    // G.5.1b +R: weight-grad numerator Lc(p) buffer + its per-block reduction (only referenced when freeRate==1 engages
+    // the +R joint LM below). Independent cudaMalloc => no effect on any other buffer's layout (byte-identical pools).
+    double* d_wnum=nullptr; double* d_redW=nullptr; std::vector<double> h_redW;
+    if(freeRate==1){ DEVB(gbj_wnum,(size_t)ncat*chunk0*sizeof(double)); d_wnum=(double*)gbj_wnum.p;
+                     DEVB(gbj_redW,(size_t)ncat*GBmax*sizeof(double)); d_redW=(double*)gbj_redW.p; h_redW.assign((size_t)ncat*GBmax,0.0); }
     std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
     std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
     std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
@@ -1895,7 +1911,10 @@ extern "C" double gpu_jolt_optimize(
                 ncat,lnL0,sumWN,Ntot,relWN,sumgz,maxrel,(maxrel<1e-4 && relWN<1e-9)?"RGRADCHECK PASS":"RGRADCHECK FAIL");
             fflush(stderr);
         }
-        return (double)NAN;   // G.5.1a: +R optimiser branch not yet wired -> decline to CPU after the (optional) check
+        // G.5.1b: freeRate==1 ENGAGES the +R joint LM (falls through to the gradient infra + LM loop below). freeRate==2
+        // is the RGRADCHECK-only diagnostic (ncat>maxcat / ineligible regime the gate let through ONLY for the FD check)
+        // -> decline to CPU after the check, preserving the historical G.5.1a behaviour for the high-ncat validation path.
+        if (freeRate != 1) return (double)NAN;
     }
 
     long nGradSweeps=0,nLnLEval=0;
@@ -1905,7 +1924,7 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> devB; double devA=1e300, devP=1e300; bool devValid=false;
     auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv,const double* cand_q)->double{
         if(nFreeQ>0 && cand_q) qApply(cand_q);   // G.6: re-decompose+reupload the trial Q -> rebuildEchild() below uses the new evalP/UP
-        if(ncat>1) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b;
+        if(ncat>1 && !freeRate) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b;   // G.5.1b: +R seeds rates directly -> never re-derive from alpha (would clobber meanR)
         rebuildEchild();   // G.7.1: chunk-INDEPENDENT (echild/expfac carry no nptn) — build once per eval, reused across all chunks
         double Lacc=0,Lk=0;   // G.7.1: Kahan accumulator of lnL over the pattern chunks (exact additivity, rel<=1e-12 vs one-shot)
         for(int t=0;t<nTile;t++){
@@ -1921,6 +1940,10 @@ extern "C" double gpu_jolt_optimize(
         return Lacc; };
 
     std::vector<double> g_df(nedge,0.0),g_ddf(nedge,0.0),gradR(ncat,0.0);   // G.5.0 Part B: invL/rnumH now on-device
+    // G.5.1b +R: weight-grad outputs filled by computeGradient when freeRate==1. WNc[c]=Σ_p Lc(p)/L_p·freq (edge-invariant,
+    // taken at the base edge — mirrors the RGRADCHECK path above), gzR[c]=WNc[c]-w_c·N (softmax weight gradient). N once.
+    std::vector<double> WNc(freeRate==1?ncat:0,0.0), gzR(freeRate==1?ncat:0,0.0);
+    double rN=0.0; if(freeRate==1){ for(int p=0;p<nptn;p++) rN+=ptn_freq[p]; }
     auto computeGradient=[&](double& lnLout,double& galphaOut){
         applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
         // part8 #2 base-sweep skip (tiling-aware): echild/expfac are chunk-INDEPENDENT, so skip the rebuild when the
@@ -1938,6 +1961,7 @@ extern "C" double gpu_jolt_optimize(
         // numerator per category). Deterministic chunk order 0..nTile-1 => reproducible; rel<=1e-12 vs the one-shot sum.
         std::vector<double> accDf(nedge,0.0),accDfK(nedge,0.0),accDdf(nedge,0.0),accDdfK(nedge,0.0);
         std::vector<double> accR(ncat,0.0),accRk(ncat,0.0);
+        std::vector<double> accW(freeRate==1?ncat:0,0.0),accWk(freeRate==1?ncat:0,0.0);   // G.5.1b +R weight-grad numerator (Kahan across chunks)
         double Lacc=0,Lk=0;
         for(int t=0;t<nTile;t++){
             setChunk(t);
@@ -1962,7 +1986,18 @@ extern "C" double gpu_jolt_optimize(
                     double l,d,dd; reduceDerv(l,d,dd); dfC[v]=d; ddfC[v]=dd;
                     if(!gotL){ lnLfirst=l;
                         // G.5.0 Part B: 1/L_p on-device from the base-edge patlh (was a host D2H + exp loop over nptn).
-                        kj_invl<<<GB,TB>>>(Pn,d_patlh,d_invLbase); gotL=true; }
+                        kj_invl<<<GB,TB>>>(Pn,d_patlh,d_invLbase); gotL=true;
+                        // G.5.1b +R: per-category likelihood Lc(p) (weight-grad numerator), edge-invariant => captured once
+                        // at this first edge of the chunk (re-derv with the wnum output; setVal/plv/pre/g_rscale still set
+                        // for THIS edge from the call above). kj_invl ran first so d_invLbase holds the correct base 1/L_p
+                        // BEFORE this derv overwrites d_patlh/d_pdf/d_pddf (already reduced for edge v at line above).
+                        if(freeRate==1){
+                            cudaMemset(d_wnum,0,(size_t)ncat*Pn*sizeof(double));
+                            kj_derv_fused<<<GB,TB>>>(ns,Pn,ncat,plv,pre,curPinv,d_baseinvar,d_patlh,d_pdf,d_pddf,nullptr,d_wnum); cudaDeviceSynchronize();
+                            kj_reduce_gradnum<<<GB,TB,(size_t)TB*sizeof(double)>>>(Pn,ncat,d_wnum,d_invLbase,d_ptnfreq,GB,d_redW);
+                            cudaMemcpy(h_redW.data(),d_redW,(size_t)ncat*GB*sizeof(double),cudaMemcpyDeviceToHost);
+                            for(int c=0;c<ncat;c++){ long double a=0; for(int b=0;b<GB;b++) a+=(long double)h_redW[(size_t)c*GB+b];
+                                double term=(double)a; double y=term-accWk[c], s=accW[c]+y; accWk[c]=(s-accW[c])-y; accW[c]=s; } } }
                     if(leaf[v]<0) proc(v,sv); rls(sv);
                 } };
             proc(root,-1); cudaDeviceSynchronize();
@@ -1980,11 +2015,12 @@ extern "C" double gpu_jolt_optimize(
         }
         for(int e=0;e<nedge;e++){ g_df[e]=accDf[e]; g_ddf[e]=accDdf[e]; }
         for(int c=0;c<ncat;c++) gradR[c]=catProp_v[c]*accR[c];
+        if(freeRate==1) for(int c=0;c<ncat;c++){ WNc[c]=accW[c]; gzR[c]=WNc[c]-catProp_v[c]*rN; }   // G.5.1b: softmax weight gradient
         double ga=0;
         // alpha gradient: ga = Σ_c (d catRate[c]/dα)·gradR[c]; catRate[c]=meanR[c]/f so the perturbed mean-1 rate
         // rp[c] must be scaled by 1/f too (else mixing scaled/unscaled rates -> wrong alpha grad on the +I path).
-        if(ncat>1){ double f = optPinv ? (1.0-curPinv) : 1.0; double rp[64]; jolt_discreteGammaMean(curAlpha+1e-5,ncat,rp);
-            for(int c=0;c<ncat;c++) ga+=((rp[c]/f-catRate[c])/1e-5)*gradR[c]; }
+        if(ncat>1 && !freeRate){ double f = optPinv ? (1.0-curPinv) : 1.0; double rp[64]; jolt_discreteGammaMean(curAlpha+1e-5,ncat,rp);
+            for(int c=0;c<ncat;c++) ga+=((rp[c]/f-catRate[c])/1e-5)*gradR[c]; }   // G.5.1b: no alpha for +R (rates are free params, not gamma-derived)
         lnLout=Lacc; galphaOut=ga; };
 
     // ---- single joint LM diagonal-Newton optimise from the provided (warm) start ----
@@ -1996,13 +2032,53 @@ extern "C" double gpu_jolt_optimize(
     const double MINQ=1e-4, MAXQ=100.0;   // == MIN_RATE / MAX_RATE (modelmarkov.h)
     std::vector<double> qcur(nFreeQ>0?nFreeQ:0), qPrev(nFreeQ>0?nFreeQ:0,0.0), gqPrev(nFreeQ>0?nFreeQ:0,0.0);
     if(nFreeQ>0){ for(int k=0;k<nFreeQ;k++) qcur[k]=q0[k]; qApply(qcur.data()); }
+    // ===== G.5.1b +R FreeRate joint-LM state (all empty/untouched unless freeRate==1) =====
+    // y_c=log(r_c) (log-rate space, so the LM moves rates multiplicatively); z_c = softmax weight-logit. gaugeFix pins
+    // Σ w·r=1 by rescaling rates and folding the scale into branch lengths (lnL-invariant) — keeps the FreeRate rate<->
+    // branch-scale degeneracy fixed (identifiability + reproducibility, ref gpu_k8c_jolt_freerate.cu:385).
+    std::vector<double> zR(freeRate==1?ncat:0,0.0), ryPrev(freeRate==1?ncat:0,0.0), rgyPrev(freeRate==1?ncat:0,0.0),
+                        rzPrev(freeRate==1?ncat:0,0.0), rgzPrev(freeRate==1?ncat:0,0.0);
+    std::vector<double> baseR_save(freeRate==1?ncat:0,0.0), baseW_save(freeRate==1?ncat:0,0.0);
+    auto gaugeFix=[&](){ double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];
+        if(m>0){ for(int c=0;c<ncat;c++) catRate[c]/=m; for(int v=0;v<nnodes;v++){ brlen[v]*=m; if(brlen[v]>20.0) brlen[v]=20.0; } }
+        for(int c=0;c<ncat;c++) meanR[c]=catRate[c]; };   // bridge: applyPinv(0) (f==1) then reproduces catRate=meanR
+    auto softmaxApply=[&](const std::vector<double>& z,std::vector<double>& w){
+        double mx=z[0]; for(int c=1;c<ncat;c++) if(z[c]>mx) mx=z[c];
+        double s=0; for(int c=0;c<ncat;c++){ w[c]=exp(z[c]-mx); s+=w[c]; } for(int c=0;c<ncat;c++) w[c]/=s;
+        double tot=0; for(int c=0;c<ncat;c++){ if(w[c]<1e-4) w[c]=1e-4; tot+=w[c]; } for(int c=0;c<ncat;c++) w[c]/=tot; };
+    if(freeRate==1){ for(int c=0;c<ncat;c++) zR[c]=log(catProp_v[c]);   // seed logits from the warm weights (softmax shift-invariant)
+        double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];  // start ON the Σ w·r=1 constraint; fold scale into startB
+        if(m>0){ for(int c=0;c<ncat;c++){ catRate[c]/=m; meanR[c]=catRate[c]; } for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
     double lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
     double aPrev=0,gaPrev=0; bool haveSec=false;
     double pPrev=0,gpPrev=0;   // G.4.3b: pinv secant curvature (mirrors the alpha secant)
+    // ---- L-BFGS state (brlen subvector, edge space) — JOLT_LBFGS_M>0; lbM=0 keeps the diagonal path byte-identical ----
+    const int    lbM   = (freeRate==1) ? 0 : g_lbfgs_m;   // G.5.1b: +R always uses the diagonal path (the L-BFGS brlen direction does NOT carry the y/z arms)
+    const double lbEps = 1e-9;                    // H0 = diag(1/(|g_ddf|+lbEps)); matches the diagonal-path mu floor
+    std::vector<std::vector<double>> lbS, lbY;    // ring buffer of (s,y) pairs, each length nedge (newest at back)
+    std::vector<double> lbRho;                    // 1/(y.s) per pair
+    std::vector<double> prevB, prevG;             // previous accepted iterate (edge space) + its g_df, for the next pair
+    std::vector<double> lbDir(lbM>0?nedge:0,0.0), lbQ(lbM>0?nedge:0,0.0), lbAlf;   // two-loop scratch
     for(it=1; it<=maxiter; it++){
-        base=brlen; double baseA=curAlpha, baseP=curPinv; if(ncat>1) applyAlpha(baseA);
+        base=brlen; double baseA=curAlpha, baseP=curPinv; if(ncat>1 && !freeRate) applyAlpha(baseA);
         double lg,ga; computeGradient(lg,ga);
+        // L-BFGS history: form the (s,y) pair for the prev->current ACCEPTED-iterate transition, then save current as prev.
+        // ACTIVE-SET (red-team DEFECT B): exclude any edge at a brlen box bound at EITHER endpoint — its constrained
+        // gradient would otherwise inject a spurious large y_e that corrupts the free-edge direction for up to lbM iters.
+        if(lbM>0){
+            if(!prevB.empty()){
+                std::vector<double> s(nedge,0.0), y(nedge,0.0); double ys=0;
+                for(int e=0;e<nedge;e++){ double bnew=base[edgeV[e]];
+                    bool atBound = (bnew<=1e-6)||(bnew>=20.0)||(prevB[e]<=1e-6)||(prevB[e]>=20.0);
+                    if(!atBound){ s[e]=bnew-prevB[e]; y[e]=prevG[e]-g_df[e]; ys+=s[e]*y[e]; } }
+                if(ys>1e-12){   // curvature condition (SPD-preserving): push only a positively-curved pair
+                    if((int)lbS.size()>=lbM){ lbS.erase(lbS.begin()); lbY.erase(lbY.begin()); lbRho.erase(lbRho.begin()); }
+                    lbS.push_back(std::move(s)); lbY.push_back(std::move(y)); lbRho.push_back(1.0/ys); }
+            }
+            if((int)prevB.size()!=nedge){ prevB.assign(nedge,0.0); prevG.assign(nedge,0.0); }
+            for(int e=0;e<nedge;e++){ prevB[e]=base[edgeV[e]]; prevG[e]=g_df[e]; }
+        }
         // G.4.3b pinv gradient by FORWARD FINITE DIFFERENCE (robust to the rate<->prop<->pinv coupling that the
         // 1/(1-pinv) rate rescaling introduces; an analytic form would need the rate-derivative term). One extra
         // postorder lnL eval (cheap vs computeGradient's full preorder). lg = lnL at the base point (from above).
@@ -2025,6 +2101,20 @@ extern "C" double gpu_jolt_optimize(
             }
             qApply(qcur.data());   // restore the device eigensystem to base Q (the last FD eval left it at a perturbation)
         }
+        // G.5.1b +R: log-rate / softmax-logit gradients + per-component secant curvature (mirrors the alpha ddA path).
+        // g_y=r·gradR (chain rule for y=log r); g_z=gzR (softmax weight grad). haveSec is still the PRE-update flag here
+        // (set true at the bottom of the iteration) so iteration 1 uses the -1e6 floor exactly like alpha. baseR/W saved
+        // for the reject restore (the trial staging below overwrites meanR/bprop in place).
+        std::vector<double> baseY(freeRate==1?ncat:0),baseZ(freeRate==1?ncat:0),g_y(freeRate==1?ncat:0),g_z(freeRate==1?ncat:0);
+        std::vector<double> ddY(freeRate==1?ncat:0,-1e6),ddZ(freeRate==1?ncat:0,-1e6);
+        if(freeRate==1){
+            baseR_save=catRate; baseW_save=catProp_v;
+            for(int c=0;c<ncat;c++){ baseY[c]=log(catRate[c]); baseZ[c]=zR[c]; g_y[c]=catRate[c]*gradR[c]; g_z[c]=gzR[c]; }
+            if(haveSec) for(int c=0;c<ncat;c++){
+                if(fabs(baseY[c]-ryPrev[c])>1e-9) ddY[c]=(g_y[c]-rgyPrev[c])/(baseY[c]-ryPrev[c]);
+                if(fabs(baseZ[c]-rzPrev[c])>1e-9) ddZ[c]=(g_z[c]-rgzPrev[c])/(baseZ[c]-rzPrev[c]); }
+            for(int c=0;c<ncat;c++){ ryPrev[c]=baseY[c]; rgyPrev[c]=g_y[c]; rzPrev[c]=baseZ[c]; rgzPrev[c]=g_z[c]; }
+        }
         double ddA=(haveSec && fabs(baseA-aPrev)>1e-9)?(ga-gaPrev)/(baseA-aPrev):-1e6;
         double ddP=(haveSec && fabs(baseP-pPrev)>1e-12)?(gradPinv-gpPrev)/(baseP-pPrev):-1e6;
         for(int k=0;k<nFreeQ;k++) ddQ[k]=(haveSec && fabs(qcur[k]-qPrev[k])>1e-12)?(gradQ[k]-gqPrev[k])/(qcur[k]-qPrev[k]):-1e6;
@@ -2032,16 +2122,60 @@ extern "C" double gpu_jolt_optimize(
         for(int k=0;k<nFreeQ;k++){ qPrev[k]=qcur[k]; gqPrev[k]=gradQ[k]; }
         haveSec=true;
         bool acc=false;
-        for(int bt=0; bt<14; bt++){
-            cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
-            double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
-            double cp=baseP; if(optPinv){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
-            std::vector<double> cq(nFreeQ>0?nFreeQ:0);
-            for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
-            double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
-            if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq; lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
-            else { mu*=4.0; nRej++; } }
-        if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP; if(nFreeQ>0) qApply(qcur.data()); break; }
+        if(lbM>0){
+            // ---- L-BFGS brlen direction (computed ONCE; textbook step-length line search on t) — red-team DEFECT A fix:
+            // a real step length t (NOT the mu ladder), so t*dir->0 always reaches acceptance for the SPD-ascent dir
+            // (H_lbfgs is SPD when every stored y.s>0 and H0 SPD => g_df.dir>0 unless g_df==0, i.e. converged). ----
+            if(!lbS.empty()){
+                int K=(int)lbS.size(); lbAlf.assign(K,0.0);
+                for(int e=0;e<nedge;e++) lbQ[e]=g_df[e];                                   // seed q=+g_df (= -grad f); dir=r (no final negation)
+                for(int i=K-1;i>=0;i--){ const std::vector<double>& s=lbS[i]; double sdot=0; for(int e=0;e<nedge;e++) sdot+=s[e]*lbQ[e];
+                    double a=lbRho[i]*sdot; lbAlf[i]=a; const std::vector<double>& y=lbY[i]; for(int e=0;e<nedge;e++) lbQ[e]-=a*y[e]; }
+                for(int e=0;e<nedge;e++) lbDir[e]=lbQ[e]/(fabs(g_ddf[e])+lbEps);             // r = H0 . q
+                for(int i=0;i<K;i++){ const std::vector<double>& y=lbY[i]; double ydot=0; for(int e=0;e<nedge;e++) ydot+=y[e]*lbDir[e];
+                    double bb=lbRho[i]*ydot, ab=lbAlf[i]-bb; const std::vector<double>& s=lbS[i]; for(int e=0;e<nedge;e++) lbDir[e]+=ab*s[e]; }
+            } else {
+                for(int e=0;e<nedge;e++) lbDir[e]=g_df[e]/(fabs(g_ddf[e])+lbEps);            // empty history == the diagonal DIRECTION (lbEps-damped; iter-1 differs from the OFF mu-ladder by design)
+            }
+            // alpha/pinv/Q keep their diagonal+secant directions (computed once at the lbEps floor), scaled by the same t.
+            double daB=(optAlpha && ncat>1)? ga/(fabs(ddA)+lbEps):0.0;
+            double dpB=(optPinv)? gradPinv/(fabs(ddP)+lbEps):0.0;
+            std::vector<double> dqB(nFreeQ>0?nFreeQ:0,0.0);
+            for(int k=0;k<nFreeQ;k++) dqB[k]=gradQ[k]/(fabs(ddQ[k])+lbEps);
+            double t=1.0;
+            for(int bt=0; bt<30; bt++){
+                cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double nb=base[v]+t*lbDir[e]; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
+                double ca=baseA; if(optAlpha && ncat>1){ ca=baseA+t*daB; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
+                double cp=baseP; if(optPinv){ cp=baseP+t*dpB; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
+                std::vector<double> cq(nFreeQ>0?nFreeQ:0);
+                for(int k=0;k<nFreeQ;k++){ double nq=qcur[k]+t*dqB[k]; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
+                double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
+                if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq; lnL=ln; acc=true; if(dl<tol)conv=true; break; }
+                else { t*=0.5; nRej++; } }
+        } else {
+            for(int bt=0; bt<14; bt++){
+                cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
+                double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
+                double cp=baseP; if(optPinv){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
+                std::vector<double> cq(nFreeQ>0?nFreeQ:0);
+                for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
+                // G.5.1b +R: log-rate / softmax-weight arms at the SAME mu (mirror the alpha/pinv diagonal arms). Stage the
+                // trial (cr,cw) into meanR/bprop so evalLnL's applyPinv(0) (f==1) evaluates EXACTLY those, with no change to evalLnL.
+                std::vector<double> cr,cw,cz;
+                if(freeRate==1){ cr.resize(ncat); cw.resize(ncat); cz.resize(ncat);
+                    for(int c=0;c<ncat;c++){ double ny=baseY[c]+g_y[c]/(fabs(ddY[c])+mu); double r=exp(ny);
+                        if(r<1e-4)r=1e-4; if(r>1000.0)r=1000.0; cr[c]=r; cz[c]=baseZ[c]+g_z[c]/(fabs(ddZ[c])+mu); }
+                    softmaxApply(cz,cw);
+                    for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } }
+                double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
+                if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq;
+                    if(freeRate==1){ catRate=cr; catProp_v=cw; for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } zR=cz; gaugeFix(); }
+                    lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
+                else { mu*=4.0; nRej++; } }
+        }
+        if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP;
+            if(freeRate==1){ catRate=baseR_save; catProp_v=baseW_save; for(int c=0;c<ncat;c++){ meanR[c]=baseR_save[c]; bprop[c]=baseW_save[c]; } }
+            if(nFreeQ>0) qApply(qcur.data()); break; }
         if(conv) break; }
 
     if (cudaGetLastError()!=cudaSuccess) return (double)NAN;   // any launch/sync error -> caller falls back to CPU
@@ -2049,6 +2183,7 @@ extern "C" double gpu_jolt_optimize(
     if(out_alpha) *out_alpha=curAlpha;
     if(out_pinv)  *out_pinv = optPinv ? curPinv : pinv0;
     if(nFreeQ>0 && out_q) for(int k=0;k<nFreeQ;k++) out_q[k]=qcur[k];
+    if(freeRate==1 && out_rates && out_props) for(int c=0;c<ncat;c++){ out_rates[c]=catRate[c]; out_props[c]=catProp_v[c]; }   // G.5.1b: optimised +R rates/weights
     if(out_iters) *out_iters=it;
     // --jolt-diag (A3) + LINE-SEARCH WASTE (red-team C1, 2026-06-26): nRej = rejected backtracks (each a WASTED full
     // postorder over all internal nodes, discarded), nLnLEval = total evalLnL postorders. reject_frac = nRej/nLnLEval
