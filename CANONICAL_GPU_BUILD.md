@@ -10,14 +10,23 @@ Everything else is superseded and archived (see §5 — no work was lost).
 | | |
 |---|---|
 | **Repo / tree** | `/scratch/rc29/as1708/iqtree3-l2search` |
-| **Branch** | `gpu-kernel-prod` == `l2-batched-nni` @ **`5551dc23`** (identical refs) |
-| **GitHub** | `setonix-iq` = github.com/XENOTEKX/setonix-iq, branch **`gpu-kernel-prod`** (pushed 2026-06-27, `6fce15de..5551dc23`, clean FF) |
-| **Canonical binary (GPU)** | `build-gpu-on/iqtree3` — md5 **`5606db007d6fc6edbd517f8f4932fe36`** (built 2026-06-27 from `f7198d73`, the +R-ladder tip) |
+| **Branch** | `gpu-kernel-prod` == `l2-batched-nni` @ **`75532f6c`** (identical refs) |
+| **GitHub** | `setonix-iq` = github.com/XENOTEKX/setonix-iq, branch **`gpu-kernel-prod`** (pushed 2026-06-27, tip `75532f6c`, clean FF) |
+| **Canonical binary (GPU)** | `build-gpu-on/iqtree3` — md5 **`fe5f01f0f9217683ade96dfbd4018817`** (built 2026-06-27 from `75532f6c`, the warm-seed tip) |
 | **Companion binary (CPU / no-GPU)** | `build-gpu-off/iqtree3` (for `--jolt`-off / OLD-vs-NEW bit-identity comparison) |
 
 History: `587e5ba8` = +R Phase-1 (fixed-Q pure +R) + shelved L-BFGS; `5551dc23` = consolidation doc; then the
-**+R ladder** — `0ec14119` = 2a (free-Q+R / GTR+R), `f7198d73` = 2b+2c (+I+R and free-Q⊗+I⊗+R = GTR+F+I+R2).
+**+R ladder** — `0ec14119` = 2a (free-Q+R / GTR+R), `f7198d73` = 2b+2c (+I+R and free-Q⊗+I⊗+R = GTR+F+I+R2);
+`4cca1d4a` = +R-ladder doc; **`75532f6c` = G.5.1e warm-seed** (the current tip).
 The two binaries differ only by `-DIQTREE_GPU`.
+
+**G.5.1e warm-seed (`75532f6c`)** — the +R/+I+R joint-LM start kept the CPU-seeded *separated* rates (`meanR=ρ_c`
+from `getRate`) instead of flattening to ~1 (a symmetric stationary point that trapped ncat≥2 at collapsed rates).
+Real-data fix: full avian `GTR+F+I+R2 -te` (21.76M ptns) had collapsed both R2 cats to (rate=1.411, prop=0.3542);
+post-fix (job **172457047**) the rates **separate** (0.9318/0.61, 3.534/0.12), lnL **−418,863,583.56** (**+5.44M nats**
+vs the collapsed −424,299,552.21), GPU==CPU **rel 2.1e-15**, 85 iters / 5.9 min (vs 401 / 19.9 min). Pure-+R is no
+longer bit-identical to the pre-fix binary *by design* (start changed) — validated by GPU≥CPU + rate-separation; the
+pinv=0 / non-+R paths are byte-identical (job **172456879**: +G/+I+G OLD==NEW).
 
 ## 2. Build recipe
 
@@ -79,4 +88,4 @@ Hard exactness bar held throughout: every engaged model self-checks GPU lnL == C
 - `archive/gpu-kernel-{a972cefc,backup-6d7f7483,clean-cca7dbc1}` — prior validated GPU-kernel states.
 
 ---
-*One tree, one binary: `gpu-kernel-prod@5551dc23` → `build-gpu-on/iqtree3` (d711a4f9). Use it.*
+*One tree, one binary: `gpu-kernel-prod@75532f6c` → `build-gpu-on/iqtree3` (md5 fe5f01f0). Use it.*
