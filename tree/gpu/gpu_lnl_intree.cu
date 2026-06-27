@@ -1816,8 +1816,12 @@ extern "C" double gpu_jolt_optimize(
     // For non-+I (optPinv=0): f=1 => catRate=meanR, catProp_v=catProp (byte-identical to the pre-+I +G path).
     std::vector<double> bprop(ncat);
     for(int c=0;c<ncat;c++) bprop[c] = optPinv ? catProp[c]/(1.0-pinv0) : catProp[c];
-    // G.5.1 +R FreeRate: seed meanR=rates[c], bprop=weights so applyPinv(0) is identity (catRate=rates, catProp_v=weights).
-    if (freeRate) { for(int c=0;c<ncat;c++){ meanR[c]=catRate0[c]; bprop[c]=catProp[c]; } }
+    // G.5.1 +R FreeRate: seed the PINV-FREE basis meanR=ρ_c (mean-1 rates, Σ w·ρ=1), bprop=w_c (weights), so
+    // applyPinv(pinv0) reproduces catRate=getRate, catProp_v=getProp. RateFreeInvar: getRate=ρ/(1-p), getProp=(1-p)w
+    // (model/ratefreeinvar.cpp:48-60) => meanR=catRate0*f0, bprop=catProp/f0 with f0=(1-pinv0). G.5.1d (2b). For pure
+    // +R (optPinv=0) f0=1 => BYTE-IDENTICAL to before (meanR=rates, bprop=weights, applyPinv(0) identity).
+    if (freeRate) { double f0 = optPinv ? (1.0-pinv0) : 1.0;
+                    for(int c=0;c<ncat;c++){ meanR[c]=catRate0[c]*f0; bprop[c]=catProp[c]/f0; } }
     double curPinv = optPinv ? pinv0 : 0.0;
     auto applyPinv=[&](double p){ double f = optPinv ? (1.0-p) : 1.0;
         for(int c=0;c<ncat;c++){ catRate[c]=meanR[c]/f; catProp_v[c]=f*bprop[c]; } };
@@ -2015,7 +2019,13 @@ extern "C" double gpu_jolt_optimize(
         }
         for(int e=0;e<nedge;e++){ g_df[e]=accDf[e]; g_ddf[e]=accDdf[e]; }
         for(int c=0;c<ncat;c++) gradR[c]=catProp_v[c]*accR[c];
-        if(freeRate==1) for(int c=0;c<ncat;c++){ WNc[c]=accW[c]; gzR[c]=WNc[c]-catProp_v[c]*rN; }   // G.5.1b: softmax weight gradient
+        // G.5.1b/G.5.1d: softmax weight gradient gz_c = WN_c − w_c·(Σ_p freq·S_p/L_p), w_c=bprop[c]. For pure +R the
+        // normalizer Σ freq·S/L = N = rN. For +I, L_p=(1-p)S_p+p·I_p, and Σ_k WN_k = Σ freq·(1-p)S/L = N − p·Σ freq·I/L
+        // EQUALS that normalizer (·(1-p) cancels into WN) — so use Σ_k WN_k under +I (NO extra reduction needed). At
+        // pinv=0: bprop==catProp_v and ΣWN==rN mathematically, but rN is kept to stay BYTE-IDENTICAL (avoids ΣaccW vs Σfreq sum-order ~1e-12 drift).
+        if(freeRate==1){ double sumWN=0; for(int c=0;c<ncat;c++) sumWN+=accW[c];
+            double wnorm = optPinv ? sumWN : rN;
+            for(int c=0;c<ncat;c++){ WNc[c]=accW[c]; gzR[c]=WNc[c]-bprop[c]*wnorm; } }
         double ga=0;
         // alpha gradient: ga = Σ_c (d catRate[c]/dα)·gradR[c]; catRate[c]=meanR[c]/f so the perturbed mean-1 rate
         // rp[c] must be scaled by 1/f too (else mixing scaled/unscaled rates -> wrong alpha grad on the +I path).
@@ -2039,16 +2049,20 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> zR(freeRate==1?ncat:0,0.0), ryPrev(freeRate==1?ncat:0,0.0), rgyPrev(freeRate==1?ncat:0,0.0),
                         rzPrev(freeRate==1?ncat:0,0.0), rgzPrev(freeRate==1?ncat:0,0.0);
     std::vector<double> baseR_save(freeRate==1?ncat:0,0.0), baseW_save(freeRate==1?ncat:0,0.0);
-    auto gaugeFix=[&](){ double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];
+    auto gaugeFix=[&](){ double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];   // m = overall mean rate (Σ catProp_v·catRate; the +I invariant class adds 0) — pin =1 (same constraint for +R and +I+R)
         if(m>0){ for(int c=0;c<ncat;c++) catRate[c]/=m; for(int v=0;v<nnodes;v++){ brlen[v]*=m; if(brlen[v]>20.0) brlen[v]=20.0; } }
-        for(int c=0;c<ncat;c++) meanR[c]=catRate[c]; };   // bridge: applyPinv(0) (f==1) then reproduces catRate=meanR
+        double f = optPinv ? (1.0-curPinv) : 1.0;   // G.5.1d (2b): meanR is the PINV-FREE rate ρ=catRate·(1-pinv); applyPinv(curPinv) then reproduces catRate. f==1 (pure +R) => byte-identical.
+        for(int c=0;c<ncat;c++) meanR[c]=catRate[c]*f; };
     auto softmaxApply=[&](const std::vector<double>& z,std::vector<double>& w){
         double mx=z[0]; for(int c=1;c<ncat;c++) if(z[c]>mx) mx=z[c];
         double s=0; for(int c=0;c<ncat;c++){ w[c]=exp(z[c]-mx); s+=w[c]; } for(int c=0;c<ncat;c++) w[c]/=s;
         double tot=0; for(int c=0;c<ncat;c++){ if(w[c]<1e-4) w[c]=1e-4; tot+=w[c]; } for(int c=0;c<ncat;c++) w[c]/=tot; };
-    if(freeRate==1){ for(int c=0;c<ncat;c++) zR[c]=log(catProp_v[c]);   // seed logits from the warm weights (softmax shift-invariant)
-        double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];  // start ON the Σ w·r=1 constraint; fold scale into startB
-        if(m>0){ for(int c=0;c<ncat;c++){ catRate[c]/=m; meanR[c]=catRate[c]; } for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
+    if(freeRate==1){ for(int c=0;c<ncat;c++) zR[c]=log(catProp_v[c]);   // seed logits from the warm weights (softmax shift-invariant; the (1-pinv) factor in +I getProp washes out)
+        if(!optPinv){   // pure +R: UNCHANGED / byte-identical (catRate here is still the constructor 1.0, so this resets meanR to ~1 — degenerate start)
+            double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];  // start ON the Σ w·r=1 constraint; fold scale into startB
+            if(m>0){ for(int c=0;c<ncat;c++){ catRate[c]/=m; meanR[c]=catRate[c]; } for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
+        else            // G.5.1d (2b) +I+R: degenerate meanR=1 start (mirrors pure +R); applyPinv(pinv0) => catRate=1/(1-p), catProp_v=(1-p)w => Σ catProp_v·catRate=Σ w=1 (gauge holds; startB unscaled)
+            for(int c=0;c<ncat;c++) meanR[c]=1.0; }
     double lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
     double aPrev=0,gaPrev=0; bool haveSec=false;
@@ -2109,7 +2123,9 @@ extern "C" double gpu_jolt_optimize(
         std::vector<double> ddY(freeRate==1?ncat:0,-1e6),ddZ(freeRate==1?ncat:0,-1e6);
         if(freeRate==1){
             baseR_save=catRate; baseW_save=catProp_v;
-            for(int c=0;c<ncat;c++){ baseY[c]=log(catRate[c]); baseZ[c]=zR[c]; g_y[c]=catRate[c]*gradR[c]; g_z[c]=gzR[c]; }
+            // G.5.1d (2b): the log-rate arm lives in the PINV-FREE basis y=log(meanR=ρ) (the trial staging writes meanR=exp(y)).
+            // g_y = d lnL/dy = meanR·dL/dmeanR = meanR·(gradR/(1-p)) = catRate·gradR (the (1-p) cancels). pure +R: meanR==catRate => byte-identical.
+            for(int c=0;c<ncat;c++){ baseY[c]=log(meanR[c]); baseZ[c]=zR[c]; g_y[c]=catRate[c]*gradR[c]; g_z[c]=gzR[c]; }
             if(haveSec) for(int c=0;c<ncat;c++){
                 if(fabs(baseY[c]-ryPrev[c])>1e-9) ddY[c]=(g_y[c]-rgyPrev[c])/(baseY[c]-ryPrev[c]);
                 if(fabs(baseZ[c]-rzPrev[c])>1e-9) ddZ[c]=(g_z[c]-rgzPrev[c])/(baseZ[c]-rzPrev[c]); }
@@ -2160,7 +2176,8 @@ extern "C" double gpu_jolt_optimize(
                 std::vector<double> cq(nFreeQ>0?nFreeQ:0);
                 for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
                 // G.5.1b +R: log-rate / softmax-weight arms at the SAME mu (mirror the alpha/pinv diagonal arms). Stage the
-                // trial (cr,cw) into meanR/bprop so evalLnL's applyPinv(0) (f==1) evaluates EXACTLY those, with no change to evalLnL.
+                // trial (cr,cw) into the PINV-FREE basis meanR/bprop so evalLnL's applyPinv(cp) (f=1-cp; ==1 for pure +R)
+                // evaluates catRate=cr/(1-cp), catProp_v=(1-cp)cw — the +I-correct rates/props. cr lives in meanR=ρ space (baseY=log meanR).
                 std::vector<double> cr,cw,cz;
                 if(freeRate==1){ cr.resize(ncat); cw.resize(ncat); cz.resize(ncat);
                     for(int c=0;c<ncat;c++){ double ny=baseY[c]+g_y[c]/(fabs(ddY[c])+mu); double r=exp(ny);
@@ -2169,12 +2186,17 @@ extern "C" double gpu_jolt_optimize(
                     for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } }
                 double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
                 if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq;
-                    if(freeRate==1){ catRate=cr; catProp_v=cw; for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } zR=cz; gaugeFix(); }
+                    // G.5.1d (2b): accept the staged pinv-free meanR/bprop, then DERIVE catRate/catProp_v via applyPinv(curPinv)
+                    // (== cr/cw at pinv=0, so pure +R byte-identical), then gauge. (Old: catRate=cr direct — wrong under +I.)
+                    if(freeRate==1){ for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } zR=cz; applyPinv(curPinv); gaugeFix(); }
                     lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
                 else { mu*=4.0; nRej++; } }
         }
         if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP;
-            if(freeRate==1){ catRate=baseR_save; catProp_v=baseW_save; for(int c=0;c<ncat;c++){ meanR[c]=baseR_save[c]; bprop[c]=baseW_save[c]; } }
+            // G.5.1d (2b): restore catRate/catProp_v AND the pinv-free basis. baseR_save/baseW_save are catRate/catProp_v at
+            // base; meanR=ρ=catRate·(1-baseP), bprop=w=catProp_v/(1-baseP). f==1 (pure +R) => meanR=baseR_save (byte-identical).
+            if(freeRate==1){ catRate=baseR_save; catProp_v=baseW_save; double f=optPinv?(1.0-baseP):1.0;
+                for(int c=0;c<ncat;c++){ meanR[c]=baseR_save[c]*f; bprop[c]=baseW_save[c]/f; } }
             if(nFreeQ>0) qApply(qcur.data()); break; }
         if(conv) break; }
 

@@ -1930,8 +1930,13 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // reproducible / R6 multimodal => conservative <=4, R5 unvalidated), FULL model-param path only (brlenOnly/lean
     // holds +R FIXED). (Was: `&& nFreeQ == 0` — that XOR was a gate restriction only; the LM never enforced it.)
     static const int JOLT_FREERATE_MAXCAT = 4;
-    bool freeRateOK = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0
-                       && site_rate->getNDim() == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && !brlenOnly);
+    // G.5.1d (ladder 2b): +I+R now engages. RateFree must be FULLY free (rates+weights = 2K-2 dims); RateFreeInvar adds
+    // one free dim (pinv) when present (getNDim == 2K-1), so strip it before the 2K-2 test. Fixed-pinv keeps getNDim==
+    // 2K-2 -> freeRateOK true but the +I guard (isFixPInvar, :1946) then declines it; a user-fixed +R{...} -> rfDim<2K-2
+    // -> CPU. The +I (1-pinv) bridge through the kernel's meanR/bprop basis is byte-identical at pinv=0 (pure +R / 2a).
+    int rfDim = site_rate->getNDim() - ((site_rate->getPInvar() > 0.0 && !site_rate->isFixPInvar()) ? 1 : 0);
+    bool freeRateOK = (ncat > 1 && site_rate->isFreeRate()
+                       && rfDim == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && !brlenOnly);
     bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
     if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !freeRateOK && !rgcheck) JOLT_DECLINE("non-mean-gamma");
     // G.4.3b — +I (proportion of invariant sites) is now JOINTLY optimised by JOLT, but ONLY for +I+G
