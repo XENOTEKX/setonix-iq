@@ -2057,12 +2057,16 @@ extern "C" double gpu_jolt_optimize(
         double mx=z[0]; for(int c=1;c<ncat;c++) if(z[c]>mx) mx=z[c];
         double s=0; for(int c=0;c<ncat;c++){ w[c]=exp(z[c]-mx); s+=w[c]; } for(int c=0;c<ncat;c++) w[c]/=s;
         double tot=0; for(int c=0;c<ncat;c++){ if(w[c]<1e-4) w[c]=1e-4; tot+=w[c]; } for(int c=0;c<ncat;c++) w[c]/=tot; };
-    if(freeRate==1){ for(int c=0;c<ncat;c++) zR[c]=log(catProp_v[c]);   // seed logits from the warm weights (softmax shift-invariant; the (1-pinv) factor in +I getProp washes out)
-        if(!optPinv){   // pure +R: UNCHANGED / byte-identical (catRate here is still the constructor 1.0, so this resets meanR to ~1 — degenerate start)
-            double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];  // start ON the Σ w·r=1 constraint; fold scale into startB
-            if(m>0){ for(int c=0;c<ncat;c++){ catRate[c]/=m; meanR[c]=catRate[c]; } for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
-        else            // G.5.1d (2b) +I+R: degenerate meanR=1 start (mirrors pure +R); applyPinv(pinv0) => catRate=1/(1-p), catProp_v=(1-p)w => Σ catProp_v·catRate=Σ w=1 (gauge holds; startB unscaled)
-            for(int c=0;c<ncat;c++) meanR[c]=1.0; }
+    // G.5.1e WARM-SEED (fixes the real-data rate-collapse trap; avian GTR+F+I+R2 job 172452425 collapsed both R2 rates
+    // to 1.411). The pre-fix start reset meanR to a flat ~1 (off the constructor catRate=1.0) — a SYMMETRIC stationary
+    // point: for ncat≥2 with equal rates the rate-separation gradient can vanish, trapping +R at the collapsed (sub-
+    // optimal) optimum. Instead START from the CPU's SEPARATED rate estimates meanR=ρ_c (seeded at :1820 from getRate),
+    // gauged to the mean-1 base Σ bprop·meanR=1 with the scale folded into startB. Unifies the pure-+R and +I+R paths
+    // (operates on the pinv-free basis meanR/bprop, so no optPinv branch). NB this CHANGES the +R convergence path vs the
+    // pre-warm-seed binary (no longer bit-identical for +R) — validated by GPU≥CPU + rate-separation, not bit-identity.
+    if(freeRate==1){ for(int c=0;c<ncat;c++) zR[c]=log(bprop[c]);   // weight-logits from the pinv-free weights w_c (== log(catProp_v) at pinv=0; softmax shift-invariant)
+        double m=0; for(int c=0;c<ncat;c++) m+=bprop[c]*meanR[c];   // mean-1 base constraint Σ w·ρ (≈1 if getRate/getProp are in convention)
+        if(m>0){ for(int c=0;c<ncat;c++) meanR[c]/=m; for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
     double lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
     double aPrev=0,gaPrev=0; bool haveSec=false;
