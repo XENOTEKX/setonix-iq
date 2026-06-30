@@ -2101,7 +2101,8 @@ public:
         L_{p,m} = w_m·Σ_c catProp_c·L_{p,m,c} laid out [nmix][nptn] (G.8.1, the EM-weight numerator). Returns NaN for
         non-mixtures / fused / PMSF / +I / ns∉{4,20} / CUDA error. */
     double gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat = nullptr, const double *w_override = nullptr,
-                                         const double *parentLenOverride = nullptr, double alphaOverride = -1.0);
+                                         const double *parentLenOverride = nullptr, double alphaOverride = -1.0,
+                                         double pinvOverride = -1.0);   // A1 (+I): >=0 selects a trial pinv; <0 uses the stored pinv
 
     /** Phase G.2.0b: reusable clean-room GPU whole-tree log-likelihood. Rebuilds the validated K1 eigen-space
         postorder sweep from the LIVE model/site_rate/tree/alignment and returns the ptn_freq-weighted total
@@ -2238,7 +2239,8 @@ public:
         error (same gate as the lnL mix path). Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     bool gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
                                              std::vector<double>& dfOut, std::vector<double>& ddfOut,
-                                             const double *parentLenOverride = nullptr, double alphaOverride = -1.0);
+                                             const double *parentLenOverride = nullptr, double alphaOverride = -1.0,
+                                             double pinvOverride = -1.0);   // A1 (+I)
 
 
     /** Phase G.2.1b: GPU override for computeLikelihoodDervPointer (byte-matches ComputeLikelihoodDervType).
@@ -2336,6 +2338,7 @@ public:
 	//   top-level (doTreeSearch main loop): perturb + nnisearch + mpi  (+ one-time initcand)
 	//   sub-phases nested inside nnisearch: evalnni + optallbr + optmodel
 	double tsd_t_perturb, tsd_t_nnisearch, tsd_t_evalnni, tsd_t_optallbr, tsd_t_optmodel, tsd_t_mpi, tsd_t_initcand;
+	double tsd_t_fusedreopt = 0.0;   // TS.8-profile: the --ts-fused optimizeAllBranchesJOLT reopt wall (legacy tsd_t_optallbr reads 0 in fused)
 	long long tsd_n_iter, tsd_n_branches_eval, tsd_n_positive, tsd_n_applied, tsd_n_derv;
 
 	// --ts-reopt-split accumulators (B6; gated by params->ts_reopt_split; zero-cost when off).

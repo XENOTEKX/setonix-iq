@@ -92,7 +92,8 @@ double gpu_lnl_crosscheck_mix(
     const double* ptn_freq,      // nptn
     const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
     const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
-    double* out_patlh, double* out_lhcat);   // out_lhcat (optional, G.8.1): per-class L_{p,m} = w_m*Σ_c catProp_c*L_{p,m,c}, [nmix][nptn]
+    double* out_patlh, double* out_lhcat,   // out_lhcat (optional, G.8.1): per-class L_{p,m} = w_m*Σ_c catProp_c*L_{p,m,c}, [nmix][nptn]
+    double pinv = 0.0, const double* clsinv = nullptr);   // A1 (+I): pinv + per-class invariant clsinv[m][ptn]=w_m*pinv*base_invar_m [nmix][nptn]; defaults keep non-+I callers unchanged
 
 // Phase G.2.1a — clean-room single-edge branch-length derivative launcher (K2 in-tree). The descriptor list
 // covers BOTH subtrees split by the central edge (two sub-roots = the edge endpoints), all entries isRoot=0 so
@@ -212,7 +213,8 @@ double gpu_allbranch_derv_crosscheck_mix(
     const double* evalC, const double* catRate,
     const double* echild, const double* expfac, const unsigned char* tip, const double* ptn_freq,
     const int* node_nchild, const int* node_child, const int* node_leaf, const double* node_parentLen,
-    double* out_df, double* out_ddf);
+    double* out_df, double* out_ddf,
+    double pinv = 0.0, const double* base_invar_comb = nullptr);   // A1 (+I): pinv + COMBINED invariant Σ_m w_m·base_invar_m [nptn]; defaults keep non-+I callers unchanged
 
 // Phase G.8.2.1b — host shim exposing the JOLT mean-1 discrete-gamma discretiser so the mixture joint-optimiser
 // kill-switch can recompute catRate[] at an iterate alpha (bit-identical to the live GAMMA_CUT_MEAN rates).
@@ -267,6 +269,33 @@ double gpu_jolt_optimize(
     int* out_iters,              // out: joint-iteration count (the headline)
     double* out_rates = nullptr, // G.5.1b: ncat optimised +R rates (gauged Σ w·r=1; nullptr unless freeRate==1)
     double* out_props = nullptr);// G.5.1b: ncat optimised +R weights (nullptr unless freeRate==1)
+
+// TS.8 GPU PARSIMONY (Phase A) — score ALL candidate insertion branches for one taxon in a single launch.
+// Bit-packed Fitch (32 sites/UINT, nstates UINTs per site-block). endL/endR are B packed endpoint state-set
+// arrays (each nstates*nsblk UINTs); scoreL/scoreR are their accumulated subtree scores; tip is the broadcast
+// new-taxon leaf partial. h_out[b] = exact CPU parsimony score of inserting at branch b. Returns 0 / -1 (fallback).
+int gpu_parsimony_score_branches(
+    const unsigned int* h_tip, unsigned int tipScore,
+    const unsigned int* h_endL, const unsigned int* h_endR,
+    const unsigned int* h_scoreL, const unsigned int* h_scoreR,
+    int nstates, int nsblk, int B, unsigned int* h_out);
+
+// TS.8 GPU PARSIMONY (Phase B v1 — device-resident, recompute-from-resident-leaves). Three calls:
+//  (1) set_leaves: ALLOCATE the resident leaf buffer (nLeaf rows of setU=nstates*nsblk UINTs); idempotent.
+//  (2) set_leaf_row: upload ONE bit-packed leaf row into slot lid (= taxon node->id), as each taxon enters the
+//      tree (leaf packs are tree-independent so idempotent across the 98 OpenMP trees). Returns 0 / -1.
+//  (3) build_and_score: per insertion, recompute ALL directed internal partials from the resident leaves via a
+//      level schedule (taskOut/A/B; refs >=0 = arena slot, <0 = leaf -(id+1); levelStart groups independent tasks),
+//      then score the candidate branches (candL/candR refs + the new-taxon tipLeaf). h_scores[k] = exact CPU
+//      parsimony score of inserting at candidate branch k. Returns 0 (filled) / -1 (caller -> CPU loop, byte-identical).
+int gpu_parsimony_set_leaves(int nLeaf, int nstates, int nsblk, const void* alnId);
+int gpu_parsimony_set_leaf_row(const unsigned int* h_row, int lid);
+int gpu_parsimony_build_and_score(
+    int maxSlots,
+    const int* h_taskOut, const int* h_taskA, const int* h_taskB,
+    const int* h_levelStart, int nLevel, int nTask,
+    const int* h_candL, const int* h_candR, int tipLeaf,
+    int nstates, int nsblk, int nCand, unsigned int* h_scores, const void* alnId);
 
 #ifdef __cplusplus
 }  // extern "C"

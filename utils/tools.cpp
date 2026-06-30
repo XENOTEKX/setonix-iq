@@ -5732,6 +5732,14 @@ void parseArg(int argc, char *argv[], Params &params) {
                 params.ts_fused_nni5_topm = convert_int(argv[cnt]);
                 continue;
             }
+            if (strcmp(argv[cnt], "--ts-subsample") == 0) {
+                // TS.9 coarse tree-search: run candidate-set init + the NNI loop on a seeded S-site subsample,
+                // then confirm/refine the best topology on the full alignment (the CTF analogue for tree search).
+                cnt++;
+                if (cnt >= argc) throw "Use --ts-subsample <num_sites>";
+                params.ts_subsample = convert_int(argv[cnt]);
+                continue;
+            }
             if (argv[cnt][0] == '-') {
                 string err = "Invalid \"";
                 err += argv[cnt];
@@ -7671,7 +7679,11 @@ void Params::setDefault() {
     print_branch_lengths = false;
     lh_mem_save = LM_PER_NODE; // auto detect
     buffer_mem_save = false;
-    start_tree = STT_PLL_PARSIMONY;
+    // Default start tree: IQ-TREE's own parsimony (STT_PARSIMONY), not PLL. PLL builds the 98 candidate parsimony
+    // trees SERIALLY on one core with SPR refinement (sprDist=6); IQ-TREE's computeParsimonyTree runs them in parallel
+    // (OpenMP) with bit-packed Fitch and no SPR -> measured ~16x faster @100k, ~19x @1M (212.7s vs PLL 4032.96s),
+    // reaching the IDENTICAL final ML lnL (parsimony only seeds ML search). Was STT_PLL_PARSIMONY. (2026-06-28)
+    start_tree = STT_PARSIMONY;
     start_tree_subtype_name = StartTree::Factory::getNameOfDefaultTreeBuilder();
 
     modelfinder_ml_tree = true;
@@ -7862,6 +7874,7 @@ void Params::setDefault() {
     ts_fused = false;           // TS.6 production fused apply (screener-positive + global JOLT reopt)
     ts_fused_check = false;     // TS.6 FM-1 gate: validation-only geometry + mi==cnt mapping check
     ts_fused_nni5_topm = 0;     // TS.6 hybrid: nni5 on top-M screener branches (0 = pure fused)
+    ts_subsample = 0;           // TS.9 coarse tree-search site-subsample (0 = off => byte-identical)
 }
 
 int countPhysicalCPUCores() {

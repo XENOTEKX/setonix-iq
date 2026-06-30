@@ -173,7 +173,7 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
 // gpu_lnl_crosscheck_mix. SILENT, returns NaN on any unsupported regime. CPU path byte-unchanged (additive).
 // ============================================================================================================
 double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_lhcat, const double *w_override,
-                                                const double *parentLenOverride, double alphaOverride) {
+                                                const double *parentLenOverride, double alphaOverride, double pinvOverride) {
     if (!model || !site_rate || !aln) return (double)NAN;
     int ns = aln->num_states;
     if (ns != 20 && ns != 4) return (double)NAN;
@@ -181,7 +181,8 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
     int N = model->getNMixtures();
     if (N <= 1) return (double)NAN;                       // single-model -> the non-mix path
     if (model->isSiteSpecificModel()) return (double)NAN; // PMSF stays on CPU (per-site pi, no class sum)
-    if (site_rate->getPInvar() > 0.0) return (double)NAN;  // +I omitted in the clean-room sweep -> CPU
+    // A1 (+I): +I is now handled (the per-class invariant clsinv + the (1-pinv) bridge below). pinvOverride>=0 selects a
+    // trial pinv (the LM's pinv-FD/step); pinvOverride<0 uses the stored site_rate->getPInvar(). pinv_eff<=0 => no +I work.
 
     int ncat = site_rate->getNRate();
     int nptn = (int)aln->size();
@@ -201,7 +202,23 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
     for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
     // G.8.2.1b: optional iterate-alpha override — recompute mean-1 discrete-gamma catRate[] at alphaOverride (catProp
     // stays fixed 1/ncat). Used by the joint-optimiser's alpha FD-Newton; warm-run reproduces the live rates exactly.
-    if (alphaOverride > 0.0 && ncat > 1) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());
+    bool alphaOv = (alphaOverride > 0.0 && ncat > 1);
+    if (alphaOv) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());   // catRate now mean-1 ρ_c (NO pinv rescale)
+    // A1 (+I) the (1-pinv) bridge — make the VARIABLE part use pinv_eff: catRate=ρ/(1-pinv_eff), catProp=(1-pinv_eff)·w_c.
+    // RateGammaInvar's getRate=ρ/(1-pinv0), getProp=(1-pinv0)/ncat carry the STORED pinv0; rebase to pinv_eff. With an
+    // alpha override catRate is already the mean-1 ρ_c (no pinv), so un-rescale getRate's 1/(1-pinv0) ONLY when !alphaOv.
+    // At pinv_eff<=0 (no +I) this whole block is skipped => the validated +G path is byte-identical.
+    double pinv0 = site_rate->getPInvar();
+    double pinv_eff = (pinvOverride >= 0.0) ? pinvOverride : pinv0;
+    if (pinv_eff > 0.0) {
+        double f0 = 1.0 - pinv0, fe = 1.0 - pinv_eff;
+        for (int c = 0; c < ncat; c++) {
+            double rho = alphaOv ? catRate[c] : catRate[c] * f0;   // -> mean-1 ρ_c
+            catRate[c] = rho / fe;                                 // ρ/(1-pinv_eff)
+            catProp[c] = catProp[c] * fe / f0;                    // (1-pinv0)·w_c -> (1-pinv_eff)·w_c
+        }
+    }
+    std::vector<double> wM(N);   // A1 (+I): the per-class weight actually used (for clsinv) — MUST match wreg's wm
     for (int m = 0; m < N; m++) {
         ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
         double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
@@ -212,7 +229,29 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
         double wf[64]; model->getStateFrequency(wf, m);   // ns<=20
         for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
         double wm = w_override ? w_override[m] : model->getMixtureWeight(m);   // G.8.2: optional EM-iterate weights
+        wM[m] = wm;
         for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+    // A1 (+I): per-class invariant clsinv[m][p] = w_m · pinv_eff · base_invar_m[p]. base_invar_m = const-site freq under
+    // class m's π (lift of the single-matrix logic at ~:2034; const_char/STATE_UNKNOWN/DNA|PROTEIN ambiguity), but with
+    // freqC[m] in place of the one model freq. Σ_m clsinv[m][p] = pinv·Σ_m w_m·π_{m,const} = the root invariant term.
+    std::vector<double> clsinv;
+    if (pinv_eff > 0.0) {
+        clsinv.assign((size_t)N*nptn, 0.0);
+        const int ambi_aa[] = {4+8, 32+64, 512+1024};   // B=N|D, Z=Q|E, U=I|L
+        int SU = (int)aln->STATE_UNKNOWN;
+        for (int m = 0; m < N; m++) {
+            const double *sf = &freqC[(size_t)m*ns]; double scal = wM[m] * pinv_eff;
+            for (int p = 0; p < nptn; p++) {
+                int cc = (int)aln->at(p).const_char; double bi = 0.0;
+                if (cc > SU)                            bi = 0.0;
+                else if (cc == SU)                      bi = 1.0;
+                else if (cc < ns)                       bi = sf[cc];
+                else if (aln->seq_type == SEQ_DNA)     { double s=0; int cs=cc-ns+1; for (int x=0;x<ns;x++) if (cs & (1<<x)) s+=sf[x]; bi=s; }
+                else if (aln->seq_type == SEQ_PROTEIN) { double s=0; int cs=cc-ns;   if (cs>=0 && cs<3) for (int x=0;x<11;x++) if (ambi_aa[cs] & (1<<x)) s+=sf[x]; bi=s; }
+                clsinv[(size_t)m*nptn + p] = scal * bi;
+            }
+        }
     }
 
     // ---- topology rooted at an internal node R (reversible-invariant) — identical to the single-model sweep ----
@@ -287,7 +326,8 @@ double PhyloTree::gpuComputeTreeLnLCleanRoomMix(double *out_patlh, double *out_l
         Uinv.data(), UinvRowSum.data(), freqC.data(), wreg.data(), echild.data(), tip.data(), ptnFreq.data(),
         dRoot.data(), dNch.data(), dOut.data(),
         dChildNode.data(), dChildIsLeaf.data(), dChildLeaf.data(), dChildSlot.data(),
-        out_patlh, out_lhcat);
+        out_patlh, out_lhcat,
+        pinv_eff, (pinv_eff > 0.0 ? clsinv.data() : nullptr));   // A1 (+I)
 }
 
 // ============================================================================================================
@@ -1664,7 +1704,7 @@ double PhyloTree::gpuComputeEdgeDervCleanRoomMix(PhyloNeighbor *dad_branch, Phyl
 // ============================================================================================================
 bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNodes, std::vector<Node*>& parentNodes,
                                                     std::vector<double>& dfOut, std::vector<double>& ddfOut,
-                                                    const double *parentLenOverride, double alphaOverride) {
+                                                    const double *parentLenOverride, double alphaOverride, double pinvOverride) {
     childNodes.clear(); parentNodes.clear(); dfOut.clear(); ddfOut.clear();
     if (!model || !site_rate || !aln) return false;
     int ns = aln->num_states;
@@ -1673,7 +1713,7 @@ bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNod
     int N = model->getNMixtures();
     if (N <= 1) return false;
     if (model->isSiteSpecificModel()) return false;
-    if (site_rate->getPInvar() > 0.0) return false;        // +I omitted in the clean-room sweep -> CPU
+    // A1 (+I): +I handled — the invariant is branch-independent (enters only the 1/Lp denominator via base_invar_comb).
     int ncat = site_rate->getNRate();
     int nptn = (int)aln->size();
     int ntax = (int)aln->getNSeq();
@@ -1691,7 +1731,17 @@ bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNod
     std::vector<double> catRate(ncat), catProp(ncat), wreg((size_t)R);
     for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
     // G.8.2.1b: optional iterate-alpha override (joint-optimiser gradient at an FD-perturbed alpha) — see the lnL path.
-    if (alphaOverride > 0.0 && ncat > 1) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());
+    bool alphaOv = (alphaOverride > 0.0 && ncat > 1);
+    if (alphaOv) gpu_discrete_gamma_mean(alphaOverride, ncat, catRate.data());   // catRate now mean-1 ρ_c (NO pinv rescale)
+    // A1 (+I) the (1-pinv) bridge (== the lnL path): rebase the variable-part rates/props from the stored pinv0 to
+    // pinv_eff. Skipped at pinv_eff<=0 => the validated +G derivative path is byte-identical.
+    double pinv0 = site_rate->getPInvar();
+    double pinv_eff = (pinvOverride >= 0.0) ? pinvOverride : pinv0;
+    if (pinv_eff > 0.0) {
+        double f0 = 1.0 - pinv0, fe = 1.0 - pinv_eff;
+        for (int c = 0; c < ncat; c++) { double rho = alphaOv ? catRate[c] : catRate[c] * f0; catRate[c] = rho / fe; catProp[c] = catProp[c] * fe / f0; }
+    }
+    std::vector<double> wM(N);
     for (int m = 0; m < N; m++) {
         ModelMarkov *cm = (ModelMarkov*)(*mix)[m];
         double *ev = cm->getEigenvalues(), *U = cm->getEigenvectors(), *Ui = cm->getInverseEigenvectors();
@@ -1701,8 +1751,29 @@ bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNod
         for (int i = 0; i < ns; i++) { double s=0; for (int j=0;j<ns;j++) s += Ui[i*ns+j]; UinvRowSum[(size_t)m*ns+i]=s; }
         double wf[64]; model->getStateFrequency(wf, m);
         for (int x = 0; x < ns; x++) freqC[(size_t)m*ns+x] = wf[x];
-        double wm = model->getMixtureWeight(m);
+        double wm = model->getMixtureWeight(m); wM[m] = wm;
         for (int c = 0; c < ncat; c++) wreg[(size_t)m*ncat+c] = wm * catProp[c];
+    }
+    // A1 (+I): COMBINED invariant base_invar_comb[p] = Σ_m w_m·base_invar_m[p] (pinv applied in-kernel by k2_derv_mix_inv).
+    // base_invar_m uses class m's π (freqC[m]); same const-site logic as the lnL path. Live weights wM (synced per outer).
+    std::vector<double> base_invar_comb;
+    if (pinv_eff > 0.0) {
+        base_invar_comb.assign(nptn, 0.0);
+        const int ambi_aa[] = {4+8, 32+64, 512+1024};
+        int SU = (int)aln->STATE_UNKNOWN;
+        for (int p = 0; p < nptn; p++) {
+            int cc = (int)aln->at(p).const_char; double acc = 0.0;
+            for (int m = 0; m < N; m++) {
+                const double *sf = &freqC[(size_t)m*ns]; double bi = 0.0;
+                if (cc > SU)                            bi = 0.0;
+                else if (cc == SU)                      bi = 1.0;
+                else if (cc < ns)                       bi = sf[cc];
+                else if (aln->seq_type == SEQ_DNA)     { double s=0; int cs=cc-ns+1; for (int x=0;x<ns;x++) if (cs & (1<<x)) s+=sf[x]; bi=s; }
+                else if (aln->seq_type == SEQ_PROTEIN) { double s=0; int cs=cc-ns;   if (cs>=0 && cs<3) for (int x=0;x<11;x++) if (ambi_aa[cs] & (1<<x)) s+=sf[x]; bi=s; }
+                acc += wM[m] * bi;
+            }
+            base_invar_comb[p] = acc;
+        }
     }
 
     // ---- single-root topology rooted at Rt (indexDfs), flat arrays (mirrors optimizeParametersJOLT) ----
@@ -1749,7 +1820,8 @@ bool PhyloTree::gpuComputeAllBranchDervCleanRoomMix(std::vector<Node*>& childNod
         Uinv.data(), Uc.data(), UinvRowSum.data(), freqC.data(), wreg.data(), evalC.data(), catRate.data(),
         echild.data(), expfac.data(), tip.data(), ptnFreq.data(),
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
-        dfV.data(), ddfV.data());
+        dfV.data(), ddfV.data(),
+        pinv_eff, (pinv_eff > 0.0 ? base_invar_comb.data() : nullptr));   // A1 (+I)
     if (std::isnan(rc)) return false;
 
     for (int v=0;v<nNodes;v++){ if(parentNode[v]==nullptr) continue;
@@ -2217,10 +2289,13 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     if (!model->isReversible() || model->getNMixtures() <= 1 || model->isSiteSpecificModel()) JMIX_DECLINE("nonrev/single/ssm");
     ModelMixture *mix = dynamic_cast<ModelMixture*>(model);
     if (!mix || mix->isFused()) JMIX_DECLINE("not-nonfused-mixture");   // LG4M/LG4X 1:1 class<->rate pairing -> CPU
-    if (site_rate->getPInvar() > 0.0) JMIX_DECLINE("plus-I");           // +I omitted in the clean-room sweep -> CPU
     int N = model->getNMixtures();
     int ncat = site_rate->getNRate();
     if (ncat < 1 || ncat > 64) JMIX_DECLINE("ncat-range");
+    // A1 (+I): engage profile-mixture +I+G (ncat>1, RateGammaInvar). Pure +I-alone (ncat==1, no gamma) is a SEPARATE
+    // gap (the invariant-only optimiser) -> keep declined. The +I term enters via the per-class clsinv / base_invar_comb
+    // built in the clean-room launchers (pinvOverride threaded below); at pinv==0 those paths are byte-identical to +G.
+    if (ncat <= 1 && site_rate->getPInvar() > 0.0) JMIX_DECLINE("pure-plusI");
     if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) JMIX_DECLINE("non-mean-gamma");  // only the Yang-1994 mean discretisation
     if (!root || !root->isLeaf() || root->neighbors.empty()) JMIX_DECLINE("bad-root");
     Node *Rt = root->neighbors[0]->node;
@@ -2256,6 +2331,14 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : 1.0;
     int optAlpha = (ncat > 1 && !site_rate->isFixGammaShape()) ? 1 : 0;
     auto alphaArg = [&](double a){ return (ncat > 1) ? a : -1.0; };   // -1 => clean-room keeps the live cat rates (ncat==1 path)
+    // A1 (+I): pinv iterate + bounds (only ncat>1 +I+G reaches here; pure-+I declined above). optPinv=1 optimises pinv
+    // (free, non-fixed) — else a FIXED-+I model still COMPUTES the invariant (pinvArg(-1) => launcher uses the stored
+    // pinv) but holds it constant. pinvArg(pv): optPinv ? trial pv : -1 (use the model's stored pinv).
+    double pinv0 = site_rate->getPInvar();
+    double pinvMin = 1e-6, pinvMax = aln->frac_const_sites;
+    int optPinv = (pinv0 > 0.0 && !site_rate->isFixPInvar() && pinvMax > pinvMin) ? 1 : 0;
+    double pinv = pinv0;
+    auto pinvArg = [&](double pv){ return optPinv ? pv : -1.0; };
 
     // G.8.2.4 — estimated-weight support. f[]/Ftot: pattern frequencies for the EM M-step. w: the weight iterate
     // (init from the live model). wp drives the lnL clean-room calls — w.data() for the EM case (stable: w is never
@@ -2277,7 +2360,7 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
     {
         std::lock_guard<std::mutex> lk(gpu_mixjolt_mtx);
         double mu = 1.0; int stall = 0;
-        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alphaArg(alpha));
+        double lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alphaArg(alpha), pinvArg(pinv));
         if (!std::isnan(lnL)) {
             const int maxOuter = 400;
             for (int outer = 0; outer < maxOuter; outer++) {
@@ -2286,16 +2369,30 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
                 // reads live weights, no w_override) is consistent with the lnL backtracking (which uses wp=w.data()).
                 if (optWeights) for (int m = 0; m < N; m++) model->setMixtureWeight(m, w[m]);
                 std::vector<Node*> cN, pN; std::vector<double> df, ddf;
-                if (!gpuComputeAllBranchDervCleanRoomMix(cN, pN, df, ddf, b.data(), alphaArg(alpha))) { lnL = (double)NAN; break; }
+                if (!gpuComputeAllBranchDervCleanRoomMix(cN, pN, df, ddf, b.data(), alphaArg(alpha), pinvArg(pinv))) { lnL = (double)NAN; break; }
                 std::vector<double> gdf(nNodes, 0.0), gddf(nNodes, 0.0);
                 for (size_t i = 0; i < cN.size(); i++) { int v = nidMap.at(cN[i]); gdf[v] = df[i]; gddf[v] = ddf[i]; }
                 double ga = 0.0, curvA = 1e-12, eps = 0.0;
                 if (optAlpha) {   // alpha gradient/curvature by central FD on the clean-room lnL (no new kernel)
                     eps = 1e-3 * std::max(alpha, 1.0);
-                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alpha+eps);
-                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alpha-eps);
+                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alpha+eps, pinvArg(pinv));
+                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alpha-eps, pinvArg(pinv));
                     if (std::isnan(lp) || std::isnan(lm)) { lnL = (double)NAN; break; }
                     ga = (lp - lm) / (2.0*eps); curvA = std::fabs((lp - 2.0*lnL + lm) / (eps*eps)); if (curvA < 1e-12) curvA = 1e-12;
+                }
+                // A1 (+I): pinv gradient/curvature by FD on the clean-room lnL (mirrors the alpha arm). One-sided near a
+                // bound (keeps both points in [pinvMin,pinvMax]); curvP is a damping estimate only (the accept gate enforces
+                // correctness). No new kernel — pinvArg threads the trial pinv into the existing lnL launcher.
+                double gp = 0.0, curvP = 1e-12, ep = 0.0;
+                if (optPinv) {
+                    ep = 1e-4; double php, plo;
+                    if (pinv + ep > pinvMax)      { php = pinv;      plo = pinv - ep; }   // backward FD near the upper bound
+                    else if (pinv - ep < pinvMin) { php = pinv + ep; plo = pinv;      }   // forward FD near the lower bound
+                    else                          { php = pinv + ep; plo = pinv - ep; }   // central
+                    double lp = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alphaArg(alpha), pinvArg(php));
+                    double lm = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, b.data(), alphaArg(alpha), pinvArg(plo));
+                    if (std::isnan(lp) || std::isnan(lm)) { lnL = (double)NAN; break; }
+                    gp = (lp - lm) / (php - plo); curvP = std::fabs((lp - 2.0*lnL + lm) / (ep*ep)); if (curvP < 1e-12) curvP = 1e-12;
                 }
                 for (int bt = 0; bt < 16; bt++) {   // shared-mu LM backtracking over ALL branches + the scalar alpha together
                     std::vector<double> bc = b;
@@ -2304,9 +2401,11 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
                         if (bc[v] < 1e-6) bc[v] = 1e-6; if (bc[v] > 20.0) bc[v] = 20.0; }
                     double ac = alpha;
                     if (optAlpha) { ac = alpha + ga / (curvA + mu); if (ac < 0.02) ac = 0.02; if (ac > 50.0) ac = 50.0; }
-                    double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, bc.data(), alphaArg(ac));
+                    double pc = pinv;   // A1 (+I): shared-mu diagonal-Newton pinv step, clamped to (pinvMin,pinvMax)
+                    if (optPinv) { pc = pinv + gp / (curvP + mu); if (pc < pinvMin) pc = pinvMin; if (pc > pinvMax) pc = pinvMax; }
+                    double ln = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, wp, bc.data(), alphaArg(ac), pinvArg(pc));
                     if (std::isnan(ln)) { lnL = (double)NAN; break; }
-                    if (ln > lnL) { b = bc; alpha = ac; lnL = ln; mu = std::max(mu*0.5, 1e-9); break; }   // accept any strict improvement
+                    if (ln > lnL) { b = bc; alpha = ac; pinv = pc; lnL = ln; mu = std::max(mu*0.5, 1e-9); break; }   // accept any strict improvement
                     else mu = std::min(mu*4.0, 1e12);                                                     // cap mu (else it runs to +inf and freezes)
                 }
                 if (std::isnan(lnL)) break;
@@ -2317,7 +2416,7 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
                 // gives the exact lnL at the new weights. Branches/alpha are fixed in this block (block-coordinate).
                 if (optWeights) {
                     std::vector<double> lhc((size_t)N*nptn), wunif(N, 1.0/N), wn(N);
-                    double l1 = gpuComputeTreeLnLCleanRoomMix(nullptr, lhc.data(), wunif.data(), b.data(), alphaArg(alpha));
+                    double l1 = gpuComputeTreeLnLCleanRoomMix(nullptr, lhc.data(), wunif.data(), b.data(), alphaArg(alpha), pinvArg(pinv));
                     if (std::isnan(l1)) { lnL = (double)NAN; break; }
                     for (int em = 0; em < 1000; em++) {
                         std::fill(wn.begin(), wn.end(), 0.0);
@@ -2329,7 +2428,7 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
                         w = wn;
                         if (em > 0 && stepw < 1e-12) break;
                     }
-                    lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha));
+                    lnL = gpuComputeTreeLnLCleanRoomMix(nullptr, nullptr, w.data(), b.data(), alphaArg(alpha), pinvArg(pinv));
                     if (std::isnan(lnL)) break;
                 }
                 outIters = outer + 1;
@@ -2386,19 +2485,21 @@ double PhyloTree::optimizeParametersJOLTMix(int fixed_len) {
         if (fwd) fwd->length = b[v];
         if (bwd) bwd->length = b[v];
     }
+    if (optPinv) site_rate->setPInvar(pinv);                    // A1 (+I): p_invar + recomputes the (1-pinv)-scaled rates (RateGammaInvar::setPInvar). MUST precede setGammaShape (single-matrix order, :2200-2201).
     if (optAlpha) site_rate->setGammaShape(alpha);              // sets gamma_shape + recomputes the discrete rates
-    clearAllPartialLH();                                        // brlen + alpha + weights changed -> partials/theta stale
+    clearAllPartialLH();                                        // brlen + alpha + pinv + weights changed -> partials/theta stale
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL at the written-back params ----
     double cpuLnL = computeLikelihood();
     double rel = (cpuLnL != 0.0) ? std::fabs((finalLnL - cpuLnL) / cpuLnL) : std::fabs(finalLnL - cpuLnL);
     static int report_count = 0;
-    string joltModelName = model->getName() + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
+    string joltModelName = model->getName() + (optPinv || pinv0 > 0.0 ? string("+I") : string("")) + (ncat > 1 ? ("+G" + std::to_string(ncat)) : string(""));
     // dev diagnostics — gate behind JOLT_DEBUG (the CPU recompute + safety gate below stay)
     if (getenv("JOLT_DEBUG") && report_count < 1000) { report_count++;
-        printf("[JOLTMIX] model=%s N=%d ns=%d ncat=%d weights=%s: %d iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f\n",
+        printf("[JOLTMIX] model=%s N=%d ns=%d ncat=%d weights=%s: %d iters | GPU lnL=%.6f  CPU lnL=%.6f  rel=%.3e %s | alpha %.6f->%.6f | pinv %.6f->%.6f%s\n",
                joltModelName.c_str(), N, ns, ncat, (optWeights ? "EM" : "fixed"), outIters, finalLnL, cpuLnL, rel,
-               (rel <= 1e-6 ? "OK" : "MISMATCH"), alpha0, (ncat > 1 ? site_rate->getGammaShape() : 0.0)); }
+               (rel <= 1e-6 ? "OK" : "MISMATCH"), alpha0, (ncat > 1 ? site_rate->getGammaShape() : 0.0),
+               pinv0, (optPinv ? site_rate->getPInvar() : pinv0), (optPinv ? " +I" : "")); }
 
     if (!(rel <= 1e-6)) {   // NOT(<=) so a NaN/inf rel also trips the fallback before setCurScore poisons _cur_score
         static bool warned_mm = false;

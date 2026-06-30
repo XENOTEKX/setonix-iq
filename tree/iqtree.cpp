@@ -926,7 +926,27 @@ void IQTree::initCandidateTreeSet(int nParTrees, int nNNITrees) {
         double score;
         readTreeString(*it);
         if (it-initTreeStrings.begin() >= init_size) {
+#ifdef IQTREE_GPU
+            // TS.7 Phase-1: the per-initial-tree branch-length optimization (this loop, "Computing
+            // log-likelihood of N initial trees") is ~25% of the tree-search wall and runs CPU-only on the
+            // GPU node's few cores -> route it through the validated production GPU optimizer when --ts-fused
+            // is engaged. NaN (JOLT-GATE decline / failure) -> CPU optimizeBranches fallback, so the retained
+            // score is always a real all-branch lnL. Disable with TS_INIT_JOLT_OFF=1 (A/B reference). CPU path
+            // is byte-identical when ts_fused is off or in non-GPU builds.
+            if (params->ts_fused && getenv("TS_INIT_JOLT_OFF") == nullptr) {
+                double _jb = optimizeAllBranchesJOLT();
+                if (_jb == _jb) {                                       // GPU succeeded (finite)
+                    curScore = _jb;
+                    treeString = getTreeString();
+                } else {                                               // decline/NaN -> CPU fallback
+                    treeString = optimizeBranches(params->brlen_num_traversal);
+                }
+            } else {
+                treeString = optimizeBranches(params->brlen_num_traversal);
+            }
+#else
             treeString = optimizeBranches(params->brlen_num_traversal);
+#endif
         } else {
             computeLogL();
             treeString = getTreeString();
@@ -2474,6 +2494,41 @@ double IQTree::doTreeSearch() {
     }
 
     double initCPUTime = getRealTime();
+
+    // TS.9 coarse-search: run the whole search on a seeded site-subsample (GPU cost is linear in nptn),
+    // then confirm/refine the best topology on the full alignment (the CTF analogue for tree search).
+    Alignment *ts_full_aln = nullptr;
+    if (params->ts_subsample > 0 && params->ts_fused
+        && !isSuperTree() && aln->seq_type != SEQ_POMO
+        && MPIHelper::getInstance().getNumProcesses() == 1
+        && params->gbo_replicates == 0 && iqp_assess_quartet != IQP_BOOTSTRAP
+        && !getCheckpoint()->getBool("finishedCandidateSet")
+        && (size_t)params->ts_subsample < aln->getNSite()) {
+        size_t nsite = aln->getNSite();
+        int Ksub = (int)min((size_t)params->ts_subsample, nsite);
+        int seed = params->ran_seed;
+        int *ssrng = nullptr;
+        init_random(seed, false, &ssrng);
+        IntVector perm(nsite);
+        for (size_t i = 0; i < nsite; i++) perm[i] = (int)i;
+        my_random_shuffle(perm.begin(), perm.end(), ssrng);
+        finish_random(ssrng);
+        IntVector site_id(perm.begin(), perm.begin() + Ksub);
+        std::sort(site_id.begin(), site_id.end());
+        Alignment *sub_aln = new Alignment();
+        sub_aln->extractSites(aln, site_id);
+        ts_full_aln = aln;                 // stash the full alignment
+        setAlignment(sub_aln);             // tree now points at the subsample
+        // sub_aln is freshly extracted: build the parsimony pattern order the full
+        // aln already had (else computePartialParsimonyFast asserts ordered_pattern non-empty)
+        if (aln->ordered_pattern.empty())
+            aln->orderPatternByNumChars(PAT_VARIANT);
+        initializeAllPartialLh();
+        clearAllPartialLH();
+        cout << "TS.9 coarse tree search on a " << sub_aln->getNSite()
+             << "-site subsample (seed " << seed << ") of " << nsite << " sites" << endl;
+    }
+
     int treesPerProc = (params->numInitTrees) / MPIHelper::getInstance().getNumProcesses() - candidateTrees.size();
     if (params->numInitTrees % MPIHelper::getInstance().getNumProcesses() != 0) {
         treesPerProc++;
@@ -2511,6 +2566,7 @@ double IQTree::doTreeSearch() {
         // main search loop only (clears any ModelFinder/init-phase contributions to the counters).
         tsd_t_initcand = getRealTime() - initCPUTime;
         tsd_t_perturb = tsd_t_nnisearch = tsd_t_evalnni = tsd_t_optallbr = tsd_t_optmodel = tsd_t_mpi = 0.0;
+        tsd_t_fusedreopt = 0.0;   // TS.8-profile: separate the --ts-fused reopt from screener+bookkeeping
         tsd_n_iter = tsd_n_branches_eval = tsd_n_positive = tsd_n_applied = tsd_n_derv = 0;
     }
     if (params->ts_reopt_split) {
@@ -2738,6 +2794,41 @@ double IQTree::doTreeSearch() {
 
     readTreeString(candidateTrees.getBestTreeStrings()[0]);
 
+    if (ts_full_aln != nullptr) {
+        // CONFIRM on full data: restore the full alignment, then full-data NNI hill-climb to convergence
+        // on the coarse-best topology. Monotone => the confirmed full-data lnL is a real full-data local opt.
+        Alignment *sub_aln = aln;
+        setAlignment(ts_full_aln);
+        initializeAllPartialLh();
+        clearAllPartialLH();
+        // RE-FIT THE MODEL on FULL data (+G alpha / +I pinvar / rates / freqs were fit to the S-site
+        // subsample). doNNISearch's internal model re-opt is gated on candidateTrees.getBestScore() (still
+        // sub-aln scores here, far less negative), so it never fires during the confirm -> we MUST re-fit
+        // explicitly, else the final lnL uses a subsample-fit model and FAILS the >= CPU-baseline bar. [red-team #1]
+        optimizeModelParameters(true, params->modelEps);
+        curScore = optimizeAllBranches(2);
+        cout << "TS.9 full-data confirmation (NNI to convergence)..." << endl;
+        int conf_round = 0;
+        for (;;) {
+            pair<int,int> ni = doNNISearch();
+            conf_round++;
+            if (ni.first <= 0 || conf_round > 100) break;
+        }
+        if (conf_round > 100)
+            outWarning("TS.9 full-data confirmation did not converge in 100 NNI rounds; result may be below the full-data baseline");
+        curScore = computeLikelihood();
+        // candidateTrees still holds SUB-alignment scores (less negative => would falsely OUTRANK the
+        // full-data tree in the score-keyed multimap); purge and re-seed with ONLY the confirmed full-data
+        // tree so getBestScore/getBestTreeStrings are full-data-consistent. this/curScore already hold the
+        // confirmed tree + its full-data lnL (NOT addTreeToCandidateSet: it reads getBestScore on the now-empty set).
+        string ts9_confirmed = getTreeString();
+        candidateTrees.clear();
+        candidateTrees.update(ts9_confirmed, curScore);
+        readTreeString(ts9_confirmed);
+        delete sub_aln;
+        cout << "TS.9 confirmed full-data logL: " << curScore << " after " << conf_round << " NNI rounds" << endl;
+    }
+
     if (testNNI) {
         outNNI.close();
     }
@@ -2771,8 +2862,11 @@ double IQTree::doTreeSearch() {
         cout << "TS-DIAG initcand            " << tsd_t_initcand << "   (candidate-set init; sub-phases below are MAIN-LOOP only)" << endl;
         cout << "TS-DIAG perturb             " << tsd_t_perturb << endl;
         cout << "TS-DIAG nnisearch           " << tsd_t_nnisearch << "   (nested: evalnni+optallbr+optmodel)" << endl;
-        cout << "TS-DIAG   evalnni           " << tsd_t_evalnni << endl;
-        cout << "TS-DIAG   optallbranches    " << tsd_t_optallbr << endl;
+        cout << "TS-DIAG   evalnni           " << tsd_t_evalnni << "   (screener: gpuScreenNNIRank + host rebuild)" << endl;
+        cout << "TS-DIAG   optallbranches    " << tsd_t_optallbr << "   (legacy path only; 0 under --ts-fused)" << endl;
+        cout << "TS-DIAG   fused-reopt       " << tsd_t_fusedreopt << "   (--ts-fused optimizeAllBranchesJOLT, both call sites)" << endl;
+        cout << "TS-DIAG   host-bookkeeping  " << (tsd_t_nnisearch - tsd_t_evalnni - tsd_t_fusedreopt - tsd_t_optmodel)
+             << "   (= nnisearch - evalnni - fused-reopt - optmodel; doNNIs/restore/clearLH/getBestNNIForBran/setup)" << endl;
         cout << "TS-DIAG   optmodel          " << tsd_t_optmodel << endl;
         cout << "TS-DIAG mpi_sync            " << tsd_t_mpi << endl;
         cout << "TS-DIAG iters               " << tsd_n_iter << endl;
@@ -3718,8 +3812,10 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
             if (appliedNNIs.empty()) break;            // no surfaced old-length-positive move -> TS.6 stops (== shadow)
             doNNIs(appliedNNIs, /*changeBran=*/false); // TOPOLOGY ONLY (swapped subtree keeps OLD length = JOLT warm start)
 #ifdef IQTREE_GPU
+            double _tsdr = params->ts_diag ? getRealTime() : 0.0;
             double _jf = optimizeAllBranchesJOLT();    // ONE global GPU reopt over ALL branches
             curScore = (_jf == _jf) ? _jf : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+            if (params->ts_diag) tsd_t_fusedreopt += getRealTime() - _tsdr;
 #else
             curScore = optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);   // CPU build: no JOLT (portability stub; --ts-fused is a GPU feature)
 #endif
@@ -3738,8 +3834,10 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
                     vector<NNIMove> one(1, best);
                     doNNIs(one, /*changeBran=*/true);  // topology + nni5 newLen
 #ifdef IQTREE_GPU
+                    double _tsdr2 = params->ts_diag ? getRealTime() : 0.0;
                     double _jf2 = optimizeAllBranchesJOLT();
                     curScore = (_jf2 == _jf2) ? _jf2 : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
+                    if (params->ts_diag) tsd_t_fusedreopt += getRealTime() - _tsdr2;
 #else
                     curScore = optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);   // CPU build: no JOLT (portability stub)
 #endif

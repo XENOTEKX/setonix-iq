@@ -3052,6 +3052,7 @@ public:
     bool ts_fused;
     bool ts_fused_check;
     int  ts_fused_nni5_topm;
+    int  ts_subsample;  // S sites for coarse tree-search subsample (0 = off)
 };
 
 /**
