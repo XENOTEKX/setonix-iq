@@ -50,6 +50,19 @@ using namespace std;
 // therefore serializes on the one GPU (the G.4.2b decision); ineligible candidates still run N-parallel on the CPU.
 static std::mutex gpu_mixjolt_mtx;
 
+// STAGE 2b (GPU-BOOTSTRAP-UFBOOT-PLAN §3 Stage 2b) — JOLT_BOOT_SNAPSHOT env flag (default OFF => the -B leanTail
+// keeps the Stage-1 gpuComputeTreeLnLCleanRoom mirror, byte-identical to the deployed 0faac84d). When ON, the -B
+// leanTail instead reuses gpu_jolt_optimize's OWN accepted-tree per-pattern snapshot (out_patlh) and SKIPS the
+// separate full-tree clean-room recompute. Correctness gate = bootstrap support within the CPU envelope + the
+// Σ freq·_pattern_lh == joltLnL identity guard. NB the snapshot is the true per-pattern log|lh_ptn| evaluated at the
+// reopt's base edge; it agrees with the root-evaluated clean-room to ~1e-6 (<< ufboot_epsilon 0.5, so RELL support
+// is preserved) — it is NOT bit-identical to the Stage-1 mirror by design.
+static inline bool jolt_boot_snapshot_enabled(){
+    static int c=-1;
+    if (c<0){ const char* e=getenv("JOLT_BOOT_SNAPSHOT"); c=(e && atoi(e)!=0)?1:0; }
+    return c!=0;
+}
+
 // ============================================================================================================
 // Reusable clean-room GPU whole-tree log-likelihood (extracted from the G.2.0a cross-check). SILENT (no prints
 // per call — it is invoked once per Branch evaluation): returns NaN on any unsupported regime / CUDA error so
@@ -2132,6 +2145,18 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // ---- run the JOLT optimiser on the GPU ----
     vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0; double outPinv = pinv0; int outIters = 0;
     vector<double> outRates(freeRateOK ? ncat : 0), outProps(freeRateOK ? ncat : 0);   // G.5.1b: +R optimised rates/weights (writeback below)
+    // STAGE 2b: under -B + JOLT_BOOT_SNAPSHOT, have gpu_jolt_optimize snapshot the accepted tree's per-pattern log-lh
+    // directly into _pattern_lh, so the boot block below can SKIP the separate gpuComputeTreeLnLCleanRoom recompute.
+    // _pattern_lh must be allocated before the call. No-boot / flag-off => joltOutPatlh stays null => byte-identical.
+    double* joltOutPatlh = nullptr;
+    if (leanTail && params->gbo_replicates > 0 && jolt_boot_snapshot_enabled()) {
+        if (!_pattern_lh) {
+            size_t mem_size = get_safe_upper_limit(getAlnNPattern()) +
+                std::max(get_safe_upper_limit((size_t)model->num_states), get_safe_upper_limit(model_factory->unobserved_ptns.size()));
+            _pattern_lh = aligned_alloc<double>(mem_size);
+        }
+        joltOutPatlh = _pattern_lh;
+    }
     double _jd_dev_t0 = params->jolt_diag ? getRealTime() : 0.0;   // --jolt-diag: device-call wall start
     double joltLnL = gpu_jolt_optimize(ns, nptn, ncat, ntax, nNodes, /*root=*/nid[R],
         Uinv, UinvRowSum.data(), U, eval, catProp.data(), tip.data(), ptnFreq.data(),
@@ -2142,7 +2167,8 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
         nFreeQ, (nFreeQ > 0 ? q0vec.data() : nullptr), jolt_qdecompose_intree, &qctx,   // G.6: DNA free-Q
         (nFreeQ > 0 ? outQ.data() : nullptr),
         outBrlen.data(), &outAlpha, &outPinv, &outIters,
-        (freeRateOK ? outRates.data() : nullptr), (freeRateOK ? outProps.data() : nullptr));   // G.5.1b: optimised +R rates/weights
+        (freeRateOK ? outRates.data() : nullptr), (freeRateOK ? outProps.data() : nullptr),   // G.5.1b: optimised +R rates/weights
+        joltOutPatlh);   // STAGE 2b: accepted-tree per-pattern snapshot target (nullptr unless -B + JOLT_BOOT_SNAPSHOT)
     if (params->jolt_diag) {   // --jolt-diag (A3): per-call H1 (host rebuild) vs device wall; echild tax printed by the CU TU
         double jd_dev = getRealTime() - _jd_dev_t0;
         printf("JOLT-DIAG-HOST H1=%.6f device=%.6f iters=%d ntax=%d nptn=%d\n", jd_h1, jd_dev, outIters, ntax, nptn);
@@ -2174,7 +2200,11 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
         // full-tail rel<=1e-6 catch (see :2065 below) for a finite-but-WRONG device lnL. When set, recompute the CPU lnL
         // at the written-back lengths and LOG rel WITHOUT gating (still return joltLnL) -> ONE search measures max(rel)
         // over all intermediate-tree calls, converting "unverified assumption" into a measured fact.
-        if (getenv("JOLT_AUDIT")) {
+        // STAGE 2b: JOLT_AUDIT's computeLikelihood() overwrites the member _pattern_lh — which IS the snapshot target
+        // (joltOutPatlh == _pattern_lh) — so running it under the snapshot path would clobber the GPU snapshot before
+        // the identity guard reads it, silently masking a snapshot defect behind CPU values. Skip the audit when the
+        // snapshot is active (both are opt-in diagnostics; the snapshot's own Σfreq·_pattern_lh guard covers fidelity).
+        if (getenv("JOLT_AUDIT") && !joltOutPatlh) {
             double cpuLnL = computeLikelihood();   // fresh CPU postorder at the JOLT-written lengths (partials just cleared)
             double arel = (cpuLnL != 0.0) ? fabs((joltLnL - cpuLnL) / cpuLnL) : fabs(joltLnL - cpuLnL);
             double aabs = fabs(joltLnL - cpuLnL);
@@ -2189,6 +2219,82 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
             fflush(stdout);
             clearAllPartialLH();   // computeLikelihood left partials VALID; restore the production dirty-set so state matches
         }
+
+        // ============================================================================================================
+        // GPU-BOOTSTRAP Stage 1 (research/Treesearch/GPU-BOOTSTRAP-UFBOOT-PLAN.md v3, "Full-sweep mirror / Option C").
+        // UFBoot (-B) crashes on this lean-tail path: saveCurrentTree -> computePatternLikelihood dereferences
+        // current_it/current_it_back (phylotree.cpp:1523) then memmoves _pattern_lh (:1541), and this path never
+        // populates either -- gdb-confirmed both null, fault at :1523 (job 172953928). Gated to -B runs only, so
+        // the no-boot fast path above is untouched/byte-identical. Reconstruct current_it/current_it_back with the
+        // SAME null-recovery idiom PhyloTree::computeLikelihood already uses (phylotree.cpp:1289-1292), zero their
+        // lh_scale_factor so computePatternLikelihood takes the NORM_LH no-scaling memmove path, and mirror
+        // _pattern_lh via the validated clean-room sweep computeLikelihoodBranchGPU already uses in production
+        // (phylotreegpu.cpp:339-340) -- NOT a raw D2H of the reopt's own device buffer: gbj_patlh is pattern-tiled
+        // (holds only the last chunk when nTile>1) and reject-fragile (can hold a stale rejected LM trial), so it
+        // cannot be trusted directly as the accepted tree's per-pattern vector (plan §2.3).
+        if (params->gbo_replicates > 0) {
+            if (!_pattern_lh) {
+                size_t mem_size = get_safe_upper_limit(getAlnNPattern()) +
+                    std::max(get_safe_upper_limit((size_t)model->num_states), get_safe_upper_limit(model_factory->unobserved_ptns.size()));
+                _pattern_lh = aligned_alloc<double>(mem_size);
+            }
+            if (!current_it) {
+                Node *leaf = findFarthestLeaf();
+                current_it = (PhyloNeighbor*)leaf->neighbors[0];
+                current_it_back = (PhyloNeighbor*)current_it->node->findNeighbor(leaf);
+            }
+            current_it->lh_scale_factor = 0.0;
+            current_it_back->lh_scale_factor = 0.0;
+            if (joltOutPatlh) {
+                // STAGE 2b fast path: _pattern_lh already holds gpu_jolt_optimize's accepted-tree per-pattern snapshot
+                // -> SKIP the separate clean-room recompute. Guard the identity Σ freq·_pattern_lh == joltLnL (plan §2.3);
+                // CPU recompute on failure (the same recovery the clean-room path uses). current_it/scale-factors were
+                // reconstructed + zeroed above, so computePatternLikelihood downstream still takes the NORM_LH path.
+                double s2b = 0.0; for (int p = 0; p < nptn; p++) s2b += ptnFreq[p] * _pattern_lh[p];
+                double s2brel = (joltLnL != 0.0) ? fabs((s2b - joltLnL) / joltLnL) : fabs(s2b - joltLnL);
+                if (std::isnan(s2b) || s2brel > 1e-6) {
+                    static bool warnedSnap = false;
+                    if (!warnedSnap) { warnedSnap = true;
+                        printf("[GPU-BOOT] WARNING: Stage-2b snapshot identity Sfreq*_pattern_lh=%.9f != joltLnL=%.9f (rel=%.3e) "
+                               "-> CPU recompute to repopulate _pattern_lh for this save\n", s2b, joltLnL, s2brel); }
+                    computeLikelihood();
+                } else if (getenv("GPU_BOOT_VERIFY")) {
+                    printf("[GPU_BOOT_VERIFY] stage2b Sfreq*_pattern_lh=%.9f joltLnL=%.9f rel=%.3e %s\n",
+                           s2b, joltLnL, s2brel, (s2brel <= 1e-9 ? "OK" : "rel>1e-9"));
+                }
+            } else {
+            double mirrorLnL = gpuComputeTreeLnLCleanRoom(_pattern_lh);
+            // Verify the mirror actually represents the JUST-ACCEPTED tree (catches a silent-stale-mirror bug,
+            // e.g. a transient clean-room failure that would otherwise leave _pattern_lh holding an earlier tree's
+            // values while saveCurrentTree's RELL loop silently scores bootstrap replicates against it). On
+            // failure, ACTIVELY RECOVER via a fresh CPU postorder rather than merely logging and leaving the bad
+            // buffer in place -- computeLikelihood() is the same recovery computeLikelihoodBranchGPU itself falls
+            // back to on a GPU failure (phylotreegpu.cpp:344-347), and the exact call JOLT_AUDIT already makes a
+            // few lines above (empirically confirmed correct at this call site, red-team review 2026-07-04: 599/599
+            // saves agreed with the GPU mirror to rel<=5e-11 on a live -B run). NB: red-team-verified this branch is
+            // unreachable for the model classes leanTail currently accepts (reversible/no-ASC/pinv=0), so in
+            // practice this is defense-in-depth against a future JOLT capability change, not a live path.
+            bool mirrorOK = !std::isnan(mirrorLnL);
+            double relerr = 0.0;
+            if (mirrorOK) {
+                relerr = (joltLnL != 0.0) ? fabs((mirrorLnL - joltLnL) / joltLnL) : fabs(mirrorLnL - joltLnL);
+                if (relerr > 1e-6) mirrorOK = false;
+            }
+            if (!mirrorOK) {
+                static bool warnedFallback = false;
+                if (!warnedFallback) { warnedFallback = true;
+                    printf("[GPU-BOOT] WARNING: clean-room mirror %s (mirrorLnL=%.9f joltLnL=%.9f rel=%.3e) "
+                           "-> falling back to a CPU recompute to repopulate _pattern_lh for this save\n",
+                           (std::isnan(mirrorLnL) ? "returned NaN" : "disagrees with accepted joltLnL"),
+                           mirrorLnL, joltLnL, relerr); }
+                computeLikelihood();   // fresh CPU postorder; repopulates _pattern_lh, current_it, scale factors
+            } else if (getenv("GPU_BOOT_VERIFY")) {
+                printf("[GPU_BOOT_VERIFY] mirrorLnL=%.9f joltLnL=%.9f rel=%.3e %s\n",
+                       mirrorLnL, joltLnL, relerr, (relerr <= 1e-9 ? "OK" : "rel>1e-9"));
+            }
+            }   // STAGE 2b: end else (Stage-1 clean-room mirror path)
+        }
+
         setCurScore(joltLnL);
         return joltLnL;
     }

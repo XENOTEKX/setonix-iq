@@ -268,7 +268,8 @@ double gpu_jolt_optimize(
     double* out_pinv,            // out: optimised pinv (unchanged if !optPinv)
     int* out_iters,              // out: joint-iteration count (the headline)
     double* out_rates = nullptr, // G.5.1b: ncat optimised +R rates (gauged Σ w·r=1; nullptr unless freeRate==1)
-    double* out_props = nullptr);// G.5.1b: ncat optimised +R weights (nullptr unless freeRate==1)
+    double* out_props = nullptr, // G.5.1b: ncat optimised +R weights (nullptr unless freeRate==1)
+    double* out_patlh = nullptr);// STAGE 2b: full-nptn accepted-tree per-pattern log|lh_ptn| snapshot (host; nullptr => no snapshot, byte-identical)
 
 // TS.8 GPU PARSIMONY (Phase A) — score ALL candidate insertion branches for one taxon in a single launch.
 // Bit-packed Fitch (32 sites/UINT, nstates UINTs per site-block). endL/endR are B packed endpoint state-set

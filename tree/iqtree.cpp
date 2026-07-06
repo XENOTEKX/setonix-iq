@@ -3805,6 +3805,20 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
             // round-level accept-or-rollback + single-best nni5 fallback (guarantees progress/termination via the stop
             // rule below). NaN JOLT (ineligible regime / CUDA error) -> exact CPU optimizeAllBranches(1) fallback.
             tsfused_rounds++;
+            // GPU-BOOTSTRAP maxiter: under -B, the non-boot default (maxiter=2) leaves AA's 20-state branch
+            // lengths under-converged each round -> noisier per-round scores -> UFBoot's split-correlation
+            // stop rule needs ~3x more search iterations (AA-100K: 300 vs 102 iters, job 172977555/mi02 vs
+            // naive/CPU). maxiter=8 is the validated sweet spot: it fully restores 102-iter convergence at
+            // the SAME optimum (job 172977555/mi08); maxiter=16 still converges but wastes GPU time per round
+            // for no further iteration benefit (job 172977555/mi16, wall regresses back near the mi02 default).
+            // DNA is unaffected in iteration count (102->102) with a mild +25% wall cost (job 172986195) --
+            // safe to default on unconditionally. Non-boot runs are byte-identical (gbo_replicates==0 keeps
+            // maxiter at the original 2). JOLT_BRLEN_MAXITER env, if set, still overrides both (existing
+            // profiling hook in optimizeAllBranchesJOLT, phylotreegpu.cpp).
+            // T=3 (2026-07-05): T-finder resolved the tightness floor to 3 (mi2->300it fails, mi3->102it passes),
+            // VALIDATED free byte-identical win both data types (AA-100K -B 1.40x, DNA-100K -B 1.30x; DNA-1M -B
+            // 1.106x RF=0 vs mi8 & gold, job 173024943). Lowered 8->3. JOLT_BRLEN_MAXITER env still overrides.
+            const int fusedBrlenMaxIter = (params->gbo_replicates > 0) ? 3 : 2;
             sort(positiveNNIs.begin(), positiveNNIs.end(),
                  [](const NNIMove &a, const NNIMove &b) { return a.preloglh > b.preloglh; });   // rank by screener score DESC
             appliedNNIs.clear();
@@ -3813,7 +3827,7 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
             doNNIs(appliedNNIs, /*changeBran=*/false); // TOPOLOGY ONLY (swapped subtree keeps OLD length = JOLT warm start)
 #ifdef IQTREE_GPU
             double _tsdr = params->ts_diag ? getRealTime() : 0.0;
-            double _jf = optimizeAllBranchesJOLT();    // ONE global GPU reopt over ALL branches
+            double _jf = optimizeAllBranchesJOLT(fusedBrlenMaxIter);    // ONE global GPU reopt over ALL branches
             curScore = (_jf == _jf) ? _jf : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
             if (params->ts_diag) tsd_t_fusedreopt += getRealTime() - _tsdr;
 #else
@@ -3826,8 +3840,19 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
                 tsfused_rejects++;                     // batch regressed -> round-level rollback
                 doNNIs(appliedNNIs, /*changeBran=*/false);   // revert (doNNI is its own inverse)
                 restoreBranchLengths(lenvec);          // lenvec captured at round top (3570), BEFORE doNNIs -> pristine
-                clearAllPartialLH();
+                clearAllPartialLH();                   // nulls current_it (phylotree.cpp:707)
                 curScore = oldScore;
+                // GPU-BOOTSTRAP LOAD-BEARING INVARIANT (red-team-verified 2026-07-04, see
+                // GPU-BOOTSTRAP-UFBOOT-PLAN.md v3 / phylotreegpu.cpp optimizeParametersJOLT leanTail branch):
+                // under -B, optimizeAllBranchesJOLT's leanTail mirror populates _pattern_lh/current_it for
+                // whichever candidate tree it was JUST called on -- including a REJECTED one, as it happens here.
+                // This is safe ONLY because every reject sub-case below is followed by curScore==oldScore, which
+                // unconditionally satisfies the stop rule (curScore-oldScore<epsilon -> break, ~line 4069) before
+                // the NEXT round's saveCurrentTree(curScore) could ever read the now-stale/renulled state. If this
+                // control flow ever changes so a rejected round can CONTINUE the loop instead of breaking, either
+                // re-run the leanTail mirror on the reverted tree here, or the original SIGSEGV (current_it==null,
+                // phylotree.cpp:1523) reappears -- or worse, saveCurrentTree silently scores bootstrap replicates
+                // against a stale/rejected tree.
                 // single-best fallback WITH a real nni5 reopt (valid newLen) -> guarantees progress or a clean stop:
                 NNIMove best = getBestNNIForBran(positiveNNIs[0].node1, positiveNNIs[0].node2, nullptr);
                 if (best.newloglh > oldScore + params->loglh_epsilon) {
@@ -3835,7 +3860,7 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
                     doNNIs(one, /*changeBran=*/true);  // topology + nni5 newLen
 #ifdef IQTREE_GPU
                     double _tsdr2 = params->ts_diag ? getRealTime() : 0.0;
-                    double _jf2 = optimizeAllBranchesJOLT();
+                    double _jf2 = optimizeAllBranchesJOLT(fusedBrlenMaxIter);
                     curScore = (_jf2 == _jf2) ? _jf2 : optimizeAllBranches(1, params->loglh_epsilon, PLL_NEWZPERCYCLE);
                     if (params->ts_diag) tsd_t_fusedreopt += getRealTime() - _tsdr2;
 #else
@@ -4067,7 +4092,8 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
         }
 
         if (curScore - oldScore <  params->loglh_epsilon) {
-            break;
+            break;   // GPU-BOOTSTRAP: this break is load-bearing for -B correctness on a fused reject -- see the
+                     // "LOAD-BEARING INVARIANT" comment at the tsfused reject branch above (~line 3826)
         }
 
         if (params->snni && (curScore > curBestScore + 0.1)) {

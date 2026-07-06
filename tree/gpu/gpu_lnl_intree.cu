@@ -560,6 +560,171 @@ __global__ void kj_pre_node(int ns, int nptn, int ncat, int eigOut, double* __re
     }
 }
 
+// ============================================================================================================
+// TS.OCC.1 (2026-07-04; DEFAULT-ON 2026-07-05) — compile-time state-count (NS) specialization of the 3 hot partial-lh
+// kernels. VALIDATED bit-identical (RF=0, lnL identical) at every scale/state; decisive AA-1M no-boot = 2.314x (job
+// 173024944). Now DEFAULT-ON; set JOLT_NS_TEMPLATE=0 to force the runtime-ns kernels (byte-identical escape hatch).
+// WHY: with runtime `ns`, prod[NS_MAX]/fsib[NS_MAX]/pus[NS_MAX] cannot be register-promoted -> they spill to LOCAL
+// memory (k1_node 160B, kj_pre 320B stack frame; confirmed `nvcc -Xptxas -v`). Templating NS in {4,20} + #pragma
+// unroll de-spills them (Phase-0 probe: NS=4 -> 48reg/0spill, occupancy unchanged; NS=20 -> 128reg/0spill, occupancy
+// 34%->25%). The state-loop ORDER is preserved (unroll only, no reassociation) so pattern_lh stays FP64 BIT-IDENTICAL
+// (rel<=5e-16, same-device). `ns` is gated to {4,20} on the GPU (phylotreegpu.cpp); this dispatch falls back to the
+// runtime kernel for any other ns, preserving the generic contract. Plan: GPU-TREESEARCH-OCCUPANCY-ATTACK-PLAN.md.
+// ============================================================================================================
+static inline bool jolt_ns_template_enabled(){
+    static int c=-1;
+    if (c<0){ const char* e=getenv("JOLT_NS_TEMPLATE"); c=(e && atoi(e)==0)?0:1; }  // DEFAULT-ON; =0 forces OFF
+    return c!=0;
+}
+
+template<int NS>
+__device__ __forceinline__ void accum_child_t(double* prod, int c, int ptn, int nptn,
+        const double* __restrict__ ec, const double* __restrict__ p, const unsigned char* __restrict__ t) {
+    const double* ecc = ec + (size_t)c*NS*NS;
+    if (p) {
+        const double* pc = p + (size_t)(c*NS)*nptn + ptn;
+        #pragma unroll
+        for (int x=0;x<NS;x++){ double v=0.0;
+            #pragma unroll
+            for (int i=0;i<NS;i++) v += ecc[x*NS+i]*pc[(size_t)i*nptn];
+            prod[x]*=v; }
+    } else {
+        int s = t[ptn];
+        #pragma unroll
+        for (int x=0;x<NS;x++){ double v=0.0;
+            #pragma unroll
+            for (int i=0;i<NS;i++){ double Li = (s<NS)? g_Uinv[i*NS+s] : g_UinvRowSum[i]; v += ecc[x*NS+i]*Li; }
+            prod[x]*=v; }
+    }
+}
+
+template<int NS>
+__global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ out, double* __restrict__ patlh,
+        int nchild,
+        const double* ec0, const double* p0, const unsigned char* t0,
+        const double* ec1, const double* p1, const unsigned char* t1,
+        const double* ec2, const double* p2, const unsigned char* t2) {
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    double lh = 0.0;
+    for (int c=0;c<ncat;c++){
+        double prod[NS];
+        #pragma unroll
+        for (int x=0;x<NS;x++) prod[x]=1.0;
+        accum_child_t<NS>(prod,c,ptn,nptn,ec0,p0,t0);
+        if (nchild>1) accum_child_t<NS>(prod,c,ptn,nptn,ec1,p1,t1);
+        if (nchild>2) accum_child_t<NS>(prod,c,ptn,nptn,ec2,p2,t2);
+        if (isRoot){
+            double s=0.0;
+            #pragma unroll
+            for (int x=0;x<NS;x++) s += g_freq[x]*prod[x];
+            lh += g_catw[c]*s;
+        } else {
+            double* o = out + (size_t)(c*NS)*nptn + ptn;
+            #pragma unroll
+            for (int r=0;r<NS;r++){ double v=0.0;
+                #pragma unroll
+                for (int x=0;x<NS;x++) v += g_Uinv[r*NS+x]*prod[x];
+                o[(size_t)r*nptn]=v; }
+        }
+    }
+    if (isRoot) patlh[ptn] = log(fabs(lh));
+}
+
+template<int NS>
+__global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
+        const double* __restrict__ pre_u, const double* __restrict__ expfac_u,
+        int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
+                 const double* ec1, const double* sp1, const unsigned char* st1){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    for (int c=0;c<ncat;c++){
+        double fsib[NS];
+        #pragma unroll
+        for (int t=0;t<NS;t++) fsib[t]=1.0;
+        accum_child_t<NS>(fsib,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child_t<NS>(fsib,c,ptn,nptn,ec1,sp1,st1);
+        const double* puc=pre_u+(size_t)(c*NS)*nptn+ptn; const double* ef=expfac_u+(size_t)c*NS;
+        double pus[NS];
+        #pragma unroll
+        for (int t=0;t<NS;t++){ double v=0.0;
+            #pragma unroll
+            for (int i=0;i<NS;i++) v+=g_U[t*NS+i]*ef[i]*puc[(size_t)i*nptn]; pus[t]=v; }
+        double* o=out_pre+(size_t)(c*NS)*nptn+ptn;
+        #pragma unroll
+        for (int j=0;j<NS;j++){ double v=0.0;
+            #pragma unroll
+            for (int t=0;t<NS;t++) v+=g_Uinv[j*NS+t]*pus[t]*fsib[t]; o[(size_t)j*nptn]=v; }
+    }
+}
+
+template<int NS>
+__global__ void kj_pre_node_t(int nptn, int ncat, int eigOut, double* __restrict__ out,
+        const double* __restrict__ up_u,
+        const double* __restrict__ Pmat_u,
+        int nsib,
+        const double* ec0, const double* sp0, const unsigned char* st0,
+        const double* ec1, const double* sp1, const unsigned char* st1){
+    int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
+    for (int c=0;c<ncat;c++){
+        double fsib[NS];
+        #pragma unroll
+        for (int x=0;x<NS;x++) fsib[x]=1.0;
+        accum_child_t<NS>(fsib,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child_t<NS>(fsib,c,ptn,nptn,ec1,sp1,st1);
+        const double* uuc = up_u + (size_t)(c*NS)*nptn + ptn;
+        const double* Pc  = Pmat_u + (size_t)c*NS*NS;
+        double r[NS];
+        #pragma unroll
+        for (int x=0;x<NS;x++){ double v=0.0;
+            #pragma unroll
+            for (int t=0;t<NS;t++) v += Pc[x*NS+t]*uuc[(size_t)t*nptn];
+            r[x] = v*fsib[x]; }
+        double* o = out + (size_t)(c*NS)*nptn + ptn;
+        if (eigOut){
+            #pragma unroll
+            for (int j=0;j<NS;j++){ double v=0.0;
+                #pragma unroll
+                for (int x=0;x<NS;x++) v += g_Uinv[j*NS+x]*r[x];
+                o[(size_t)j*nptn]=v; }
+        } else {
+            #pragma unroll
+            for (int x=0;x<NS;x++) o[(size_t)x*nptn]=r[x];
+        }
+    }
+}
+
+// Launch dispatchers — JOLT_NS_TEMPLATE on + ns in {4,20} -> de-spilled template<NS>; else runtime kernel (byte-id).
+// Signature order mirrors the raw <<<GB,TB,0,stream>>> launch: (GB,TB,stream, then the kernel's own arg list incl. ns).
+static inline void launch_k1_node(int GB, int TB, cudaStream_t stream,
+        int ns, int nptn, int ncat, int isRoot, double* out, double* patlh, int nchild,
+        const double* ec0, const double* p0, const unsigned char* t0,
+        const double* ec1, const double* p1, const unsigned char* t1,
+        const double* ec2, const double* p2, const unsigned char* t2){
+    const bool T = jolt_ns_template_enabled();
+    if (T && ns==4)  k1_node_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
+    else if (T && ns==20) k1_node_t<20><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
+    else k1_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
+}
+static inline void launch_kj_pre(int GB, int TB, cudaStream_t stream,
+        int ns, int nptn, int ncat, double* out_pre,
+        const double* pre_u, const double* expfac_u,
+        int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
+        const double* ec1, const double* sp1, const unsigned char* st1){
+    const bool T = jolt_ns_template_enabled();
+    if (T && ns==4)  kj_pre_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    else if (T && ns==20) kj_pre_t<20><<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    else kj_pre<<<GB,TB,0,stream>>>(ns,nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+}
+static inline void launch_kj_pre_node(int GB, int TB, cudaStream_t stream,
+        int ns, int nptn, int ncat, int eigOut, double* out,
+        const double* up_u, const double* Pmat_u,
+        int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
+        const double* ec1, const double* sp1, const unsigned char* st1){
+    const bool T = jolt_ns_template_enabled();
+    if (T && ns==4)  kj_pre_node_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    else if (T && ns==20) kj_pre_node_t<20><<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    else kj_pre_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+}
+
 // make_pmat — derive the node-space transition Pmat[v][c][x][t] = Σ_i echild[v][c][x][i]·Uinv[i][t] = P(b_v)[x][t]
 // from the already-uploaded echild (= U·diag(exp(eval·rate·b_v))) and g_Uinv. Pattern-INDEPENDENT (no ptn axis),
 // run ONCE per launcher; same per-node layout/stride as echild. One thread per (v,c,x) row, writing ns entries (t).
@@ -1121,7 +1286,7 @@ extern "C" double gpu_lnl_crosscheck(
             if (desc_childIsLeaf[idx*3+k]) t[k] = d_tip + (size_t)desc_childLeaf[idx*3+k]*nptn;
             else                          p[k] = d_partial + (size_t)desc_childSlot[idx*3+k]*slotSz;
         }
-        k1_node<<<GB,TB>>>(ns,nptn,ncat,isRoot,out,d_patlh,nchild,
+        launch_k1_node(GB,TB,0,ns,nptn,ncat,isRoot,out,d_patlh,nchild,
             ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
     }
     GCK(cudaDeviceSynchronize());
@@ -1591,7 +1756,7 @@ extern "C" double gpu_derv_crosscheck(
             if (cn>=0) ec[k]=d_echild+(size_t)cn*ecStride;
             if (desc_childIsLeaf[idx*3+k]) tp[k]=d_tip+(size_t)desc_childLeaf[idx*3+k]*nptn;
             else                          p[k]=d_partial+(size_t)desc_childSlot[idx*3+k]*slotSz; }
-        k1_node<<<GB,TB>>>(ns,nptn,ncat,/*isRoot=*/0,out,d_patlh,nchild,
+        launch_k1_node(GB,TB,0,ns,nptn,ncat,/*isRoot=*/0,out,d_patlh,nchild,
             ec[0],p[0],tp[0], ec[1],p[1],tp[1], ec[2],p[2],tp[2]);
     }
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
@@ -1698,7 +1863,7 @@ extern "C" double gpu_screen_nni_fold_crosscheck(
             if (cn>=0) ec[k]=d_echild+(size_t)cn*ecStride;
             if (desc_childIsLeaf[idx*3+k]) tp[k]=d_tip+(size_t)desc_childLeaf[idx*3+k]*nptn;
             else                          p[k]=d_partial+(size_t)desc_childSlot[idx*3+k]*slotSz; }
-        k1_node<<<GB,TB>>>(ns,nptn,ncat,/*isRoot=*/0,out,d_patlh,nchild,
+        launch_k1_node(GB,TB,0,ns,nptn,ncat,/*isRoot=*/0,out,d_patlh,nchild,
             ec[0],p[0],tp[0], ec[1],p[1],tp[1], ec[2],p[2],tp[2]);
     }
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
@@ -1708,9 +1873,9 @@ extern "C" double gpu_screen_nni_fold_crosscheck(
     auto ecP = [&](int ecn){ return (ecn>=0)? (const double*)(d_echild+(size_t)ecn*ecStride) : (const double*)nullptr; };
     auto plP = [&](int slot){ return (slot>=0)? (const double*)(d_partial+(size_t)slot*slotSz) : (const double*)nullptr; };
     auto tpP = [&](int leaf){ return (leaf>=0)? (const unsigned char*)(d_tip+(size_t)leaf*nptn) : (const unsigned char*)nullptr; };
-    k1_node<<<GB,TB>>>(ns,nptn,ncat,/*isRoot=*/0,d_n1eig,d_patlh,/*nchild=*/2,
+    launch_k1_node(GB,TB,0,ns,nptn,ncat,/*isRoot=*/0,d_n1eig,d_patlh,/*nchild=*/2,
         ecP(n1a_ec),plP(n1a_slot),tpP(n1a_leaf), ecP(n1b_ec),plP(n1b_slot),tpP(n1b_leaf), nullptr,nullptr,nullptr);
-    k1_node<<<GB,TB>>>(ns,nptn,ncat,/*isRoot=*/0,d_n2eig,d_patlh,/*nchild=*/2,
+    launch_k1_node(GB,TB,0,ns,nptn,ncat,/*isRoot=*/0,d_n2eig,d_patlh,/*nchild=*/2,
         ecP(n2a_ec),plP(n2a_slot),tpP(n2a_leaf), ecP(n2b_ec),plP(n2b_slot),tpP(n2b_leaf), nullptr,nullptr,nullptr);
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
 
@@ -1803,13 +1968,13 @@ extern "C" double gpu_allbranch_upper_check(
     // ---- POSTORDER: resident lower partials (skip root) ----
     for (int idx=0; idx<nInternal; idx++){ int u=post_internal[idx]; if(u==root) continue;
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
-        k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_partial+(size_t)node_slot[u]*slotSz,d_patlh,nch,
+        launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_partial+(size_t)node_slot[u]*slotSz,d_patlh,nch,
             ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
 
     // ---- whole-tree lnL: root isRoot=1 fold over root's children (independent reference) ----
     { int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,-1,nch,ec,p,t);
-      k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/1,/*out=*/nullptr,d_patlh,nch,
+      launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/1,/*out=*/nullptr,d_patlh,nch,
           ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
       GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError()); }
     double tree_lnL = reduceLnL();
@@ -1824,13 +1989,13 @@ extern "C" double gpu_allbranch_upper_check(
             double* pre=d_upper+(size_t)v*slotSz;
             if(u==root){   // root child: upper = lower partial of root EXCLUDING v (k1_node isRoot=0; no parent branch)
                 int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,v,nch,ec,p,t);
-                k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,pre,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+                launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,pre,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
             } else {       // interior parent: propagate pre_u through u with siblings-of-v and the parent branch b_u
                 const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
                 for(int jj=0; jj<node_nchild[u]; jj++){ int w=node_child[u*3+jj]; if(w==v||nsb>=2) continue;
                     ec[nsb]=d_echild+(size_t)w*ecStride;
                     if(node_leaf[w]>=0) st[nsb]=d_tip+(size_t)node_leaf[w]*Pn; else sp[nsb]=d_partial+(size_t)node_slot[w]*slotSz; nsb++; }
-                kj_pre<<<GB,TB>>>(ns,Pn,ncat,pre,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,nsb,
+                launch_kj_pre(GB,TB,0,ns,Pn,ncat,pre,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,nsb,
                     ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
             }
             GCK(cudaDeviceSynchronize());
@@ -1929,13 +2094,13 @@ extern "C" double gpu_screen_nni_batch_crosscheck(
     // ---- POSTORDER (resident lowers) ----
     for (int idx=0; idx<nInternal; idx++){ int u=post_internal[idx]; if(u==root) continue;
         int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
-        k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_partial+(size_t)node_slot[u]*slotSz,d_patlh,nch,
+        launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_partial+(size_t)node_slot[u]*slotSz,d_patlh,nch,
             ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
     GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
 
     // ---- whole-tree lnL (independent; result-invariance) ----
     { int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,-1,nch,ec,p,t);
-      k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/1,nullptr,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+      launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/1,nullptr,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
       GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError()); }
     if (out_tree_lnL) *out_tree_lnL = reduceLnL();
 
@@ -1953,7 +2118,7 @@ extern "C" double gpu_screen_nni_batch_crosscheck(
                 for(int jj=0; jj<node_nchild[u]; jj++){ int w=node_child[u*3+jj]; if(w==v||nsb>=2) continue;
                     ec[nsb]=d_echild+(size_t)w*ecStride;
                     if(node_leaf[w]>=0) st[nsb]=d_tip+(size_t)node_leaf[w]*Pn; else sp[nsb]=d_partial+(size_t)node_slot[w]*slotSz; nsb++; }
-                kj_pre_node<<<GB,TB>>>(ns,Pn,ncat,/*eigOut=*/0,pre,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,nsb,
+                launch_kj_pre_node(GB,TB,0,ns,Pn,ncat,/*eigOut=*/0,pre,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,nsb,
                     ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
             }
             GCK(cudaDeviceSynchronize());
@@ -1968,13 +2133,13 @@ extern "C" double gpu_screen_nni_batch_crosscheck(
     for (int m=0; m<nMoves; m++){
         int u=mv_u[m];
         if (mv_uIsRoot[m]) {   // u==root: no upper/expfac -> k1_node({swapped-in v-child, u's staying child})
-            k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_n1eig,d_patlh,/*nchild=*/2,
+            launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_n1eig,d_patlh,/*nchild=*/2,
                 ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), ecP(n1b_ec[m]),plP(n1b_slot[m]),tpP(n1b_leaf[m]), nullptr,nullptr,nullptr);
         } else {               // interior u: node1Eig = Uinv·((P(b_u)·up_u) ⊙ (P(b_swapchild)·L_swapchild)), eigOut=1
-            kj_pre_node<<<GB,TB>>>(ns,Pn,ncat,/*eigOut=*/1,d_n1eig,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,/*nsib=*/1,
+            launch_kj_pre_node(GB,TB,0,ns,Pn,ncat,/*eigOut=*/1,d_n1eig,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,/*nsib=*/1,
                 ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), nullptr,nullptr,nullptr);
         }
-        k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_n2eig,d_patlh,/*nchild=*/2,
+        launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_n2eig,d_patlh,/*nchild=*/2,
             ecP(n2a_ec[m]),plP(n2a_slot[m]),tpP(n2a_leaf[m]), ecP(n2b_ec[m]),plP(n2b_slot[m]),tpP(n2b_leaf[m]), nullptr,nullptr,nullptr);
         GCK(cudaDeviceSynchronize());
         setVal(mv_bv[m]);
@@ -2165,16 +2330,16 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
             double* pre=d_upper+(size_t)v*slotSz;
             if(u==root){
                 int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,v,nch,ec,p,t);
-                if(eigUpper) k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,pre,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+                if(eigUpper) launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,pre,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
                 else         k1_node_prod<<<GB,TB>>>(ns,Pn,ncat,pre,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
             } else {
                 const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
                 for(int jj=0; jj<node_nchild[u]; jj++){ int w=node_child[u*3+jj]; if(w==v||nsb>=2) continue;
                     ec[nsb]=d_echild+(size_t)w*ecStride;
                     if(node_leaf[w]>=0) st[nsb]=d_tip+(size_t)node_leaf[w]*Pn; else sp[nsb]=d_partial+(size_t)node_slot[w]*slotSz; nsb++; }
-                if(eigUpper) kj_pre<<<GB,TB>>>(ns,Pn,ncat,pre,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,nsb,
+                if(eigUpper) launch_kj_pre(GB,TB,0,ns,Pn,ncat,pre,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,nsb,
                     ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
-                else         kj_pre_node<<<GB,TB>>>(ns,Pn,ncat,/*eigOut=*/0,pre,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,nsb,
+                else         launch_kj_pre_node(GB,TB,0,ns,Pn,ncat,/*eigOut=*/0,pre,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,nsb,
                     ec[0],sp[0],st[0], ec[1],sp[1],st[1]);
             }
             GCK(cudaDeviceSynchronize());
@@ -2199,14 +2364,14 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
         // POSTORDER (resident lowers for THIS chunk)
         for (int idx=0; idx<nInternal; idx++){ int u=post_internal[idx]; if(u==root) continue;
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(u,-1,nch,ec,p,t);
-            k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_partial+(size_t)node_slot[u]*slotSz,d_patlh,nch,
+            launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_partial+(size_t)node_slot[u]*slotSz,d_patlh,nch,
                 ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]); }
         GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError());
 
         if (g_kcount) g_kc_scr_base += nInternal;   // base postorder lowers, one k1_node/internal-node, recomputed THIS chunk
         // TREE-LNL (independent root isRoot=1 reduction) -> carried accTree. MUST precede the preorder (proc clobbers d_patlh).
         { int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; fillChild(root,-1,nch,ec,p,t);
-          k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/1,nullptr,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+          launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/1,nullptr,d_patlh,nch, ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
           GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError()); }
         reduceInto(accTree,accTreeK);
 
@@ -2226,15 +2391,15 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
             double* p_pddf=d_pddf  + (size_t)s*chunk0;
             double* p_pl = d_patlh + (size_t)s*chunk0;
             if (mv_uIsRoot[m]) {   // u==root: no upper -> k1_node({swapped-in child, root-leaf}) (eigen), unchanged
-                k1_node<<<GB,TB,0,st>>>(ns,Pn,ncat,/*isRoot=*/0,p_n1,p_pl,/*nchild=*/2,
+                launch_k1_node(GB,TB,st,ns,Pn,ncat,/*isRoot=*/0,p_n1,p_pl,/*nchild=*/2,
                     ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), ecP(n1b_ec[m]),plP(n1b_slot[m]),tpP(n1b_leaf[m]), nullptr,nullptr,nullptr);
             } else {               // interior u: node1Eig = Uinv·((P(b_u)·up_u) ⊙ (P(b_swapchild)·L_swapchild)), eigOut=1
-                if(eigUpper) kj_pre<<<GB,TB,0,st>>>(ns,Pn,ncat,p_n1,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,/*nsib=*/1,
+                if(eigUpper) launch_kj_pre(GB,TB,st,ns,Pn,ncat,p_n1,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,/*nsib=*/1,
                     ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), nullptr,nullptr,nullptr);
-                else         kj_pre_node<<<GB,TB,0,st>>>(ns,Pn,ncat,/*eigOut=*/1,p_n1,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,/*nsib=*/1,
+                else         launch_kj_pre_node(GB,TB,st,ns,Pn,ncat,/*eigOut=*/1,p_n1,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,/*nsib=*/1,
                     ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), nullptr,nullptr,nullptr);
             }
-            k1_node<<<GB,TB,0,st>>>(ns,Pn,ncat,/*isRoot=*/0,p_n2,p_pl,/*nchild=*/2,   // node2Eig (lower fold), already eigen
+            launch_k1_node(GB,TB,st,ns,Pn,ncat,/*isRoot=*/0,p_n2,p_pl,/*nchild=*/2,   // node2Eig (lower fold), already eigen
                 ecP(n2a_ec[m]),plP(n2a_slot[m]),tpP(n2a_leaf[m]), ecP(n2b_ec[m]),plP(n2b_slot[m]),tpP(n2b_leaf[m]), nullptr,nullptr,nullptr);
             const double* dv0=d_valall+(size_t)m*3*ncat*ns;   // TS.2.1 K1: this move's precomputed table slice (no per-move g_val upload)
             if (useInv)   // A3 (+I): add the invariant term pinv*baseinvar[ptn]; non-+I path UNCHANGED (same kernel below)
@@ -2334,15 +2499,15 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
             for (int m=0; m<nMoves; m++){
                 int u=mv_u[m];
                 if (mv_uIsRoot[m]) {   // u==root: no upper -> k1_node({swapped-in child, root-leaf}) (eigen), unchanged
-                    k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_n1eig,d_patlh,/*nchild=*/2,
+                    launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_n1eig,d_patlh,/*nchild=*/2,
                         ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), ecP(n1b_ec[m]),plP(n1b_slot[m]),tpP(n1b_leaf[m]), nullptr,nullptr,nullptr);
                 } else {               // interior u: node1Eig = Uinv·((P(b_u)·up_u) ⊙ (P(b_swapchild)·L_swapchild)), eigOut=1
-                    if(eigUpper) kj_pre<<<GB,TB>>>(ns,Pn,ncat,d_n1eig,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,/*nsib=*/1,
+                    if(eigUpper) launch_kj_pre(GB,TB,0,ns,Pn,ncat,d_n1eig,d_upper+(size_t)u*slotSz,d_expfac+(size_t)u*exStride,/*nsib=*/1,
                         ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), nullptr,nullptr,nullptr);
-                    else         kj_pre_node<<<GB,TB>>>(ns,Pn,ncat,/*eigOut=*/1,d_n1eig,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,/*nsib=*/1,
+                    else         launch_kj_pre_node(GB,TB,0,ns,Pn,ncat,/*eigOut=*/1,d_n1eig,d_upper+(size_t)u*slotSz,d_pmat+(size_t)u*ecStride,/*nsib=*/1,
                         ecP(n1a_ec[m]),plP(n1a_slot[m]),tpP(n1a_leaf[m]), nullptr,nullptr,nullptr);
                 }
-                k1_node<<<GB,TB>>>(ns,Pn,ncat,/*isRoot=*/0,d_n2eig,d_patlh,/*nchild=*/2,   // node2Eig (lower fold), already eigen
+                launch_k1_node(GB,TB,0,ns,Pn,ncat,/*isRoot=*/0,d_n2eig,d_patlh,/*nchild=*/2,   // node2Eig (lower fold), already eigen
                     ecP(n2a_ec[m]),plP(n2a_slot[m]),tpP(n2a_leaf[m]), ecP(n2b_ec[m]),plP(n2b_slot[m]),tpP(n2b_leaf[m]), nullptr,nullptr,nullptr);
                 GCK(cudaDeviceSynchronize());
                 const double* dv0=d_valall+(size_t)m*3*ncat*ns;   // TS.2.1 K1: this move's precomputed table slice (no per-move g_val upload)
@@ -2433,7 +2598,8 @@ extern "C" double gpu_jolt_optimize(
     const double* catRate0, int freeRate,   // G.5.1: +R FreeRate — catRate0=rates[c] (else nullptr); freeRate=1 seeds rates directly (no alpha)
     int nFreeQ, const double* q0, jolt_qdecompose_fn qdecompose, void* qctx, double* out_q,   // G.6: DNA free-Q (eigensystem moves)
     double* out_brlen, double* out_alpha, double* out_pinv, int* out_iters,
-    double* out_rates, double* out_props)   // G.5.1b: +R optimised rates/weights (nullptr unless freeRate==1)
+    double* out_rates, double* out_props,   // G.5.1b: +R optimised rates/weights (nullptr unless freeRate==1)
+    double* out_patlh)   // STAGE 2b: full-nptn accepted-tree per-pattern log|lh_ptn| snapshot (host; nullptr => no snapshot)
 {
     int ns = nstates;
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[JOLT] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
@@ -2636,7 +2802,7 @@ extern "C" double gpu_jolt_optimize(
     auto postorderFill=[&](){
         for(int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* t[3]; childArgs(u,-1,nch,ec,p,t);
-            k1_node<<<GB,TB>>>(ns,Pn,ncat,0,d_partial+(size_t)slot[u]*slotSz,d_patlh,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
+            launch_k1_node(GB,TB,0,ns,Pn,ncat,0,d_partial+(size_t)slot[u]*slotSz,d_patlh,nch,ec[0],p[0],t[0],ec[1],p[1],t[1],ec[2],p[2],t[2]); }
         cudaDeviceSynchronize(); };
     // Inc 2 (S3): the central-edge coefficient tables, split into a PURE host-build helper (setValBuild) and the
     // legacy upload (setVal). setValBuild fills v0/v1/v2 with the EXACT same FP64 math (same exp(evalP[x]*rc*t)*pcw
@@ -2679,7 +2845,7 @@ extern "C" double gpu_jolt_optimize(
             setChunk(0);   // G.7.1: nTile==1 for +R — upload the (whole) tip/ptn_freq/base_invar slice the old one-time copy used to do
             rebuildEchild(); postorderFill();
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
-            k1_node<<<GB,TB>>>(ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
+            launch_k1_node(GB,TB,0,ns,nptn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
             const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();
             cudaMemset(d_rnum,0,(size_t)ncat*nptn*sizeof(double));   // reuse the rnum buffer as wnum (rnum unused here)
             setVal(brlen[c0]);
@@ -2724,6 +2890,11 @@ extern "C" double gpu_jolt_optimize(
     // evalLnL) so computeGradient can skip the redundant rebuild+postorder when its base already matches. Values are
     // COPIES of the same candidate vectors (no recompute) => exact == is reliable; any mismatch falls back to rebuild.
     std::vector<double> devB; double devA=1e300, devP=1e300; bool devValid=false;
+    // STAGE 2b (GPU-BOOTSTRAP-UFBOOT-PLAN §3 Stage 2b): out_patlh snapshot state. `snapPatlh` is set ONLY for the
+    // final re-eval snapshot call (nTile>1 / no-accept / L-BFGS) => the tile-loop D2H below is skipped during the LM
+    // loop => byte-identical. `snapDone` records that the cheap snapshot-on-accept fast path already filled out_patlh
+    // (nTile==1 case) so the final re-eval is skipped. Both stay inert unless out_patlh != nullptr (i.e. -B + opt-in).
+    double* snapPatlh = nullptr; bool snapDone = false;
     auto evalLnL=[&](const std::vector<double>& cand_b,double cand_a,double cand_pinv,const double* cand_q)->double{
         if(nFreeQ>0 && cand_q) qApply(cand_q);   // G.6: re-decompose+reupload the trial Q -> rebuildEchild() below uses the new evalP/UP
         if(ncat>1 && !freeRate) applyAlpha(cand_a); applyPinv(cand_pinv); brlen=cand_b;   // G.5.1b: +R seeds rates directly -> never re-derive from alpha (would clobber meanR)
@@ -2732,7 +2903,7 @@ extern "C" double gpu_jolt_optimize(
         for(int t=0;t<nTile;t++){
             setChunk(t); postorderFill();
             int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,c0,nch,ec,p,tp);
-            k1_node<<<GB,TB>>>(ns,Pn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
+            launch_k1_node(GB,TB,0,ns,Pn,ncat,0,d_pretmp,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); cudaDeviceSynchronize();
             const double* pl0=edgeNodePtr(c0); cudaDeviceSynchronize();   // part8 #3: fused — no theta materialisation
             // Inc 2: evalLnL's base-edge derv is derv-ONLY (rnum=wnum=nullptr) — it never reads g_rscale. Under ON we
             // host-build only v0/v1/v2 into the valpool slot's [v0|v1|v2] region (the rscale tail is left unread because
@@ -2762,6 +2933,7 @@ extern "C" double gpu_jolt_optimize(
                 reduceDerv(l,d,dd);
             }
             double y=l-Lk, s=Lacc+y; Lk=(s-Lacc)-y; Lacc=s;   // Kahan add this chunk's lnL contribution
+            if(snapPatlh) cudaMemcpy(snapPatlh+pOff, d_patlh, (size_t)Pn*sizeof(double), cudaMemcpyDeviceToHost);   // STAGE 2b: this tile's per-pattern log|lh| (d_patlh synced by reduceDerv above); pOff/Pn set by setChunk
         }
         devB=cand_b; devA=cand_a; devP=cand_pinv; devValid=true;   // part8 #2: echild matches this base (full postorder present on device only when nTile==1)
         return Lacc; };
@@ -2802,10 +2974,10 @@ extern "C" double gpu_jolt_optimize(
                 for(int v:child[u]){
                     int sv=acq(); double* pre=d_prepool+(size_t)sv*slotSz;
                     if(u==root){ int nch; const double* ec[3]; const double* p[3]; const unsigned char* tp[3]; childArgs(root,v,nch,ec,p,tp);
-                        k1_node<<<GB,TB>>>(ns,Pn,ncat,0,pre,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); }
+                        launch_k1_node(GB,TB,0,ns,Pn,ncat,0,pre,d_patlh,nch,ec[0],p[0],tp[0],ec[1],p[1],tp[1],ec[2],p[2],tp[2]); }
                     else { const double* ec[2]={0,0}; const double* sp[2]={0,0}; const unsigned char* st[2]={0,0}; int nsb=0;
                         for(int w:child[u]){ if(w==v||nsb>=2) continue; sibArg(w,ec[nsb],sp[nsb],st[nsb]); nsb++; }
-                        kj_pre<<<GB,TB>>>(ns,Pn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
+                        launch_kj_pre(GB,TB,0,ns,Pn,ncat,pre,d_prepool+(size_t)su*slotSz,d_expfac+(size_t)u*ncat*ns,nsb,ec[0],sp[0],st[0],ec[1],sp[1],st[1]); }
                     if (g_kcount) g_kc_reopt_part++;   // reopt: one upper-partial launch (k1_node root / kj_pre interior) per edge per LM iter
                     cudaDeviceSynchronize();
                     const double* plv=edgeNodePtr(v);   // part8 #3: fused theta+derv+ratenum, no d_theta round-trip
@@ -3051,7 +3223,9 @@ extern "C" double gpu_jolt_optimize(
                 std::vector<double> cq(nFreeQ>0?nFreeQ:0);
                 for(int k=0;k<nFreeQ;k++){ double nq=qcur[k]+t*dqB[k]; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
                 double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
-                if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq; lnL=ln; acc=true; if(dl<tol)conv=true; break; }
+                if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq; lnL=ln; acc=true;
+                    if(out_patlh&&nTile==1){ cudaMemcpy(out_patlh,d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost); snapDone=true; }   // STAGE 2b snapshot-on-accept: d_patlh holds THIS just-accepted trial (nTile==1 => all nptn), nothing overwrites it before break
+                    if(dl<tol)conv=true; break; }
                 else { t*=0.5; nRej++; } }
         } else {
             for(int bt=0; bt<14; bt++){
@@ -3074,7 +3248,9 @@ extern "C" double gpu_jolt_optimize(
                     // G.5.1d (2b): accept the staged pinv-free meanR/bprop, then DERIVE catRate/catProp_v via applyPinv(curPinv)
                     // (== cr/cw at pinv=0, so pure +R byte-identical), then gauge. (Old: catRate=cr direct — wrong under +I.)
                     if(freeRate==1){ for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } zR=cz; applyPinv(curPinv); gaugeFix(); }
-                    lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true; if(dl<tol)conv=true; break; }
+                    lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true;
+                    if(out_patlh&&nTile==1){ cudaMemcpy(out_patlh,d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost); snapDone=true; }   // STAGE 2b snapshot-on-accept: d_patlh holds THIS just-accepted trial (nTile==1 => all nptn); host-only work above it (gaugeFix) never touches d_patlh
+                    if(dl<tol)conv=true; break; }
                 else { mu*=4.0; nRej++; } }
         }
         if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP;
@@ -3102,5 +3278,18 @@ extern "C" double gpu_jolt_optimize(
     if (g_kcount) { g_kc_reopt_calls++;
         fprintf(stderr,"[TS-KCOUNT reopt] call=%ld reopt_part_launches(cum)=%ld | cum: scr_base=%ld scr_upper=%ld scr_fold=%ld reopt_part=%ld -> shareable(base+upper+reopt-rebuild) vs FOLD(necessary)\n",
                 g_kc_reopt_calls,g_kc_reopt_part,g_kc_scr_base,g_kc_scr_upper,g_kc_scr_fold,g_kc_reopt_part); }
+
+    // STAGE 2b: robust fallback snapshot. Reached only when out_patlh != nullptr (-B + opt-in) AND the cheap
+    // snapshot-on-accept above did NOT fire (snapDone false) — i.e. nTile>1 (accept only captured the last tile), OR
+    // no LM step was ever accepted (out_patlh unwritten), OR the L-BFGS path is active. Re-eval the ACCEPTED params
+    // (brlen/curAlpha/curPinv/qcur are the accepted values at this point, restored on a reject exit) with snapPatlh
+    // set, so evalLnL's per-tile D2H fills out_patlh over ALL tiles from the accepted tree. Warm (reuses the reopt's
+    // echild/partial/prepool arenas) — no separate clean-room rebuild. lnL (the return value) is left unchanged.
+    if (out_patlh && !snapDone) {
+        snapPatlh = out_patlh;
+        (void)evalLnL(brlen, curAlpha, curPinv, nFreeQ>0 ? qcur.data() : nullptr);
+        snapPatlh = nullptr;
+        if (cudaGetLastError()!=cudaSuccess) return (double)NAN;
+    }
     return lnL;
 }
