@@ -2347,6 +2347,110 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     return cpuLnL;
 }
 
+// ============================================================================================================
+// L0 (CPU-decoupling): a pure, SIDE-EFFECT-FREE full-tree GPU log-likelihood for the JOLT search loop's perturb /
+// re-sum postorders (iqtree.cpp:3628/:3639). The eligibility gate is a brlenOnly subset of optimizeParametersJOLT
+// (:1972-2057) — KEEP IN SYNC — then it calls gpu_jolt_optimize(maxiter=0) DIRECTLY into throwaway out_* buffers.
+// It writes NOTHING back to the tree (no brlen writeback, no clearAllPartialLH, no setCurScore, no CPU self-check),
+// so it is a legal drop-in for computeLogL()'s VALUE. It leaves the CPU partials dirty => the caller must only use
+// it under --ts-fused (the fused NNI path never reads CPU partials). Returns NaN (decline / CUDA error) => the
+// caller falls back to computeLogL(). tip[]/ptnFreq[] are cached (alignment/ns-invariant), rebuilt on signature change.
+// ============================================================================================================
+double PhyloTree::computeLikelihoodGPUResident() {
+    // ---- eligibility gate (brlenOnly subset of optimizeParametersJOLT :1972-2057 => optAlpha=optPinv=nFreeQ=freeRate=0) ----
+    if (!model || !site_rate || !aln) return (double)NAN;
+    int ns = aln->num_states;
+    if (ns != 4 && ns != 20) return (double)NAN;
+    if (!model->isReversible() || model->getNMixtures() != 1 || model->isSiteSpecificModel()) return (double)NAN;
+    if (model_factory && model_factory->getASC() != ASC_NONE) return (double)NAN;   // +ASC: kernel nptn excludes unobserved_ptns
+    {   // free-Q held FIXED for a pure eval (evaluated at the current eigensystem); accept AA fixed (ndim==0 / +F) and the
+        // validated DNA free-Q family, decline +FO / tied-freq / AA-GTR — mirrors :1997-2000.
+        int ndim = model->getNDim();
+        bool freeQok = (ndim > 0 && ndim <= 5 && ns == 4 && model->getFreqType() != FREQ_ESTIMATE &&
+                        model->isReversible() && nFreqParams(model->getFreqType()) == 0);
+        if (ndim != 0 && !freeQok) return (double)NAN;
+    }
+    int ncat = site_rate->getNRate();
+    if (ncat < 1 || ncat > 64) return (double)NAN;
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) return (double)NAN;   // MEAN discrete-gamma only (decline +R/+Gm)
+    double pinv0 = site_rate->getPInvar();
+    if (pinv0 > 0.0) return (double)NAN;   // +I: optPinv==0 path zeroes base_invar + drops 1/(1-pinv) => wrong objective (:2046) -> CPU
+
+    // ---- model eigen factors (alpha-independent, same convention as the clean-room lnL) ----
+    double *eval = model->getEigenvalues();
+    double *U    = model->getEigenvectors();
+    double *Uinv = model->getInverseEigenvectors();
+    if (!eval || !U || !Uinv) return (double)NAN;
+    vector<double> UinvRowSum(ns, 0.0);
+    for (int i = 0; i < ns; i++) { double s = 0; for (int j = 0; j < ns; j++) s += Uinv[i*ns+j]; UinvRowSum[i] = s; }
+    vector<double> catProp(ncat), catRate0(ncat);
+    for (int c = 0; c < ncat; c++) { catProp[c] = site_rate->getProp(c); catRate0[c] = site_rate->getRate(c); }
+    double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : 1.0;
+    JoltQCtx qctx{ model, ns };
+
+    // ---- topology rooted at internal node R (identical to optimizeParametersJOLT :2077-2101) ----
+    if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
+    Node *R = root->neighbors[0]->node;
+    if (R->isLeaf()) return (double)NAN;
+    map<Node*,int> nid;
+    vector<Node*> nodes, parentNode;
+    vector<double> parentLen;
+    vector<int> leafTax;
+    vector<vector<int>> childList;
+    function<void(Node*,Node*,double)> indexDfs = [&](Node *n, Node *dad, double lenToDad) {
+        int myi = (int)nodes.size(); nid[n] = myi; nodes.push_back(n);
+        parentNode.push_back(dad); parentLen.push_back(lenToDad);
+        leafTax.push_back(n->isLeaf() ? aln->getSeqID(n->name) : -1);
+        childList.push_back(vector<int>());
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; indexDfs(nb->node, n, nb->length); }
+    };
+    indexDfs(R, nullptr, 0.0);
+    int nNodes = (int)nodes.size();
+    for (int i = 0; i < nNodes; i++) {
+        Node *n = nodes[i], *dad = parentNode[i];
+        for (auto nb : n->neighbors) { if (nb->node == dad) continue; childList[i].push_back(nid[nb->node]); }
+        if ((int)childList[i].size() > 3) return (double)NAN;
+    }
+    int nptn = (int)aln->size(), ntax = (int)aln->getNSeq();
+    // red-team: a leaf whose name is not in the alignment (getSeqID -> -1) would be mis-treated as internal by the
+    // launcher (wrong lnL). Decline to CPU, matching optimizeParametersJOLT's tip-build guard (:2108).
+    for (int i = 0; i < nNodes; i++)
+        if (nodes[i]->isLeaf() && (leafTax[i] < 0 || leafTax[i] >= ntax)) return (double)NAN;
+
+    // ---- CACHE the alignment/ns-invariant tip[] (taxon-id indexed) + ptnFreq[]; rebuild only on signature change ----
+    if (_gpuResAln != aln || _gpuResNs != ns || _gpuResNptn != nptn || _gpuResNtax != ntax) {
+        _gpuResTip.assign((size_t)ntax*nptn, 0);
+        for (int tax = 0; tax < ntax; tax++)
+            for (int p = 0; p < nptn; p++) { int st = (int)aln->at(p)[tax]; _gpuResTip[(size_t)tax*nptn+p] = (unsigned char)((st < ns) ? st : ns); }
+        _gpuResPtnFreq.resize(nptn);
+        for (int p = 0; p < nptn; p++) _gpuResPtnFreq[p] = (double)aln->at(p).frequency;
+        _gpuResAln = aln; _gpuResNs = ns; _gpuResNptn = nptn; _gpuResNtax = ntax;
+    }
+
+    // ---- flat topology arrays (rebuilt per call, O(nNodes)) + all-zero invariant base (optPinv==0) ----
+    vector<int> nodeNch(nNodes), nodeChild(nNodes*3, -1), nodeLeaf(nNodes);
+    vector<double> nodeParentLen(nNodes);
+    for (int i = 0; i < nNodes; i++) {
+        nodeNch[i] = (int)childList[i].size(); nodeLeaf[i] = leafTax[i]; nodeParentLen[i] = parentLen[i];
+        for (int k = 0; k < (int)childList[i].size() && k < 3; k++) nodeChild[i*3+k] = childList[i][k];
+    }
+    vector<double> base_invar(nptn, 0.0);
+    const double L0_MIN_PINVAR = 1e-6;
+
+    // ---- pure lnL eval: gpu_jolt_optimize(maxiter=0) DIRECT. out_* are throwaway (out_brlen echoes input at maxiter=0). ----
+    vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0, outPinv = pinv0; int outIters = 0;
+    double lnL = gpu_jolt_optimize(ns, nptn, ncat, ntax, nNodes, /*root=*/nid[R],
+        Uinv, UinvRowSum.data(), U, eval, catProp.data(), _gpuResTip.data(), _gpuResPtnFreq.data(),
+        nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
+        alpha0, /*optAlpha=*/0, /*maxiter=*/0,
+        base_invar.data(), pinv0, /*optPinv=*/0, L0_MIN_PINVAR, /*pinvMax=*/aln->frac_const_sites,
+        catRate0.data(), /*freeRate=*/0,
+        /*nFreeQ=*/0, nullptr, jolt_qdecompose_intree, &qctx, nullptr,
+        outBrlen.data(), &outAlpha, &outPinv, &outIters,
+        nullptr, nullptr, /*joltOutPatlh=*/nullptr);
+    return lnL;   // NaN on CUDA error => caller (iqtree.cpp) falls back to computeLogL()
+}
+
 // TS.1 (reborn / L1) — lean in-loop JOLT all-branch reopt: the GPU replacement for optimizeAllBranches(1) in the NNI
 // search loop (optallbranches 19.5% surface, plan §17). brlenOnly=true holds the model params fixed (only branch
 // lengths move); leanTail=true writes back brlens + clearAllPartialLH (flag-flip) + trusts the device lnL, skipping

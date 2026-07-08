@@ -3612,7 +3612,37 @@ double IQTree::doTreePerturbation() {
             }
         }
         //optimizeBranches(1);
-        curScore = computeLogL();
+        // ---- L0 (CPU-decoupling): device-resident full-tree lnL at the perturb postorder. computeLikelihoodGPUResident()
+        //      = gpu_jolt_optimize(maxiter=0): a pure, side-effect-free GPU lnL (no tree mutation; NaN on ineligible/CUDA
+        //      -> CPU fallback). SAFE ONLY under --ts-fused (it leaves CPU partials dirty; only the fused NNI path — GPU
+        //      screener + optimizeAllBranchesJOLT — never reads them). JOLT_L0=1 MEASURES (runs BOTH, prints rel+speedup,
+        //      KEEPS the CPU value => byte-identical trajectory); JOLT_L0>=2 PRODUCTION (skips the CPU postorder). This
+        //      MUST be paired with the doNNISearch re-sum hook (:3639) or the postorder just relocates there.
+        //      SAFE-REGIME GUARD (red-team): L0 leaves current_it null + _pattern_lh stale (it skips computeLogL). That is
+        //      only OK when nothing downstream reads them before the next clearAllPartialLH: exclude -B/UFBoot
+        //      (gbo_replicates>0 -> optimizeNNI saveCurrentTree :3742 null-derefs computePatternLikelihood, and RELL would
+        //      score replicates against a stale _pattern_lh) and the intermediate-tree / site-posterior print paths.
+        const char *_l0env = getenv("JOLT_L0");
+        const bool _l0_ok = params->ts_fused && params->ts_fused_nni5_topm == 0 && params->gbo_replicates == 0 &&
+                            !params->write_intermediate_trees && !params->print_trees_site_posterior;
+        // ts_fused_nni5_topm==0 (pure fused): the hybrid nni5 path (--ts-fused-topm M>0) runs a CPU getBestNNIForBran on
+        // the L0-stale partials in round 1 (no preceding clearAllPartialLH) -> exclude it (red-team S1). Default M=0 unaffected.
+        if (_l0env && _l0_ok) {
+            if (atoi(_l0env) >= 2) {
+                double _g = computeLikelihoodGPUResident();
+                curScore = (_g == _g) ? _g : computeLogL();          // _g==_g false on NaN -> CPU fallback
+            } else {
+                double _t0 = getRealTime(); double _g = computeLikelihoodGPUResident(); double _t1 = getRealTime();
+                double _c = computeLogL();  double _t2 = getRealTime();
+                double _gpu_s = _t1 - _t0, _cpu_s = _t2 - _t1;
+                printf("JOLT-L0 site=perturb gpu=%.5f (%.5fs) cpu=%.5f (%.5fs) rel=%.3e speedup=%.2fx\n",
+                       _g, _gpu_s, _c, _cpu_s, (_c != 0.0 ? fabs(_g - _c) / fabs(_c) : 0.0),
+                       (_gpu_s > 0.0 ? _cpu_s / _gpu_s : 0.0));
+                curScore = _c;                                       // MEASURE: keep CPU value (byte-identical trajectory)
+            }
+        } else {
+            curScore = computeLogL();
+        }
     }
     return curScore;
 }
@@ -3622,7 +3652,23 @@ double IQTree::doTreePerturbation() {
  ****************************************************************************/
 pair<int, int> IQTree::doNNISearch(bool write_info) {
 
-    computeLogL();
+    // L0: paired with the perturb-site offload (:3628). If perturb ran on the GPU the CPU partials are dirty here, so a
+    //     plain computeLogL() would recompute the whole postorder on CPU (relocating, not removing, it). Offload it too:
+    //     a second maxiter=0 GPU eval — cheap and correct (the tree is unchanged since perturb, so the lnL matches). SAFE
+    //     ONLY under --ts-fused (see :3628). JOLT_L0=1 (measure) keeps the CPU call => byte-identical trajectory.
+    {   // SAFE-REGIME GUARD identical to the perturb hook (:3628): fused, no -B/UFBoot, no intermediate/site-posterior print.
+        const char *_l0env = getenv("JOLT_L0");
+        const bool _l0_ok = params->ts_fused && params->ts_fused_nni5_topm == 0 && params->gbo_replicates == 0 &&
+                            !params->write_intermediate_trees && !params->print_trees_site_posterior;
+        // ts_fused_nni5_topm==0 (pure fused): the hybrid nni5 path (--ts-fused-topm M>0) runs a CPU getBestNNIForBran on
+        // the L0-stale partials in round 1 (no preceding clearAllPartialLH) -> exclude it (red-team S1). Default M=0 unaffected.
+        if (_l0env && atoi(_l0env) >= 2 && _l0_ok) {
+            double _g = computeLikelihoodGPUResident();
+            if (_g == _g) curScore = _g; else computeLogL();         // NaN -> CPU fallback
+        } else {
+            computeLogL();
+        }
+    }
     double curBestScore = getBestScore();
 
     if (Params::getInstance().write_intermediate_trees && save_all_trees != 2) {

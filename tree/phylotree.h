@@ -2122,6 +2122,23 @@ public:
         back to the standard CPU/stateless-GPU path. Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
     double optimizeParametersJOLT(int fixed_len, bool brlenOnly = false, bool leanTail = false, int brlenMaxIter = 400);
 
+    /** L0 (CPU-decoupling): a pure, SIDE-EFFECT-FREE full-tree GPU log-likelihood at the CURRENT branch lengths + model.
+        Replaces the CPU computeLogL() postorders in the JOLT search loop (iqtree.cpp perturb :3628 + doNNISearch re-sum
+        :3639) so JOLT stops being handicapped on 1 host thread. = gpu_jolt_optimize(maxiter=0) (LM loop skipped, out_brlen
+        echoes input) called DIRECTLY — unlike optimizeParametersJOLT it does NOT write branch lengths back, does NOT
+        clearAllPartialLH(), does NOT setCurScore(), and runs NO CPU self-check; it only returns a number. Eligibility
+        mirrors the brlenOnly gate (phylotreegpu.cpp:1972-2057: reversible fixed-Q, ns in {4,20}, mean-gamma; declines
+        +I/+R/mixture/ASC/free-freq) => returns NaN on decline/CUDA-error so the caller falls back to computeLogL(). The
+        alignment/ns-invariant tip[]/ptnFreq[] are cached (built once, keyed on the aln pointer + ns + nptn + ntax).
+        SAFE ONLY under --ts-fused: it leaves the CPU partials dirty, and only the fused NNI path (GPU screener +
+        optimizeAllBranchesJOLT) never reads them. Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
+    double computeLikelihoodGPUResident();
+    // L0 cache for computeLikelihoodGPUResident (alignment/ns-invariant; rebuilt when the signature below changes):
+    std::vector<unsigned char> _gpuResTip;      ///< [ntax*nptn] compacted tip states, taxon-id indexed
+    std::vector<double>        _gpuResPtnFreq;  ///< [nptn] pattern frequencies
+    const Alignment*           _gpuResAln = nullptr;   ///< cache-validity signature (aln pointer)
+    int _gpuResNs = -1, _gpuResNptn = -1, _gpuResNtax = -1;
+
     /** TS.1 (reborn / L1): lean in-loop JOLT all-branch reopt — the GPU replacement for optimizeAllBranches(1) in the
         NNI search loop (the optallbranches 19.5% surface). Thin wrapper over optimizeParametersJOLT with brlenOnly=true
         (model params held FIXED: optAlpha=optPinv=nFreeQ=0; only branch lengths move) and leanTail=true (write back

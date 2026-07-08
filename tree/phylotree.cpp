@@ -412,6 +412,7 @@ void PhyloTree::copyPhyloTreeMixlen(PhyloTree *tree, int mix, bool borrowSummary
 #define FAST_NAME_CHECK 1
 void PhyloTree::setAlignment(Alignment *alignment) {
     aln = alignment;
+    _gpuResAln = nullptr;   // L0: invalidate the computeLikelihoodGPUResident tip cache on any alignment (re)binding
     //double checkStart = getRealTime();
     size_t nseq = aln->getNSeq();
     bool err = false;
