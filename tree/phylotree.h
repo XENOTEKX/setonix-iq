@@ -2132,7 +2132,7 @@ public:
         alignment/ns-invariant tip[]/ptnFreq[] are cached (built once, keyed on the aln pointer + ns + nptn + ntax).
         SAFE ONLY under --ts-fused: it leaves the CPU partials dirty, and only the fused NNI path (GPU screener +
         optimizeAllBranchesJOLT) never reads them. Defined only in tree/phylotreegpu.cpp under #ifdef IQTREE_GPU. */
-    double computeLikelihoodGPUResident();
+    double computeLikelihoodGPUResident(bool bootSnapshot = false);
     // L0 cache for computeLikelihoodGPUResident (alignment/ns-invariant; rebuilt when the signature below changes):
     std::vector<unsigned char> _gpuResTip;      ///< [ntax*nptn] compacted tip states, taxon-id indexed
     std::vector<double>        _gpuResPtnFreq;  ///< [nptn] pattern frequencies

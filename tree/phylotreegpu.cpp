@@ -2356,7 +2356,7 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
 // it under --ts-fused (the fused NNI path never reads CPU partials). Returns NaN (decline / CUDA error) => the
 // caller falls back to computeLogL(). tip[]/ptnFreq[] are cached (alignment/ns-invariant), rebuilt on signature change.
 // ============================================================================================================
-double PhyloTree::computeLikelihoodGPUResident() {
+double PhyloTree::computeLikelihoodGPUResident(bool bootSnapshot) {
     // ---- eligibility gate (brlenOnly subset of optimizeParametersJOLT :1972-2057 => optAlpha=optPinv=nFreeQ=freeRate=0) ----
     if (!model || !site_rate || !aln) return (double)NAN;
     int ns = aln->num_states;
@@ -2438,6 +2438,19 @@ double PhyloTree::computeLikelihoodGPUResident() {
     const double L0_MIN_PINVAR = 1e-6;
 
     // ---- pure lnL eval: gpu_jolt_optimize(maxiter=0) DIRECT. out_* are throwaway (out_brlen echoes input at maxiter=0). ----
+    // bootSnapshot (-B/UFBoot): ALSO snapshot the current tree's per-pattern log|lh_ptn| into _pattern_lh (joltOutPatlh) so
+    // the round-1 saveCurrentTree (iqtree.cpp:3755, which runs BEFORE any reopt in this doNNISearch) reads fresh GPU data
+    // instead of the L0-stale member -> correct UFBoot RELL scoring. Replicates the optimizeParametersJOLT leanTail STAGE 2b
+    // contract below; no-boot (bootSnapshot=false) leaves outPat null => byte-identical to the pure-eval path.
+    double* outPat = nullptr;
+    if (bootSnapshot) {
+        if (!_pattern_lh) {
+            size_t mem_size = get_safe_upper_limit(getAlnNPattern()) +
+                std::max(get_safe_upper_limit((size_t)model->num_states), get_safe_upper_limit(model_factory->unobserved_ptns.size()));
+            _pattern_lh = aligned_alloc<double>(mem_size);
+        }
+        outPat = _pattern_lh;
+    }
     vector<double> outBrlen(nNodes, 0.0); double outAlpha = alpha0, outPinv = pinv0; int outIters = 0;
     double lnL = gpu_jolt_optimize(ns, nptn, ncat, ntax, nNodes, /*root=*/nid[R],
         Uinv, UinvRowSum.data(), U, eval, catProp.data(), _gpuResTip.data(), _gpuResPtnFreq.data(),
@@ -2447,7 +2460,34 @@ double PhyloTree::computeLikelihoodGPUResident() {
         catRate0.data(), /*freeRate=*/0,
         /*nFreeQ=*/0, nullptr, jolt_qdecompose_intree, &qctx, nullptr,
         outBrlen.data(), &outAlpha, &outPinv, &outIters,
-        nullptr, nullptr, /*joltOutPatlh=*/nullptr);
+        nullptr, nullptr, /*joltOutPatlh=*/outPat);
+    // ---- bootSnapshot post-block: KEEP IN SYNC with optimizeParametersJOLT leanTail STAGE 2b (phylotreegpu.cpp ~:2235-2264).
+    // On a valid snapshot: reconstruct current_it/current_it_back if null (SAME idiom as computeLikelihood, phylotree.cpp:
+    // 1289-1292) and zero both lh_scale_factor so saveCurrentTree->computePatternLikelihood takes the NORM_LH memmove path;
+    // guard the identity Sum(freq*_pattern_lh) == lnL (rel<=1e-6), CPU-recompute to recover on failure. NaN lnL => skip
+    // (caller falls back to computeLogL() which repopulates everything). ----
+    if (bootSnapshot && !std::isnan(lnL)) {
+        if (!current_it) {
+            Node *leaf = findFarthestLeaf();
+            current_it = (PhyloNeighbor*)leaf->neighbors[0];
+            current_it_back = (PhyloNeighbor*)current_it->node->findNeighbor(leaf);
+        }
+        current_it->lh_scale_factor = 0.0;
+        current_it_back->lh_scale_factor = 0.0;
+        double s2b = 0.0; for (int p = 0; p < nptn; p++) s2b += _gpuResPtnFreq[p] * _pattern_lh[p];
+        double s2brel = (lnL != 0.0) ? fabs((s2b - lnL) / lnL) : fabs(s2b - lnL);
+        if (std::isnan(s2b) || s2brel > 1e-6) {
+            static bool warnedL0Snap = false;
+            if (!warnedL0Snap) { warnedL0Snap = true;
+                printf("[GPU-BOOT] WARNING: L0 bootSnapshot identity Sfreq*_pattern_lh=%.9f != lnL=%.9f (rel=%.3e) "
+                       "-> CPU recompute to repopulate _pattern_lh for this save\n", s2b, lnL, s2brel); }
+            clearAllPartialLH();   // red-team: make the recovery self-contained (match STAGE 2b :2199) — do not rely on the
+            computeLikelihood();   // implicit post-readTreeString uncomputed-partial state; rare guard-fire path, zero hot cost
+        } else if (getenv("GPU_BOOT_VERIFY")) {
+            printf("[GPU_BOOT_VERIFY] L0-bootSnapshot Sfreq*_pattern_lh=%.9f lnL=%.9f rel=%.3e %s\n",
+                   s2b, lnL, s2brel, (s2brel <= 1e-9 ? "OK" : "rel>1e-9"));
+        }
+    }
     return lnL;   // NaN on CUDA error => caller (iqtree.cpp) falls back to computeLogL()
 }
 

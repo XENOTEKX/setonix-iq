@@ -3623,10 +3623,14 @@ double IQTree::doTreePerturbation() {
         //      (gbo_replicates>0 -> optimizeNNI saveCurrentTree :3742 null-derefs computePatternLikelihood, and RELL would
         //      score replicates against a stale _pattern_lh) and the intermediate-tree / site-posterior print paths.
         const char *_l0env = getenv("JOLT_L0");
-        const bool _l0_ok = params->ts_fused && params->ts_fused_nni5_topm == 0 && params->gbo_replicates == 0 &&
-                            !params->write_intermediate_trees && !params->print_trees_site_posterior;
-        // ts_fused_nni5_topm==0 (pure fused): the hybrid nni5 path (--ts-fused-topm M>0) runs a CPU getBestNNIForBran on
-        // the L0-stale partials in round 1 (no preceding clearAllPartialLH) -> exclude it (red-team S1). Default M=0 unaffected.
+        const char *_bs    = getenv("JOLT_BOOT_SNAPSHOT");   // -B opt-in for L0 (the STAGE 2b snapshot path)
+        const bool _l0_ok = params->ts_fused && params->ts_fused_nni5_topm == 0 &&
+                            !params->write_intermediate_trees && !params->print_trees_site_posterior &&
+                            (params->gbo_replicates == 0 || (_bs && atoi(_bs) != 0));
+        // Pure fused (ts_fused_nni5_topm==0) only (red-team S1: the --ts-fused-topm M>0 hybrid runs a CPU getBestNNIForBran
+        // on L0-stale partials). Under -B (gbo_replicates>0) L0 engages ONLY with JOLT_BOOT_SNAPSHOT set: the doNNISearch
+        // re-sum hook then runs in bootSnapshot mode (snapshots the GPU per-pattern lnL into _pattern_lh + reconstructs
+        // current_it) so round-1 saveCurrentTree (iqtree.cpp:3763) reads fresh data. No-B path + default OFF unchanged.
         if (_l0env && _l0_ok) {
             if (atoi(_l0env) >= 2) {
                 double _g = computeLikelihoodGPUResident();
@@ -3658,12 +3662,16 @@ pair<int, int> IQTree::doNNISearch(bool write_info) {
     //     ONLY under --ts-fused (see :3628). JOLT_L0=1 (measure) keeps the CPU call => byte-identical trajectory.
     {   // SAFE-REGIME GUARD identical to the perturb hook (:3628): fused, no -B/UFBoot, no intermediate/site-posterior print.
         const char *_l0env = getenv("JOLT_L0");
-        const bool _l0_ok = params->ts_fused && params->ts_fused_nni5_topm == 0 && params->gbo_replicates == 0 &&
-                            !params->write_intermediate_trees && !params->print_trees_site_posterior;
-        // ts_fused_nni5_topm==0 (pure fused): the hybrid nni5 path (--ts-fused-topm M>0) runs a CPU getBestNNIForBran on
-        // the L0-stale partials in round 1 (no preceding clearAllPartialLH) -> exclude it (red-team S1). Default M=0 unaffected.
+        const char *_bs    = getenv("JOLT_BOOT_SNAPSHOT");   // -B opt-in for L0 (the STAGE 2b snapshot path)
+        const bool _l0_ok = params->ts_fused && params->ts_fused_nni5_topm == 0 &&
+                            !params->write_intermediate_trees && !params->print_trees_site_posterior &&
+                            (params->gbo_replicates == 0 || (_bs && atoi(_bs) != 0));
+        // Pure fused (ts_fused_nni5_topm==0) only (red-team S1: the --ts-fused-topm M>0 hybrid runs a CPU getBestNNIForBran
+        // on L0-stale partials). Under -B (gbo_replicates>0) L0 engages ONLY with JOLT_BOOT_SNAPSHOT set: the doNNISearch
+        // re-sum hook then runs in bootSnapshot mode (snapshots the GPU per-pattern lnL into _pattern_lh + reconstructs
+        // current_it) so round-1 saveCurrentTree (iqtree.cpp:3763) reads fresh data. No-B path + default OFF unchanged.
         if (_l0env && atoi(_l0env) >= 2 && _l0_ok) {
-            double _g = computeLikelihoodGPUResident();
+            double _g = computeLikelihoodGPUResident(/*bootSnapshot=*/params->gbo_replicates > 0);
             if (_g == _g) curScore = _g; else computeLogL();         // NaN -> CPU fallback
         } else {
             computeLogL();
