@@ -2372,9 +2372,17 @@ double PhyloTree::computeLikelihoodGPUResident(bool bootSnapshot) {
     }
     int ncat = site_rate->getNRate();
     if (ncat < 1 || ncat > 64) return (double)NAN;
-    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN) return (double)NAN;   // MEAN discrete-gamma only (decline +R/+Gm)
+    // +R (FreeRate): admit a FULLY-free RateFree (rates+weights = 2K-2 dims), ncat<=4, pinv==0 — pass freeRate=1 so the
+    // launcher SEEDS the category rates from catRate0 (getRate(c)) instead of reconstructing mean-gamma from alpha0
+    // (which for +R is garbage). Mirrors optimizeParametersJOLT's freeRateOK (:2022-2024). maxiter=0 => this is a PURE
+    // eval: freeRate only selects the rate basis; no LM runs, so out_rates/out_props are never written (guarded null,
+    // :679). A user-fixed +R{...} (rfDim < 2K-2) or +I+R (pinv>0) still declines to CPU below.
+    static const int L0_FREERATE_MAXCAT = 4;
+    int rfDim = site_rate->getNDim() - ((site_rate->getPInvar() > 0.0 && !site_rate->isFixPInvar()) ? 1 : 0);
+    bool freeRateOK = (ncat > 1 && site_rate->isFreeRate() && rfDim == 2*ncat - 2 && ncat <= L0_FREERATE_MAXCAT);
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !freeRateOK) return (double)NAN;   // MEAN discrete-gamma OR fully-free +R only (decline +Gm / user-fixed +R{})
     double pinv0 = site_rate->getPInvar();
-    if (pinv0 > 0.0) return (double)NAN;   // +I: optPinv==0 path zeroes base_invar + drops 1/(1-pinv) => wrong objective (:2046) -> CPU
+    if (pinv0 > 0.0) return (double)NAN;   // +I / +I+R: optPinv==0 path zeroes base_invar + drops 1/(1-pinv) => wrong objective (:2046) -> CPU (a later ladder step)
 
     // ---- model eigen factors (alpha-independent, same convention as the clean-room lnL) ----
     double *eval = model->getEigenvalues();
@@ -2385,7 +2393,7 @@ double PhyloTree::computeLikelihoodGPUResident(bool bootSnapshot) {
     for (int i = 0; i < ns; i++) { double s = 0; for (int j = 0; j < ns; j++) s += Uinv[i*ns+j]; UinvRowSum[i] = s; }
     vector<double> catProp(ncat), catRate0(ncat);
     for (int c = 0; c < ncat; c++) { catProp[c] = site_rate->getProp(c); catRate0[c] = site_rate->getRate(c); }
-    double alpha0 = (ncat > 1) ? site_rate->getGammaShape() : 1.0;
+    double alpha0 = (ncat > 1 && !freeRateOK) ? site_rate->getGammaShape() : 1.0;   // +R has no alpha; inert under freeRate=1 (applyAlpha skipped, :2900)
     JoltQCtx qctx{ model, ns };
 
     // ---- topology rooted at internal node R (identical to optimizeParametersJOLT :2077-2101) ----
@@ -2457,7 +2465,7 @@ double PhyloTree::computeLikelihoodGPUResident(bool bootSnapshot) {
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
         alpha0, /*optAlpha=*/0, /*maxiter=*/0,
         base_invar.data(), pinv0, /*optPinv=*/0, L0_MIN_PINVAR, /*pinvMax=*/aln->frac_const_sites,
-        catRate0.data(), /*freeRate=*/0,
+        catRate0.data(), /*freeRate=*/(freeRateOK ? 1 : 0),   // +R: seed rates from catRate0 (no alpha reconstruction)
         /*nFreeQ=*/0, nullptr, jolt_qdecompose_intree, &qctx, nullptr,
         outBrlen.data(), &outAlpha, &outPinv, &outIters,
         nullptr, nullptr, /*joltOutPatlh=*/outPat);
