@@ -2882,7 +2882,12 @@ extern "C" double gpu_jolt_optimize(
         // G.5.1b: freeRate==1 ENGAGES the +R joint LM (falls through to the gradient infra + LM loop below). freeRate==2
         // is the RGRADCHECK-only diagnostic (ncat>maxcat / ineligible regime the gate let through ONLY for the FD check)
         // -> decline to CPU after the check, preserving the historical G.5.1a behaviour for the high-ncat validation path.
-        if (freeRate != 1) return (double)NAN;
+        // L5 (2026-07-09): freeRate==3 = SEED-ONLY +R for the brlen-only path. The rates/weights are seeded above (meanR
+        // from catRate0, :2779) and held FIXED: every rate/weight (y/z) LM arm, the weight-grad buffers, gaugeFix, and the
+        // out_rates/out_props write-back below are ==1-gated, so freeRate==3 falls through to run the SAME branch-only
+        // diagonal LM as +G4 (applyAlpha is !freeRate-gated => skipped => rates never reconstructed from alpha). See
+        // phylotreegpu.cpp freeRateBrlenOK.
+        if (freeRate != 1 && freeRate != 3) return (double)NAN;
     }
 
     long nGradSweeps=0,nLnLEval=0;
@@ -3102,6 +3107,15 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> zR(freeRate==1?ncat:0,0.0), ryPrev(freeRate==1?ncat:0,0.0), rgyPrev(freeRate==1?ncat:0,0.0),
                         rzPrev(freeRate==1?ncat:0,0.0), rgzPrev(freeRate==1?ncat:0,0.0);
     std::vector<double> baseR_save(freeRate==1?ncat:0,0.0), baseW_save(freeRate==1?ncat:0,0.0);
+    // L7 Stage B (2026-07-09): EM closed-form weight M-step. When JOLT_REM is set AND pure +R (optPinv==0), the softmax-
+    // GRADIENT weight arm is replaced by the EM JUMP w_c = WNc[c]/Σ_c WNc[c], where WNc[c]=Σ_p freq_p·γ_pc is the EM
+    // posterior sum ALREADY reduced for the weight gradient (:3086; Σ_c WNc = N for pure +R, so w sums to 1). Block-
+    // alternation: EM-optimal weights (given base rates/branches) combined with the diagonal-LM branch/rate step, kept
+    // monotone by the accept-if-better test. The most-coupled block (Σw=1 simplex) then converges in ~1 step instead of
+    // many damped gradient steps => fewer outer iters at high K (the measured 97-149s R5-R10 handicap, job 173435343).
+    // Default-OFF => byte-identical (the softmax-gradient path is untouched). Pure +R only (pinv=0); +I+R keeps the
+    // gradient arm (its EM normaliser is 1-pinv, deferred). Plan §2c.4 Stage B.
+    static const bool JOLT_REM_EN = (getenv("JOLT_REM") != nullptr);
     auto gaugeFix=[&](){ double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];   // m = overall mean rate (Σ catProp_v·catRate; the +I invariant class adds 0) — pin =1 (same constraint for +R and +I+R)
         if(m>0){ for(int c=0;c<ncat;c++) catRate[c]/=m; for(int v=0;v<nnodes;v++){ brlen[v]*=m; if(brlen[v]>20.0) brlen[v]=20.0; } }
         double f = optPinv ? (1.0-curPinv) : 1.0;   // G.5.1d (2b): meanR is the PINV-FREE rate ρ=catRate·(1-pinv); applyPinv(curPinv) then reproduces catRate. f==1 (pure +R) => byte-identical.
@@ -3154,7 +3168,7 @@ extern "C" double gpu_jolt_optimize(
         // 1/(1-pinv) rate rescaling introduces; an analytic form would need the rate-derivative term). One extra
         // postorder lnL eval (cheap vs computeGradient's full preorder). lg = lnL at the base point (from above).
         double gradPinv=0.0;
-        if(optPinv){ double ep=1e-4, pp=baseP+ep, dep;
+        if(optPinv==1){ double ep=1e-4, pp=baseP+ep, dep;   // L6: ==1 only (optPinv==2 = +I apply-don't-step => pinv held FIXED, no gradient)
             if(pp>pinvMax){ pp=baseP-ep; if(pp<pinvMin)pp=pinvMin; }   // backward FD at the upper boundary (audit #4: avoid a stuck zero gradient)
             dep=pp-baseP;
             if(fabs(dep)>1e-9){ double lpe=evalLnL(base,baseA,pp,nullptr); nLnLEval++; gradPinv=(lpe-lg)/dep; } }
@@ -3212,14 +3226,14 @@ extern "C" double gpu_jolt_optimize(
             }
             // alpha/pinv/Q keep their diagonal+secant directions (computed once at the lbEps floor), scaled by the same t.
             double daB=(optAlpha && ncat>1)? ga/(fabs(ddA)+lbEps):0.0;
-            double dpB=(optPinv)? gradPinv/(fabs(ddP)+lbEps):0.0;
+            double dpB=(optPinv==1)? gradPinv/(fabs(ddP)+lbEps):0.0;   // L6: pinv step only for ==1 (==2 holds fixed)
             std::vector<double> dqB(nFreeQ>0?nFreeQ:0,0.0);
             for(int k=0;k<nFreeQ;k++) dqB[k]=gradQ[k]/(fabs(ddQ[k])+lbEps);
             double t=1.0;
             for(int bt=0; bt<30; bt++){
                 cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double nb=base[v]+t*lbDir[e]; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
                 double ca=baseA; if(optAlpha && ncat>1){ ca=baseA+t*daB; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
-                double cp=baseP; if(optPinv){ cp=baseP+t*dpB; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
+                double cp=baseP; if(optPinv==1){ cp=baseP+t*dpB; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }   // L6: ==2 => cp stays baseP (pinv fixed)
                 std::vector<double> cq(nFreeQ>0?nFreeQ:0);
                 for(int k=0;k<nFreeQ;k++){ double nq=qcur[k]+t*dqB[k]; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
                 double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
@@ -3231,7 +3245,7 @@ extern "C" double gpu_jolt_optimize(
             for(int bt=0; bt<14; bt++){
                 cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
                 double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
-                double cp=baseP; if(optPinv){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }
+                double cp=baseP; if(optPinv==1){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }   // L6: ==2 => cp stays baseP (pinv fixed)
                 std::vector<double> cq(nFreeQ>0?nFreeQ:0);
                 for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
                 // G.5.1b +R: log-rate / softmax-weight arms at the SAME mu (mirror the alpha/pinv diagonal arms). Stage the
@@ -3239,9 +3253,14 @@ extern "C" double gpu_jolt_optimize(
                 // evaluates catRate=cr/(1-cp), catProp_v=(1-cp)cw — the +I-correct rates/props. cr lives in meanR=ρ space (baseY=log meanR).
                 std::vector<double> cr,cw,cz;
                 if(freeRate==1){ cr.resize(ncat); cw.resize(ncat); cz.resize(ncat);
+                    bool remW = (JOLT_REM_EN && optPinv==0);   // L7 Stage B: EM weight M-step (pure +R only)
                     for(int c=0;c<ncat;c++){ double ny=baseY[c]+g_y[c]/(fabs(ddY[c])+mu); double r=exp(ny);
-                        if(r<1e-4)r=1e-4; if(r>1000.0)r=1000.0; cr[c]=r; cz[c]=baseZ[c]+g_z[c]/(fabs(ddZ[c])+mu); }
-                    softmaxApply(cz,cw);
+                        if(r<1e-4)r=1e-4; if(r>1000.0)r=1000.0; cr[c]=r;
+                        if(!remW) cz[c]=baseZ[c]+g_z[c]/(fabs(ddZ[c])+mu); }   // gradient arm (OFF path / +I+R)
+                    if(remW){ double wn=0; for(int c=0;c<ncat;c++) wn+=WNc[c];   // EM closed-form: w_c = WNc[c]/Σ WNc
+                        double tt=0; for(int c=0;c<ncat;c++){ cw[c]=(wn>0.0? WNc[c]/wn : bprop[c]); if(cw[c]<1e-4)cw[c]=1e-4; tt+=cw[c]; }
+                        for(int c=0;c<ncat;c++){ cw[c]/=tt; cz[c]=log(cw[c]); } }   // floor+renorm (== softmaxApply MIN_PROP); logit state for zR consistency
+                    else softmaxApply(cz,cw);
                     for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } }
                 double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
                 if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq;

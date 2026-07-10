@@ -2014,7 +2014,14 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // (getNDim()==2*ncat-2; a user-fixed +R{...} or a mid-EM substep -> CPU), ncat<=JOLT_FREERATE_MAXCAT (harness: R4
     // reproducible / R6 multimodal => conservative <=4, R5 unvalidated), FULL model-param path only (brlenOnly/lean
     // holds +R FIXED). (Was: `&& nFreeQ == 0` — that XOR was a gate restriction only; the LM never enforced it.)
-    static const int JOLT_FREERATE_MAXCAT = 4;
+    // L7 STAGE A (2026-07-09): high-K +R (R5-R10) behind a DEFAULT-OFF flag. Env UNSET => cap stays 4 => BYTE-IDENTICAL
+    // to prod (R5+ decline to CPU exactly as before). Set JOLT_FREERATE_HIGHK[=N] => cap = N (default 10) => the
+    // ncat-general joint-LM engages R5-R10 on GPU. This MEASURES the warm-started in-tree reproducibility the cold-start
+    // sweep (job 171518800: R5/R6/R8 = 1/4) never tested — it is a validation-confidence gate, NOT a kernel limit (buffers
+    // ncat-sized cu:2759/2944/3102; gradient bit-exact at every K). If reproducibility fails here => the GPU-EM redesign
+    // (FULL-GPU-END-TO-END-PLAN.md §2c.4, Stages B-D). Same static-getenv-once idiom as JOLT_RBRLEN_EN below.
+    static const int JOLT_FREERATE_MAXCAT = [](){ const char* e = getenv("JOLT_FREERATE_HIGHK");
+        return e ? (atoi(e) > 0 ? atoi(e) : 10) : 4; }();
     // G.5.1d (ladder 2b): +I+R now engages. RateFree must be FULLY free (rates+weights = 2K-2 dims); RateFreeInvar adds
     // one free dim (pinv) when present (getNDim == 2K-1), so strip it before the 2K-2 test. Fixed-pinv keeps getNDim==
     // 2K-2 -> freeRateOK true but the +I guard (isFixPInvar, :1946) then declines it; a user-fixed +R{...} -> rfDim<2K-2
@@ -2022,8 +2029,19 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     int rfDim = site_rate->getNDim() - ((site_rate->getPInvar() > 0.0 && !site_rate->isFixPInvar()) ? 1 : 0);
     bool freeRateOK = (ncat > 1 && site_rate->isFreeRate()
                        && rfDim == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && !brlenOnly);
+    // L5 (2026-07-09): seed-only +R in the brlen-ONLY path. Same eligibility as freeRateOK but brlenOnly==true: the GPU
+    // branch-LM runs with the FreeRate rates/weights held FIXED (kernel seeds meanR from catRate0; freeRate==3 skips the
+    // rate/weight (y/z) LM arms AND the rate write-back, which are all ==1-gated in gpu_lnl_intree.cu). Fixes the measured
+    // 65x +R init-tree CPU decline (job 173377352; init-tree loop iqtree.cpp:937 + NNI reopt both call optimizeAllBranchesJOLT).
+    // +I+R (pinv>0) is caught by the brlenOnly-pinv backstop below (:~2054); ncat>4 stays on CPU. Correctness: kj_derv_fused
+    // builds pdf/pddf purely from catRate/catProp_v with no d(rate)/d(alpha) term (verified) => branch LM is rate-origin
+    // agnostic. Gated default-OFF by JOLT_RBRLEN until the JOLT_AUDIT rel<=1e-6 gate passes; OFF => +R declines exactly as
+    // before (byte-identical for every model).
+    static const bool JOLT_RBRLEN_EN = (getenv("JOLT_RBRLEN") != nullptr);
+    bool freeRateBrlenOK = (JOLT_RBRLEN_EN && ncat > 1 && site_rate->isFreeRate()
+                            && rfDim == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && brlenOnly);
     bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
-    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !freeRateOK && !rgcheck) JOLT_DECLINE("non-mean-gamma");
+    if (ncat > 1 && site_rate->isGammaRate() != GAMMA_CUT_MEAN && !freeRateOK && !rgcheck && !freeRateBrlenOK) JOLT_DECLINE("non-mean-gamma");
     // G.4.3b — +I (proportion of invariant sites) is now JOINTLY optimised by JOLT, but ONLY for +I+G
     // (RateGammaInvar: getProp(c)=(1-pinv)/K, standard mean-1 discrete-gamma rates). Pure +I (RateInvar, ncat==1)
     // rescales getRate=1/(1-pinv) -> out of JOLT scope -> CPU. A user-FIXED pinv, or no constant sites (pinvMax->0
@@ -2039,7 +2057,19 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
         if (aln->frac_const_sites <= 2.0*JOLT_MIN_PINVAR)            JOLT_DECLINE("no-const-sites");
         optPinv = 1;
     }
-    if (brlenOnly) optPinv = 0;   // TS.1: brlen-only reopt holds p_invar FIXED
+    // L6 (2026-07-09): +I in the brlen-ONLY path via optPinv==2 = APPLY-DON'T-STEP (the pinv analogue of L5's
+    // freeRate==3). The kernel ALREADY has the +I apply-machinery (Lp=lh+pinv*baseinvar in kj_derv_fused
+    // gpu_lnl_intree.cu:428/453/481; the 1/(1-pinv) rescale in applyPinv; base_invar upload :2740) used by the
+    // validated FULL +I+G joint path (optPinv==1, modelfactory.cpp:1373). optPinv==2 keeps every optPinv?(1-p):1
+    // APPLY site truthy but the 4 pinv-OPTIMISE arms (gpu_lnl_intree.cu:3162/3220/3227/3239) are ==1-gated =>
+    // pinv held FIXED. base_invar computes automatically (`if(optPinv)` :2129 truthy for 2). Only pure +I+G
+    // (mean-gamma); +I+R stays declined at :2065 (isGammaRate!=MEAN => invarBrlenOK false). MUST read the
+    // optPinv==1 value BEFORE the brlenOnly force below. Default-OFF via JOLT_IBRLEN => optPinv forced 0 =>
+    // byte-identical (declines exactly as today).
+    static const bool JOLT_IBRLEN_EN = (getenv("JOLT_IBRLEN") != nullptr);
+    bool invarBrlenOK = (JOLT_IBRLEN_EN && brlenOnly && optPinv == 1 && ncat > 1
+                         && site_rate->isGammaRate() == GAMMA_CUT_MEAN);
+    if (brlenOnly) optPinv = invarBrlenOK ? 2 : 0;   // TS.1: brlen-only holds p_invar FIXED (L6: =2 applies +I fixed; =0 declines below)
     // AUDIT FIX (job 172316260, GTR+I+G4): setting optPinv=0 for brlen-only does NOT merely HOLD pinv fixed -- it also
     // zeroes the additive invariant term (base_invar is computed only `if (optPinv)`, :1971) AND drops the 1/(1-pinv)
     // gamma-rate rescale (applyPinv(0) => rates=meanR un-rescaled). So on +I the device computes lnL AND the LM
@@ -2051,7 +2081,7 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // the already-correct FULL +I+G joint path (optPinv=1, base_invar populated, rel<=1e-6 self-check :2068) is
     // UNTOUCHED; the screener likewise declines +I at :1309. FIX-B-PROPER = plumb pinv0 through the lean kernels +
     // screener to re-enable +I on the GPU lean path (kernel work, logged follow-up; needs the rel<=1e-6 discipline).
-    if (brlenOnly && pinv0 > 0.0) JOLT_DECLINE("invar-sites-brlenonly");
+    if (brlenOnly && pinv0 > 0.0 && !invarBrlenOK) JOLT_DECLINE("invar-sites-brlenonly");   // L6: +I+G brlen now GPU (optPinv==2); +I+R / median / fixed-pinv still CPU
 
     // ---- model eigen factors (alpha-independent; same convention as the clean-room lnL) ----
     double *eval = model->getEigenvalues();
@@ -2163,7 +2193,7 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
         nodeNch.data(), nodeChild.data(), nodeLeaf.data(), nodeParentLen.data(),
         alpha0, optAlpha, /*maxiter=*/brlenMaxIter,
         base_invar.data(), pinv0, optPinv, JOLT_MIN_PINVAR, pinvMax,
-        catRate0.data(), (freeRateOK ? 1 : (rgcheck ? 2 : 0)),   // G.5.1b: 1=ENGAGE the +R joint LM; 2=RGRADCHECK-only then decline to CPU
+        catRate0.data(), (freeRateOK ? 1 : (freeRateBrlenOK ? 3 : (rgcheck ? 2 : 0))),   // G.5.1b: 1=+R joint LM; 2=RGRADCHECK-only; L5: 3=seed-only +R brlen (rates/weights held FIXED)
         nFreeQ, (nFreeQ > 0 ? q0vec.data() : nullptr), jolt_qdecompose_intree, &qctx,   // G.6: DNA free-Q
         (nFreeQ > 0 ? outQ.data() : nullptr),
         outBrlen.data(), &outAlpha, &outPinv, &outIters,
