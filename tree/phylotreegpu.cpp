@@ -2014,14 +2014,25 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // (getNDim()==2*ncat-2; a user-fixed +R{...} or a mid-EM substep -> CPU), ncat<=JOLT_FREERATE_MAXCAT (harness: R4
     // reproducible / R6 multimodal => conservative <=4, R5 unvalidated), FULL model-param path only (brlenOnly/lean
     // holds +R FIXED). (Was: `&& nFreeQ == 0` — that XOR was a gate restriction only; the LM never enforced it.)
-    // L7 STAGE A (2026-07-09): high-K +R (R5-R10) behind a DEFAULT-OFF flag. Env UNSET => cap stays 4 => BYTE-IDENTICAL
-    // to prod (R5+ decline to CPU exactly as before). Set JOLT_FREERATE_HIGHK[=N] => cap = N (default 10) => the
-    // ncat-general joint-LM engages R5-R10 on GPU. This MEASURES the warm-started in-tree reproducibility the cold-start
-    // sweep (job 171518800: R5/R6/R8 = 1/4) never tested — it is a validation-confidence gate, NOT a kernel limit (buffers
-    // ncat-sized cu:2759/2944/3102; gradient bit-exact at every K). If reproducibility fails here => the GPU-EM redesign
-    // (FULL-GPU-END-TO-END-PLAN.md §2c.4, Stages B-D). Same static-getenv-once idiom as JOLT_RBRLEN_EN below.
-    static const int JOLT_FREERATE_MAXCAT = [](){ const char* e = getenv("JOLT_FREERATE_HIGHK");
-        return e ? (atoi(e) > 0 ? atoi(e) : 10) : 4; }();
+    // L7 STAGE A: high-K +R (R5-R10) on the GPU joint-LM. GRADUATED to default-ON 2026-07-10 (was a default-OFF flag).
+    // UNLIKE L5/L6 this is NOT byte-identical: lifting the cap lets R5-R10 fit on the GPU (a BETTER lnL than the degraded
+    // CPU-EM, which underfits at high K), so ModelFinder MAY select a high-K +R model it previously could not. BIC
+    // self-regulates the risk: R8's ~+0.46-nat gain is crushed by its ~92-nat BIC penalty (8 extra params) UNLESS the data
+    // genuinely carries >4 rate classes — and there the GPU fit is CORRECT and CPU-EM was WRONG. On a GPU node the only
+    // alternative is R5-R10 declining to single-thread CPU-EM (15-19x slower, worse lnL, R10 times out), so default-ON is
+    // faster AND more accurate wherever it runs. Reproducibility validated on the fixed-tree path (3/3 bit-identical R6/R8,
+    // jobs 173435343/173435097); the graduation's load-bearing gate is the real-MF CROSS-SEED reproducibility test (G2).
+    // Absolute high-K wall (R8 ~92-149s vs +G4 ~15s) is a SEPARATE deferred lever (branch-LM convergence), NOT correctness.
+    // Kill-switch (mirrors JOLT_NO_RBRLEN/JOLT_NO_IBRLEN): JOLT_NO_FREERATE_HIGHK (any value) OR JOLT_FREERATE_HIGHK=0 =>
+    // cap 4 => byte-identical to prod (R5+ decline exactly as before). JOLT_FREERATE_HIGHK=N pins the cap to N. Note the cap
+    // gates BOTH freeRateOK (:~2031 model selection) AND freeRateBrlenOK (:~2046 L5 brlen). Doc: FULL-GPU-END-TO-END §2c.4.
+    static const int JOLT_FREERATE_MAXCAT = [](){
+        if (getenv("JOLT_NO_FREERATE_HIGHK") != nullptr) return 4;   // kill-switch => legacy cap => byte-identical prod
+        const char* e = getenv("JOLT_FREERATE_HIGHK");
+        if (!e) return 10;                                            // GRADUATED default-ON: R5-R10 engage on GPU
+        int v = atoi(e);
+        return v > 0 ? v : 4;                                        // =N pins cap; =0 / non-numeric => legacy opt-out
+    }();
     // G.5.1d (ladder 2b): +I+R now engages. RateFree must be FULLY free (rates+weights = 2K-2 dims); RateFreeInvar adds
     // one free dim (pinv) when present (getNDim == 2K-1), so strip it before the 2K-2 test. Fixed-pinv keeps getNDim==
     // 2K-2 -> freeRateOK true but the +I guard (isFixPInvar, :1946) then declines it; a user-fixed +R{...} -> rfDim<2K-2
