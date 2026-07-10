@@ -42,6 +42,21 @@ __constant__ double g_val1[64*NS_MAX];   // (rate_c*eval[x]) * val0
 __constant__ double g_val2[64*NS_MAX];   // (rate_c*eval[x]) * val1
 __constant__ double g_rscale[64];        // G.4.2: per-cat edge scale b_e/(r_k*w_k) for the +R/alpha rate-grad numerator
 
+// LEVER 3 (tip-vector precompute) — JOLT_TIPVEC, DEFAULT-OFF. A leaf child has exactly ONE observed state s=t[ptn],
+// so its fold Σ_i echild[v][c][x][i]·Uinv[i][s] is just column s of P(b_v)[x][·] (the very matrix make_pmat builds)
+// and is shared by every pattern carrying that state. Precompute it once per (node,cat) into tabP[v][c][x][s] —
+// s=0..ns-1 the real states, s=ns the collapsed ambiguous/gap bucket (Σ_i echild[x][i]·UinvRowSum[i]) — turning the
+// O(ns²) leaf matvec into an O(ns) gather. Note this is NOT primarily a FLOP saving: it removes ns² *divergent*
+// __constant__ reads (g_Uinv[i*ns+s] with s thread-varying => constant-cache serialization => MIO/short-scoreboard
+// pressure) and replaces them by ns L1-resident global reads. Internal children are untouched (their partial is a
+// continuous nptn×ns vector — no finite table exists), so this cannot help the long-scoreboard pc[i*nptn] gather.
+// accum_child_t derives the node index from ec's offset in the echild pool => NO launch-site signature changes.
+// Bit-identical to the matvec BY CONSTRUCTION: make_tabP_all sums the same operands in the same i-order (see there).
+__constant__ const double* gc_echild_base;   // = d_echild of the current single-model peel
+__constant__ const double* gc_tabP_base;     // = d_tabP (parallel pool, node-strided)
+__constant__ long gc_ecStride;               // ncat*ns*ns      (elements/node) — node = (ec - gc_echild_base)/ecStride
+__constant__ long gc_tabStride;              // ncat*ns*(ns+1)  (elements/node)
+
 // per-child probability-space contribution: prod[x] *= sum_i echild[c][x][i] * L_child[c][i]
 __device__ __forceinline__ void accum_child(double* prod, int ns, int c, int ptn, int nptn,
         const double* __restrict__ ec, const double* __restrict__ p, const unsigned char* __restrict__ t) {
@@ -577,7 +592,20 @@ static inline bool jolt_ns_template_enabled(){
     return c!=0;
 }
 
-template<int NS>
+// LEVER 3 gate. DEFAULT-OFF; JOLT_TIPVEC=1 arms it. TIPVEC is a *compile-time* template parameter, so the OFF
+// instantiation contains no branch and no constant read — it is the shipped kernel, instruction-for-instruction.
+// g_tipvec_ready is set by tipvec_sync() only after tabP was successfully (re)built for the CURRENT d_echild, so an
+// OOM / unsupported-ns / JOLT_NS_TEMPLATE=0 run silently falls back to the byte-identical <NS,false> instantiation
+// rather than gathering from a stale or null tabP. Single-threaded by the same contract as the static DevBuf pool.
+static inline bool jolt_tipvec_enabled(){
+    static const int c = [](){ const char* e=getenv("JOLT_TIPVEC"); return (e && atoi(e)!=0)?1:0; }();
+    return c!=0;
+}
+static bool      g_tipvec_ready   = false;   // tabP valid for the current echild upload (host-side dispatch guard)
+static long long g_tipvec_engaged = 0;       // # tabP-gathering launches (engagement gate; see JOLT_TIPVEC_DIAG)
+static inline bool tipvec_active(){ return g_tipvec_ready; }
+
+template<int NS, bool TIPVEC>
 __device__ __forceinline__ void accum_child_t(double* prod, int c, int ptn, int nptn,
         const double* __restrict__ ec, const double* __restrict__ p, const unsigned char* __restrict__ t) {
     const double* ecc = ec + (size_t)c*NS*NS;
@@ -590,15 +618,23 @@ __device__ __forceinline__ void accum_child_t(double* prod, int c, int ptn, int 
             prod[x]*=v; }
     } else {
         int s = t[ptn];
-        #pragma unroll
-        for (int x=0;x<NS;x++){ double v=0.0;
+        if constexpr (TIPVEC) {   // LEVER 3: gather the precomputed leaf column tabP[node][c][x][s] (== the matvec below)
+            long node = (long)(ec - gc_echild_base) / gc_ecStride;
+            int ss = (s < NS) ? s : NS;                       // all ambiguous/gap codes collapse to the row-sum bucket
+            const double* row = gc_tabP_base + node*gc_tabStride + (size_t)c*NS*(NS+1) + ss;
             #pragma unroll
-            for (int i=0;i<NS;i++){ double Li = (s<NS)? g_Uinv[i*NS+s] : g_UinvRowSum[i]; v += ecc[x*NS+i]*Li; }
-            prod[x]*=v; }
+            for (int x=0;x<NS;x++) prod[x] *= row[(size_t)x*(NS+1)];
+        } else {                  // ORIGINAL leaf matvec (verbatim — the byte-identical OFF path)
+            #pragma unroll
+            for (int x=0;x<NS;x++){ double v=0.0;
+                #pragma unroll
+                for (int i=0;i<NS;i++){ double Li = (s<NS)? g_Uinv[i*NS+s] : g_UinvRowSum[i]; v += ecc[x*NS+i]*Li; }
+                prod[x]*=v; }
+        }
     }
 }
 
-template<int NS>
+template<int NS, bool TIPVEC>
 __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ out, double* __restrict__ patlh,
         int nchild,
         const double* ec0, const double* p0, const unsigned char* t0,
@@ -610,9 +646,9 @@ __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ o
         double prod[NS];
         #pragma unroll
         for (int x=0;x<NS;x++) prod[x]=1.0;
-        accum_child_t<NS>(prod,c,ptn,nptn,ec0,p0,t0);
-        if (nchild>1) accum_child_t<NS>(prod,c,ptn,nptn,ec1,p1,t1);
-        if (nchild>2) accum_child_t<NS>(prod,c,ptn,nptn,ec2,p2,t2);
+        accum_child_t<NS,TIPVEC>(prod,c,ptn,nptn,ec0,p0,t0);
+        if (nchild>1) accum_child_t<NS,TIPVEC>(prod,c,ptn,nptn,ec1,p1,t1);
+        if (nchild>2) accum_child_t<NS,TIPVEC>(prod,c,ptn,nptn,ec2,p2,t2);
         if (isRoot){
             double s=0.0;
             #pragma unroll
@@ -630,7 +666,7 @@ __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ o
     if (isRoot) patlh[ptn] = log(fabs(lh));
 }
 
-template<int NS>
+template<int NS, bool TIPVEC>
 __global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
         const double* __restrict__ pre_u, const double* __restrict__ expfac_u,
         int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
@@ -640,8 +676,8 @@ __global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
         double fsib[NS];
         #pragma unroll
         for (int t=0;t<NS;t++) fsib[t]=1.0;
-        accum_child_t<NS>(fsib,c,ptn,nptn,ec0,sp0,st0);
-        if (nsib>1) accum_child_t<NS>(fsib,c,ptn,nptn,ec1,sp1,st1);
+        accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec1,sp1,st1);
         const double* puc=pre_u+(size_t)(c*NS)*nptn+ptn; const double* ef=expfac_u+(size_t)c*NS;
         double pus[NS];
         #pragma unroll
@@ -656,7 +692,7 @@ __global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
     }
 }
 
-template<int NS>
+template<int NS, bool TIPVEC>
 __global__ void kj_pre_node_t(int nptn, int ncat, int eigOut, double* __restrict__ out,
         const double* __restrict__ up_u,
         const double* __restrict__ Pmat_u,
@@ -668,8 +704,8 @@ __global__ void kj_pre_node_t(int nptn, int ncat, int eigOut, double* __restrict
         double fsib[NS];
         #pragma unroll
         for (int x=0;x<NS;x++) fsib[x]=1.0;
-        accum_child_t<NS>(fsib,c,ptn,nptn,ec0,sp0,st0);
-        if (nsib>1) accum_child_t<NS>(fsib,c,ptn,nptn,ec1,sp1,st1);
+        accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec1,sp1,st1);
         const double* uuc = up_u + (size_t)(c*NS)*nptn + ptn;
         const double* Pc  = Pmat_u + (size_t)c*NS*NS;
         double r[NS];
@@ -700,8 +736,11 @@ static inline void launch_k1_node(int GB, int TB, cudaStream_t stream,
         const double* ec1, const double* p1, const unsigned char* t1,
         const double* ec2, const double* p2, const unsigned char* t2){
     const bool T = jolt_ns_template_enabled();
-    if (T && ns==4)  k1_node_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
-    else if (T && ns==20) k1_node_t<20><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
+    const bool V = tipvec_active();   // LEVER 3: only when tabP is built & valid for the current echild
+    if (T && ns==4)  { if (V) { g_tipvec_engaged++; k1_node_t<4,true> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
+                       else                          k1_node_t<4,false><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
+    else if (T && ns==20) { if (V) { g_tipvec_engaged++; k1_node_t<20,true> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
+                            else                          k1_node_t<20,false><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
     else k1_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
 }
 static inline void launch_kj_pre(int GB, int TB, cudaStream_t stream,
@@ -710,8 +749,11 @@ static inline void launch_kj_pre(int GB, int TB, cudaStream_t stream,
         int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
         const double* ec1, const double* sp1, const unsigned char* st1){
     const bool T = jolt_ns_template_enabled();
-    if (T && ns==4)  kj_pre_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
-    else if (T && ns==20) kj_pre_t<20><<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    const bool V = tipvec_active();
+    if (T && ns==4)  { if (V) { g_tipvec_engaged++; kj_pre_t<4,true> <<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+                       else                          kj_pre_t<4,false><<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+    else if (T && ns==20) { if (V) { g_tipvec_engaged++; kj_pre_t<20,true> <<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+                            else                          kj_pre_t<20,false><<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
     else kj_pre<<<GB,TB,0,stream>>>(ns,nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
 }
 static inline void launch_kj_pre_node(int GB, int TB, cudaStream_t stream,
@@ -720,8 +762,11 @@ static inline void launch_kj_pre_node(int GB, int TB, cudaStream_t stream,
         int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
         const double* ec1, const double* sp1, const unsigned char* st1){
     const bool T = jolt_ns_template_enabled();
-    if (T && ns==4)  kj_pre_node_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
-    else if (T && ns==20) kj_pre_node_t<20><<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    const bool V = tipvec_active();
+    if (T && ns==4)  { if (V) { g_tipvec_engaged++; kj_pre_node_t<4,true> <<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+                       else                          kj_pre_node_t<4,false><<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+    else if (T && ns==20) { if (V) { g_tipvec_engaged++; kj_pre_node_t<20,true> <<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+                            else                          kj_pre_node_t<20,false><<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
     else kj_pre_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
 }
 
@@ -736,6 +781,26 @@ __global__ void make_pmat(int ns, int ncat, int nnodes, const double* __restrict
     for (int t=0;t<ns;t++){ double v=0.0;
         for (int i=0;i<ns;i++) v += ec[i]*g_Uinv[i*ns+t];   // Σ_i echild[x][i]·Uinv[i][t] = P(b)[x][t]
         pm[t]=v; }
+}
+// LEVER 3: make_tabP_all — precompute the leaf-fold table tabP[v][c][x][s]. For s=0..ns-1 this is EXACTLY P(b_v)[x][s]
+// (same quantity make_pmat writes), and s=ns is the collapsed ambiguous/gap bucket Σ_i echild[x][i]·UinvRowSum[i].
+// BIT-IDENTITY: the consumer (accum_child_t's OFF path) computes Σ_i ecc[x*ns+i]·Li with Li=g_Uinv[i*ns+s] (or
+// g_UinvRowSum[i]). Here ec = echild + row*ns with row=(v*ncat+c)*ns+x, so ec[i] IS ecc[x*ns+i] — same operands,
+// same i-order, same FMA contraction (no -use_fast_math => nvcc may not reassociate). Hence the gather reproduces
+// the matvec bit-for-bit; do NOT "optimize" tabP[c][x][ns] to a literal 1.0 (the CPU's shortcut) — that is only
+// mathematically equal, not bit-equal to this FP64 sum. Layout mirrors make_pmat but with an (ns+1) row stride.
+__global__ void make_tabP_all(int ns, int ncat, int nnodes, const double* __restrict__ echild, double* __restrict__ tabP){
+    int row = blockIdx.x*blockDim.x + threadIdx.x;   // row = (v*ncat+c)*ns + x  over nnodes*ncat*ns rows
+    if (row >= nnodes*ncat*ns) return;
+    const double* ec = echild + (size_t)row*ns;      // echild[v][c][x][:]  (over i)
+    int x = row % ns; int vc = row / ns;             // vc = v*ncat+c
+    double* tp = tabP + (size_t)vc*ns*(ns+1) + (size_t)x*(ns+1);   // tabP[v][c][x][:]  (over s, ns+1 entries)
+    for (int s=0;s<ns;s++){ double v=0.0;
+        for (int i=0;i<ns;i++) v += ec[i]*g_Uinv[i*ns+s];   // = P(b)[x][s], identical to the inline leaf matvec
+        tp[s]=v; }
+    double vr=0.0;
+    for (int i=0;i<ns;i++) vr += ec[i]*g_UinvRowSum[i];      // s=ns: the collapsed ambiguous/gap bucket
+    tp[ns]=vr;
 }
 // kj_ratenum — accumulate b_e*qp_e[k] into rnum[k][ptn] per category (the +R/alpha rate-grad numerator).
 // g_rscale[k]=b_e/(r_k*w_k) folds the chain rule; Sum_x g_val1[k,x]*theta = r_k*w_k*qp_e[k].
@@ -819,6 +884,55 @@ static DevBuf gb_n1batch, gb_n2batch, gb_patlhbatch, gb_mvdesc;   // TS RAKE BAT
 #define DEVB(b, bytes) do{ if(!devbuf_ensure((b),(size_t)(bytes))){ \
     fprintf(stderr,"[GPU] devbuf_ensure failed (%zu bytes) at %s:%d\n",(size_t)(bytes),__FILE__,__LINE__); \
     return (double)NAN; } }while(0)
+
+static DevBuf gb_tabP;   // LEVER 3 (tip-vector) parallel pool: tabP[node][c][x][s], node stride ncat*ns*(ns+1)
+static void tipvec_report(){ fprintf(stderr,"[TIPVEC] engaged launches=%lld\n", g_tipvec_engaged); }
+// LEVER 3 safety: the MIXTURE launchers reuse the SAME gb_echild pool but never rebuild tabP (they peel via
+// accum_child_mix). Without this, a single-model launcher could later re-enter with an echild that an intervening
+// mixture call clobbered, skip its own rebuild, and gather a tabP describing the OLD matrix — a silent wrong answer.
+// So every non-single-model echild upload invalidates tabP; the next single-model tipvec_sync rebuilds it.
+static inline void tipvec_invalidate(){ g_tipvec_ready = false; }
+// LEVER 3: (re)build tabP for the CURRENT single-model d_echild upload and point the device symbols at it. Must be
+// called immediately after every single-model `cudaMemcpy(d_echild,...)`; the MIXTURE paths deliberately do NOT call
+// it (they peel via accum_child_mix, which never reads tabP) — g_tipvec_ready is therefore only ever consulted by the
+// single-model launchers. Sets g_tipvec_ready=false on any bail-out so the launchers fall back to <NS,false>.
+// Launched on the NULL stream, as are the consuming peel kernels (`launch_*(...,0,...)`); the stream pool is created
+// with cudaStreamCreate (blocking), so legacy NULL-stream semantics order tabP before any consumer either way.
+static void tipvec_sync(const double* d_echild, int nnodes, int ncat, int ns){
+    g_tipvec_ready = false;
+    if (!jolt_tipvec_enabled()) return;          // DEFAULT-OFF: zero host work, zero symbol traffic
+    if (!jolt_ns_template_enabled()) return;     // the runtime-ns kernels never gather from tabP
+    if (!(ns==4 || ns==20)) return;              // only the templated instantiations exist
+    if (nnodes<=0 || ncat<=0) return;
+    const long ecStride  = (long)ncat*ns*ns;
+    const long tabStride = (long)ncat*ns*(ns+1);
+    if (!devbuf_ensure(gb_tabP, (size_t)nnodes*tabStride*sizeof(double))) {
+        fprintf(stderr,"[TIPVEC] devbuf_ensure failed -> falling back to the leaf matvec\n"); return; }
+    const double* d_tabP = (const double*)gb_tabP.p;
+    if (cudaMemcpyToSymbol(gc_echild_base, &d_echild, sizeof(double*)) != cudaSuccess) return;
+    if (cudaMemcpyToSymbol(gc_tabP_base,   &d_tabP,   sizeof(double*)) != cudaSuccess) return;
+    if (cudaMemcpyToSymbol(gc_ecStride,    &ecStride, sizeof(long))    != cudaSuccess) return;
+    if (cudaMemcpyToSymbol(gc_tabStride,   &tabStride,sizeof(long))    != cudaSuccess) return;
+    const int total = nnodes*ncat*ns, tb = 128, gb = (total+tb-1)/tb;
+    make_tabP_all<<<gb,tb>>>(ns, ncat, nnodes, d_echild, (double*)gb_tabP.p);
+    if (cudaGetLastError() != cudaSuccess) return;   // launch failed -> stay on the matvec path
+    g_tipvec_ready = true;
+    // Engagement evidence. atexit() ALONE is not enough: a run killed by `timeout -s KILL` skips atexit handlers, so
+    // a harness grepping only the exit line reads "0 engaged" and mis-reports a TIMEOUT as a NEGATIVE result -- the
+    // exact vacuous-A/B failure mode behind the retracted +R L0 finding (job 173445151). Emit a running count
+    // periodically as well, so even a killed run leaves proof that <NS,true> kernels really ran.
+    static const bool diag = (getenv("JOLT_TIPVEC_DIAG") != nullptr);
+    if (diag){
+        static long long nbuild = 0;
+        if (nbuild++ == 0){
+            fprintf(stderr,"[TIPVEC] tabP built: nnodes=%d ncat=%d ns=%d (%.2f MB)\n",
+                    nnodes,ncat,ns,(double)nnodes*tabStride*sizeof(double)/1048576.0);
+            atexit(tipvec_report);
+        } else if ((nbuild & 0xFFF) == 0) {          // every 4096 rebuilds: liveness under SIGKILL
+            tipvec_report(); fflush(stderr);
+        }
+    }
+}
 
 // ============================================================================================================
 // ASYNC/STREAMS substrate (Inc 0) — process-global stream pool + pinned host staging for screener move overlap.
@@ -1271,6 +1385,7 @@ extern "C" double gpu_lnl_crosscheck(
     double *d_echild=(double*)gb_echild.p, *d_partial=(double*)gb_partial.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));
+    tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
 
     int TB=256, GB=(nptn+TB-1)/TB;
@@ -1378,6 +1493,7 @@ extern "C" double gpu_lnl_crosscheck_mix(
     double *d_clsinv = nullptr;   // A1 (+I): per-chunk per-class invariant [nmix][Pn] (only when pinv>0)
     if (pinv > 0.0 && clsinv) { DEVB(gb_mClsinv, (size_t)nmix*chunk0*sizeof(double)); d_clsinv=(double*)gb_mClsinv.p; }
     GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));      // pattern-independent
+    tipvec_invalidate();   // LEVER 3: mixture echild clobbers the shared pool -> tabP is stale
 
     std::vector<unsigned char> tipChunk((size_t)ntax*chunk0);
     std::vector<double> patlh(chunk0), lhcatChunk((size_t)(out_lhcat?nmix:0)*chunk0);
@@ -1475,6 +1591,7 @@ extern "C" double gpu_derv_crosscheck_mix(
     double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    tipvec_invalidate();   // LEVER 3: mixture echild clobbers the shared pool -> tabP is stale
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
     int TB=256, GB=(nptn+TB-1)/TB;
@@ -1598,6 +1715,7 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
     double *d_v0=(double*)gb_mDval0.p, *d_v1=(double*)gb_mDval1.p, *d_v2=(double*)gb_mDval2.p, *d_tipeig=(double*)gb_nodeleaf.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));   // pattern-independent
+    tipvec_invalidate();   // LEVER 3: mixture echild clobbers the shared pool -> tabP is stale
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));   // pattern-independent
 
     int TB=256;
@@ -1743,6 +1861,7 @@ extern "C" double gpu_derv_crosscheck(
     double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
     int TB=256, GB=(nptn+TB-1)/TB;
@@ -1849,6 +1968,7 @@ extern "C" double gpu_screen_nni_fold_crosscheck(
     double *d_n1eig=(double*)gb_n1eig.p, *d_n2eig=(double*)gb_n2eig.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
     int TB=256, GB=(nptn+TB-1)/TB;
@@ -1945,6 +2065,7 @@ extern "C" double gpu_allbranch_upper_check(
     double *d_tipeig=(double*)gb_nodeleaf.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
@@ -2070,6 +2191,7 @@ extern "C" double gpu_screen_nni_batch_crosscheck(
     double *d_pmat=(double*)gb_pmat.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
     { int rows=nnodes*ncat*ns, gbp=(rows+TB-1)/TB; make_pmat<<<gbp,TB>>>(ns,ncat,nnodes,d_echild,d_pmat);   // P(b) per node·cat
@@ -2267,6 +2389,7 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
     double *d_n1eig=(double*)gb_n1eig.p, *d_n2eig=(double*)gb_n2eig.p, *d_valall=(double*)gb_valall.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
     // derive node-space P(b)=echild·Uinv ONCE (pattern-independent) for the stable node-space upper recurrence
     { int rows=nnodes*ncat*ns, gbp=(rows+TB-1)/TB; make_pmat<<<gbp,TB>>>(ns,ncat,nnodes,d_echild,d_pmat);
@@ -2797,6 +2920,7 @@ extern "C" double gpu_jolt_optimize(
                 double* e=&h_echild[(size_t)c*ecStride+(size_t)cat*ns*ns]; for(int x=0;x<ns;x++) for(int i=0;i<ns;i++) e[x*ns+i]=UP[x*ns+i]*ex[i];
                 for(int i=0;i<ns;i++) h_expfac[(size_t)c*ncat*ns+cat*ns+i]=ex[i]; } }
         cudaMemcpy(d_echild,h_echild.data(),(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice);
+        tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
         cudaMemcpy(d_expfac,h_expfac.data(),(size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice);
         if(g_jdiag){ g_jd_echild_sec += std::chrono::duration<double>(std::chrono::steady_clock::now()-_jd_e0).count(); g_jd_echild_n++; } };   // --jolt-diag: echild tax
     auto postorderFill=[&](){
