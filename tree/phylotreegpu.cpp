@@ -2035,9 +2035,13 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // 65x +R init-tree CPU decline (job 173377352; init-tree loop iqtree.cpp:937 + NNI reopt both call optimizeAllBranchesJOLT).
     // +I+R (pinv>0) is caught by the brlenOnly-pinv backstop below (:~2054); ncat>4 stays on CPU. Correctness: kj_derv_fused
     // builds pdf/pddf purely from catRate/catProp_v with no d(rate)/d(alpha) term (verified) => branch LM is rate-origin
-    // agnostic. Gated default-OFF by JOLT_RBRLEN until the JOLT_AUDIT rel<=1e-6 gate passes; OFF => +R declines exactly as
-    // before (byte-identical for every model).
-    static const bool JOLT_RBRLEN_EN = (getenv("JOLT_RBRLEN") != nullptr);
+    // agnostic. GRADUATED default-ON 2026-07-10 (validated GREEN job 173428381: LG+R4 64.6x, RF=0, run_max_rel 6.8e-15,
+    // and the R3/DNA+R newly-engaging cells + killswitch==prod byte-identity in the graduation validation). Kill-switch:
+    // set JOLT_NO_RBRLEN (any value) OR JOLT_RBRLEN=0 to force the legacy CPU decline (byte-identical to old default-OFF).
+    // Mirrors the JOLT_NO_FREEQ opt-out idiom (:~1984). The declining backstops below (esp. the +I+R catch at :~2084)
+    // are UNCHANGED, so default-ON only enables the already-guarded +R brlen path -- it cannot newly reach any other model.
+    static const bool JOLT_RBRLEN_EN = (getenv("JOLT_NO_RBRLEN") == nullptr) &&
+        []{ const char* e = getenv("JOLT_RBRLEN"); return !e || atoi(e) != 0; }();
     bool freeRateBrlenOK = (JOLT_RBRLEN_EN && ncat > 1 && site_rate->isFreeRate()
                             && rfDim == 2*ncat - 2 && ncat <= JOLT_FREERATE_MAXCAT && brlenOnly);
     bool rgcheck = (ncat > 1 && site_rate->isFreeRate() && site_rate->getPInvar() <= 0.0 && getenv("JOLT_RGRADCHECK") != nullptr);
@@ -2064,9 +2068,12 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // APPLY site truthy but the 4 pinv-OPTIMISE arms (gpu_lnl_intree.cu:3162/3220/3227/3239) are ==1-gated =>
     // pinv held FIXED. base_invar computes automatically (`if(optPinv)` :2129 truthy for 2). Only pure +I+G
     // (mean-gamma); +I+R stays declined at :2065 (isGammaRate!=MEAN => invarBrlenOK false). MUST read the
-    // optPinv==1 value BEFORE the brlenOnly force below. Default-OFF via JOLT_IBRLEN => optPinv forced 0 =>
-    // byte-identical (declines exactly as today).
-    static const bool JOLT_IBRLEN_EN = (getenv("JOLT_IBRLEN") != nullptr);
+    // optPinv==1 value BEFORE the brlenOnly force below. GRADUATED default-ON 2026-07-10 (validated GREEN job 173428382:
+    // AA+DNA +I+G rel<=2.5e-11, RF=0, plus the -B UFBoot mirror cell + killswitch==prod byte-identity in the graduation
+    // validation). Kill-switch: set JOLT_NO_IBRLEN (any value) OR JOLT_IBRLEN=0 => optPinv forced 0 => byte-identical to
+    // old default-OFF. Only +I+G (mean-gamma) reaches here; +I+R / median / fixed-pinv / pure-+I still decline (:~2044/2084).
+    static const bool JOLT_IBRLEN_EN = (getenv("JOLT_NO_IBRLEN") == nullptr) &&
+        []{ const char* e = getenv("JOLT_IBRLEN"); return !e || atoi(e) != 0; }();
     bool invarBrlenOK = (JOLT_IBRLEN_EN && brlenOnly && optPinv == 1 && ncat > 1
                          && site_rate->isGammaRate() == GAMMA_CUT_MEAN);
     if (brlenOnly) optPinv = invarBrlenOK ? 2 : 0;   // TS.1: brlen-only holds p_invar FIXED (L6: =2 applies +I fixed; =0 declines below)
@@ -2301,9 +2308,11 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
             // buffer in place -- computeLikelihood() is the same recovery computeLikelihoodBranchGPU itself falls
             // back to on a GPU failure (phylotreegpu.cpp:344-347), and the exact call JOLT_AUDIT already makes a
             // few lines above (empirically confirmed correct at this call site, red-team review 2026-07-04: 599/599
-            // saves agreed with the GPU mirror to rel<=5e-11 on a live -B run). NB: red-team-verified this branch is
-            // unreachable for the model classes leanTail currently accepts (reversible/no-ASC/pinv=0), so in
-            // practice this is defense-in-depth against a future JOLT capability change, not a live path.
+            // saves agreed with the GPU mirror to rel<=5e-11 on a live -B run). NB (updated 2026-07-10, L6 graduation):
+            // with JOLT_IBRLEN now default-ON, +I+G (pinv>0) accepted trees DO reach here under -B; the clean-room mirror
+            // gpuComputeTreeLnLCleanRoom declines pinv>0 (phylotreegpu.cpp:~80) => NaN => the CPU computeLikelihood() recovery below fires each such
+            // save. Correct (repopulates _pattern_lh for RELL) but a per-accepted-save CPU postorder cost on -B +I+G. The
+            // +R (pinv=0) mirror path stays on GPU. This is now a LIVE fallback path, not merely defense-in-depth.
             bool mirrorOK = !std::isnan(mirrorLnL);
             double relerr = 0.0;
             if (mirrorOK) {
