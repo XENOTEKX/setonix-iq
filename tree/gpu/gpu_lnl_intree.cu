@@ -57,6 +57,22 @@ __constant__ const double* gc_tabP_base;     // = d_tabP (parallel pool, node-st
 __constant__ long gc_ecStride;               // ncat*ns*ns      (elements/node) — node = (ec - gc_echild_base)/ecStride
 __constant__ long gc_tabStride;              // ncat*ns*(ns+1)  (elements/node)
 
+// LEVER 4 (factored fold) — JOLT_FACTORED, DEFAULT-OFF. `echild` is NOT a general matrix: rebuildEchild builds it as
+//     echild[v][c][x][i] = U[x][i] * ex[i],   ex[i] = exp(eval[i]*brlen[v]*catRate[c])
+// and stores that same ex[] in `expfac[v][c][i]` (only ns doubles, vs ns² for echild). U already lives in the
+// __constant__ g_U. So the fold can recompute e[x][i] = fl(U[x][i]*ex[i]) in-register instead of streaming ns²
+// doubles per thread from global memory. Measured on the shipped kernel (job 173279955): the L1TEX data pipe is the
+// single most-utilised resource (61.8-68.5% of peak) and ~97% of the kernel's 1922 LDG instructions load `ecc`,
+// while the FP64 pipe idles at 21.7-25.3%. ptxas hoists g_U into UNIFORM registers (DMUL R,R,UR) — a separate file
+// that touches neither the L1TEX data pipe nor the vector RF. Precedent: the neighbouring kj_pre_t ALREADY folds
+// this way (`v += g_U[t*NS+i]*ef[i]*puc[...]`); accum_child_t simply never got the treatment.
+// BIT-IDENTICAL: __dmul_rn(g_U[x*NS+i], ef[i]) reproduces the host's single-rounded fl(U[x][i]*ex[i]) exactly, and
+// the i-order of the fma chain is preserved (see the i-outer loop, whose acc[x] accumulates i ascending as before).
+// NODE DERIVATION: for every path that arms this, ecStride/exStride == ns EXACTLY, so
+//     ef_node = gc_expfac_base + (ec - gc_echild_base)/NS       (NS is a COMPILE-TIME constant => multiply-shift,
+// no 64-bit IDIV — unlike the tipvec path's divide by the runtime gc_ecStride).
+__constant__ const double* gc_expfac_base;   // = d_expfac of the current peel; expfac[v][c][i], stride ncat*ns
+
 // per-child probability-space contribution: prod[x] *= sum_i echild[c][x][i] * L_child[c][i]
 __device__ __forceinline__ void accum_child(double* prod, int ns, int c, int ptn, int nptn,
         const double* __restrict__ ec, const double* __restrict__ p, const unsigned char* __restrict__ t) {
@@ -605,17 +621,51 @@ static bool      g_tipvec_ready   = false;   // tabP valid for the current echil
 static long long g_tipvec_engaged = 0;       // # tabP-gathering launches (engagement gate; see JOLT_TIPVEC_DIAG)
 static inline bool tipvec_active(){ return g_tipvec_ready; }
 
-template<int NS, bool TIPVEC>
+// LEVER 4 gate. DEFAULT-OFF; JOLT_FACTORED=1 arms it. Like TIPVEC it is a *compile-time* template parameter, so the
+// OFF instantiation is the shipped kernel instruction-for-instruction (verified by cuobjdump SASS diff).
+// g_factored_ready is armed ONLY by factored_sync(), which is called ONLY from the four launchers that upload BOTH a
+// per-node expfac AND a current g_U. The audit found three dev-crosscheck launchers (gpu_lnl_crosscheck,
+// gpu_derv_crosscheck, gpu_screen_nni_fold_crosscheck) that build echild with NO expfac and NEVER upload g_U — under
+// a naive rewrite they would fold against whatever U a previous, unrelated launcher (or a mixture) left in the
+// process-global __constant__ g_U: silently wrong. Those paths, and every mixture path, call factored_invalidate().
+static inline bool jolt_factored_enabled(){
+    static const int c = [](){ const char* e=getenv("JOLT_FACTORED"); return (e && atoi(e)!=0)?1:0; }();
+    return c!=0;
+}
+static bool      g_factored_ready   = false;  // expfac + g_U both current for the CURRENT d_echild
+static long long g_factored_engaged = 0;      // # factored launches (engagement gate; see JOLT_FACTORED_DIAG)
+static inline bool factored_active(){ return g_factored_ready; }
+
+template<int NS, bool TIPVEC, bool FACTORED>
 __device__ __forceinline__ void accum_child_t(double* prod, int c, int ptn, int nptn,
         const double* __restrict__ ec, const double* __restrict__ p, const unsigned char* __restrict__ t) {
     const double* ecc = ec + (size_t)c*NS*NS;
+    // LEVER 4: the ns doubles ex[] for THIS (node,cat). (ec - base) is an exact multiple of ecStride=ncat*ns*ns, and
+    // exStride=ncat*ns, so dividing the byte-free element offset by the compile-time NS lands on node*exStride.
+    const double* ef = FACTORED ? (gc_expfac_base + ((ec - gc_echild_base) / NS) + (size_t)c*NS) : nullptr;
     if (p) {
         const double* pc = p + (size_t)(c*NS)*nptn + ptn;
-        #pragma unroll
-        for (int x=0;x<NS;x++){ double v=0.0;
+        if constexpr (FACTORED) {
+            // i-OUTER so only ONE ex[i] and ONE pc[i] are live at a time (an i-INNER unroll hoists all 20 of each and
+            // blows the register budget to 255 + spills — measured). acc[x] still accumulates i ASCENDING, and
+            // __dmul_rn forces the same single rounding the host used, so the fma chain is BIT-IDENTICAL to
+            //     v += ecc[x*NS+i]*pc[i*nptn]   with ecc[x*NS+i] == fl(U[x][i]*ex[i]).
+            double acc[NS];
             #pragma unroll
-            for (int i=0;i<NS;i++) v += ecc[x*NS+i]*pc[(size_t)i*nptn];
-            prod[x]*=v; }
+            for (int x=0;x<NS;x++) acc[x]=0.0;
+            #pragma unroll 1
+            for (int i=0;i<NS;i++){ double ei=ef[i], pci=pc[(size_t)i*nptn];
+                #pragma unroll
+                for (int x=0;x<NS;x++) acc[x] += __dmul_rn(g_U[x*NS+i], ei) * pci; }
+            #pragma unroll
+            for (int x=0;x<NS;x++) prod[x]*=acc[x];
+        } else {
+            #pragma unroll
+            for (int x=0;x<NS;x++){ double v=0.0;
+                #pragma unroll
+                for (int i=0;i<NS;i++) v += ecc[x*NS+i]*pc[(size_t)i*nptn];
+                prod[x]*=v; }
+        }
     } else {
         int s = t[ptn];
         if constexpr (TIPVEC) {   // LEVER 3: gather the precomputed leaf column tabP[node][c][x][s] (== the matvec below)
@@ -624,6 +674,16 @@ __device__ __forceinline__ void accum_child_t(double* prod, int c, int ptn, int 
             const double* row = gc_tabP_base + node*gc_tabStride + (size_t)c*NS*(NS+1) + ss;
             #pragma unroll
             for (int x=0;x<NS;x++) prod[x] *= row[(size_t)x*(NS+1)];
+        } else if constexpr (FACTORED) {   // LEVER 4 on the leaf fold too (same bit-identity argument)
+            double acc[NS];
+            #pragma unroll
+            for (int x=0;x<NS;x++) acc[x]=0.0;
+            #pragma unroll 1
+            for (int i=0;i<NS;i++){ double ei=ef[i]; double Li=(s<NS)? g_Uinv[i*NS+s] : g_UinvRowSum[i];
+                #pragma unroll
+                for (int x=0;x<NS;x++) acc[x] += __dmul_rn(g_U[x*NS+i], ei) * Li; }
+            #pragma unroll
+            for (int x=0;x<NS;x++) prod[x]*=acc[x];
         } else {                  // ORIGINAL leaf matvec (verbatim — the byte-identical OFF path)
             #pragma unroll
             for (int x=0;x<NS;x++){ double v=0.0;
@@ -634,7 +694,7 @@ __device__ __forceinline__ void accum_child_t(double* prod, int c, int ptn, int 
     }
 }
 
-template<int NS, bool TIPVEC>
+template<int NS, bool TIPVEC, bool FACTORED>
 __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ out, double* __restrict__ patlh,
         int nchild,
         const double* ec0, const double* p0, const unsigned char* t0,
@@ -646,9 +706,9 @@ __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ o
         double prod[NS];
         #pragma unroll
         for (int x=0;x<NS;x++) prod[x]=1.0;
-        accum_child_t<NS,TIPVEC>(prod,c,ptn,nptn,ec0,p0,t0);
-        if (nchild>1) accum_child_t<NS,TIPVEC>(prod,c,ptn,nptn,ec1,p1,t1);
-        if (nchild>2) accum_child_t<NS,TIPVEC>(prod,c,ptn,nptn,ec2,p2,t2);
+        accum_child_t<NS,TIPVEC,FACTORED>(prod,c,ptn,nptn,ec0,p0,t0);
+        if (nchild>1) accum_child_t<NS,TIPVEC,FACTORED>(prod,c,ptn,nptn,ec1,p1,t1);
+        if (nchild>2) accum_child_t<NS,TIPVEC,FACTORED>(prod,c,ptn,nptn,ec2,p2,t2);
         if (isRoot){
             double s=0.0;
             #pragma unroll
@@ -666,7 +726,7 @@ __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ o
     if (isRoot) patlh[ptn] = log(fabs(lh));
 }
 
-template<int NS, bool TIPVEC>
+template<int NS, bool TIPVEC, bool FACTORED>
 __global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
         const double* __restrict__ pre_u, const double* __restrict__ expfac_u,
         int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
@@ -676,8 +736,8 @@ __global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
         double fsib[NS];
         #pragma unroll
         for (int t=0;t<NS;t++) fsib[t]=1.0;
-        accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec0,sp0,st0);
-        if (nsib>1) accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec1,sp1,st1);
+        accum_child_t<NS,TIPVEC,FACTORED>(fsib,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child_t<NS,TIPVEC,FACTORED>(fsib,c,ptn,nptn,ec1,sp1,st1);
         const double* puc=pre_u+(size_t)(c*NS)*nptn+ptn; const double* ef=expfac_u+(size_t)c*NS;
         double pus[NS];
         #pragma unroll
@@ -692,7 +752,7 @@ __global__ void kj_pre_t(int nptn, int ncat, double* __restrict__ out_pre,
     }
 }
 
-template<int NS, bool TIPVEC>
+template<int NS, bool TIPVEC, bool FACTORED>
 __global__ void kj_pre_node_t(int nptn, int ncat, int eigOut, double* __restrict__ out,
         const double* __restrict__ up_u,
         const double* __restrict__ Pmat_u,
@@ -704,8 +764,8 @@ __global__ void kj_pre_node_t(int nptn, int ncat, int eigOut, double* __restrict
         double fsib[NS];
         #pragma unroll
         for (int x=0;x<NS;x++) fsib[x]=1.0;
-        accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec0,sp0,st0);
-        if (nsib>1) accum_child_t<NS,TIPVEC>(fsib,c,ptn,nptn,ec1,sp1,st1);
+        accum_child_t<NS,TIPVEC,FACTORED>(fsib,c,ptn,nptn,ec0,sp0,st0);
+        if (nsib>1) accum_child_t<NS,TIPVEC,FACTORED>(fsib,c,ptn,nptn,ec1,sp1,st1);
         const double* uuc = up_u + (size_t)(c*NS)*nptn + ptn;
         const double* Pc  = Pmat_u + (size_t)c*NS*NS;
         double r[NS];
@@ -730,44 +790,58 @@ __global__ void kj_pre_node_t(int nptn, int ncat, int eigOut, double* __restrict
 
 // Launch dispatchers — JOLT_NS_TEMPLATE on + ns in {4,20} -> de-spilled template<NS>; else runtime kernel (byte-id).
 // Signature order mirrors the raw <<<GB,TB,0,stream>>> launch: (GB,TB,stream, then the kernel's own arg list incl. ns).
+// LEVER 3 (TIPVEC, leaf fold) and LEVER 4 (FACTORED, both folds) are ORTHOGONAL compile-time params: TIPVEC replaces
+// the leaf matvec with a tabP gather, FACTORED replaces the materialized-echild stream with g_U*expfac. When both are
+// armed the leaf takes the tabP gather (cheapest) and the internal child takes the factored fold. <false,false> is
+// the shipped kernel, SASS-identical. The engagement counters make a vacuous A/B fail loud instead of reading as
+// "no speedup" (the retracted +R L0 lesson, job 173445151).
+#define JOLT_DISPATCH4(KERN, NSV, ARGS)                                                          \
+    do { if (V) { if (Fa) { g_tipvec_engaged++; g_factored_engaged++; KERN<NSV,true,true>  <<<GB,TB,0,stream>>> ARGS; } \
+                  else    { g_tipvec_engaged++;                       KERN<NSV,true,false> <<<GB,TB,0,stream>>> ARGS; } } \
+         else    { if (Fa) {                    g_factored_engaged++; KERN<NSV,false,true> <<<GB,TB,0,stream>>> ARGS; } \
+                  else    {                                           KERN<NSV,false,false><<<GB,TB,0,stream>>> ARGS; } } } while(0)
+
 static inline void launch_k1_node(int GB, int TB, cudaStream_t stream,
         int ns, int nptn, int ncat, int isRoot, double* out, double* patlh, int nchild,
         const double* ec0, const double* p0, const unsigned char* t0,
         const double* ec1, const double* p1, const unsigned char* t1,
         const double* ec2, const double* p2, const unsigned char* t2){
-    const bool T = jolt_ns_template_enabled();
-    const bool V = tipvec_active();   // LEVER 3: only when tabP is built & valid for the current echild
-    if (T && ns==4)  { if (V) { g_tipvec_engaged++; k1_node_t<4,true> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
-                       else                          k1_node_t<4,false><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
-    else if (T && ns==20) { if (V) { g_tipvec_engaged++; k1_node_t<20,true> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
-                            else                          k1_node_t<20,false><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2); }
+    const bool T  = jolt_ns_template_enabled();
+    const bool V  = tipvec_active();      // LEVER 3: tabP built & valid for the current echild
+    const bool Fa = factored_active();    // LEVER 4: expfac + g_U both current for the current echild
+    #define K1ARGS (nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2)
+    if      (T && ns==4)  JOLT_DISPATCH4(k1_node_t, 4,  K1ARGS);
+    else if (T && ns==20) JOLT_DISPATCH4(k1_node_t, 20, K1ARGS);
     else k1_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
+    #undef K1ARGS
 }
 static inline void launch_kj_pre(int GB, int TB, cudaStream_t stream,
         int ns, int nptn, int ncat, double* out_pre,
         const double* pre_u, const double* expfac_u,
         int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
         const double* ec1, const double* sp1, const unsigned char* st1){
-    const bool T = jolt_ns_template_enabled();
-    const bool V = tipvec_active();
-    if (T && ns==4)  { if (V) { g_tipvec_engaged++; kj_pre_t<4,true> <<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
-                       else                          kj_pre_t<4,false><<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
-    else if (T && ns==20) { if (V) { g_tipvec_engaged++; kj_pre_t<20,true> <<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
-                            else                          kj_pre_t<20,false><<<GB,TB,0,stream>>>(nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+    const bool T  = jolt_ns_template_enabled();
+    const bool V  = tipvec_active();
+    const bool Fa = factored_active();
+    #define KJARGS (nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1)
+    if      (T && ns==4)  JOLT_DISPATCH4(kj_pre_t, 4,  KJARGS);
+    else if (T && ns==20) JOLT_DISPATCH4(kj_pre_t, 20, KJARGS);
     else kj_pre<<<GB,TB,0,stream>>>(ns,nptn,ncat,out_pre,pre_u,expfac_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    #undef KJARGS
 }
 static inline void launch_kj_pre_node(int GB, int TB, cudaStream_t stream,
         int ns, int nptn, int ncat, int eigOut, double* out,
         const double* up_u, const double* Pmat_u,
         int nsib, const double* ec0, const double* sp0, const unsigned char* st0,
         const double* ec1, const double* sp1, const unsigned char* st1){
-    const bool T = jolt_ns_template_enabled();
-    const bool V = tipvec_active();
-    if (T && ns==4)  { if (V) { g_tipvec_engaged++; kj_pre_node_t<4,true> <<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
-                       else                          kj_pre_node_t<4,false><<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
-    else if (T && ns==20) { if (V) { g_tipvec_engaged++; kj_pre_node_t<20,true> <<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
-                            else                          kj_pre_node_t<20,false><<<GB,TB,0,stream>>>(nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1); }
+    const bool T  = jolt_ns_template_enabled();
+    const bool V  = tipvec_active();
+    const bool Fa = factored_active();
+    #define KJNARGS (nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1)
+    if      (T && ns==4)  JOLT_DISPATCH4(kj_pre_node_t, 4,  KJNARGS);
+    else if (T && ns==20) JOLT_DISPATCH4(kj_pre_node_t, 20, KJNARGS);
     else kj_pre_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,eigOut,out,up_u,Pmat_u,nsib,ec0,sp0,st0,ec1,sp1,st1);
+    #undef KJNARGS
 }
 
 // make_pmat — derive the node-space transition Pmat[v][c][x][t] = Σ_i echild[v][c][x][i]·Uinv[i][t] = P(b_v)[x][t]
@@ -887,6 +961,48 @@ static DevBuf gb_n1batch, gb_n2batch, gb_patlhbatch, gb_mvdesc;   // TS RAKE BAT
 
 static DevBuf gb_tabP;   // LEVER 3 (tip-vector) parallel pool: tabP[node][c][x][s], node stride ncat*ns*(ns+1)
 static void tipvec_report(){ fprintf(stderr,"[TIPVEC] engaged launches=%lld\n", g_tipvec_engaged); }
+static void factored_report(){ fprintf(stderr,"[FACTORED] engaged launches=%lld\n", g_factored_engaged); }
+
+// ── LEVER 4 (factored fold) host guards ─────────────────────────────────────────────────────────────────────────
+// factored_active() may be true ONLY when, for the CURRENT d_echild, BOTH of these hold on the device:
+//   (a) d_expfac holds the matching per-node ex[] (same node index, same cat, same branch length), and
+//   (b) __constant__ g_U holds the SAME U that built that echild.
+// The source audit found FOUR single-model echild builders with NO expfac at all (gpuComputeTreeLnLCleanRoom,
+// gpuComputeEdgeDervCleanRoom, gpuScreenNNICleanRoom, gpuScreenNNIFoldCleanRoom) whose launchers ALSO never upload
+// g_U — under a naive rewrite they would fold against whatever U some previous, unrelated launcher (or a mixture)
+// left in the process-global g_U. Those launchers, and every MIXTURE launcher (which uses per-class U_m from GLOBAL
+// memory, not g_U — it overflows the 64KB constant budget), therefore call factored_invalidate() and fall back to
+// the SASS-identical <NS,*,false> instantiation. Only the four launchers that upload expfac AND g_U call
+// factored_sync(): gpu_allbranch_upper_check, gpu_screen_nni_batch_crosscheck, gpu_screen_nni_tile_crosscheck,
+// gpu_jolt_optimize. Call it AFTER the d_expfac upload (not just the d_echild one).
+static inline void factored_invalidate(){ g_factored_ready = false; }
+static void factored_sync(const double* d_echild, const double* d_expfac, int nnodes, int ncat, int ns){
+    g_factored_ready = false;
+    if (!jolt_factored_enabled()) return;        // DEFAULT-OFF: zero host work, zero symbol traffic
+    if (!jolt_ns_template_enabled()) return;     // only the templated kernels carry the FACTORED instantiation
+    if (!(ns==4 || ns==20)) return;              // only those instantiations exist
+    if (!d_echild || !d_expfac || nnodes<=0 || ncat<=0) return;
+    // The device derives  ef = gc_expfac_base + (ec - gc_echild_base)/NS  and relies on ecStride/exStride == ns
+    // (i.e. (ncat*ns*ns)/(ncat*ns) == ns). That identity is exact for ANY ncat,ns, so there is nothing to test at
+    // the host level — the load-bearing preconditions are (1) ns in {4,20}, enforced above, and (2) the callers
+    // laying out d_echild node-major with stride ncat*ns*ns and d_expfac node-major with stride ncat*ns, which the
+    // arming launchers do by construction (their nnodes*ecStride / nnodes*exStride allocations). No runtime guard
+    // can add safety here; a fabricated inequality check would only give false confidence.
+    const long ecStride = (long)ncat*ns*ns;
+    if (cudaMemcpyToSymbol(gc_echild_base, &d_echild, sizeof(double*)) != cudaSuccess) return;
+    if (cudaMemcpyToSymbol(gc_expfac_base, &d_expfac, sizeof(double*)) != cudaSuccess) return;
+    if (cudaMemcpyToSymbol(gc_ecStride,    &ecStride, sizeof(long))    != cudaSuccess) return;
+    g_factored_ready = true;
+    static const bool diag = (getenv("JOLT_FACTORED_DIAG") != nullptr);
+    if (diag){
+        static long long nsync = 0;
+        if (nsync++ == 0){
+            fprintf(stderr,"[FACTORED] armed: nnodes=%d ncat=%d ns=%d (expfac %.2f KB vs echild %.2f KB per peel)\n",
+                    nnodes,ncat,ns,(double)nnodes*exStride*8/1024.0,(double)nnodes*ecStride*8/1024.0);
+            atexit(factored_report);
+        } else if ((nsync & 0xFFF) == 0) { factored_report(); fflush(stderr); }   // liveness under SIGKILL
+    }
+}
 // LEVER 3 safety: the MIXTURE launchers reuse the SAME gb_echild pool but never rebuild tabP (they peel via
 // accum_child_mix). Without this, a single-model launcher could later re-enter with an echild that an intervening
 // mixture call clobbered, skip its own rebuild, and gather a tabP describing the OLD matrix — a silent wrong answer.
@@ -1385,6 +1501,7 @@ extern "C" double gpu_lnl_crosscheck(
     double *d_echild=(double*)gb_echild.p, *d_partial=(double*)gb_partial.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));
+    factored_invalidate();   // LEVER 4: no per-node expfac and/or no current g_U on this path
     tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
 
@@ -1493,6 +1610,7 @@ extern "C" double gpu_lnl_crosscheck_mix(
     double *d_clsinv = nullptr;   // A1 (+I): per-chunk per-class invariant [nmix][Pn] (only when pinv>0)
     if (pinv > 0.0 && clsinv) { DEVB(gb_mClsinv, (size_t)nmix*chunk0*sizeof(double)); d_clsinv=(double*)gb_mClsinv.p; }
     GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));      // pattern-independent
+    factored_invalidate();   // LEVER 4: no per-node expfac and/or no current g_U on this path
     tipvec_invalidate();   // LEVER 3: mixture echild clobbers the shared pool -> tabP is stale
 
     std::vector<unsigned char> tipChunk((size_t)ntax*chunk0);
@@ -1591,6 +1709,7 @@ extern "C" double gpu_derv_crosscheck_mix(
     double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    factored_invalidate();   // LEVER 4: no per-node expfac and/or no current g_U on this path
     tipvec_invalidate();   // LEVER 3: mixture echild clobbers the shared pool -> tabP is stale
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
@@ -1715,8 +1834,10 @@ extern "C" double gpu_allbranch_derv_crosscheck_mix(
     double *d_v0=(double*)gb_mDval0.p, *d_v1=(double*)gb_mDval1.p, *d_v2=(double*)gb_mDval2.p, *d_tipeig=(double*)gb_nodeleaf.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));   // pattern-independent
+    factored_invalidate();   // LEVER 4: no per-node expfac and/or no current g_U on this path
     tipvec_invalidate();   // LEVER 3: mixture echild clobbers the shared pool -> tabP is stale
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));   // pattern-independent
+    factored_invalidate();   // LEVER 4: MIXTURE expfac pairs with per-class U_m (global), not g_U
 
     int TB=256;
     // chunk-scoped pattern window (referenced by the lambdas below): updated each tile iteration
@@ -1861,6 +1982,7 @@ extern "C" double gpu_derv_crosscheck(
     double *d_pdf=(double*)gb_pdf.p, *d_pddf=(double*)gb_pddf.p, *d_patlh=(double*)gb_patlh.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    factored_invalidate();   // LEVER 4: no per-node expfac and/or no current g_U on this path
     tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
@@ -1968,6 +2090,7 @@ extern "C" double gpu_screen_nni_fold_crosscheck(
     double *d_n1eig=(double*)gb_n1eig.p, *d_n2eig=(double*)gb_n2eig.p;
     unsigned char *d_tip=(unsigned char*)gb_tip.p;
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
+    factored_invalidate();   // LEVER 4: no per-node expfac and/or no current g_U on this path
     tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
@@ -2067,6 +2190,7 @@ extern "C" double gpu_allbranch_upper_check(
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
     tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
+    factored_sync(d_echild, d_expfac, nnodes, ncat, ns);   // LEVER 4: expfac + g_U both current
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
 
     // child-args helper (exclude `excl`, -1 for none): echild/partial/tip pointers for k1_node
@@ -2193,6 +2317,7 @@ extern "C" double gpu_screen_nni_batch_crosscheck(
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
     tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
+    factored_sync(d_echild, d_expfac, nnodes, ncat, ns);   // LEVER 4: expfac + g_U both current
     GCK(cudaMemcpy(d_tip,tip,(size_t)ntax*nptn,cudaMemcpyHostToDevice));
     { int rows=nnodes*ncat*ns, gbp=(rows+TB-1)/TB; make_pmat<<<gbp,TB>>>(ns,ncat,nnodes,d_echild,d_pmat);   // P(b) per node·cat
       GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError()); }
@@ -2391,6 +2516,7 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
     GCK(cudaMemcpy(d_echild,echild,(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice));
     tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
     GCK(cudaMemcpy(d_expfac,expfac,(size_t)nnodes*exStride*sizeof(double),cudaMemcpyHostToDevice));
+    factored_sync(d_echild, d_expfac, nnodes, ncat, ns);   // LEVER 4: expfac + g_U both current
     // derive node-space P(b)=echild·Uinv ONCE (pattern-independent) for the stable node-space upper recurrence
     { int rows=nnodes*ncat*ns, gbp=(rows+TB-1)/TB; make_pmat<<<gbp,TB>>>(ns,ncat,nnodes,d_echild,d_pmat);
       GCK(cudaDeviceSynchronize()); GCK(cudaGetLastError()); }
@@ -2922,6 +3048,7 @@ extern "C" double gpu_jolt_optimize(
         cudaMemcpy(d_echild,h_echild.data(),(size_t)nnodes*ecStride*sizeof(double),cudaMemcpyHostToDevice);
         tipvec_sync(d_echild, nnodes, ncat, ns);   // LEVER 3: (re)build tabP for this echild (no-op unless JOLT_TIPVEC)
         cudaMemcpy(d_expfac,h_expfac.data(),(size_t)nnodes*ncat*ns*sizeof(double),cudaMemcpyHostToDevice);
+        factored_sync(d_echild, d_expfac, nnodes, ncat, ns);   // LEVER 4: expfac + g_U both current
         if(g_jdiag){ g_jd_echild_sec += std::chrono::duration<double>(std::chrono::steady_clock::now()-_jd_e0).count(); g_jd_echild_n++; } };   // --jolt-diag: echild tax
     auto postorderFill=[&](){
         for(int idx=0; idx<nInternal; idx++){ int u=postorder[idx]; if(u==root) continue;
