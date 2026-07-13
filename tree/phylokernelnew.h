@@ -2463,15 +2463,13 @@ void PhyloTree::computeLikelihoodDervGenericSIMD(PhyloNeighbor *dad_branch, Phyl
                 }
             } // FOR ptn
             pk_lh[packet_id] = horizontal_add(my_lh); // JOLT_DET: per-packet, combined in fixed order below
-        #ifdef _OPENMP
-        #pragma omp critical
-        #endif
-            {
-                for (size_t i = 0; i < nmixlen; i++)
-                    all_dfvec[i] += my_df[i];
-                for (size_t i = 0; i < nmixlen2; i++)
-                    all_ddfvec[i] += my_ddf[i];
-            }
+            // JOLT_DET (red-team #5, 2026-07-13): the `#pragma omp critical` that used to live here combined
+            // all_dfvec/all_ddfvec in ARBITRARY THREAD ARRIVAL ORDER -- the exact defect this whole patch exists
+            // to remove. It was missed because +I/+R take the non-mixlen branch below, so the 3x-bit-identical
+            // gate never exercised it; heterotachy/GHOST/+H (PhyloTreeMixlen, built by refineBootTrees at
+            // iqtree.cpp:3388) still wobbled run-to-run. No accumulation here at all now: my_df/my_ddf ALREADY
+            // live at a packet-strided offset in buffer_partial_lh (:2408-2413), so they survive the parallel
+            // loop and are summed in fixed packet order after it (see the mixlen combine below).
         } else {
             // to access g-matrix elements to store derivatives
             size_t g_index = branch_id * g_matrix_nptn;
@@ -2576,6 +2574,19 @@ void PhyloTree::computeLikelihoodDervGenericSIMD(PhyloNeighbor *dad_branch, Phyl
         all_prob_const += pk_pc[k];   all_df_const += pk_dfc[k];   all_ddf_const += pk_ddfc[k];
     }
     delete[] pk_lh; delete[] pk_df; delete[] pk_ddf; delete[] pk_pc; delete[] pk_dfc; delete[] pk_ddfc;
+    // JOLT_DET (red-team #5): the MIXLEN derivative vectors, likewise in fixed packet order. This replaces the
+    // `#pragma omp critical` that used to accumulate them in thread-arrival order (:2465). my_df/my_ddf were never
+    // thread-local -- they are views into buffer_partial_lh at a packet stride (:2408-2413) -- so they are still
+    // live here and can simply be re-derived and summed deterministically. No extra allocation.
+    if (isMixlen()) {
+        for (int k = 0; k < num_packets; k++) {
+            VectorClass *df_k    = ((VectorClass*)buffer_partial_lh_ptr) + (nmixlen+3)*nmixlen * k;
+            VectorClass *my_df_k  = df_k + nmixlen*2;
+            VectorClass *my_ddf_k = df_k + nmixlen*3;
+            for (size_t i = 0; i < nmixlen;  i++) all_dfvec[i]  += my_df_k[i];
+            for (size_t i = 0; i < nmixlen2; i++) all_ddfvec[i] += my_ddf_k[i];
+        }
+    }
     gradient_vector[branch_id] = all_df;
     hessian_diagonal[branch_id] = all_ddf;
 

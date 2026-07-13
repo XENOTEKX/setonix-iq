@@ -42,6 +42,9 @@
 #include <cstdio>
 #include <mutex>     // G.8.2.2: serialize the unguarded mix clean-room launchers across ModelFinder's per-model OpenMP threads
 #include <memory>    // JOLT_SCREEN_CACHE: shared_ptr-held cache buffers (red-team #1 -- rebind can't free a live reader)
+#ifdef _OPENMP
+#include <omp.h>     // omp_in_parallel(): the cache must bypass inside a parallel region (red-team #2, partitions)
+#endif
 using namespace std;
 
 // G.8.2.2 — process-wide lock for optimizeParametersJOLTMix. The mixture clean-room launchers
@@ -1414,18 +1417,37 @@ static void joltBuildTipPtnFreq(Alignment* aln, int nptn, int ntax, int ns,
     for (int p = 0; p < nptn; p++) ptnFreq[p] = (double)aln->at(p).frequency;
 }
 
-// Both call sites go through here. Returns pointers to cached (hit) or freshly-built buffers; when the cache is OFF,
-// builds into the caller-provided fallbacks (byte-identical to the old inline rebuild -- proven by the stock==OFF gate).
+// Both call sites go through here. Returns the cached buffers (hit) or freshly-built private ones.
+//
+// ⚠️ THE CACHE IS DELIBERATELY BYPASSED INSIDE AN OpenMP PARALLEL REGION (red-team, 2026-07-13 -- a CONFIRMED
+// regression, caught before it shipped). ModelFinder parallelises ACROSS PARTITIONS (main/phylotesting.cpp:3066,
+// `#pragma omp parallel for ... if(parallel_over_partitions)`), and each of those N threads drives a *different*
+// Alignment through optimizeParametersJOLT (model/modelfactory.cpp:1613). The JOLT eligibility gate declines on
+// MODEL properties only -- it does NOT bar a plain PhyloTree holding a partition Alignment -- so it engages.
+// With one global cache slot every such call MISSES (`g_jsc_aln != aln`), and the miss path would run the full
+// O(ntax*nptn) rebuild *while holding the process-wide g_jsc_mtx*. The threads evict each other forever: 0 hits,
+// and ModelFinder's across-partition parallelism collapses to SERIAL. That is STRICTLY WORSE than the code this
+// cache replaced (which built a private stack vector per thread, lock-free and fully parallel).
+// The cache exists to kill the ~1168 redundant rebuilds in the SERIAL tree-search drivers -- that is where the
+// 3.50x lives. In a parallel region we fall back to exactly the old private build: no lock, no sharing, no
+// regression. (The single-alignment CTF/-m MF per-model threads lose nothing measurable: the CTF phase is ~117s
+// with and without the cache, jobs 173500688 vs 173571993.)
+// This also corrects the old comment's claim that "partitions are a different tree class" and are barred. They
+// are not -- which is exactly why the shared_ptr lifetime fix below was NECESSARY, not merely defensive.
 static void joltGetTipPtnFreq(Alignment* aln, int nptn, int ntax, int ns,
                               std::shared_ptr<vector<unsigned char>>& tip_out,
                               std::shared_ptr<vector<double>>& pf_out) {
-    if (!g_jsc_on) {                                     // OFF (kill-switch): private build, no shared state, no lock
+    bool bypass = !g_jsc_on;
+#ifdef _OPENMP
+    if (omp_in_parallel()) bypass = true;                // multi-alignment concurrency => private build (see above)
+#endif
+    if (bypass) {                                        // kill-switch OR parallel region: private build, no lock
         tip_out = std::make_shared<vector<unsigned char>>();
         pf_out  = std::make_shared<vector<double>>();
         joltBuildTipPtnFreq(aln, nptn, ntax, ns, *tip_out, *pf_out);
         return;
     }
-    std::lock_guard<std::mutex> lk(g_jsc_mtx);          // serialize cache build/key across MF per-model OMP threads
+    std::lock_guard<std::mutex> lk(g_jsc_mtx);          // serial callers only; guards against any future concurrency
     uint64_t fp_now = joltAlnFingerprint(aln, nptn);
     bool hit = g_jsc_tip && g_jsc_ptnFreq && g_jsc_aln == aln && g_jsc_nptn == nptn && g_jsc_ntax == ntax
                && g_jsc_ns == ns && g_jsc_fp == fp_now
@@ -1525,8 +1547,18 @@ bool PhyloTree::gpuScreenNNIRank(std::map<int,double> &branchBest,
 
     // -- JOLT_SCREEN_CACHE: tip[]/ptnFreq[] are ALIGNMENT-CONSTANT + TREE-INDEPENDENT; this screener AND the reopt
     // driver optimizeParametersJOLT both rebuilt them every call (~53-65% of the DNA host, Job P). Served from ONE
-    // unified file-static cache via joltGetTipPtnFreq (above): default-OFF (JOLT_SCREEN_CACHE), CHECK-guarded,
+    // unified file-static cache via joltGetTipPtnFreq (above): DEFAULT-ON (kill: JOLT_NO_SCREEN_CACHE), CHECK-guarded,
     // fingerprinted, mutex-safe. OFF => builds into the local fallbacks, byte-identical to the old inline rebuild.
+    // RESTORED (red-team #4, 2026-07-13): the old inline tip-build declined to CPU on an out-of-range leaf taxon;
+    // hoisting the build into joltGetTipPtnFreq (which just walks tax in [0,ntax)) silently DROPPED that guard.
+    // It matters: node_leaf[v] = -1 is the launcher's INTERNAL-node sentinel (see :1560 below), so a leaf whose
+    // name is absent from the alignment (getSeqID() == -1) would be fed to the kernel as a CHILDLESS INTERNAL
+    // node => wrong screener lnL => wrong NNI ranking => wrong tree, with no error raised. Decline instead.
+    for (int v = 0; v < nNodes; v++) {
+        if (!isLeafV[v]) continue;
+        int tax = leafTax[v];
+        if (tax < 0 || tax >= ntax) return false;        // -> CPU fallback, as before
+    }
     std::shared_ptr<vector<unsigned char>> _tipp; std::shared_ptr<vector<double>> _pfp;
     joltGetTipPtnFreq(aln, nptn, ntax, ns, _tipp, _pfp);  // shared_ptr keeps the buffer alive for this whole call
     vector<unsigned char>& tip     = *_tipp;
@@ -2248,6 +2280,14 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     // JOLT_SCREEN_CACHE: the reopt driver's tip[]/ptnFreq[] rebuild is the TWIN of the screener's (byte-identical,
     // alignment-constant). Served from the SAME unified file-static cache via joltGetTipPtnFreq (Job P: 574 s / 30%
     // of the DNA host, ~360 s on AA). OFF => builds into the local fallbacks, byte-identical to the old inline rebuild.
+    // RESTORED (red-team #4, 2026-07-13): the old inline build declined (NAN -> CPU) on an out-of-range leaf taxon.
+    // Hoisting the build into joltGetTipPtnFreq dropped it. computeLikelihoodGPUResident still carries its own copy
+    // of this guard (:2571) whose comment cites "optimizeParametersJOLT's tip-build guard" -- i.e. THIS one. Keep it.
+    for (int i = 0; i < nNodes; i++) {
+        if (leafTax[i] < 0) continue;
+        int tax = leafTax[i];
+        if (tax < 0 || tax >= ntax) return (double)NAN;  // -> CPU fallback, as before
+    }
     std::shared_ptr<vector<unsigned char>> _tipp; std::shared_ptr<vector<double>> _pfp;
     joltGetTipPtnFreq(aln, nptn, ntax, ns, _tipp, _pfp);  // shared_ptr keeps the buffer alive for this whole call
     vector<unsigned char>& tip     = *_tipp;
