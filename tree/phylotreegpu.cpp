@@ -41,6 +41,7 @@
 #include <cmath>
 #include <cstdio>
 #include <mutex>     // G.8.2.2: serialize the unguarded mix clean-room launchers across ModelFinder's per-model OpenMP threads
+#include <memory>    // JOLT_SCREEN_CACHE: shared_ptr-held cache buffers (red-team #1 -- rebind can't free a live reader)
 using namespace std;
 
 // G.8.2.2 — process-wide lock for optimizeParametersJOLTMix. The mixture clean-room launchers
@@ -1351,6 +1352,104 @@ bool PhyloTree::gpuScreenNNITileCleanRoom(double *out_max_rel, long long *out_nm
 // false on ineligibility / no moves / CUDA error => caller falls back to pure CPU evaluateNNIs (byte-identical).
 // Rebuilt every call (reads LIVE branch lengths + current eigendecomposition) — NEVER cache across rounds.
 // ============================================================================================================
+// ---- JOLT_SCREEN_CACHE content fingerprint (2026-07-12, red-team §9 fix) ------------------------------------------
+// Cheap O(nptn/64) signature of the alignment CONTENT, folded into the cache key so a freed-then-realloc'd Alignment at
+// a RECYCLED address (the classic `-b` bootstrap ABA case) cannot false-hit the pointer-keyed cache: resampled
+// replicates carry different pattern frequencies/states, so the fingerprint differs and forces a rebuild. (UFBoot `-B`
+// is already safe by a separate mechanism -- it resamples into side vectors and never mutates aln->frequency, traced
+// through alignment.cpp/superalignment.cpp createBootstrapAlignment; and bootstrap replicates usually differ in nptn
+// anyway, already in the key.) JOLT_SCREEN_CACHE_CHECK remains the EXACT full-recompute+memcmp verifier; this is the
+// cheap always-on production guard. Not cryptographic -- the proof-level fix is an Alignment-lifetime member (deferred:
+// needs a header change => full-tree rebuild).
+static uint64_t joltAlnFingerprint(Alignment* aln, int nptn) {
+    uint64_t h = 1469598103934665603ULL;                        // FNV-1a 64 offset basis
+    auto mix = [&h](uint64_t x){ h = (h ^ x) * 1099511628211ULL; };
+    int step = nptn > 64 ? nptn / 64 : 1;
+    for (int p = 0; p < nptn; p += step) {
+        Pattern &pt = aln->at(p);
+        mix(((uint64_t)(unsigned)pt.frequency << 24) ^ ((uint64_t)(unsigned char)pt.const_char << 8)
+            ^ (uint64_t)(unsigned char)(pt.empty() ? 0 : pt[0]));
+    }
+    mix((uint64_t)nptn);
+    return h;
+}
+
+// ---- UNIFIED alignment-constant tip[]/ptnFreq[] cache (2026-07-12) -----------------------------------------------
+// ONE file-static cache shared by BOTH host hotspots: the screener gpuScreenNNIRank AND the reopt driver
+// optimizeParametersJOLT. tip[tax*nptn+p] = clamp(aln->at(p)[tax], ns) and ptnFreq[p] = aln->at(p).frequency are
+// ALIGNMENT-CONSTANT and TREE-INDEPENDENT (every taxon is a leaf => the transpose needs no tree), yet BOTH sites
+// rebuilt them EVERY call (Job P DNA-1M: screener 1.04 s + reopt 1.08 s per call = 64.8% of the DNA host; AA ~1 s
+// each too). Keyed on (aln,nptn,ntax,ns,fingerprint); joltAlnFingerprint closes the pointer-ABA hole. Default-OFF
+// (JOLT_SCREEN_CACHE). JOLT_SCREEN_CACHE_CHECK recomputes+memcmp on every reuse (the exact staleness verifier).
+// THREAD-SAFETY: the screener is serial (tree-search main thread), but optimizeParametersJOLT is ALSO called by
+// ModelFinder's per-model OpenMP threads (modelfactory.cpp:1613) => the shared cache is guarded by g_jsc_mtx (the
+// same pattern as gpu_mixjolt_mtx). Buffers are read-only after a build; the only unguarded case (a rebuild for a
+// DIFFERENT aln while another thread reads the pointer) requires interleaved multi-alignment concurrency, which the
+// screener/reopt eligibility gates bar (partitions are a different tree class) -- defensive-only, per red-team §9b-#3.
+// PROMOTED 2026-07-13: DEFAULT-ON (kill-switch JOLT_NO_SCREEN_CACHE=1). Bit-identical; DNA-1M standalone 2.089x
+// (job 173571085), and it is what closed the Hashara tree-search loss (1998.7s -> 683.6s, job 173571993).
+static const bool  g_jsc_on    = (getenv("JOLT_NO_SCREEN_CACHE") == nullptr);
+static const bool  g_jsc_check = (getenv("JOLT_SCREEN_CACHE_CHECK") != nullptr);
+static std::mutex  g_jsc_mtx;
+static const Alignment* g_jsc_aln = nullptr;
+static int g_jsc_nptn = -1, g_jsc_ntax = -1, g_jsc_ns = -1;
+static uint64_t g_jsc_fp = 0;
+// RED-TEAM #1 CLOSED (2026-07-13 -- this was the precondition for making the cache a DEFAULT). The buffers are held
+// by shared_ptr and the getter hands the caller a shared_ptr COPY taken under the lock. A rebind for a DIFFERENT
+// alignment therefore allocates a FRESH buffer and merely drops the cache's reference: the old buffer stays alive
+// until the last reader releases it, so a pointer a caller is mid-read on can never be freed/realloc'd underneath it.
+// (The old code returned &g_jsc_tip and the caller read it OUTSIDE the lock => latent use-after-free the moment any
+// concurrent multi-alignment JOLT path appears. Unreachable today -- one alignment => build-once-then-all-hits, no
+// realloc -- but a latent UAF is not something to ship as a default.) Zero extra copies on the hot path.
+static std::shared_ptr<vector<unsigned char>> g_jsc_tip;
+static std::shared_ptr<vector<double>>        g_jsc_ptnFreq;
+
+// tree-INDEPENDENT build (byte-identical to both call sites' old leaf-enumerated fills; every taxon is a leaf).
+static void joltBuildTipPtnFreq(Alignment* aln, int nptn, int ntax, int ns,
+                                vector<unsigned char>& tip, vector<double>& ptnFreq) {
+    tip.assign((size_t)ntax*nptn, 0);
+    for (int tax = 0; tax < ntax; tax++)
+        for (int p = 0; p < nptn; p++) { int st = (int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p] = (unsigned char)((st < ns) ? st : ns); }
+    ptnFreq.assign((size_t)nptn, 0.0);
+    for (int p = 0; p < nptn; p++) ptnFreq[p] = (double)aln->at(p).frequency;
+}
+
+// Both call sites go through here. Returns pointers to cached (hit) or freshly-built buffers; when the cache is OFF,
+// builds into the caller-provided fallbacks (byte-identical to the old inline rebuild -- proven by the stock==OFF gate).
+static void joltGetTipPtnFreq(Alignment* aln, int nptn, int ntax, int ns,
+                              std::shared_ptr<vector<unsigned char>>& tip_out,
+                              std::shared_ptr<vector<double>>& pf_out) {
+    if (!g_jsc_on) {                                     // OFF (kill-switch): private build, no shared state, no lock
+        tip_out = std::make_shared<vector<unsigned char>>();
+        pf_out  = std::make_shared<vector<double>>();
+        joltBuildTipPtnFreq(aln, nptn, ntax, ns, *tip_out, *pf_out);
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_jsc_mtx);          // serialize cache build/key across MF per-model OMP threads
+    uint64_t fp_now = joltAlnFingerprint(aln, nptn);
+    bool hit = g_jsc_tip && g_jsc_ptnFreq && g_jsc_aln == aln && g_jsc_nptn == nptn && g_jsc_ntax == ntax
+               && g_jsc_ns == ns && g_jsc_fp == fp_now
+               && g_jsc_tip->size() == (size_t)ntax*nptn && g_jsc_ptnFreq->size() == (size_t)nptn;
+    if (!hit) {
+        // REBIND into FRESH buffers -- never .assign() into buffers an earlier caller may still be reading (RED-TEAM #1).
+        auto tip_new = std::make_shared<vector<unsigned char>>();
+        auto pf_new  = std::make_shared<vector<double>>();
+        joltBuildTipPtnFreq(aln, nptn, ntax, ns, *tip_new, *pf_new);
+        g_jsc_tip = tip_new; g_jsc_ptnFreq = pf_new;
+        g_jsc_aln = aln; g_jsc_nptn = nptn; g_jsc_ntax = ntax; g_jsc_ns = ns; g_jsc_fp = fp_now;
+    } else if (g_jsc_check) {                            // exact staleness verifier: recompute + memcmp on every reuse
+        vector<unsigned char> chk_tip; vector<double> chk_pf;
+        joltBuildTipPtnFreq(aln, nptn, ntax, ns, chk_tip, chk_pf);
+        if (chk_tip.size() != g_jsc_tip->size() || chk_pf.size() != g_jsc_ptnFreq->size() ||
+            memcmp(chk_tip.data(), g_jsc_tip->data(), chk_tip.size()) != 0 ||
+            memcmp(chk_pf.data(), g_jsc_ptnFreq->data(), chk_pf.size()*sizeof(double)) != 0) {
+            fprintf(stderr, "[JOLT-SCREEN-CACHE] FATAL stale cache (aln=%p nptn=%d ntax=%d ns=%d) -- abort\n",
+                    (const void*)aln, nptn, ntax, ns); abort();
+        }
+    }
+    tip_out = g_jsc_tip; pf_out = g_jsc_ptnFreq;         // shared_ptr COPY taken under the lock => reader keeps it alive
+}
+
 bool PhyloTree::gpuScreenNNIRank(std::map<int,double> &branchBest,
                                  std::map<int,std::pair<double,double> > *branchBoth,
                                  int *out_ntile, double *out_wall_screen) {
@@ -1424,15 +1523,14 @@ bool PhyloTree::gpuScreenNNIRank(std::map<int,double> &branchBest,
         }
     }
 
-    vector<unsigned char> tip((size_t)ntax*nptn);
-    for (int v = 0; v < nNodes; v++) {
-        if (!isLeafV[v]) continue;
-        int tax = leafTax[v];
-        if (tax < 0 || tax >= ntax) return false;
-        for (int p = 0; p < nptn; p++) { int st = (int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p] = (unsigned char)((st < ns) ? st : ns); }
-    }
-    vector<double> ptnFreq(nptn);
-    for (int p = 0; p < nptn; p++) ptnFreq[p] = (double)aln->at(p).frequency;
+    // -- JOLT_SCREEN_CACHE: tip[]/ptnFreq[] are ALIGNMENT-CONSTANT + TREE-INDEPENDENT; this screener AND the reopt
+    // driver optimizeParametersJOLT both rebuilt them every call (~53-65% of the DNA host, Job P). Served from ONE
+    // unified file-static cache via joltGetTipPtnFreq (above): default-OFF (JOLT_SCREEN_CACHE), CHECK-guarded,
+    // fingerprinted, mutex-safe. OFF => builds into the local fallbacks, byte-identical to the old inline rebuild.
+    std::shared_ptr<vector<unsigned char>> _tipp; std::shared_ptr<vector<double>> _pfp;
+    joltGetTipPtnFreq(aln, nptn, ntax, ns, _tipp, _pfp);  // shared_ptr keeps the buffer alive for this whole call
+    vector<unsigned char>& tip     = *_tipp;
+    vector<double>&        ptnFreq = *_pfp;
 
     vector<int> node_nchild(nNodes, 0), node_child(nNodes*3, -1), node_leaf(nNodes, -1), node_slot(nNodes, -1);
     vector<double> node_parentLen(nNodes, 0.0);
@@ -2147,14 +2245,13 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
 
     // ---- compact tip states + pattern frequencies + flat topology arrays ----
     int nptn = (int)aln->size(), ntax = (int)aln->getNSeq();
-    vector<unsigned char> tip((size_t)ntax*nptn);
-    for (int i = 0; i < nNodes; i++) {
-        if (leafTax[i] < 0) continue; int tax = leafTax[i];
-        if (tax < 0 || tax >= ntax) return (double)NAN;
-        for (int p = 0; p < nptn; p++) { int st = (int)aln->at(p)[tax]; tip[(size_t)tax*nptn+p] = (unsigned char)((st < ns) ? st : ns); }
-    }
-    vector<double> ptnFreq(nptn);
-    for (int p = 0; p < nptn; p++) ptnFreq[p] = (double)aln->at(p).frequency;
+    // JOLT_SCREEN_CACHE: the reopt driver's tip[]/ptnFreq[] rebuild is the TWIN of the screener's (byte-identical,
+    // alignment-constant). Served from the SAME unified file-static cache via joltGetTipPtnFreq (Job P: 574 s / 30%
+    // of the DNA host, ~360 s on AA). OFF => builds into the local fallbacks, byte-identical to the old inline rebuild.
+    std::shared_ptr<vector<unsigned char>> _tipp; std::shared_ptr<vector<double>> _pfp;
+    joltGetTipPtnFreq(aln, nptn, ntax, ns, _tipp, _pfp);  // shared_ptr keeps the buffer alive for this whole call
+    vector<unsigned char>& tip     = *_tipp;
+    vector<double>&        ptnFreq = *_pfp;
 
     // G.4.3b — pinv-independent invariant base per pattern (== ptn_invar[p]/pinv; replicates the constant-site
     // logic of PhyloTree::computePtnInvar, phylotreesse.cpp:560). base_invar[p] = Σ_{states s with which EVERY

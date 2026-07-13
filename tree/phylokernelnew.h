@@ -2382,8 +2382,13 @@ void PhyloTree::computeLikelihoodDervGenericSIMD(PhyloNeighbor *dad_branch, Phyl
     }
     
     double all_lh(0.0), all_df(0.0), all_ddf(0.0), all_prob_const(0.0), all_df_const(0.0), all_ddf_const(0.0);
+    // JOLT_DET (determinism fix, mirrors the tree_lh fixed-order combine ~:3148): the OpenMP reduction(+:)
+    // combined per-thread partials in unspecified order => run-to-run last-ULP wiggle that flips +I/+R
+    // (df_const/ddf_const) NNI accept/reject. Accumulate per packet, then sum in fixed packet order.
+    double *pk_lh = new double[num_packets](), *pk_df = new double[num_packets](), *pk_ddf = new double[num_packets]();
+    double *pk_pc = new double[num_packets](), *pk_dfc = new double[num_packets](), *pk_ddfc = new double[num_packets]();
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) num_threads(num_threads) reduction(+:all_lh,all_df,all_ddf,all_prob_const,all_df_const,all_ddf_const)
+#pragma omp parallel for schedule(static) num_threads(num_threads)
 #endif
     for (int packet_id = 0; packet_id < num_packets; packet_id++) {
         VectorClass my_df(0.0), my_ddf(0.0), vc_prob_const(0.0), vc_df_const(0.0), vc_ddf_const(0.0);
@@ -2457,7 +2462,7 @@ void PhyloTree::computeLikelihoodDervGenericSIMD(PhyloNeighbor *dad_branch, Phyl
                     ASSERT(0 && "TODO +ASC not supported");
                 }
             } // FOR ptn
-            all_lh += horizontal_add(my_lh); //handled by reduction clause
+            pk_lh[packet_id] = horizontal_add(my_lh); // JOLT_DET: per-packet, combined in fixed order below
         #ifdef _OPENMP
         #pragma omp critical
         #endif
@@ -2553,17 +2558,24 @@ void PhyloTree::computeLikelihoodDervGenericSIMD(PhyloNeighbor *dad_branch, Phyl
                 //shared variables are all mentioned in the reduction clause
                 //Note that, since those variables are now double, the
                 //horizontal_add operations need to be done here.
-                all_df  += horizontal_add(my_df);
-                all_ddf += horizontal_add(my_ddf);
+                pk_df[packet_id]  = horizontal_add(my_df);
+                pk_ddf[packet_id] = horizontal_add(my_ddf);
                 if (ASC_Lewis) {
-                    all_prob_const += horizontal_add(vc_prob_const);
-                    all_df_const   += horizontal_add(vc_df_const);
-                    all_ddf_const  += horizontal_add(vc_ddf_const);
+                    pk_pc[packet_id]   = horizontal_add(vc_prob_const);
+                    pk_dfc[packet_id]  = horizontal_add(vc_df_const);
+                    pk_ddfc[packet_id] = horizontal_add(vc_ddf_const);
                 }
             }
 
         } // else isMixlen()
     } // FOR packet
+    // JOLT_DET: deterministic fixed-order combine of the per-packet partials (packet order is fixed => reproducible)
+    for (int k = 0; k < num_packets; k++) {
+        all_lh += pk_lh[k];
+        all_df += pk_df[k];   all_ddf += pk_ddf[k];
+        all_prob_const += pk_pc[k];   all_df_const += pk_dfc[k];   all_ddf_const += pk_ddfc[k];
+    }
+    delete[] pk_lh; delete[] pk_df; delete[] pk_ddf; delete[] pk_pc; delete[] pk_dfc; delete[] pk_ddfc;
     gradient_vector[branch_id] = all_df;
     hessian_diagonal[branch_id] = all_ddf;
 
