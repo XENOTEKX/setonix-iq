@@ -3050,6 +3050,9 @@ public:
         production fused apply (Increment 2). ts_fused_nni5_topm M = HYBRID: still run exact nni5 on the top-M screener
         branches to catch late-bloomers (red-team FM-5), fused-apply the rest; 0 = pure fused. Off by default. */
     bool ts_fused;
+    /** TRUE to force OFF the default-ON GPU fused tree-search pipeline (set by --no-ts-fused; mirrors --no-jolt).
+        Blocks the main.cpp GPU-build default from enabling ts_fused. For A/B, bisection, legacy comparison arms. */
+    bool no_ts_fused;
     bool ts_fused_check;
     int  ts_fused_nni5_topm;
     int  ts_subsample;  // S sites for coarse tree-search subsample (0 = off)

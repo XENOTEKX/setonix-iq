@@ -3882,6 +3882,12 @@ pair<int, int> IQTree::optimizeNNI(bool speedNNI) {
             // T=3 (2026-07-05): T-finder resolved the tightness floor to 3 (mi2->300it fails, mi3->102it passes),
             // VALIDATED free byte-identical win both data types (AA-100K -B 1.40x, DNA-100K -B 1.30x; DNA-1M -B
             // 1.106x RF=0 vs mi8 & gold, job 173024943). Lowered 8->3. JOLT_BRLEN_MAXITER env still overrides.
+            // REVERTED 2026-07-14 to the T=3 BLANKET default (mi3 for ALL data types under -B). The prior
+            // data-type-aware DNA->mi2-under-B special-case is WITHDRAWN: its "~1.25x faster" was a standalone-brlen
+            // measurement; in full `-m MFP` + `-B` tree search DNA mi=2 was actually SLOWER -- Gate B (job 173736600):
+            // mi2 = 104 iters / 1580s vs mi3 = 102 iters / 1409s, at a BIT-IDENTICAL lnL (-59208019.101646). mi3 is
+            // the validated both-types value (AA-100K -B 1.40x, DNA-100K -B 1.30x, DNA-1M -B 1.106x RF=0 vs mi8,
+            // job 173024943). Non-boot stays 2 as before. JOLT_BRLEN_MAXITER env still overrides (phylotreegpu.cpp:2701/2706).
             const int fusedBrlenMaxIter = (params->gbo_replicates > 0) ? 3 : 2;
             sort(positiveNNIs.begin(), positiveNNIs.end(),
                  [](const NNIMove &a, const NNIMove &b) { return a.preloglh > b.preloglh; });   // rank by screener score DESC

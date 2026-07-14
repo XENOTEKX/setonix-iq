@@ -2290,6 +2290,17 @@ int main(int argc, char *argv[]) {
         Params::getInstance().gpu = true;
         Params::getInstance().jolt = true;
     }
+    // GPU tree search (the TS.6 fused pipeline: screener + adaptive-K + global JOLT reopt, and L0 on top)
+    // is part of the DEFAULT GPU path -- the exact config every flagship benchmark uses. It fires whenever
+    // GPU is active (plain invocation OR explicit --jolt/--gpu/--ctf), so the full pipeline never needs a
+    // second flag. Opt out with --no-ts-fused. These four assignments MIRROR the --ts-fused flag body
+    // (utils/tools.cpp) verbatim, so "default" is byte-for-byte the same config as an explicit --ts-fused.
+    if (Params::getInstance().gpu && !Params::getInstance().no_ts_fused) {
+        Params::getInstance().ts_fused          = true;
+        Params::getInstance().ts_screen_adaptive = true;
+        Params::getInstance().ts_jolt_allbr     = true;
+        Params::getInstance().ts_reopt_split    = true;
+    }
 #endif
 
     // --- GPU diagnostic hook (Phase G.1.0, opt-in) ---------------------------
@@ -2457,6 +2468,43 @@ int main(int argc, char *argv[]) {
             snprintf(gpu_line, sizeof(gpu_line), "GPU:     %s, %.1f GB, CUDA %d.%d",
                      gpu_name, gpu_vram, cuda_maj, cuda_min);
             cout << gpu_line << endl;
+        }
+        // ---- JOLT OPTIMISATION POSTURE (2026-07-14) ----------------------------------------------------
+        // ONE line stating exactly which levers are live, so nobody has to GUESS which env vars are set --
+        // the failure that kept ruining runs, and that had a collaborator benchmarking the UN-optimised path
+        // because she pasted an incomplete flag battery. Every lever below is DEFAULT-ON; the JOLT_NO_*
+        // kill-switches are the only way to turn one off. Mirrors the exact default logic at
+        // iqtree.cpp:3630/3632 and phylotreegpu.cpp:2216/2185 -- if you change a default, change it HERE too.
+        // Printed via cout so it lands in BOTH the console AND <prefix>.log: a raw printf/fprintf(stderr)
+        // is DESTROYED when a script redirects the console onto <prefix>.log (see lint_gate.sh R5).
+        {
+            auto lever_on = [](const char *kill, const char *opt) -> bool {
+                if (getenv(kill)) return false;                        // kill-switch wins
+                const char *e = opt ? getenv(opt) : nullptr;
+                return !e || atoi(e) != 0;                             // else default-ON unless explicitly =0
+            };
+            // ts-search (the fused GPU tree-search pipeline) gates L0 + the screener cache: both are fused-path
+            // levers and cannot fire without it. Reporting them ON when ts_fused is off would be a lie (the exact
+            // over-claim this banner exists to prevent), so they are shown relative to the ACTUAL ts_fused state.
+            const bool  tsf = Params::getInstance().ts_fused;
+            const char *l0e = getenv("JOLT_L0");
+            const int   l0  = (!tsf || getenv("JOLT_NO_L0")) ? 0 : (l0e ? atoi(l0e) : 2);
+            const char *nst = getenv("JOLT_NS_TEMPLATE");
+            const char *mie = getenv("JOLT_BRLEN_MAXITER");
+            char post[512];
+            snprintf(post, sizeof(post),
+                     "JOLT:    ts-search=%s cache=%s L0=%d boot-snap=%s +I=%s +R=%s freeQ=%s highK=%s ns-tmpl=%s brlen-maxiter=%s",
+                     tsf                                                       ? "ON" : "off",
+                     (tsf && lever_on("JOLT_NO_SCREEN_CACHE", nullptr))        ? "ON" : "off",
+                     l0,
+                     lever_on("JOLT_NO_BOOT_SNAPSHOT",  "JOLT_BOOT_SNAPSHOT")  ? "ON" : "off",
+                     lever_on("JOLT_NO_IBRLEN",         "JOLT_IBRLEN")         ? "ON" : "off",
+                     lever_on("JOLT_NO_RBRLEN",         "JOLT_RBRLEN")         ? "ON" : "off",
+                     lever_on("JOLT_NO_FREEQ",          nullptr)               ? "ON" : "off",
+                     lever_on("JOLT_NO_FREERATE_HIGHK", nullptr)               ? "ON" : "off",
+                     (nst && atoi(nst) == 0)                                   ? "off" : "ON",
+                     mie ? mie : "auto(DNA:2/AA:3)");
+            cout << post << endl;
         }
     }
 #endif
@@ -3629,6 +3677,43 @@ char* build_phylogenetic(StringArray& cnames, StringArray& cseqs, const char* cm
             snprintf(gpu_line, sizeof(gpu_line), "GPU:     %s, %.1f GB, CUDA %d.%d",
                      gpu_name, gpu_vram, cuda_maj, cuda_min);
             cout << gpu_line << endl;
+        }
+        // ---- JOLT OPTIMISATION POSTURE (2026-07-14) ----------------------------------------------------
+        // ONE line stating exactly which levers are live, so nobody has to GUESS which env vars are set --
+        // the failure that kept ruining runs, and that had a collaborator benchmarking the UN-optimised path
+        // because she pasted an incomplete flag battery. Every lever below is DEFAULT-ON; the JOLT_NO_*
+        // kill-switches are the only way to turn one off. Mirrors the exact default logic at
+        // iqtree.cpp:3630/3632 and phylotreegpu.cpp:2216/2185 -- if you change a default, change it HERE too.
+        // Printed via cout so it lands in BOTH the console AND <prefix>.log: a raw printf/fprintf(stderr)
+        // is DESTROYED when a script redirects the console onto <prefix>.log (see lint_gate.sh R5).
+        {
+            auto lever_on = [](const char *kill, const char *opt) -> bool {
+                if (getenv(kill)) return false;                        // kill-switch wins
+                const char *e = opt ? getenv(opt) : nullptr;
+                return !e || atoi(e) != 0;                             // else default-ON unless explicitly =0
+            };
+            // ts-search (the fused GPU tree-search pipeline) gates L0 + the screener cache: both are fused-path
+            // levers and cannot fire without it. Reporting them ON when ts_fused is off would be a lie (the exact
+            // over-claim this banner exists to prevent), so they are shown relative to the ACTUAL ts_fused state.
+            const bool  tsf = Params::getInstance().ts_fused;
+            const char *l0e = getenv("JOLT_L0");
+            const int   l0  = (!tsf || getenv("JOLT_NO_L0")) ? 0 : (l0e ? atoi(l0e) : 2);
+            const char *nst = getenv("JOLT_NS_TEMPLATE");
+            const char *mie = getenv("JOLT_BRLEN_MAXITER");
+            char post[512];
+            snprintf(post, sizeof(post),
+                     "JOLT:    ts-search=%s cache=%s L0=%d boot-snap=%s +I=%s +R=%s freeQ=%s highK=%s ns-tmpl=%s brlen-maxiter=%s",
+                     tsf                                                       ? "ON" : "off",
+                     (tsf && lever_on("JOLT_NO_SCREEN_CACHE", nullptr))        ? "ON" : "off",
+                     l0,
+                     lever_on("JOLT_NO_BOOT_SNAPSHOT",  "JOLT_BOOT_SNAPSHOT")  ? "ON" : "off",
+                     lever_on("JOLT_NO_IBRLEN",         "JOLT_IBRLEN")         ? "ON" : "off",
+                     lever_on("JOLT_NO_RBRLEN",         "JOLT_RBRLEN")         ? "ON" : "off",
+                     lever_on("JOLT_NO_FREEQ",          nullptr)               ? "ON" : "off",
+                     lever_on("JOLT_NO_FREERATE_HIGHK", nullptr)               ? "ON" : "off",
+                     (nst && atoi(nst) == 0)                                   ? "off" : "ON",
+                     mie ? mie : "auto(DNA:2/AA:3)");
+            cout << post << endl;
         }
     }
 #endif

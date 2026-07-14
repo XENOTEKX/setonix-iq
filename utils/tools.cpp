@@ -5719,10 +5719,23 @@ void parseArg(int argc, char *argv[], Params &params) {
             }
             if (strcmp(argv[cnt], "--ts-fused") == 0) {
                 // TS.6 PRODUCTION fused apply (Increment 2): screener-positive select + ONE global JOLT reopt.
+                // NOTE: default-ON in the GPU build (see main/main.cpp) -- this explicit flag is now redundant,
+                // kept as an advanced/documentation alias. --no-ts-fused is the opt-out.
                 params.ts_fused = true;
                 params.ts_screen_adaptive = true; // adaptive-K selection over the screener
                 params.ts_jolt_allbr = true;      // the global JOLT reopt (TS.1 keystone)
                 params.ts_reopt_split = true;
+                continue;
+            }
+            if (strcmp(argv[cnt], "--no-ts-fused") == 0) {
+                // KILL SWITCH (mirrors --no-jolt): opt out of the default GPU fused tree-search pipeline so tree
+                // search runs the legacy per-move path. For A/B, bisection, and old --jolt-alone comparison arms.
+                // no_ts_fused also blocks the main.cpp GPU-default from re-enabling it.
+                params.no_ts_fused = true;
+                params.ts_fused = false;
+                params.ts_screen_adaptive = false;
+                params.ts_jolt_allbr = false;
+                params.ts_reopt_split = false;
                 continue;
             }
             if (strcmp(argv[cnt], "--ts-fused-topm") == 0) {
@@ -7871,7 +7884,8 @@ void Params::setDefault() {
     ts_shadow = false;          // TS.6 SHADOW: CPU falsification of FM-5 (committed TS.6-rule counterfactual)
     ts_shadow_converge = false; // TS.6 SHADOW with converged optimizeAllBranches(100) reopt bracket
     ts_lbr_measure = false;     // LBR G1: read-only af/distance instrument riding the --ts-shadow apply path
-    ts_fused = false;           // TS.6 production fused apply (screener-positive + global JOLT reopt)
+    ts_fused = false;           // TS.6 production fused apply (screener-positive + global JOLT reopt); GPU-build default flips ON
+    no_ts_fused = false;        // --no-ts-fused kill switch (mirrors --no-jolt); blocks the GPU-build default
     ts_fused_check = false;     // TS.6 FM-1 gate: validation-only geometry + mi==cnt mapping check
     ts_fused_nni5_topm = 0;     // TS.6 hybrid: nni5 on top-M screener branches (0 = pure fused)
     ts_subsample = 0;           // TS.9 coarse tree-search site-subsample (0 = off => byte-identical)

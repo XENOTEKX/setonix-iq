@@ -830,15 +830,20 @@ static DevBuf gb_n1batch, gb_n2batch, gb_patlhbatch, gb_mvdesc;   // TS RAKE BAT
 // and pinned buffer are lazily created and NEVER freed (released at process exit), mirroring the DevBuf pool.
 // JOLT_TS_NSTREAMS sets the pool size K (default 8). The active stream count S used by the screener is
 // min(K, nMoves) when async, else 1.
-static bool g_ts_async       = (getenv("JOLT_TS_ASYNC") != nullptr);        // master gate (default OFF)
-static bool g_ts_async_check = (getenv("JOLT_TS_ASYNC_CHECK") != nullptr);  // bit-exact shadow-check gate
-// ---- TS RAKE BATCH (2026-06-29): batch the per-move screener folds into one 2D-grid launch (blockIdx.y=move) to
-// fill the H200 grid (the kcount-measured FOLD slice = 34% of partial launches, each currently a 32%-occupancy
-// kernel). Default OFF => byte-identical. JOLT_TS_BATCHFOLD_B = #moves per batched launch (grid fill vs HBM). ----
-static bool g_ts_batchfold       = (getenv("JOLT_TS_BATCHFOLD") != nullptr);        // master gate (default OFF)
-static bool g_ts_batchfold_check = (getenv("JOLT_TS_BATCHFOLD_CHECK") != nullptr);  // bit-exact shadow-check gate
-static int  ts_batchfold_B_init(){ int v=64; if(const char* e=getenv("JOLT_TS_BATCHFOLD_B")){ int t=atoi(e); if(t>=1) v=t; } return v; }
-static int  g_ts_batchfold_B = ts_batchfold_B_init();
+// ---- RETIRED EXPERIMENTS (2026-07-14): the env surface is GONE -- these can no longer be set and the strings
+// vanish from the binary, so they leave the flag audit entirely (GPU-BINARIES.md §5).
+//   JOLT_TS_ASYNC      -- async stream pool for the screener. Measured NULL; retired (project-gpu-tree-search).
+//   JOLT_TS_BATCHFOLD  -- 2D-grid batched screener folds (blockIdx.y=move). Never beat the shipped path.
+// Held as `constexpr false` rather than hand-deleted ON PURPOSE: these gates are interwoven with the PRODUCTION
+// screener's if/else-if chain (`if (g_ts_async && ... && !TS_GPURED) ... else if (g_ts_batchfold && ...)`) and they
+// size device buffers. With constexpr, the COMPILER dead-strips every branch provably -- none of the regression risk
+// of hand-editing the hottest CUDA path for a cosmetic gain. Gate: production lnL must be BIT-IDENTICAL.
+// (The experiments remain recoverable from git history if ever revisited.)
+static constexpr bool g_ts_async           = false;
+static constexpr bool g_ts_async_check     = false;
+static constexpr bool g_ts_batchfold       = false;
+static constexpr bool g_ts_batchfold_check = false;
+static constexpr int  g_ts_batchfold_B     = 64;   // referenced in dead `g_ts_batchfold ? ... : 1` sizing exprs
 // Lazily-initialized stream pool. g_ts_nstreams is the realized pool size; 0 until first ts_streams() call.
 static cudaStream_t* g_ts_streams = nullptr;
 static int           g_ts_nstreams = 0;
@@ -1209,21 +1214,8 @@ extern "C" int gpu_parsimony_build_and_score(
     const int* dTaskA   = (const int*)gb_pbTaskA.p;
     const int* dTaskB   = (const int*)gb_pbTaskB.p;
     const unsigned int* dTip = dLeaves + (size_t)tipLeaf * setU;
-    // v2 Stage-1: 2D-grid (saturating, atomicAdd) by default; GPU_PARS_1D forces the v1 1D path (A/B + reference).
-    static const bool use1d = (getenv("GPU_PARS_1D") != nullptr);
-    if (use1d) {
-        for (int l = 0; l < nLevel; l++) {                       // v1: grid = cnt, nsblk in thread stride
-            int base = h_levelStart[l], cnt = h_levelStart[l+1] - base;
-            if (cnt <= 0) continue;
-            k_pars_combine_to_arena<<<cnt, PARS_TPB>>>(dLeaves, dArena, dScore,
-                dTaskOut + base, dTaskA + base, dTaskB + base, nstates, nsblk, cnt);
-            if (cudaGetLastError() != cudaSuccess) return -1;
-        }
-        k_pars_score_indexed<<<nCand, PARS_TPB>>>(dLeaves, dArena, dScore,
-            (const int*)gb_pbCandL.p, (const int*)gb_pbCandR.p, dTip, nstates, nsblk, nCand,
-            (unsigned int*)gb_pbScores.p);
-        if (cudaGetLastError() != cudaSuccess) return -1;
-    } else {
+    // Stage-1 parsimony: 2D-grid Fitch (saturating, atomicAdd) — the shipped path.
+    {
         const int CH = 128;                                      // spike-tuned; nChunk=ceil(nsblk/CH) saturates SMs
         const int nChunk = (nsblk + CH - 1) / CH;
         // atomicAdd accumulators MUST start at 0 (combine writes touched slots; score writes nCand)
@@ -2304,7 +2296,8 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
     // ~1e-12, §13.9), NOT bit-identical (it drops the nTile-invariance gate). DEFAULT OFF => the proven host-Kahan path
     // is byte-identical. Needs a per-chunk device ptn_freq (uploaded in the tile loop). d_pdf/d_pddf are valid (k2_derv
     // fills all 3 channels); only the patlh channel (h_sredpart[0..GB-1]) is consumed.
-    static const bool TS_GPURED = (getenv("TS_SCREEN_GPUREDUCE") != nullptr);
+    static constexpr bool TS_GPURED = false;   // RETIRED 2026-07-14 (was TS_SCREEN_GPUREDUCE): GPU-side ptnfreq
+                                               // reduce experiment; never shipped. Env surface removed (constexpr).
     int GBmax = (chunk0+TB-1)/TB;
     double *d_sptnfreq=nullptr, *d_sredpart=nullptr; std::vector<double> h_sredpart;
     if (TS_GPURED) { DEVB(gb_sptnfreq,(size_t)chunk0*sizeof(double)); d_sptnfreq=(double*)gb_sptnfreq.p;
@@ -2323,7 +2316,8 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
     // up_v = (P(b_u)·up_u) ⊙ fsib via kj_pre_node(eigOut=0). No eigen round-trip => no cancellation (F39/F40 fix).
     // TS_EIGEN_UPPER=1 (DIAGNOSTIC ONLY): selects the pre-migration EIGEN upper (k1_node + kj_pre via d_expfac) so a
     // single binary can run the eigen-vs-node-space head-to-head (reliability/wall). Default OFF = node-space production.
-    bool eigUpper = (getenv("TS_EIGEN_UPPER") != nullptr);
+    constexpr bool eigUpper = false;   // RETIRED 2026-07-14 (was TS_EIGEN_UPPER): eigen-upper kernel variant;
+                                       // never shipped. Env surface removed; compiler strips the launches.
     std::function<void(int)> proc=[&](int u)->double{
         for(int kk=0; kk<node_nchild[u]; kk++){
             int v=node_child[u*3+kk];
@@ -3115,7 +3109,8 @@ extern "C" double gpu_jolt_optimize(
     // many damped gradient steps => fewer outer iters at high K (the measured 97-149s R5-R10 handicap, job 173435343).
     // Default-OFF => byte-identical (the softmax-gradient path is untouched). Pure +R only (pinv=0); +I+R keeps the
     // gradient arm (its EM normaliser is 1-pinv, deferred). Plan §2c.4 Stage B.
-    static const bool JOLT_REM_EN = (getenv("JOLT_REM") != nullptr);
+    static constexpr bool JOLT_REM_EN = false;   // RETIRED 2026-07-14 (was JOLT_REM): EM closed-form weight M-step,
+                                                 // measured NEUTRAL (1.0x, insurance only). Env surface removed.
     auto gaugeFix=[&](){ double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];   // m = overall mean rate (Σ catProp_v·catRate; the +I invariant class adds 0) — pin =1 (same constraint for +R and +I+R)
         if(m>0){ for(int c=0;c<ncat;c++) catRate[c]/=m; for(int v=0;v<nnodes;v++){ brlen[v]*=m; if(brlen[v]>20.0) brlen[v]=20.0; } }
         double f = optPinv ? (1.0-curPinv) : 1.0;   // G.5.1d (2b): meanR is the PINV-FREE rate ρ=catRate·(1-pinv); applyPinv(curPinv) then reproduces catRate. f==1 (pure +R) => byte-identical.
