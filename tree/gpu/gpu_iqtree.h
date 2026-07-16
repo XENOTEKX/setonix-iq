@@ -74,6 +74,8 @@ double gpu_lnl_crosscheck(
     const int* desc_childIsLeaf, // nInternal*3
     const int* desc_childLeaf,   // nInternal*3 (taxon id if leaf child)
     const int* desc_childSlot,   // nInternal*3 (partials slot if internal child)
+    double pinv,                 // A3 (+I): invariant proportion (<=0 => no +I term, byte-identical)
+    const double* base_invar,    // A3 (+I): nptn per-pattern invariant base (host; null => no +I term)
     double* out_patlh);          // nptn (optional; per-pattern log|lh_ptn| if non-NULL) — G.2.0b
 
 // Phase G.8.0 — profile-mixture clean-room lnL (C20/C60/MEOW80). Same descriptor scheme as gpu_lnl_crosscheck but

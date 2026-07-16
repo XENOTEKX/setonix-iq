@@ -81,7 +81,7 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
     if (!model->isReversible()) return (double)NAN;
     if (model->getNMixtures() != 1) return (double)NAN;
     if (model->isSiteSpecificModel()) return (double)NAN;
-    if (site_rate->getPInvar() > 0.0) return (double)NAN;   // +I omits ptn_invar in the clean-room sweep -> CPU
+    double pinv = site_rate->getPInvar();   // A3 (+I): no longer declined -- the root fold adds pinv*base_invar (built below)
 
     int ncat = site_rate->getNRate();
     int nptn = (int)aln->size();
@@ -99,6 +99,26 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
     for (int i = 0; i < ns; i++) { double s = 0; for (int j = 0; j < ns; j++) s += Uinv[i*ns+j]; UinvRowSum[i] = s; }
     vector<double> catRate(ncat), catProp(ncat);
     for (int c = 0; c < ncat; c++) { catRate[c] = site_rate->getRate(c); catProp[c] = site_rate->getProp(c); }
+
+    // A3 (+I): per-pattern invariant base (UNSCALED pi_const -- the kernel multiplies by pinv, matching the optimizer's
+    // own base_invar at gpu_lnl_intree.cu:236). catProp above already carries (1-pinv) via getProp, so the root fold
+    // Sum(catw*s) == (1-pinv)*Vbar and the kernel's +pinv*base_invar makes L_p = (1-pinv)Vbar + pinv*pi_const == the CPU
+    // ptn_invar form exactly. Ambiguity handling mirrors the mixture clsinv build in gpuComputeTreeLnLCleanRoomMix (and
+    // the optimizer's own host base_invar build) with the single-model freq -- same const_char/STATE_UNKNOWN/DNA|PROTEIN logic.
+    vector<double> base_invar(nptn, 0.0);
+    if (pinv > 0.0) {
+        const int ambi_aa[] = {4+8, 32+64, 512+1024};   // B=N|D, Z=Q|E, U=I|L
+        int SU = (int)aln->STATE_UNKNOWN;
+        for (int p = 0; p < nptn; p++) {
+            int cc = (int)aln->at(p).const_char; double bi = 0.0;
+            if (cc > SU)                            bi = 0.0;
+            else if (cc == SU)                      bi = 1.0;
+            else if (cc < ns)                       bi = freq[cc];
+            else if (aln->seq_type == SEQ_DNA)     { double s=0; int cs=cc-ns+1; for (int x=0;x<ns;x++) if (cs & (1<<x)) s+=freq[x]; bi=s; }
+            else if (aln->seq_type == SEQ_PROTEIN) { double s=0; int cs=cc-ns;   if (cs>=0 && cs<3) for (int x=0;x<11;x++) if (ambi_aa[cs] & (1<<x)) s+=freq[x]; bi=s; }
+            base_invar[p] = bi;
+        }
+    }
 
     // ---- topology rooted at an internal node R (IQ-TREE roots at a leaf; lnL is reversible-invariant) ----
     if (!root || !root->isLeaf() || root->neighbors.empty()) return (double)NAN;
@@ -179,6 +199,7 @@ double PhyloTree::gpuComputeTreeLnLCleanRoom(double *out_patlh) {
         Uinv, UinvRowSum.data(), freq.data(), catProp.data(), echild.data(), tip.data(), ptnFreq.data(),
         dRoot.data(), dNch.data(), dOut.data(),
         dChildNode.data(), dChildIsLeaf.data(), dChildLeaf.data(), dChildSlot.data(),
+        pinv, base_invar.data(),   // A3 (+I): pinv + unscaled per-pattern invariant base (pinv<=0 => byte-identical)
         out_patlh);
 }
 
@@ -2467,10 +2488,14 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
             // back to on a GPU failure (phylotreegpu.cpp:344-347), and the exact call JOLT_AUDIT already makes a
             // few lines above (empirically confirmed correct at this call site, red-team review 2026-07-04: 599/599
             // saves agreed with the GPU mirror to rel<=5e-11 on a live -B run). NB (updated 2026-07-10, L6 graduation):
-            // with JOLT_IBRLEN now default-ON, +I+G (pinv>0) accepted trees DO reach here under -B; the clean-room mirror
-            // gpuComputeTreeLnLCleanRoom declines pinv>0 (phylotreegpu.cpp:~80) => NaN => the CPU computeLikelihood() recovery below fires each such
-            // save. Correct (repopulates _pattern_lh for RELL) but a per-accepted-save CPU postorder cost on -B +I+G. The
-            // +R (pinv=0) mirror path stays on GPU. This is now a LIVE fallback path, not merely defense-in-depth.
+            // with JOLT_IBRLEN now default-ON, +I+G (pinv>0) accepted trees DO reach here under -B. NB (updated 2026-07-15,
+            // A3 (+I)): the clean-room mirror gpuComputeTreeLnLCleanRoom NO LONGER declines pinv>0 -- it now COMPUTES +I
+            // (root term +pinv*base_invar), so mirrorLnL is a valid number for +I+G and its _pattern_lh CORRECTLY carries
+            // the invariant term. So the CPU recovery below NO LONGER fires for +I+G here (only on a genuine >tol
+            // disagreement). joltLnL stays authoritative (return joltLnL), and agreement is within RELL tol (~1e-6 << the
+            // ufboot epsilon 0.5). BEHAVIOR CHANGE from pre-A3: the GPU mirror _pattern_lh (correct, ~1e-6 vs CPU) is now
+            // used for -B +I+G RELL instead of a per-save CPU recompute -- an improvement, but NOT bit-identical to pre-A3;
+            // verify bootstrap support is unchanged if a -B +I+G gate is run. +R (pinv=0) path unchanged.
             bool mirrorOK = !std::isnan(mirrorLnL);
             double relerr = 0.0;
             if (mirrorOK) {
@@ -2531,7 +2556,76 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     }
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
+    // Direction-A measurement (JOLT_MF_DEVCHECK, run-both, default-OFF, measurement-only -> behavior UNCHANGED):
+    // time the CPU postorder AND the independent on-device mirror (gpuComputeTreeLnLCleanRoom). The CPU value stays
+    // authoritative; the mirror is never returned. When the env is unset this is byte-identical to the guard binary.
+    static const bool mf_devcheck = (getenv("JOLT_MF_DEVCHECK") != nullptr);
+
+    // ---- Direction-A PRODUCTION OFFLOAD (JOLT_MF_DEVUSE, default-OFF) ------------------------------------------------
+    // The per-candidate CPU computeLikelihood() postorder below is the DOMINANT no-`--ctf` host cost (mfoffload:
+    // 43.5% DNA / 69.5% AA of host self-time at 1M). Direction A replaces it with the independent on-device mirror
+    // gpuComputeTreeLnLCleanRoom (own g_Uinv upload + host echild via exp() + host Kahan; shares ONLY the k1_node fold,
+    // red-team K.4). Grounded by devcheck 173802323: on base/+G models the mirror is ~7-11x cheaper (AA 0.88s->0.12s)
+    // at rel<=1e-11 (grounded devcheck rows, ncat<=1..5, pinv=0). WHAT ROUTES TO THE AUTHORITATIVE CPU POSTORDER:
+    //  - +I / +I+G / +I+R (pinv>0): the mirror now COMPUTES these (A3 (+I) term at :84; it no longer declines pinv>0).
+    //    BUT DEVUSE still EXCLUDES them from the trust path via the explicit `getPInvar()<=0` guard below, because the
+    //    mirror-vs-jolt rel check is TAUTOLOGICAL for +I: mirror and joltLnL share the identical +I formulation
+    //    (same base_invar, same fabs(lh)+pinv*base_invar), so rel_m~1e-11 ALWAYS passes -- it cannot catch the scab
+    //    173825354 ~1.7e-6 GPU(jolt)-vs-CPU divergence (the +I(pinv) COUPLING; every divergent row had pinv>0, even a
+    //    1.7e-5 that prints 0.0000). So pinv>0 routes to the authoritative CPU postorder. (The mirror's +I value IS
+    //    correct vs CPU -- validated by DEVCHECK mirror-vs-CPU, iplus 173879879 -- the risk is joltLnL's +I accuracy,
+    //    which A3 does not close; hence keep +I on CPU here.)
+    //  - pure +R (freeRate, pinv=0): the mirror does NOT gate freeRate (red-team-corrected -- no freeRate gate exists,
+    //    it computes +R via getRate/getProp) and on synthetic 100K it AGREES with CPU (rel~0). BUT we still EXCLUDE it
+    //    (`!freeRateOK` below) and send it to CPU: scab proved +R is the divergence-prone family and the CPU self-check
+    //    is its backstop; pure-+R agreement is UNVALIDATED on real +R data (avian). Re-enabling pure-+R offload is a
+    //    future step gated on a real-+R cross-check, not assumed now. Cost of excluding it: ~4-9 candidates/aln.
+    // SAFETY: (a) trust the mirror ONLY for non-freeRate, pinv=0 models at rel<=1e-9 (base/+G land ~1e-11);
+    //  (b) a 1/K sampled CPU audit still runs the authoritative postorder to bound the shared-k1_node blind spot
+    //  (K.4/K.7-step2); (c) SERIAL regime only -- the mirror writes __constant__ g_Uinv with no lock, so under a
+    //  parallel evaluateAll (--thread-model/MPI) it would race (K.9); omp_in_parallel() falls back to CPU there.
+    // NOT bit-identical to the CPU path (mirror value differs ~1e-11); the gate is SELECTION-INVARIANCE vs the CPU
+    // -m MF oracle + the per-candidate wall win, not byte-identity.
+    static const bool mf_devuse  = (getenv("JOLT_MF_DEVUSE") != nullptr);
+    static const int  mf_audit_k = []{ const char* e=getenv("JOLT_MF_DEVUSE_AUDIT"); int n=e?atoi(e):8; return n<1?1:n; }();
+    static long mf_devuse_calls = 0;
+    if (mf_devuse && !mf_devcheck && !freeRateOK && site_rate->getPInvar() <= 0.0 && !omp_in_parallel()) {   // A3: exclude pinv>0 (+I* tautology, red-team) + freeRate; trust only base/+G
+        bool audit_tick = ((mf_devuse_calls++ % mf_audit_k) == 0);   // 1/K candidates keep the authoritative CPU check
+        if (!audit_tick) {
+            // Pass _pattern_lh (NOT nullptr) so the mirror POPULATES the per-pattern likelihood buffer, exactly as the
+            // leanTail Stage-2b path does (:2451). This makes the -B/bootstrap safety EXPLICIT (saveCurrentTree ->
+            // computePatternLikelihood reads _pattern_lh) instead of relying incidentally on the doNNISearch refresh
+            // ordering (red-team hardening #1). Cost is the same k1_node fold, just written out.
+            double gpuMirror = gpuComputeTreeLnLCleanRoom(_pattern_lh);  // independent device self-check; NaN => declined
+            if (!std::isnan(gpuMirror)) {
+                double rel_m = (gpuMirror != 0.0) ? fabs((joltLnL - gpuMirror) / gpuMirror) : fabs(joltLnL - gpuMirror);
+                if (rel_m <= 1e-9) {
+                    if (getenv("JOLT_DEBUG"))
+                        printf("[JOLT-DEVUSE] GPU self-check model=%s ns=%d ncat=%d rel=%.3e -> CPU postorder SKIPPED\n",
+                               model->getName().c_str(), ns, ncat, rel_m);
+                    setCurScore(gpuMirror);
+                    return gpuMirror;
+                }
+                // rel_m in (1e-9, ...] -> not tight enough; fall through to the authoritative CPU postorder
+            }
+            // NaN (mirror declined: +I pinv>0 / mixture / ns!=4,20) -> fall through to CPU (coverage preserved).
+            // (pure +R never reaches here: excluded by !freeRateOK above -> straight to the CPU backstop.)
+        }
+    }
+
+    double t_cpu0 = mf_devcheck ? getRealTime() : 0.0;
     double cpuLnL = computeLikelihood();
+    if (mf_devcheck) {
+        double wall_cpu = getRealTime() - t_cpu0;
+        double t_gpu0 = getRealTime();
+        double gpuLnL = gpuComputeTreeLnLCleanRoom(nullptr);   // independent device mirror; NaN => declined (pinv>0/mixture/ns!=4,20/...)
+        double wall_gpu = getRealTime() - t_gpu0;
+        int declined = std::isnan(gpuLnL) ? 1 : 0;
+        double rel_gpu = declined ? 0.0 : ((gpuLnL != 0.0) ? fabs((joltLnL - gpuLnL) / gpuLnL) : fabs(joltLnL - gpuLnL));
+        printf("[MF-DEVCHECK] ns=%d ncat=%d pinv=%.8f wall_cpu=%.5f wall_gpu=%.5f gpu_declined=%d rel_gpu=%.3e joltLnL=%.4f cpuLnL=%.6f gpuLnL=%.6f\n",
+               ns, ncat, site_rate->getPInvar(), wall_cpu, wall_gpu, declined, rel_gpu, joltLnL, cpuLnL, gpuLnL);
+        fflush(stdout);
+    }
     double rel = (cpuLnL != 0.0) ? fabs((joltLnL - cpuLnL) / cpuLnL) : fabs(joltLnL - cpuLnL);
     static int report_count = 0;
     // G.4.3a: use model->getName() (includes the +F/+FO freq suffix) not model->name (matrix only) — the old print
@@ -2549,6 +2643,25 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
                joltLnL, cpuLnL, rel, (rel <= 1e-9 ? "PASS" : (rel <= 1e-6 ? "OK(gamma-resid)" : "MISMATCH")),
                alpha0, (ncat>1?site_rate->getGammaShape():0.0),
                pinv0, (optPinv?site_rate->getPInvar():0.0), (optPinv?" +I":"")); }
+
+    // T2 SPIKE (JOLT_IR_TRACE, default-OFF): resolve the +I+R constant ~10-nat joltLnL-vs-CPU offset (scab 173825354).
+    // The offset is INVARIANT to pinv (0.0184..0.00036 -> same ~10), which falsifies a missing pinv*base_invar term
+    // (that would scale with pinv). Decompose: diff = joltLnL - cpuLnL; invContrib = cpuLnL - cpuLnL@pinv=0. If
+    // |diff| ~= invContrib the GPU value is missing the invariant term; if invContrib >> diff (thousands vs ~10) the
+    // GPU HAS the invariant and the ~10 is a small residual (normalization or a stale-pinv write-back). Recomputes CPU
+    // twice (pinv=0 then restore) -> 100K only. freeRate && optPinv (the divergent family) only.
+    if (getenv("JOLT_IR_TRACE") && freeRateOK && optPinv && report_count < 30) {
+        double p_jolt = site_rate->getPInvar();
+        double diff   = joltLnL - cpuLnL;
+        site_rate->setPInvar(0.0); clearAllPartialLH();
+        double cpu_p0 = computeLikelihood();                       // CPU lnL with the invariant term removed
+        site_rate->setPInvar(p_jolt); clearAllPartialLH();
+        double cpu_re = computeLikelihood();                       // restore state at the real pinv
+        printf("[IR-TRACE] model=%s ncat=%d pinv=%.6f | joltLnL=%.6f cpuLnL=%.6f diff=%.6f | cpuLnL@pinv0=%.6f invContrib=%.6f | diff/invContrib=%.4f restore_rel=%.2e\n",
+               joltModelName.c_str(), ncat, p_jolt, joltLnL, cpuLnL, diff, cpu_p0, cpuLnL - cpu_p0,
+               (cpuLnL-cpu_p0!=0.0?diff/(cpuLnL-cpu_p0):0.0), (cpuLnL!=0.0?fabs((cpu_re-cpuLnL)/cpuLnL):0.0));
+        fflush(stdout);
+    }
 
     // G.6.1 safety gate: if the fresh CPU recompute disagrees with the JOLT lnL at the SAME written-back params by
     // more than the gamma-residual band, the GPU result is untrustworthy (a kernel/regime failure, not a convergence

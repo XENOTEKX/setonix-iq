@@ -64,7 +64,8 @@ __global__ void k1_node(int ns, int nptn, int ncat, int isRoot, double* __restri
         int nchild,
         const double* ec0, const double* p0, const unsigned char* t0,
         const double* ec1, const double* p1, const unsigned char* t1,
-        const double* ec2, const double* p2, const unsigned char* t2) {
+        const double* ec2, const double* p2, const unsigned char* t2,
+        double pinv = 0.0, const double* base_invar = nullptr) {   // A3 (+I): add pinv*base_invar at root when base_invar!=null (else byte-identical)
     int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
     double lh = 0.0;
     for (int c=0;c<ncat;c++){
@@ -84,7 +85,7 @@ __global__ void k1_node(int ns, int nptn, int ncat, int isRoot, double* __restri
                 o[(size_t)r*nptn]=v; }
         }
     }
-    if (isRoot) patlh[ptn] = log(fabs(lh));
+    if (isRoot) patlh[ptn] = log(base_invar ? fabs(lh)+pinv*base_invar[ptn] : fabs(lh));   // A3 (+I): +pinv*base_invar
 }
 
 // ============================================================================================================
@@ -603,7 +604,8 @@ __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ o
         int nchild,
         const double* ec0, const double* p0, const unsigned char* t0,
         const double* ec1, const double* p1, const unsigned char* t1,
-        const double* ec2, const double* p2, const unsigned char* t2) {
+        const double* ec2, const double* p2, const unsigned char* t2,
+        double pinv = 0.0, const double* base_invar = nullptr) {   // A3 (+I): add pinv*base_invar at root when base_invar!=null (else byte-identical)
     int ptn = blockIdx.x*blockDim.x + threadIdx.x; if (ptn>=nptn) return;
     double lh = 0.0;
     for (int c=0;c<ncat;c++){
@@ -627,7 +629,7 @@ __global__ void k1_node_t(int nptn, int ncat, int isRoot, double* __restrict__ o
                 o[(size_t)r*nptn]=v; }
         }
     }
-    if (isRoot) patlh[ptn] = log(fabs(lh));
+    if (isRoot) patlh[ptn] = log(base_invar ? fabs(lh)+pinv*base_invar[ptn] : fabs(lh));   // A3 (+I): +pinv*base_invar
 }
 
 template<int NS>
@@ -698,11 +700,12 @@ static inline void launch_k1_node(int GB, int TB, cudaStream_t stream,
         int ns, int nptn, int ncat, int isRoot, double* out, double* patlh, int nchild,
         const double* ec0, const double* p0, const unsigned char* t0,
         const double* ec1, const double* p1, const unsigned char* t1,
-        const double* ec2, const double* p2, const unsigned char* t2){
+        const double* ec2, const double* p2, const unsigned char* t2,
+        double pinv = 0.0, const double* base_invar = nullptr){   // A3 (+I): threaded to the kernel's root term; defaults keep every existing caller byte-identical
     const bool T = jolt_ns_template_enabled();
-    if (T && ns==4)  k1_node_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
-    else if (T && ns==20) k1_node_t<20><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
-    else k1_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2);
+    if (T && ns==4)  k1_node_t<4> <<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2,pinv,base_invar);
+    else if (T && ns==20) k1_node_t<20><<<GB,TB,0,stream>>>(nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2,pinv,base_invar);
+    else k1_node<<<GB,TB,0,stream>>>(ns,nptn,ncat,isRoot,out,patlh,nchild,ec0,p0,t0,ec1,p1,t1,ec2,p2,t2,pinv,base_invar);
 }
 static inline void launch_kj_pre(int GB, int TB, cudaStream_t stream,
         int ns, int nptn, int ncat, double* out_pre,
@@ -1244,6 +1247,7 @@ extern "C" double gpu_lnl_crosscheck(
     const double* echild, const unsigned char* tip, const double* ptn_freq,
     const int* desc_isRoot, const int* desc_nchild, const int* desc_outSlot,
     const int* desc_childNode, const int* desc_childIsLeaf, const int* desc_childLeaf, const int* desc_childSlot,
+    double pinv, const double* base_invar,   // A3 (+I): pinv + host per-pattern invariant base (nullptr/pinv<=0 => byte-identical, no +I term)
     double* out_patlh)
 {
     int ns = nstates;
@@ -1265,6 +1269,14 @@ extern "C" double gpu_lnl_crosscheck(
     GCK(cudaMemcpy(d_echild, echild, (size_t)nnodes*ecStride*sizeof(double), cudaMemcpyHostToDevice));
     GCK(cudaMemcpy(d_tip, tip, (size_t)ntax*nptn, cudaMemcpyHostToDevice));
 
+    // A3 (+I): upload the per-pattern invariant base (once) if pinv>0; else d_baseinvar stays null => root term unchanged.
+    double* d_baseinvar = nullptr;
+    if (pinv > 0.0 && base_invar) {
+        DEVB(gb_baseinvar, (size_t)nptn*sizeof(double));
+        d_baseinvar = (double*)gb_baseinvar.p;
+        GCK(cudaMemcpy(d_baseinvar, base_invar, (size_t)nptn*sizeof(double), cudaMemcpyHostToDevice));
+    }
+
     int TB=256, GB=(nptn+TB-1)/TB;
     for (int idx=0; idx<nInternal; idx++){
         int isRoot = desc_isRoot[idx], nchild = desc_nchild[idx];
@@ -1279,7 +1291,8 @@ extern "C" double gpu_lnl_crosscheck(
             else                          p[k] = d_partial + (size_t)desc_childSlot[idx*3+k]*slotSz;
         }
         launch_k1_node(GB,TB,0,ns,nptn,ncat,isRoot,out,d_patlh,nchild,
-            ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2]);
+            ec[0],p[0],t[0], ec[1],p[1],t[1], ec[2],p[2],t[2],
+            pinv, d_baseinvar);   // A3 (+I): kernel adds pinv*base_invar at the root fold (d_baseinvar null => unchanged)
     }
     GCK(cudaDeviceSynchronize());
     GCK(cudaGetLastError());
@@ -2737,13 +2750,24 @@ extern "C" double gpu_jolt_optimize(
     // nTile==1 this uploads the whole arrays once per sweep — byte-identical device state to the old one-time upload.)
     std::vector<unsigned char> tipChunk((size_t)ntax*chunk0);
     std::vector<double> biFull(nptn, 0.0); if (base_invar) for (int p=0;p<nptn;p++) biFull[p]=base_invar[p];
+    // Phase 1a JOLT_MF_RESIDENT (MODELFINDER-FULL-GPU-PLAN.md §F): tip/ptn_freq/base_invar are CONSTANT across this
+    // optimise call (comment above) and the three device buffers d_tip/d_ptnfreq/d_baseinvar are written ONLY by
+    // setChunk and are read-only to every kernel (verified: no kernel writes gbj_tip/gbj_ptnfreq/gbj_baseinvar).
+    // So re-uploading the same chunk is redundant. nsys(173763069)+sqlite: at 1M this re-upload = 86.5% of H2D
+    // (451.5s, the 93.5MB d_tip re-sent ~505x/candidate). Guard: skip the re-gather+3xH2D when the requested chunk
+    // is already resident. Byte-identical by construction (identical device bytes). Default OFF for the A/B gate;
+    // loadedChunk is per-CALL (resets each gpu_jolt_optimize invocation) so a fresh candidate always re-uploads.
+    static const bool mf_resident = (getenv("JOLT_MF_RESIDENT") != nullptr);
+    int loadedChunk = -1;
     auto setChunk=[&](int t){
         int p0=t*chunk0, p1=p0+chunk0; if(p1>nptn)p1=nptn; int cw=p1-p0;
         Pn=cw; pOff=p0; slotSz=(size_t)ncat*ns*cw; GB=(cw+TB-1)/TB;
+        if (mf_resident && t == loadedChunk) return;   // Phase 1a: chunk already resident -> skip redundant re-upload
         for(int a=0;a<ntax;a++) memcpy(&tipChunk[(size_t)a*cw], tip+(size_t)a*nptn+p0, (size_t)cw);
         cudaMemcpy(d_tip, tipChunk.data(), (size_t)ntax*cw, cudaMemcpyHostToDevice);
         cudaMemcpy(d_ptnfreq, ptn_freq+p0, (size_t)cw*sizeof(double), cudaMemcpyHostToDevice);
         cudaMemcpy(d_baseinvar, biFull.data()+p0, (size_t)cw*sizeof(double), cudaMemcpyHostToDevice);
+        loadedChunk = t;   // Phase 1a
     };
 
     DEVB(gbj_redpart, (size_t)3*GBmax*sizeof(double));   // G.5.0: 3 channels x GBmax per-block partial sums
@@ -3135,6 +3159,13 @@ extern "C" double gpu_jolt_optimize(
         double m=0; for(int c=0;c<ncat;c++) m+=bprop[c]*meanR[c];   // mean-1 base constraint Σ w·ρ (≈1 if getRate/getProp are in convention)
         if(m>0){ for(int c=0;c<ncat;c++) meanR[c]/=m; for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
     double lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+    // T5 BISECTION PROBE (JOLT_IR3, default-OFF): the +I+R constant +10.00-nat joltLnL-vs-CPU offset (iplus 173879879:
+    // jolt=cpu+10.00 exactly, mirror==cpu, only freeRate&&optPinv, pinv-invariant). Force maxiter=0 for freeRate&&optPinv
+    // so gpu_jolt_optimize RETURNS THIS SEED lnL and writes back the SEED brlen/rates/props => DEVCHECK's cpuLnL is
+    // computed at the SAME seed state. If joltLnL(seed)-cpuLnL(seed)=+10 the offset is in the SEED evalLnL (seeding of
+    // catRate/catProp_v or the eval itself, reproducible without the LM loop); if =0 it ACCUMULATES in the LM loop
+    // (gaugeFix/applyPinv on accept). Bisects loop-vs-seed in ONE build. No production effect (flag-gated).
+    if (getenv("JOLT_IR3") && freeRate==1 && optPinv) maxiter = 0;
     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
     double aPrev=0,gaPrev=0; bool haveSec=false;
     double pPrev=0,gpPrev=0;   // G.4.3b: pinv secant curvature (mirrors the alpha secant)
@@ -3145,6 +3176,34 @@ extern "C" double gpu_jolt_optimize(
     std::vector<double> lbRho;                    // 1/(y.s) per pair
     std::vector<double> prevB, prevG;             // previous accepted iterate (edge space) + its g_df, for the next pair
     std::vector<double> lbDir(lbM>0?nedge:0,0.0), lbQ(lbM>0?nedge:0,0.0), lbAlf;   // two-loop scratch
+    // ②a +I+R WRITEBACK RECONCILIATION (grounded: JOB C irsweep 173890952 — JOLT reaches the true MLE, =pure-CPU MLE
+    // -7541972.276 exact, but the state WRITTEN BACK is ~10 nats worse => self-check rel~1.3e-6 trips 1e-6 => CPU fallback;
+    // mfgauge 173893718: gaugeFix INVARIANT d=0. VALIDATED job 173898475: -m MF worst|jolt-cpu| 10.00->1e-4 DNA+AA).
+    // Root cause (Plan-agent + blue-team, source-verified): the pinv-FD (:3212-3215) calls evalLnL(base,baseA,baseP±1e-4)
+    // whose applyPinv leaves catRate/catProp_v at the (1-baseP∓1e-4) scaling; when nFreeQ==0 nothing re-evals at baseP
+    // before the baseR_save/baseW_save capture (:3238), so the reject-EXIT restore (:3333) writes props summing to
+    // 1-1e-4 => ~1e-4*N_var ≈ 10-nat deficit at 100k sites. ⚠️ TRIGGER IS nFreeQ==0, NOT "AA": AA AND equal/empirical-freq
+    // DNA (JC+I+R, F81+F+I+R) hit it; only FREE-Q DNA (HKY/TN/GTR) is clean because its Q-FD's last eval (:3226) re-evals
+    // at baseP first. The corrupted catRate also feeds g_y=catRate·gradR (:3241), so the fix (before :3238) repairs both.
+    // TWO default-OFF fixes, A/B'd by gems_irbestwb.sh; FDFIX is the graduation candidate (red-team: BESTWB alone fails
+    // the zero-accept exit where bs_have==false; blue-team: BESTWB redundant once FDFIX lands):
+    static const bool JOLT_IR_FDFIX_EN  = (getenv("JOLT_IR_NOFDFIX") == nullptr);  // GRADUATED DEFAULT-ON (job 173898475: -m MF gap 10->1e-4 DNA+AA, selection unchanged, DNA exact-MLE incl. avian GTR+F+I+R4); disable via JOLT_IR_NOFDFIX for A/B. AA +I+R still 0.07 below CPU MLE = the ④ convergence lever, tracked separately.
+    static const bool JOLT_IR_BESTWB_EN = (getenv("JOLT_IR_BESTWB") != nullptr);   // defense-in-depth ONLY, default-OFF (red-team: INCOMPLETE — skips the zero-accept exit; never ship as the sole fix). snapshot best-accept, restore before writeback
+    double bs_lnL=-1e300; bool bs_have=false; double bs_alpha=0.0, bs_pinv=0.0;
+    std::vector<double> bs_brlen, bs_catRate, bs_catProp, bs_meanR, bs_bprop, bs_qcur;
+    // ④ AA +I+R convergence gap — ACCEPTED, DOCUMENTED limitation (user decision 2026-07-15). JOLT's diagonal-LM optimum on
+    // AA LG+I+R4 (-te = -7541972.346) sits 0.07 nats below the CPU MLE (-7541972.276) = 0.14 BIC, SELECTION-IRRELEVANT
+    // (best-fit unchanged in every gate). It lives in this diagonal-LM's noisy FD model-arm secants (ddY/ddZ/ddP) + a shared
+    // mu that ratchets 1e3->1e9 (CONVTRACE probe 173907382) — NOT ②a (the +I+R writeback fix, which stays graduated). The
+    // curvFloor band-aid (κ·rN) was REVERTED: it fixed AA R4 but REGRESSED high-ncat +R (LG+I+R8 -0.41, R10 -2.6; gate
+    // 173910972), and NO hardcoded constant generalizes across ncat/models/data. The principled parameter-free fix (OPG
+    // empirical-Fisher — see research/Modelfinder/JOLT-OPG-FISHER-OPTIMIZER.md) is DEFERRED: not worth an optimizer redesign
+    // unless the gap ever flips a REAL-DATA selection (untested). The arms below use fabs(dd) (byte-identical pre-④). The
+    // JOLT_IR_TOL / FREEZE_MODEL / FREEZE_BRLEN / CONVTRACE flags are retained diagnostics (all default-OFF, byte-identical).
+    if(const char* _e=getenv("JOLT_IR_TOL")) tol=atof(_e);                                                            // H-tol diagnostic
+    const bool   JOLT_IR_FREEZE_MODEL = (getenv("JOLT_IR_FREEZE_MODEL") != nullptr);                                   // H-couple attribution: brlen+alpha only
+    const bool   JOLT_IR_FREEZE_BRLEN = (getenv("JOLT_IR_FREEZE_BRLEN") != nullptr);                                   // H-couple attribution: model arms only
+    const bool   JOLT_IR_CONVTRACE    = (getenv("JOLT_IR_CONVTRACE") != nullptr);                                      // H-diag: per-iter mu/rej/exit print
     for(it=1; it<=maxiter; it++){
         base=brlen; double baseA=curAlpha, baseP=curPinv; if(ncat>1 && !freeRate) applyAlpha(baseA);
         double lg,ga; computeGradient(lg,ga);
@@ -3193,6 +3252,7 @@ extern "C" double gpu_jolt_optimize(
         std::vector<double> baseY(freeRate==1?ncat:0),baseZ(freeRate==1?ncat:0),g_y(freeRate==1?ncat:0),g_z(freeRate==1?ncat:0);
         std::vector<double> ddY(freeRate==1?ncat:0,-1e6),ddZ(freeRate==1?ncat:0,-1e6);
         if(freeRate==1){
+            if(JOLT_IR_FDFIX_EN) applyPinv(baseP);   // ②a root-cause: undo the pinv-FD (:3212-3215) perturbation so baseR_save/baseW_save (+ g_y :3241) == the consistent gauged baseP state (meanR holds catRate_gauged·(1-pinv) via gaugeFix :3146 => applyPinv(baseP) recovers catRate_gauged). Free-Q DNA no-op (Q-FD already resets); FIXES nFreeQ==0 DNA (JC/F81)+AA. default-OFF => byte-identical.
             baseR_save=catRate; baseW_save=catProp_v;
             // G.5.1d (2b): the log-rate arm lives in the PINV-FREE basis y=log(meanR=ρ) (the trial staging writes meanR=exp(y)).
             // g_y = d lnL/dy = meanR·dL/dmeanR = meanR·(gradR/(1-p)) = catRate·gradR (the (1-p) cancels). pure +R: meanR==catRate => byte-identical.
@@ -3208,7 +3268,7 @@ extern "C" double gpu_jolt_optimize(
         aPrev=baseA; gaPrev=ga; pPrev=baseP; gpPrev=gradPinv;
         for(int k=0;k<nFreeQ;k++){ qPrev[k]=qcur[k]; gqPrev[k]=gradQ[k]; }
         haveSec=true;
-        bool acc=false;
+        bool acc=false; double muIn=mu; int nRej0=nRej;   // ④ CONVTRACE: mu at iteration entry + rejects-this-iter
         if(lbM>0){
             // ---- L-BFGS brlen direction (computed ONCE; textbook step-length line search on t) — red-team DEFECT A fix:
             // a real step length t (NOT the mu ladder), so t*dir->0 always reaches acceptance for the SPD-ascent dir
@@ -3243,9 +3303,9 @@ extern "C" double gpu_jolt_optimize(
                 else { t*=0.5; nRej++; } }
         } else {
             for(int bt=0; bt<14; bt++){
-                cand=base; for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }
-                double ca=baseA; if(optAlpha && ncat>1){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
-                double cp=baseP; if(optPinv==1){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }   // L6: ==2 => cp stays baseP (pinv fixed)
+                cand=base; if(!JOLT_IR_FREEZE_BRLEN) for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }   // ④ FREEZE_BRLEN: hold brlen at base
+                double ca=baseA; if(optAlpha && ncat>1 && !JOLT_IR_FREEZE_MODEL){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
+                double cp=baseP; if(optPinv==1 && !JOLT_IR_FREEZE_MODEL){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }   // L6: ==2 => cp stays baseP
                 std::vector<double> cq(nFreeQ>0?nFreeQ:0);
                 for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
                 // G.5.1b +R: log-rate / softmax-weight arms at the SAME mu (mirror the alpha/pinv diagonal arms). Stage the
@@ -3254,9 +3314,9 @@ extern "C" double gpu_jolt_optimize(
                 std::vector<double> cr,cw,cz;
                 if(freeRate==1){ cr.resize(ncat); cw.resize(ncat); cz.resize(ncat);
                     bool remW = (JOLT_REM_EN && optPinv==0);   // L7 Stage B: EM weight M-step (pure +R only)
-                    for(int c=0;c<ncat;c++){ double ny=baseY[c]+g_y[c]/(fabs(ddY[c])+mu); double r=exp(ny);
+                    for(int c=0;c<ncat;c++){ double ny=baseY[c]+(JOLT_IR_FREEZE_MODEL?0.0:g_y[c]/(fabs(ddY[c])+mu)); double r=exp(ny);   // FREEZE_MODEL holds rate
                         if(r<1e-4)r=1e-4; if(r>1000.0)r=1000.0; cr[c]=r;
-                        if(!remW) cz[c]=baseZ[c]+g_z[c]/(fabs(ddZ[c])+mu); }   // gradient arm (OFF path / +I+R)
+                        if(!remW) cz[c]=baseZ[c]+(JOLT_IR_FREEZE_MODEL?0.0:g_z[c]/(fabs(ddZ[c])+mu)); }   // gradient arm (OFF path / +I+R); FREEZE_MODEL holds weight
                     if(remW){ double wn=0; for(int c=0;c<ncat;c++) wn+=WNc[c];   // EM closed-form: w_c = WNc[c]/Σ WNc
                         double tt=0; for(int c=0;c<ncat;c++){ cw[c]=(wn>0.0? WNc[c]/wn : bprop[c]); if(cw[c]<1e-4)cw[c]=1e-4; tt+=cw[c]; }
                         for(int c=0;c<ncat;c++){ cw[c]/=tt; cz[c]=log(cw[c]); } }   // floor+renorm (== softmaxApply MIN_PROP); logit state for zR consistency
@@ -3267,11 +3327,28 @@ extern "C" double gpu_jolt_optimize(
                     // G.5.1d (2b): accept the staged pinv-free meanR/bprop, then DERIVE catRate/catProp_v via applyPinv(curPinv)
                     // (== cr/cw at pinv=0, so pure +R byte-identical), then gauge. (Old: catRate=cr direct — wrong under +I.)
                     if(freeRate==1){ for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } zR=cz; applyPinv(curPinv); gaugeFix(); }
+                    // GAUGE-INVARIANCE PROBE (JOLT_GAUGE_TRACE, default-OFF): `ln` was computed at the PRE-gauge state
+                    // (cand, catRate=cr/(1-cp)); applyPinv+gaugeFix just re-expressed it (catRate/=m, brlen*=m) which is
+                    // SUPPOSED to be lnL-invariant (rate*brlen preserved, +I term rate/brlen-independent). Re-eval at the
+                    // JUST-GAUGED state and compare: d = ln_gauged - ln. d~=0 => gaugeFix invariant (drift is elsewhere);
+                    // d~=-10 => gaugeFix corrupts THIS accept (the AA -te iriters 173889582 writeback -10). Dumps the
+                    // normalizers (Sprop should be (1-pinv); SpropRate=m_post should be ~1 after the gauge). Measurement
+                    // only (extra evalLnL); leaves device state at the gauged accept, which the next iter's base=brlen expects.
+                    if (getenv("JOLT_GAUGE_TRACE") && freeRate==1 && optPinv==1) {
+                        double ln_g = evalLnL(brlen, curAlpha, curPinv, nFreeQ>0?qcur.data():nullptr); nLnLEval++;
+                        double sp=0, spr=0; for(int c=0;c<ncat;c++){ sp+=catProp_v[c]; spr+=catProp_v[c]*catRate[c]; }
+                        fprintf(stderr,"[GAUGE] it=%d ln=%.6f ln_gauged=%.6f d=%.6f | Sprop=%.9f SpropRate=%.9f pinv=%.8f b_c0=%.6f cr0=%.6f cp0=%.6f\n",
+                                it, ln, ln_g, ln_g-ln, sp, spr, curPinv, brlen[c0], catRate[0], catProp_v[0]);
+                    }
                     lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true;
                     if(out_patlh&&nTile==1){ cudaMemcpy(out_patlh,d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost); snapDone=true; }   // STAGE 2b snapshot-on-accept: d_patlh holds THIS just-accepted trial (nTile==1 => all nptn); host-only work above it (gaugeFix) never touches d_patlh
+                    // ②a defensive snapshot: this accept is the post-gauge, self-consistent state (JOLT_GAUGE_TRACE d=0) that evaluates to ln=lnL. Capture it so loop exit writes back THIS state, not the pinv-FD-perturbed reject-EXIT restore.
+                    if(JOLT_IR_BESTWB_EN && freeRate==1 && ln>bs_lnL){ bs_lnL=ln; bs_have=true;
+                        bs_brlen=brlen; bs_alpha=curAlpha; bs_pinv=curPinv; bs_catRate=catRate; bs_catProp=catProp_v; bs_meanR=meanR; bs_bprop=bprop; if(nFreeQ>0) bs_qcur=qcur; }
                     if(dl<tol)conv=true; break; }
                 else { mu*=4.0; nRej++; } }
         }
+        if(JOLT_IR_CONVTRACE && freeRate==1) fprintf(stderr,"[IRCONV] it=%d muIn=%.3e muOut=%.3e rej_it=%d acc=%d conv=%d lnL=%.6f exit=%s\n", it, muIn, mu, nRej-nRej0, acc?1:0, conv?1:0, lnL, acc?(conv?"CONV(dl<tol)":"accept"):"REJECT-EXIT");   // ④ H-diag
         if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP;
             // G.5.1d (2b): restore catRate/catProp_v AND the pinv-free basis. baseR_save/baseW_save are catRate/catProp_v at
             // base; meanR=ρ=catRate·(1-baseP), bprop=w=catProp_v/(1-baseP). f==1 (pure +R) => meanR=baseR_save (byte-identical).
@@ -3279,6 +3356,13 @@ extern "C" double gpu_jolt_optimize(
                 for(int c=0;c<ncat;c++){ meanR[c]=baseR_save[c]*f; bprop[c]=baseW_save[c]/f; } }
             if(nFreeQ>0) qApply(qcur.data()); break; }
         if(conv) break; }
+
+    // ②a RETRACTED (JOB C irsweep 173890952): the old JOLT_IR_REEVAL re-eval was HARMFUL — it re-scored the DRIFTED
+    // written-back state (props sum 1-1e-4, root cause :3227/:3322) and DEGRADED the reported optimum to MLE-10 (AA
+    // -7541982 vs the true MLE -7541972 that JOLT already reaches). REMOVED. The +I+R writeback is repaired at the root
+    // (JOLT_IR_FDFIX @ the pinv-FD capture) and/or by restoring the best-accept snapshot here (JOLT_IR_BESTWB, default-OFF).
+    if(JOLT_IR_BESTWB_EN && freeRate==1 && bs_have){   // restore best-accept {brlen,alpha,pinv,catRate,catProp_v,meanR,bprop,qcur} so out_* == the params that scored joltLnL (the MLE) => CPU self-check passes at the MLE
+        brlen=bs_brlen; curAlpha=bs_alpha; curPinv=bs_pinv; catRate=bs_catRate; catProp_v=bs_catProp; meanR=bs_meanR; bprop=bs_bprop; if(nFreeQ>0) qcur=bs_qcur; }
 
     if (cudaGetLastError()!=cudaSuccess) return (double)NAN;   // any launch/sync error -> caller falls back to CPU
     for(int v=0;v<nnodes;v++) out_brlen[v]=brlen[v];
