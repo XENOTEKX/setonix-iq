@@ -1329,14 +1329,22 @@ void getRateHet(SeqType seq_type, string model_name, double frac_invariant_sites
 // ============================================================================
 
 /**
- The CTF JOLT eligibility gate, mirroring ctf_rerank.py ineligible():
- FreeRate (+R / +I+R) and pure-+I decline to CPU; everything else (incl. +I+G,
- free-Q DNA) engages JOLT. MUST stay in lockstep with the in-tree JOLT
- eligibility gate (phylotreegpu.cpp).
+ The CTF JOLT eligibility gate, mirroring ctf_rerank.py ineligible().
+ LOCKSTEP UPDATE 2026-07-15 (M.2/M.6): the in-tree JOLT gate (phylotreegpu.cpp) now ENGAGES +R / +I+R / pure +I on the
+ GPU (pure +I default-on :2210, +R tiling :2696, fixed +I optPinv=2 :2203). This gate MUST stay in lockstep — so those
+ families are no longer "ineligible". PREVIOUSLY they were marked ineligible ⇒ the CTF coarse rerank SKIPPED them in the
+ refine step (selectCTFTopK:1411), which is exactly what could MISS a +R-freerate winner on real heterogeneous data (the
+ avian case; the detector :1398 warns of it). Now they are GPU-eligible ⇒ REFINED like any eligible model, on the GPU,
+ so no winner is skipped. Kill-switch JOLT_CTF_LEGACY restores the old +R/+I skip for A/B (measure the missed-winner risk).
  */
 static inline bool ctfIneligible(const string &name) {
-    return (name.find("+R") != string::npos) ||
-           (name.find("+I") != string::npos && name.find("+G") == string::npos);
+    static const bool legacy = (getenv("JOLT_CTF_LEGACY") != nullptr);
+    if (legacy)                                   // old behaviour: +R / +I+R / pure +I decline (may skip a +R winner)
+        return (name.find("+R") != string::npos) ||
+               (name.find("+I") != string::npos && name.find("+G") == string::npos);
+    // Extended in-tree gate handles +R / +I+R / pure +I on GPU ⇒ none are CTF-ineligible; genuinely GPU-ineligible
+    // families (mixtures / codon / free-Q beyond freeQok) already fall back at the in-tree hook, correctly.
+    return false;
 }
 
 /**
@@ -1445,9 +1453,13 @@ static void ctfSelfTest() {
         vector<pair<string,bool> > top = selectCTFTopK(A, 4, false);
         ASSERT(!top.empty() && top[0].first == "LG+G4" && top[0].second == false
                && "CTF self-test A: LG+G4 must be native #1 and refined");
-        bool found_R5_skip = false;
-        for (auto &p : top) if (p.first == "LG+R5") { ASSERT(p.second == true && "CTF self-test A: LG+R5 must be skipped"); found_R5_skip = true; }
-        ASSERT(found_R5_skip && "CTF self-test A: LG+R5 must appear in top-4");
+        // LOCKSTEP UPDATE 2026-07-15: +R is now GPU-eligible by default (ctfIneligible false) => LG+R5 is REFINED, not
+        // skipped; the old skip only happens under JOLT_CTF_LEGACY. Pin BOTH: LG+R5.skip == legacy-mode (must match the
+        // same getenv the gate reads, else this fixture would false-abort in Release, where NDEBUG is undefined).
+        const bool legacy_mode = (getenv("JOLT_CTF_LEGACY") != nullptr);
+        bool found_R5 = false;
+        for (auto &p : top) if (p.first == "LG+R5") { ASSERT(p.second == legacy_mode && "CTF self-test A: LG+R5 skipped iff legacy"); found_R5 = true; }
+        ASSERT(found_R5 && "CTF self-test A: LG+R5 must appear in top-4");
     }
     // Fixture B: LG+R4 leads native BIC => refined (leader never skipped).
     {

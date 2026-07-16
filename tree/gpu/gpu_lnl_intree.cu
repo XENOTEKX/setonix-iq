@@ -2682,7 +2682,12 @@ extern "C" double gpu_jolt_optimize(
             nTile = T;
         }
     }
-    if (freeRate) nTile = 1;   // +R declines to CPU before the optimise loop (RGRADCHECK uses full-nptn buffers); no tiling
+    // FIX 2026-07-15 (JOLT_RTILE): the production +R LM is chunk-safe -- the lnL loop (:2919) AND the gradient loop
+    // (:2981) tile and Kahan-accumulate across chunks (accW->WNc, rel<=1e-12 vs one-shot). ONLY the OPTIONAL RGRADCHECK
+    // finite-difference DIAGNOSTIC uses full-nptn buffers. The old `if (freeRate) nTile = 1;` disabled tiling for EVERY
+    // +R model -> AA-1M +R allocated the full 74.2GB gbj_partial arena and OOM'd on 80GB. Now +R auto-tiles like every
+    // other family (fits A100-80GB at nTile~2-3). JOLT_RTILE_OFF restores the old force-nTile=1 for rollback/A-B.
+    if (freeRate && (getenv("JOLT_RGRADCHECK") || getenv("JOLT_RTILE_OFF"))) nTile = 1;
     if (getenv("JOLT_DEBUG")) {
         size_t fB=0,tB=0; cudaMemGetInfo(&fB,&tB);
         fprintf(stderr,"[JOLT-TILE] nptn=%d ns=%d ncat=%d nInternal=%d nPool=%d -> nTile=%d (chunk~%d ptn); freeVRAM=%.1f GB\n",

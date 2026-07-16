@@ -2196,11 +2196,21 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     double pinv0 = site_rate->getPInvar();
     int optPinv = 0;
     if (pinv0 > 0.0) {
-        if (site_rate->isFixPInvar())                                JOLT_DECLINE("fixed-pinvar");
-        if (ncat <= 1)                                               JOLT_DECLINE("pure-pinvar-no-gamma");  // RateInvar getRate=1/(1-pinv) -> CPU (ncat>1 already => mean-gamma per the check above)
+        // COVERAGE 2026-07-15: fixed +I (user-pinned pinv) -> GPU as APPLY-DON'T-STEP (optPinv=2 below), not DECLINE.
+        // base_invar + 1/(1-pinv) rescale are populated (optPinv truthy); the 4 pinv-OPTIMISE arms are ==1-gated so
+        // optPinv=2 HOLDS pinv fixed = exactly "fixed pinv". Kill-switch JOLT_NO_FIXINVAR restores the decline.
+        bool jolt_fixp = site_rate->isFixPInvar();
+        if (jolt_fixp && getenv("JOLT_NO_FIXINVAR") != nullptr)      JOLT_DECLINE("fixed-pinvar");
+        // PROBE 2026-07-15 (JOLT_PUREINVAR): pure +I (RateInvar, ncat==1) declined here as "out of scope". But the
+        // rate machinery already handles it: meanR is init 1.0 (:2775) and applyAlpha is ncat>1-guarded (:2767/2905/3149),
+        // so meanR[0] stays 1.0; bprop[0]=catProp[0]/(1-pinv0)=(1-pinv0)/(1-pinv0)=1.0; applyPinv(p) => catRate[0]=1/(1-p),
+        // catProp_v[0]=(1-p) == EXACTLY RateInvar (getRate=1/(1-pinv), getProp=(1-pinv)). No double-rescale (meanR comes
+        // from alpha, NOT the pre-rescaled catRate0). So this decline looks over-conservative like the +R nTile guard.
+        // JOLT_PUREINVAR lets ncat==1 pinv>0 onto the GPU; the gate proves GPU==CPU (rel<=1e-6, RF=0) or falsifies it.
+        if (ncat <= 1 && getenv("JOLT_NO_PUREINVAR") != nullptr)     JOLT_DECLINE("pure-pinvar-no-gamma");  // COVERAGE 2026-07-15: pure +I DEFAULT-ON (invargate iP_dna rel 5.9e-10, RF=0, engaged); kill-switch JOLT_NO_PUREINVAR
         if (params && params->no_rescale_gamma_invar)                JOLT_DECLINE("no-rescale-gamma-invar"); // GPU unconditionally rescales rates by 1/(1-pinv); this flag disables IQ-TREE's rescale -> mismatch -> CPU
         if (aln->frac_const_sites <= 2.0*JOLT_MIN_PINVAR)            JOLT_DECLINE("no-const-sites");
-        optPinv = 1;
+        optPinv = jolt_fixp ? 2 : 1;   // COVERAGE: fixed pinv = apply-don't-step (2); estimated pinv = optimise (1)
     }
     // L6 (2026-07-09): +I in the brlen-ONLY path via optPinv==2 = APPLY-DON'T-STEP (the pinv analogue of L5's
     // freeRate==3). The kernel ALREADY has the +I apply-machinery (Lp=lh+pinv*baseinvar in kj_derv_fused
@@ -2497,6 +2507,28 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
             site_rate->setRate(c, outRates[c]); site_rate->setProp(c, outProps[c]); }
     }
     clearAllPartialLH();                                        // brlen + alpha + pinv + Q + (R) changed -> partials, theta & ptn_invar stale
+
+    // ── SAMPLED SELF-CHECK A/B EXPERIMENT (JOLT_SELFCHECK_STRIDE=N; default 1 == current per-candidate check) ──
+    // The FRESH CPU computeLikelihood() below is the DOMINANT host cost in -m MF (mfoffload: 43.5% DNA / 69.5% AA of
+    // host self-time). It is the load-bearing write-back coherence gate (returns cpuLnL; falls back to CPU on rel>1e-6).
+    // This experiment tests whether it is OVER-CONSERVATIVE overhead (model selection UNCHANGED when sampled) vs
+    // genuinely load-bearing (selection changes). With N>1, only every Nth candidate is CPU-verified; the rest TRUST
+    // joltLnL directly (no host recompute, no sync). N=1 (default) == byte-identical: the `<=1` short-circuit below
+    // NEVER evaluates the counter, so the original CPU-validated path runs unchanged. ⚠️ EXPERIMENT-ONLY at N>1 —
+    // (1) MF's candidate loop IS OMP-parallel (evaluateAll phylotesting.cpp:4559), so `jolt_sc_calls++` RACES across
+    // threads; benign (it only feeds the %stride decision — a lost increment just makes the sampled fraction
+    // approximate, never corrupts an lnL/partial), but NOT the "single-threaded" claim I first wrote (red-team F2-D).
+    // (2) skipping bypasses the rel<=1e-6 NaN-fallback: a diverged GPU optimum would be TRUSTED -> wrong-high BIC
+    // mis-select + an +I+G ASSERT abort (modelfactory.cpp:1528) (red-team F2-C). So N>1 MUST NOT be defaulted on.
+    static const int  JOLT_SC_STRIDE = []{ const char* e=getenv("JOLT_SELFCHECK_STRIDE"); int n=e?atoi(e):1; return n<1?1:n; }();
+    static long jolt_sc_calls = 0;
+    const bool jolt_do_check = (JOLT_SC_STRIDE <= 1) || ((jolt_sc_calls++ % JOLT_SC_STRIDE) == 0);
+    if (!jolt_do_check) {
+        if (getenv("JOLT_DEBUG")) printf("[JOLT] SAMPLED-SKIP self-check (stride=%d) model=%s -> trust GPU lnL=%.6f\n",
+                                         JOLT_SC_STRIDE, model->getName().c_str(), joltLnL);
+        setCurScore(joltLnL);
+        return joltLnL;   // trust the device value; skips the CPU postorder + its host sync
+    }
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
     double cpuLnL = computeLikelihood();
