@@ -2785,10 +2785,19 @@ extern "C" double gpu_jolt_optimize(
     // (451.5s, the 93.5MB d_tip re-sent ~505x/candidate). Guard: skip the re-gather+3xH2D when the requested chunk
     // is already resident. Byte-identical by construction (identical device bytes).
     // loadedChunk is per-CALL (resets each gpu_jolt_optimize invocation) so a fresh candidate always re-uploads.
-    // ✅ GRADUATED TO DEFAULT-ON 2026-07-17 (kill-switch JOLT_NO_MF_RESIDENT). Evidence: job 173781194 = 1.597x on
-    // DNA-1M -m MF, bit-identical (binary md5 26fba2bb), and the OMP-safety question was settled separately (the
-    // MF candidate loop is parallel, but loadedChunk is a per-call local, not shared state). Byte-identity is by
-    // construction, not by measurement: the guard only skips re-sending bytes the device already holds.
+    // ✅ GRADUATED TO DEFAULT-ON 2026-07-17 (kill-switch JOLT_NO_MF_RESIDENT).
+    // EVIDENCE (verified on disk, gems-verify/mfresprof_173781194): DNA-1M (935227 distinct patterns) -m MF,
+    // mf_off 2571.527s -> mf_on 1610.467s = 1.597x; bit-identical (best model F81+F+G4 both, lnL -59208019.1016
+    // both, treefile md5 identical, fitted params identical).
+    // ⚠️ THE SAFETY INVARIANT IS THE MUTEX, NOT THE LOCAL. My first comment credited "loadedChunk is a per-call
+    // local, not shared state" -- that is true (:349, captured by-ref) but it would NOT be sufficient on its own:
+    // d_tip/d_ptnfreq/d_baseinvar alias the process-global static DevBufs gbj_tip/gbj_ptnfreq/gbj_baseinvar
+    // (:2605-2609), and a per-call cursor over a SHARED device buffer is exactly a stale-read race. What actually
+    // makes this safe is that gpu_jolt_optimize holds the process-wide `static std::mutex jolt_gpu_mtx` across its
+    // ENTIRE body (:2648-2649), so no two candidates are ever in flight on those buffers at once.
+    // 🔴 IF jolt_gpu_mtx IS EVER NARROWED OR REMOVED, THIS FLAG BECOMES A SILENT STALE-CHUNK CORRECTNESS BUG.
+    // (md5 "26fba2bb" was cited for this job in my earlier notes; it is NOT recorded in the job artifacts and is
+    //  therefore dropped rather than repeated -- the 1.597x and the bit-identity are independently verified above.)
     static const bool mf_resident = (getenv("JOLT_NO_MF_RESIDENT") == nullptr);
     int loadedChunk = -1;
     auto setChunk=[&](int t){
@@ -3229,7 +3238,18 @@ extern "C" double gpu_jolt_optimize(
     // at baseP first. The corrupted catRate also feeds g_y=catRate·gradR (:3241), so the fix (before :3238) repairs both.
     // TWO default-OFF fixes, A/B'd by gems_irbestwb.sh; FDFIX is the graduation candidate (red-team: BESTWB alone fails
     // the zero-accept exit where bs_have==false; blue-team: BESTWB redundant once FDFIX lands):
-    static const bool JOLT_IR_FDFIX_EN  = (getenv("JOLT_IR_NOFDFIX") == nullptr);  // GRADUATED DEFAULT-ON (job 173898475: -m MF gap 10->1e-4 DNA+AA, selection unchanged, DNA exact-MLE incl. avian GTR+F+I+R4); disable via JOLT_IR_NOFDFIX for A/B. AA +I+R still 0.07 below CPU MLE = the ④ convergence lever, tracked separately.
+    // GRADUATED DEFAULT-ON (job 173898475: -m MF gap 10->1e-4 DNA+AA, selection unchanged, DNA exact-MLE incl. avian
+    // GTR+F+I+R4). Disable via JOLT_IR_NOFDFIX for A/B.
+    // 🔴 MERGE 2026-07-17 -- JOLT_NO_PINVFIX IS KEPT AS A KILL-SWITCH ALIAS, DELIBERATELY. mfresident implemented
+    // this same fix under the name JOLT_NO_PINVFIX, and the PASSING promotion gate (job 174010664,
+    // gems_pinvfix_rfavor_euk.sh) both (a) asserts `strings|grep JOLT_NO_PINVFIX` as its proof-of-build and (b) uses
+    // `JOLT_NO_PINVFIX=1` as its OFF arm. Dropping the name would have been WORSE THAN A COMPILE ERROR: the sentinel
+    // check would false-FAIL a correct binary, and -- if that were "fixed" -- the OFF arm would silently become a
+    // second ON arm, both arms would agree, and the gate would print SAME ✅ **having tested nothing**. A gate that
+    // passes without testing anything is the worst failure mode available to us. The alias costs one getenv.
+    // ⚠️ Retire this alias ONLY together with those scripts' sentinel + OFF-arm env, in the same commit.
+    static const bool JOLT_IR_FDFIX_EN  = (getenv("JOLT_IR_NOFDFIX") == nullptr &&
+                                           getenv("JOLT_NO_PINVFIX") == nullptr);
     static const bool JOLT_IR_BESTWB_EN = (getenv("JOLT_IR_BESTWB") != nullptr);   // defense-in-depth ONLY, default-OFF (red-team: INCOMPLETE — skips the zero-accept exit; never ship as the sole fix). snapshot best-accept, restore before writeback
     double bs_lnL=-1e300; bool bs_have=false; double bs_alpha=0.0, bs_pinv=0.0;
     std::vector<double> bs_brlen, bs_catRate, bs_catProp, bs_meanR, bs_bprop, bs_qcur;
@@ -3314,12 +3334,23 @@ extern "C" double gpu_jolt_optimize(
             // guards. Shipping the graduated NAME (JOLT_IR_FDFIX_EN / kill-switch JOLT_IR_NOFDFIX, job 173898475)
             // together with mfresident's GUARD (optPinv==1). Dropping either duplicate wholesale would have been a
             // real defect, in BOTH directions:
-            //   * drop mfresident  -> ships the UNGUARDED form. applyPinv at optPinv==2 does an (x*(1-p))/(1-p)
-            //     round-trip that is NOT byte-exact. Unreachable in mfdevcheck alone -- but the pureinvar layer
-            //     merged above introduces `optPinv = jolt_fixp ? 2 : 1` (phylotreegpu.cpp:2234; fa7d7a1c had ZERO
-            //     jolt_fixp), so THE MERGE ITSELF MAKES optPinv==2 REACHABLE. The guard is load-bearing HERE and
-            //     was not in either parent.
+            //   * drop mfresident  -> ships the UNGUARDED form (applyPinv at optPinv==2 does an (x*(1-p))/(1-p)
+            //     round-trip that is NOT byte-exact).
             //   * drop mfdevcheck -> loses the graduated, gate-validated name/default.
+            //
+            // 🔴 REACHABILITY -- CORRECTED 2026-07-17 (red-team). My first TWO justifications for this guard were
+            // BOTH WRONG, in opposite directions. The code is right; neither reason I gave for it was:
+            //   (a) "the merge makes optPinv==2 reachable via pureinvar's `optPinv = jolt_fixp ? 2 : 1`
+            //       (phylotreegpu.cpp:2258)" -- true when written, but the SAME merge then demoted fixed-pinvar to
+            //       opt-in (JOLT_FIXINVAR), so that route is now DEFAULT-OFF.
+            //   (b) "load-bearing regardless, because brlen-only (:2274) reaches optPinv==2 too" -- FALSE.
+            //       freeRateOK is defined `&& !brlenOnly` (:2204-2205) and the call site passes
+            //       `freeRateOK ? 1 : (freeRateBrlenOK ? 3 : ...)` (:2405) => brlenOnly gives freeRate 3/2/0,
+            //       NEVER 1 => it cannot enter this `if(freeRate==1)` block at all.
+            // TRUTH: with fixed-pinvar opt-in, this guard is UNREACHABLE-BY-DEFAULT => shipped behaviour is exactly
+            // the form job 173898475 validated. KEEP IT: one comparison, a strict improvement the moment
+            // JOLT_FIXINVAR=1 is set or fixed-pinvar is re-graduated, and deleting it would silently re-arm the trap.
+            // Documented as unreachable rather than justified by a reachability story that does not survive the source.
             // Guard semantics (mfresident's, verified): optPinv!=1 (pure +R / fixed-pinv) never runs the pinv-FD,
             // so catProp_v is never perturbed => applyPinv would be a no-op-in-intent but NOT byte-exact => guard
             // it out and pure +R / fixed-pinv stay BYTE-IDENTICAL.

@@ -54,8 +54,10 @@ using namespace std;
 // therefore serializes on the one GPU (the G.4.2b decision); ineligible candidates still run N-parallel on the CPU.
 static std::mutex gpu_mixjolt_mtx;
 
-// STAGE 2b (GPU-BOOTSTRAP-UFBOOT-PLAN §3 Stage 2b) — JOLT_BOOT_SNAPSHOT env flag (default OFF => the -B leanTail
-// keeps the Stage-1 gpuComputeTreeLnLCleanRoom mirror, byte-identical to the deployed 0faac84d). When ON, the -B
+// STAGE 2b (GPU-BOOTSTRAP-UFBOOT-PLAN §3 Stage 2b) — JOLT_BOOT_SNAPSHOT env flag. 🔴 STALE AS OF 2026-07-17: this
+// said "default OFF"; the flag is now **DEFAULT-ON** (kill-switch JOLT_NO_BOOT_SNAPSHOT) — see the graduation note
+// on jolt_boot_snapshot_enabled() below, which is the authority. Historic behaviour was: default OFF => the -B
+// leanTail keeps the Stage-1 gpuComputeTreeLnLCleanRoom mirror, byte-identical to the deployed 0faac84d. When ON, the -B
 // leanTail instead reuses gpu_jolt_optimize's OWN accepted-tree per-pattern snapshot (out_patlh) and SKIPS the
 // separate full-tree clean-room recompute. Correctness gate = bootstrap support within the CPU envelope + the
 // Σ freq·_pattern_lh == joltLnL identity guard. NB the snapshot is the true per-pattern log|lh_ptn| evaluated at the
@@ -70,6 +72,15 @@ static std::mutex gpu_mixjolt_mtx;
 // boot-snap=ON, iqtree.cpp believed it was ON, and the snapshot silently never ran. Not a correctness bug (the
 // CPU path is the safe fallback) but a real UNREALISED WIN: a CPU postorder per accepted -B +I+G save.
 // Now matches iqtree.cpp EXACTLY: default-ON, same kill-switch, same explicit-value override semantics.
+// ✅ -B GATE FOR DEFAULT-ON (job 173460572, gems-verify/l0_boot_r4_aa100k_R4_boot_173460572): arm B ran
+// `JOLT_BOOT_SNAPSHOT=1 GPU_BOOT_VERIFY=1` on AA-100k +R4 -B and reported ML RF(A,B)=0 (byte-id), consensus
+// RF(A,B)=0 (byte-id), and support values A=197 B=197 matched=197 **max|delta|=0.000**. So turning the snapshot
+// ON left every bootstrap support value unchanged. ⚠️ Honest scope: that run also set JOLT_RBRLEN=1 JOLT_L0=2, so
+// it is a combined-lever arm, not an isolated boot-snapshot A/B, and it is one dataset (AA-100k +R4).
+// ⚠️ By this file's own design note above, the snapshot is NOT bit-identical to the Stage-1 mirror (~1e-6, far
+// below ufboot_epsilon 0.5) -- so support values CAN move in principle; 173460572 is the evidence that they did
+// not. Fallbacks remain: the consumer checks the Σ freq·_pattern_lh == joltLnL identity to rel<=1e-6 and recovers
+// via computeLikelihood(), so a bad snapshot degrades to the CPU path rather than corrupting support.
 static inline bool jolt_boot_snapshot_enabled(){
     static int c=-1;
     if (c<0){
@@ -2756,7 +2767,7 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     //     the >20 clamp (clamp_hits=0). Pure +R (optPinv!=1 => no pinv-FD) never perturbs catProp_v => clean.
     //     ⚠️ The "cpuLnL == exported-eval to full precision" I once called decisive only proves the CPU faithfully
     //     re-scores the SAME under-normalised params — it does NOT prove Σprop+pinv=1. It does not.
-    // (4) FIX (gpu_lnl_intree.cu:3261, default-ON, kill-switch JOLT_NO_PINVFIX): re-derive catRate/catProp_v from the
+    // (4) FIX (gpu_lnl_intree.cu, default-ON, kill-switch JOLT_IR_NOFDFIX; JOLT_NO_PINVFIX kept as an alias): re-derive catRate/catProp_v from the
     //     base pinv (applyPinv(baseP)) BEFORE capturing baseR_save/baseW_save — meanR/bprop are still at base there, so
     //     this restores the exact base state (Σprop+pinv=1) and also repairs the g_y gradient (:3248). Host-only, zero
     //     GPU cost, pure +R byte-identical. The EARLIER "re-evaluate at the exported point and return that" fix was
