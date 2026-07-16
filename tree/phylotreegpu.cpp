@@ -2533,6 +2533,18 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     }
     clearAllPartialLH();                                        // brlen + alpha + pinv + Q + (R) changed -> partials, theta & ptn_invar stale
 
+    // ===== MERGE RESOLUTION 2026-07-17 -- UNION, not a choice =====
+    // mfdevcheck (JOLT_SELFCHECK_STRIDE) and mfresident (JOLT_RDIAG, JOLT_MF_NOSELFCHECK) both inserted diagnostics
+    // at this seam. They are INDEPENDENT probes, not competing implementations, and ALL THREE are default-OFF /
+    // byte-identical when unset -- so all three are kept. None may be defaulted ON:
+    //   * JOLT_SELFCHECK_STRIDE>1  -- bypasses the rel<=1e-6 NaN-fallback (see below). EXPERIMENT-ONLY.
+    //   * JOLT_MF_NOSELFCHECK      -- crude full-skip; its shippable form (finalists-only) is a VERIFIED 0.85x
+    //                                 REGRESSION, and the "self-check is the DNA lever" premise it was built to
+    //                                 test is REFUTED (nt1 profile artefact; ~11% at nt12). Measurement-only.
+    //   * JOLT_RDIAG               -- pure printf probe, no control flow.
+    // ORDER NOTE (honest): STRIDE is evaluated before RDIAG, so with BOTH set (>1 and RDIAG) a sampled-skip
+    // candidate returns early and RDIAG does not print for it. Harmless -- they are mutually-exclusive experiments
+    // and both default OFF -- but it is a real interaction, so it is written down rather than left to be rediscovered.
     // ── SAMPLED SELF-CHECK A/B EXPERIMENT (JOLT_SELFCHECK_STRIDE=N; default 1 == current per-candidate check) ──
     // The FRESH CPU computeLikelihood() below is the DOMINANT host cost in -m MF (mfoffload: 43.5% DNA / 69.5% AA of
     // host self-time). It is the load-bearing write-back coherence gate (returns cpuLnL; falls back to CPU on rel>1e-6).
@@ -2554,6 +2566,46 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
         setCurScore(joltLnL);
         return joltLnL;   // trust the device value; skips the CPU postorder + its host sync
     }
+
+    // ---- JOLT_RDIAG (default OFF; byte-identical when unset): +R WRITE-BACK FIDELITY probe ----
+    // Settles a question `rel` alone CANNOT: is the measured GPU-vs-CPU +R divergence (4.55 nats @nt12 / 20.26 @nt1,
+    // job 173931905) (a) a LOSSY WRITE-BACK -- the CPU model does not actually HOLD the params JOLT optimised, so the
+    // self-check's computeLikelihood() legitimately evaluates a DIFFERENT point than joltLnL -- or (b) genuine kernel
+    // arithmetic disagreement at the SAME point? These demand opposite fixes.
+    // Verified resolution of the two setters above: setRate -> RateGamma::setRate (rategamma.h:113, rates[c]=value,
+    // inherited: RateFree defines no setRate) and setProp -> RateFree::setProp (ratefree.h:75, prop[c]=value).
+    // BOTH are raw stores with NO normalisation/gauging. So RateFree's invariants (sum prop == 1 and
+    // sum prop*rate == 1 == meanRates()) survive write-back ONLY IF the GPU already gauges its output that way --
+    // an assumption the ":2495 gauged Σ w·r=1" comment asserts but nothing measures. This probe reads the params
+    // straight back out of the CPU model and checks the invariants on both sides.
+    //   max|d*| ~0 AND CPU sums ~1 => write-back faithful => divergence is ARITHMETIC (fix the kernel).
+    //   CPU sums != 1              => GPU gauge != RateFree convention => model left INVALID (fix the write-back).
+    //   max|d*| != 0               => a setter silently transformed the value (fix the write-back).
+    if (freeRateOK && getenv("JOLT_RDIAG")) {
+        double maxdr = 0.0, maxdp = 0.0, cpu_sw = 0.0, cpu_swr = 0.0, gpu_sw = 0.0, gpu_swr = 0.0;
+        for (int c = 0; c < ncat; c++) {
+            double gr = site_rate->getRate(c), gp = site_rate->getProp(c);   // what the CPU model NOW holds
+            double dr = fabs(gr - outRates[c]), dp = fabs(gp - outProps[c]); // vs what JOLT asked for
+            if (dr > maxdr) maxdr = dr;
+            if (dp > maxdp) maxdp = dp;
+            cpu_sw  += gp;             cpu_swr += gp * gr;                   // RateFree invariants, CPU side
+            gpu_sw  += outProps[c];    gpu_swr += outProps[c] * outRates[c]; // ... and as JOLT gauged them
+        }
+        printf("[RDIAG] model=%s+R%d readback max|dRate|=%.3e max|dProp|=%.3e | CPU sum(p)=%.15f sum(p*r)=%.15f"
+               " | GPU sum(w)=%.15f sum(w*r)=%.15f\n",
+               model->getName().c_str(), ncat, maxdr, maxdp, cpu_sw, cpu_swr, gpu_sw, gpu_swr);
+        fflush(stdout);
+    }
+
+    // ---- D4 CEILING MEASUREMENT (JOLT_MF_NOSELFCHECK, default OFF; byte-identical when unset) ----
+    // perf job 173929005 attributed ~68% of the DNA-1M -m MF host wall to the per-candidate CPU self-check
+    // (the computeLikelihood() below = CPU Felsenstein postorder recomputed for EVERY candidate). This gate SKIPS it
+    // and trusts the JOLT lnL directly, to MEASURE the reclaimable ceiling. NOT the shippable form (that is
+    // finalists-only: exact-verify only the top-K by BIC); this crude full-skip sizes the lever + is gated on
+    // best-model + top-K BIC order UNCHANGED. RISK it trades away: the rel<=1e-6 safety net vs a finite-but-wrong
+    // device lnL (accepted for the measurement only). joltLnL fidelity was validated rel<=1e-6 on fitted MF candidates.
+    static const bool g_mf_noselfcheck = (getenv("JOLT_MF_NOSELFCHECK") != nullptr);
+    if (g_mf_noselfcheck) { setCurScore(joltLnL); return joltLnL; }
 
     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
     // Direction-A measurement (JOLT_MF_DEVCHECK, run-both, default-OFF, measurement-only -> behavior UNCHANGED):
@@ -2665,7 +2717,40 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
 
     // G.6.1 safety gate: if the fresh CPU recompute disagrees with the JOLT lnL at the SAME written-back params by
     // more than the gamma-residual band, the GPU result is untrustworthy (a kernel/regime failure, not a convergence
-    // gap — write-back coherence is otherwise ~1e-12 universally). Return NaN so the caller re-optimises on the CPU
+    // gap).
+    // 🔴 CORRECTED 2026-07-16 (THREE times — the first two mechanisms were WRONG; this one is source-confirmed by
+    // red-team). The +R self-check MISMATCH is a +I+R EXPORT-NORMALISATION bug, NOT "trajectory" and NOT the gauge.
+    // (1) The original "~1e-12 universally" claim was FALSE by ~5 orders — extrapolated from a GAMMA-ONLY measurement
+    //     (commit 505b52d1 validated LG+G4 only). +R was never in that sample.
+    // (2) DIRECT per-call evidence (job 173982163): JC+I+R2..R5 disagree by a near-CONSTANT ~10 nats @100K / ~100 @1M
+    //     (rel ~1.66e-6), GPU lnL BETTER than the CPU recompute — a same-params single-call MISMATCH => CPU fallback.
+    // (3) MECHANISM — CONFIRMED (gpu_lnl_intree.cu, source-traced): the pinv forward-FD (:3220-3223) calls evalLnL with
+    //     pp=baseP+ep (ep=1e-4), whose applyPinv(pp) OVERWRITES catRate/catProp_v and leaves them. For nFreeQ==0 (JC)
+    //     the Q-FD reset (:3228) is skipped, so baseR_save/baseW_save (:3245) capture the PERTURBED values; a reject-exit
+    //     (:3324-3328) then exports out_props=(1-pp)*bprop with out_pinv=baseP => Σprop+pinv = 1-ep = 1-1e-4, an
+    //     UNDER-NORMALISED model. Error = ep*Nsites nats (10 @100K, 100 @1M — ncat-INDEPENDENT, set by ep not by any
+    //     gauge m). The gauge (catRate/=m, brlen*=m) is EXACTLY lnL-invariant and was NOT the cause (retracted). NOT
+    //     the >20 clamp (clamp_hits=0). Pure +R (optPinv!=1 => no pinv-FD) never perturbs catProp_v => clean.
+    //     ⚠️ The "cpuLnL == exported-eval to full precision" I once called decisive only proves the CPU faithfully
+    //     re-scores the SAME under-normalised params — it does NOT prove Σprop+pinv=1. It does not.
+    // (4) FIX (gpu_lnl_intree.cu:3261, default-ON, kill-switch JOLT_NO_PINVFIX): re-derive catRate/catProp_v from the
+    //     base pinv (applyPinv(baseP)) BEFORE capturing baseR_save/baseW_save — meanR/bprop are still at base there, so
+    //     this restores the exact base state (Σprop+pinv=1) and also repairs the g_y gradient (:3248). Host-only, zero
+    //     GPU cost, pure +R byte-identical. The EARLIER "re-evaluate at the exported point and return that" fix was
+    //     REMOVED as NET-HARMFUL (it made joltLnL==cpuLnL at the WRONG under-normalised point => passed the self-check on
+    //     an invalid model AND suppressed the CPU-fallback recovery). Validated by rgvld (see gems_regauge_validate.sh).
+    // (5) ATTRIBUTION: LONGSTANDING — the pinv-FD + reject-export landed in 587e5ba8 (G.5.1b, 2026-06-27), NOT this
+    //     session; every session change is default-OFF/kill-switched.
+    // CONSEQUENCE for correctness: this self-check is load-bearing. Its REPLACEMENT arm (return cpuLnL) keeps the
+    // PUBLISHED -m MF table honest regardless (cpuLnL re-scores the exported params); the bug bites GPU-TRUSTING paths
+    // with no self-check (tree-search +R reopt, JOLT_MF_NOSELFCHECK), which shipped the under-normalised lnL. The
+    // rel<=1e-6 DETECTION arm is near-decorative at 1M (admits ~59 nats vs ~6 that decide selection) — do not lean on it.
+    // See [[project-gpu-freerate-handicap]].
+    // CONSEQUENCE for speed: the self-check is NOT the DNA lever. At the DEPLOYED -nt 12 it is ~25% of MF wall (the
+    // "68%" was an -nt 1 profile on a 12-core node), and even removed entirely our MF (1300.9s) still trails hers
+    // (1142.4s, job 173919899) => a free self-check LOSES DNA. The residual (~933 CPU-s ours-vs-hers at nt12) is
+    // UNNAMED and is the real question. Do not chase the self-check as a speed lever.
+    // Return NaN so the caller re-optimises on the CPU
     // from scratch. (Convergence-to-the-CPU-MLE is validated separately: G.6.0b JOLT>=CPU on HKY..GTR; +G/+I rel ~1e-12.)
     if (!(rel <= 1e-6)) {   // audit RISK-3: NOT(<=) so a NaN/inf rel (cpuLnL underflowed to NaN) ALSO trips the
                             // fallback and returns NaN BEFORE the setCurScore(cpuLnL) below could poison _cur_score

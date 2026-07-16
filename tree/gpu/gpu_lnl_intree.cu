@@ -25,6 +25,7 @@
 #include <functional>   // G.4.2: recursive DFS lambdas in the JOLT launcher
 #include <mutex>        // G.4.2: serialize GPU access — ModelFinder is across-model OpenMP-parallel
 #include <cstring>      // G.7.1: memcpy for the pattern-tiling tip-slice gather
+#include <omp.h>        // CONSTCACHE: omp_in_parallel() -> bypass the shadow in parallel regions (mirrors screen-cache)
 #include <cstdlib>      // G.7.1: getenv/atoi for JOLT_NTILE
 #include <chrono>       // --jolt-diag (A3): host-side timer for the per-eval echild rebuild tax
 
@@ -41,6 +42,33 @@ __constant__ double g_val0[64*NS_MAX];   // exp(eval[x]*rate_c*t) * prop_c
 __constant__ double g_val1[64*NS_MAX];   // (rate_c*eval[x]) * val0
 __constant__ double g_val2[64*NS_MAX];   // (rate_c*eval[x]) * val1
 __constant__ double g_rscale[64];        // G.4.2: per-cat edge scale b_e/(r_k*w_k) for the +R/alpha rate-grad numerator
+
+// [CONSTCACHE 2026-07-15] gpu_jolt_optimize + its inner eval fns re-upload the MODEL constants g_Uinv/g_U/
+// g_UinvRowSum/g_freq/g_catw on EVERY call, though they change only per-eigensystem (nsys DNA-1M -m MF: 9.06M
+// cudaMemcpyToSymbol = 209s host-API + launch/idle churn). This guard shadows the last-uploaded bytes per symbol id
+// and SKIPS the toSymbol when unchanged -- correct because these __constant__ symbols are written ONLY through this
+// guard (5 canonical sites + the free-Q qApply lambda), so the device already holds that value. getenv JOLT_CONSTCACHE
+// gates it; UNSET => always upload => byte-identical to prod. Bypasses omp_in_parallel() (mirrors the screen-cache
+// guard, phylotreegpu.cpp:1442) so concurrent candidate evals cannot race the process-global shadow. g_val0/1/2 are
+// branch-dependent (contain edge length t) => NOT cached; they always upload.
+static long g_cc_red[8] = {0}, g_cc_tot[8] = {0};
+static inline bool cc_skip_toSymbol(int id, const void* src, size_t sz){
+    static const bool on = (getenv("JOLT_CONSTCACHE") != nullptr);
+    if(!on) return false;
+    if(omp_in_parallel()) return false;
+    if(id < 0 || id >= 8) return false;
+    static std::vector<char> shadow[8];
+    std::vector<char>& s = shadow[id];
+    g_cc_tot[id]++;
+    bool skip = (s.size()==sz && memcmp(s.data(), src, sz)==0);
+    if(skip) g_cc_red[id]++;
+    else s.assign((const char*)src, (const char*)src + sz);
+    if(id==0 && (g_cc_tot[0] & ((1L<<16)-1))==0)
+        fprintf(stderr,"[CONSTCACHE] red/tot Uinv:%ld/%ld U:%ld/%ld URS:%ld/%ld freq:%ld/%ld catw:%ld/%ld\n",
+                g_cc_red[0],g_cc_tot[0],g_cc_red[1],g_cc_tot[1],g_cc_red[2],g_cc_tot[2],g_cc_red[3],g_cc_tot[3],g_cc_red[4],g_cc_tot[4]);
+    return skip;
+}
+#define CC_TOSYM(id, sym, src, sz) do{ if(!cc_skip_toSymbol((id),(src),(sz))) GCK(cudaMemcpyToSymbol((sym),(src),(sz))); }while(0)
 
 // per-child probability-space contribution: prod[x] *= sum_i echild[c][x][i] * L_child[c][i]
 __device__ __forceinline__ void accum_child(double* prod, int ns, int c, int ptn, int nptn,
@@ -1253,10 +1281,10 @@ extern "C" double gpu_lnl_crosscheck(
     int ns = nstates;
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[GPU-XCHECK] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
 
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_freq, freq, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_catw, catProp, sizeof(double)*ncat));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
+    CC_TOSYM(3, g_freq, freq, sizeof(double)*ns);
+    CC_TOSYM(4, g_catw, catProp, sizeof(double)*ncat);
 
     size_t ecStride = (size_t)ncat*ns*ns;
     size_t slotSz   = (size_t)ncat*ns*nptn;
@@ -1723,10 +1751,10 @@ extern "C" double gpu_derv_crosscheck(
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[GPU-DERV] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
     (void)desc_isRoot;  // all entries are internal (isRoot=0) for the derivative sweep
 
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_freq, freq, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_catw, catProp, sizeof(double)*ncat));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
+    CC_TOSYM(3, g_freq, freq, sizeof(double)*ns);
+    CC_TOSYM(4, g_catw, catProp, sizeof(double)*ncat);
 
     // central-edge derivative coefficients val0/val1/val2 (host) -> __constant__
     std::vector<double> v0((size_t)ncat*ns), v1((size_t)ncat*ns), v2((size_t)ncat*ns);
@@ -1826,10 +1854,10 @@ extern "C" double gpu_screen_nni_fold_crosscheck(
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[GPU-FOLD] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
     (void)desc_isRoot;
 
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_freq, freq, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_catw, catProp, sizeof(double)*ncat));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
+    CC_TOSYM(3, g_freq, freq, sizeof(double)*ns);
+    CC_TOSYM(4, g_catw, catProp, sizeof(double)*ncat);
 
     // central-edge coeffs at the UNCHANGED length t (the swap never touches t) -> __constant__
     std::vector<double> v0((size_t)ncat*ns), v1((size_t)ncat*ns), v2((size_t)ncat*ns);
@@ -1929,11 +1957,11 @@ extern "C" double gpu_allbranch_upper_check(
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[GPU-UPPER] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
     int TB=256, GB=(nptn+TB-1)/TB, Pn=nptn;
 
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_U,    U,    sizeof(double)*ns*ns));   // kj_pre needs the eigenvectors (up-map)
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_freq, freq, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_catw, catProp, sizeof(double)*ncat));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(1, g_U,    U,    sizeof(double)*ns*ns);   // kj_pre needs the eigenvectors (up-map)
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
+    CC_TOSYM(3, g_freq, freq, sizeof(double)*ns);
+    CC_TOSYM(4, g_catw, catProp, sizeof(double)*ncat);
 
     size_t ecStride=(size_t)ncat*ns*ns, exStride=(size_t)ncat*ns, slotSz=(size_t)ncat*ns*nptn;
     DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
@@ -2050,11 +2078,11 @@ extern "C" double gpu_screen_nni_batch_crosscheck(
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[GPU-BATCH] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
     int TB=256, GB=(nptn+TB-1)/TB, Pn=nptn;
 
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_U,    U,    sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_freq, freq, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_catw, catProp, sizeof(double)*ncat));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(1, g_U,    U,    sizeof(double)*ns*ns);
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
+    CC_TOSYM(3, g_freq, freq, sizeof(double)*ns);
+    CC_TOSYM(4, g_catw, catProp, sizeof(double)*ncat);
 
     size_t ecStride=(size_t)ncat*ns*ns, exStride=(size_t)ncat*ns, slotSz=(size_t)ncat*ns*nptn;
     DEVB(gb_echild, (size_t)nnodes*ecStride*sizeof(double));
@@ -2195,11 +2223,11 @@ extern "C" double gpu_screen_nni_tile_crosscheck(
     if (ns > NS_MAX || ncat > 64) { fprintf(stderr,"[GPU-TILE] unsupported ns=%d ncat=%d\n",ns,ncat); return (double)NAN; }
     int TB=256;
 
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_U,    U,    sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_freq, freq, sizeof(double)*ns));
-    GCK(cudaMemcpyToSymbol(g_catw, catProp, sizeof(double)*ncat));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(1, g_U,    U,    sizeof(double)*ns*ns);
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
+    CC_TOSYM(3, g_freq, freq, sizeof(double)*ns);
+    CC_TOSYM(4, g_catw, catProp, sizeof(double)*ncat);
 
     // ---- ASYNC (Inc 0): stream count S for the screener move loop. OFF => S=1 (default stream, identical alloc).
     //      ON => S=min(poolK,nMoves) private scratch slots round-robined across g_ts_streams. ts_streams() lazily
@@ -2632,9 +2660,9 @@ extern "C" double gpu_jolt_optimize(
 
     // alpha-independent eigen constants — upload once (the BASE-Q eigensystem). For free-Q (nFreeQ>0) qApply()
     // re-uploads these whenever an exchangeability changes; for fixed-Q this is the only upload.
-    GCK(cudaMemcpyToSymbol(g_Uinv, Uinv, sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_U,    U,    sizeof(double)*ns*ns));
-    GCK(cudaMemcpyToSymbol(g_UinvRowSum, UinvRowSum, sizeof(double)*ns));
+    CC_TOSYM(0, g_Uinv, Uinv, sizeof(double)*ns*ns);
+    CC_TOSYM(1, g_U,    U,    sizeof(double)*ns*ns);
+    CC_TOSYM(2, g_UinvRowSum, UinvRowSum, sizeof(double)*ns);
 
     // G.6 free-Q: MUTABLE working copies of the eigensystem (refreshed per Q change via qApply). For fixed-Q
     // (nFreeQ==0) evalP/UP alias the passed-in const arrays (the lambdas below use evalP/UP, so the fixed-Q path is
@@ -2648,10 +2676,10 @@ extern "C" double gpu_jolt_optimize(
         // swallowing the error + UB. Matches rebuildEchild's plain copies; any failure is caught by the final
         // cudaGetLastError() backstop (the sticky last-error persists to the end of gpu_jolt_optimize -> NaN -> CPU).
         qdecompose(qctx, q, evalB.data(), UB.data(), UinvB.data());
-        cudaMemcpyToSymbol(g_Uinv, UinvB.data(), sizeof(double)*ns*ns);
-        cudaMemcpyToSymbol(g_U,    UB.data(),    sizeof(double)*ns*ns);
+        if(!cc_skip_toSymbol(0, UinvB.data(), sizeof(double)*ns*ns)) cudaMemcpyToSymbol(g_Uinv, UinvB.data(), sizeof(double)*ns*ns);
+        if(!cc_skip_toSymbol(1, UB.data(),    sizeof(double)*ns*ns)) cudaMemcpyToSymbol(g_U,    UB.data(),    sizeof(double)*ns*ns);
         double rs[NS_MAX]; for(int i=0;i<ns;i++){ double s=0; for(int j=0;j<ns;j++) s+=UinvB[i*ns+j]; rs[i]=s; }
-        cudaMemcpyToSymbol(g_UinvRowSum, rs, sizeof(double)*ns); };
+        if(!cc_skip_toSymbol(2, rs, sizeof(double)*ns)) cudaMemcpyToSymbol(g_UinvRowSum, rs, sizeof(double)*ns); };
 
     // ---- rebuild topology from flat arrays (node ids = caller's DFS index) ----
     std::vector<std::vector<int>> child(nnodes);
@@ -3140,8 +3168,18 @@ extern "C" double gpu_jolt_optimize(
     // gradient arm (its EM normaliser is 1-pinv, deferred). Plan §2c.4 Stage B.
     static constexpr bool JOLT_REM_EN = false;   // RETIRED 2026-07-14 (was JOLT_REM): EM closed-form weight M-step,
                                                  // measured NEUTRAL (1.0x, insurance only). Env surface removed.
+    // ---- +R GAUGE INSTRUMENTATION (RDIAG; host-side counters only -> numerics UNCHANGED whether or not it prints) ----
+    // gaugeFix rescales (catRate/=m, brlen*=m). That product is what the likelihood depends on (P = exp(Q·rate·brlen)),
+    // so the transform is EXACTLY lnL-invariant in exact arithmetic -- EXCEPT for the >20.0 clamp below, which breaks
+    // invariance for any branch already sitting at the cap (the LM trial itself caps at 20.0, :3285, so branches CAN
+    // rest exactly there; with m>1 the branch re-clamps to 20.0 while its rate was still divided by m => a real 1/m
+    // change in rate*brlen on that branch). rd_clamps/rd_maxm measure whether that actually fires -- the one
+    // source-visible non-invariance, and the open question in the root-cause chain.
+    long   rd_clamps = 0;    // # of times the >20.0 clamp truncated a branch during a gauge
+    double rd_maxm   = 0.0;  // worst |m-1| seen (how far the mean rate drifts before being gauged back)
     auto gaugeFix=[&](){ double m=0; for(int c=0;c<ncat;c++) m+=catProp_v[c]*catRate[c];   // m = overall mean rate (Σ catProp_v·catRate; the +I invariant class adds 0) — pin =1 (same constraint for +R and +I+R)
-        if(m>0){ for(int c=0;c<ncat;c++) catRate[c]/=m; for(int v=0;v<nnodes;v++){ brlen[v]*=m; if(brlen[v]>20.0) brlen[v]=20.0; } }
+        if(fabs(m-1.0)>rd_maxm) rd_maxm=fabs(m-1.0);
+        if(m>0){ for(int c=0;c<ncat;c++) catRate[c]/=m; for(int v=0;v<nnodes;v++){ brlen[v]*=m; if(brlen[v]>20.0){ brlen[v]=20.0; rd_clamps++; } } }
         double f = optPinv ? (1.0-curPinv) : 1.0;   // G.5.1d (2b): meanR is the PINV-FREE rate ρ=catRate·(1-pinv); applyPinv(curPinv) then reproduces catRate. f==1 (pure +R) => byte-identical.
         for(int c=0;c<ncat;c++) meanR[c]=catRate[c]*f; };
     auto softmaxApply=[&](const std::vector<double>& z,std::vector<double>& w){
@@ -3252,7 +3290,36 @@ extern "C" double gpu_jolt_optimize(
         std::vector<double> baseY(freeRate==1?ncat:0),baseZ(freeRate==1?ncat:0),g_y(freeRate==1?ncat:0),g_z(freeRate==1?ncat:0);
         std::vector<double> ddY(freeRate==1?ncat:0,-1e6),ddZ(freeRate==1?ncat:0,-1e6);
         if(freeRate==1){
-            if(JOLT_IR_FDFIX_EN) applyPinv(baseP);   // ②a root-cause: undo the pinv-FD (:3212-3215) perturbation so baseR_save/baseW_save (+ g_y :3241) == the consistent gauged baseP state (meanR holds catRate_gauged·(1-pinv) via gaugeFix :3146 => applyPinv(baseP) recovers catRate_gauged). Free-Q DNA no-op (Q-FD already resets); FIXES nFreeQ==0 DNA (JC/F81)+AA. default-OFF => byte-identical.
+            // ===== +I+R EXPORT-NORMALISATION FIX (default ON; kill-switch JOLT_IR_NOFDFIX restores old behaviour) =====
+            // BUG (root-caused rdiag 173984235 + red-team, source-confirmed): the pinv forward-FD at :3220-3223 calls
+            // evalLnL(..,pp,..) with pp=baseP+ep (ep=1e-4), whose applyPinv(pp) OVERWRITES catRate/catProp_v to the
+            // pp-perturbed values and leaves them there. For a model with NO free exchangeabilities (nFreeQ==0, e.g. JC)
+            // the Q-FD block at :3228 is skipped, so NOTHING resets catRate/catProp_v before the capture just below.
+            // Then baseR_save/baseW_save capture the PERTURBED values, and a reject-exit (:3324-3328) restores + exports
+            // them: out_props=(1-pp)*bprop (Σ=1-baseP-ep) with out_pinv=baseP => Σprop+pinv = 1-ep = 1-1e-4, i.e. the
+            // exported +I+R model is UNDER-NORMALISED by exactly ep. That costs ~ep*Nsites nats (10 @100K / 100 @1M,
+            // ncat-INDEPENDENT -- driven by ep, not by the gauge m), which is precisely the measured JC+I+R gap. The
+            // gauge (catRate/=m, brlen*=m) is EXACTLY lnL-invariant and was NOT the cause (my earlier diagnosis; retracted).
+            // FIX: re-derive catRate/catProp_v from the base pinv before capturing the base state. meanR/bprop are still
+            // at base here (the FD's applyPinv reads them, never writes them), so applyPinv(baseP) reconstructs the exact
+            // base catRate=meanR/(1-baseP), catProp_v=(1-baseP)*bprop -- Σprop+pinv=1. This also repairs the g_y gradient
+            // just below (:3248 reads catRate). Zero GPU cost (host-only). optPinv!=1 (pure +R / fixed-pinv) never runs
+            // the pinv-FD => catProp_v never perturbed => the guard makes this a no-op there => pure +R BYTE-IDENTICAL.
+            // ===== MERGE RESOLUTION 2026-07-17 -- ONE fix, NOT a dedupe =====
+            // mfdevcheck and mfresident independently implemented THIS SAME FIX with different names AND different
+            // guards. Shipping the graduated NAME (JOLT_IR_FDFIX_EN / kill-switch JOLT_IR_NOFDFIX, job 173898475)
+            // together with mfresident's GUARD (optPinv==1). Dropping either duplicate wholesale would have been a
+            // real defect, in BOTH directions:
+            //   * drop mfresident  -> ships the UNGUARDED form. applyPinv at optPinv==2 does an (x*(1-p))/(1-p)
+            //     round-trip that is NOT byte-exact. Unreachable in mfdevcheck alone -- but the pureinvar layer
+            //     merged above introduces `optPinv = jolt_fixp ? 2 : 1` (phylotreegpu.cpp:2234; fa7d7a1c had ZERO
+            //     jolt_fixp), so THE MERGE ITSELF MAKES optPinv==2 REACHABLE. The guard is load-bearing HERE and
+            //     was not in either parent.
+            //   * drop mfdevcheck -> loses the graduated, gate-validated name/default.
+            // Guard semantics (mfresident's, verified): optPinv!=1 (pure +R / fixed-pinv) never runs the pinv-FD,
+            // so catProp_v is never perturbed => applyPinv would be a no-op-in-intent but NOT byte-exact => guard
+            // it out and pure +R / fixed-pinv stay BYTE-IDENTICAL.
+            if(optPinv==1 && JOLT_IR_FDFIX_EN) applyPinv(baseP);
             baseR_save=catRate; baseW_save=catProp_v;
             // G.5.1d (2b): the log-rate arm lives in the PINV-FREE basis y=log(meanR=ρ) (the trial staging writes meanR=exp(y)).
             // g_y = d lnL/dy = meanR·dL/dmeanR = meanR·(gradR/(1-p)) = catRate·gradR (the (1-p) cancels). pure +R: meanR==catRate => byte-identical.
@@ -3365,6 +3432,22 @@ extern "C" double gpu_jolt_optimize(
         brlen=bs_brlen; curAlpha=bs_alpha; curPinv=bs_pinv; catRate=bs_catRate; catProp_v=bs_catProp; meanR=bs_meanR; bprop=bs_bprop; if(nFreeQ>0) qcur=bs_qcur; }
 
     if (cudaGetLastError()!=cudaSuccess) return (double)NAN;   // any launch/sync error -> caller falls back to CPU
+
+    // ===== +I+R EXPORT-NORMALISATION VERIFY (JOLT_RDIAG diagnostic; NO effect on lnL or params) =====
+    // The real fix lives at the base-state capture above (JOLT_NO_PINVFIX). Here we only VERIFY the invariant the bug
+    // violated: for a +I+R model the exported weights + pinv must sum to 1. Red-team's exposing measurement -- pre-fix
+    // this reads ~1-1e-4 on a reject-terminal JC+I+R; post-fix it must read 1.0. Print-only, gated, side-effect-free.
+    // (My earlier re-evaluate-and-return "fix" here was REMOVED: it made joltLnL==cpuLnL at the WRONG (under-normalised)
+    //  point, shipping an invalid model AND suppressing the CPU-fallback safety net. The normalisation fix makes the
+    //  self-check pass on a CORRECT model, so no re-eval is needed.)
+    if (freeRate==1 && getenv("JOLT_RDIAG")) {
+        double sp = optPinv ? curPinv : 0.0;
+        for(int c=0;c<ncat;c++) sp += catProp_v[c];
+        fprintf(stderr, "[RDIAG-GPU] ncat=%d optPinv=%d curPinv=%.6f  Sum(props)+pinv=%.10f  (must be 1.0)  clamp=%ld\n",
+                ncat, optPinv, curPinv, sp, rd_clamps);
+        fflush(stderr);
+    }
+
     for(int v=0;v<nnodes;v++) out_brlen[v]=brlen[v];
     if(out_alpha) *out_alpha=curAlpha;
     if(out_pinv)  *out_pinv = optPinv ? curPinv : pinv0;
