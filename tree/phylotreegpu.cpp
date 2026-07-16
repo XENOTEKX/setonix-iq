@@ -61,9 +61,21 @@ static std::mutex gpu_mixjolt_mtx;
 // Σ freq·_pattern_lh == joltLnL identity guard. NB the snapshot is the true per-pattern log|lh_ptn| evaluated at the
 // reopt's base edge; it agrees with the root-evaluated clean-room to ~1e-6 (<< ufboot_epsilon 0.5, so RELL support
 // is preserved) — it is NOT bit-identical to the Stage-1 mirror by design.
+// 🔴 MERGE 2026-07-17 -- FIXES A HALF-LANDED GRADUATION (a same-name / opposite-default trap).
+// This helper read JOLT_BOOT_SNAPSHOT as an OPT-IN (`c=(e && atoi(e)!=0)?1:0` => DEFAULT-OFF) while iqtree.cpp
+// :3632 and :3676 read the SAME env name as a DEFAULT-ON kill-switch
+// (`getenv("JOLT_NO_BOOT_SNAPSHOT") ? false : (_bs ? atoi(_bs)!=0 : true)`), and the startup banner
+// (main.cpp:2496/3705) PRINTS `boot-snap=ON`. So the graduation landed at the two iqtree.cpp sites and at the
+// banner, but not here -- the one place that actually gates the work (:2379). Net effect: the binary announced
+// boot-snap=ON, iqtree.cpp believed it was ON, and the snapshot silently never ran. Not a correctness bug (the
+// CPU path is the safe fallback) but a real UNREALISED WIN: a CPU postorder per accepted -B +I+G save.
+// Now matches iqtree.cpp EXACTLY: default-ON, same kill-switch, same explicit-value override semantics.
 static inline bool jolt_boot_snapshot_enabled(){
     static int c=-1;
-    if (c<0){ const char* e=getenv("JOLT_BOOT_SNAPSHOT"); c=(e && atoi(e)!=0)?1:0; }
+    if (c<0){
+        if (getenv("JOLT_NO_BOOT_SNAPSHOT")) c=0;
+        else { const char* e=getenv("JOLT_BOOT_SNAPSHOT"); c = (e ? (atoi(e)!=0 ? 1:0) : 1); }
+    }
     return c!=0;
 }
 
@@ -2219,9 +2231,20 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
     if (pinv0 > 0.0) {
         // COVERAGE 2026-07-15: fixed +I (user-pinned pinv) -> GPU as APPLY-DON'T-STEP (optPinv=2 below), not DECLINE.
         // base_invar + 1/(1-pinv) rescale are populated (optPinv truthy); the 4 pinv-OPTIMISE arms are ==1-gated so
-        // optPinv=2 HOLDS pinv fixed = exactly "fixed pinv". Kill-switch JOLT_NO_FIXINVAR restores the decline.
+        // optPinv=2 HOLDS pinv fixed = exactly "fixed pinv".
         bool jolt_fixp = site_rate->isFixPInvar();
-        if (jolt_fixp && getenv("JOLT_NO_FIXINVAR") != nullptr)      JOLT_DECLINE("fixed-pinvar");
+        // 🔴 MERGE 2026-07-17 -- DEMOTED TO OPT-IN. This shipped as a DEFAULT-ON kill-switch (JOLT_NO_FIXINVAR),
+        // but it has **ZERO passing GPU evidence**. Its only gate, covgate job 173822572, FAILED OUTRIGHT: every
+        // GPU arm died with `env: '--jolt': No such file or directory` (an empty env-var expansion made `env` treat
+        // --jolt as the command), leaving 41-byte consoles and no lnL. Only the CPU arms produced numbers, so the
+        // gate proved nothing about the GPU. The sibling feature pure-+I IS properly gated (invar job 173818786:
+        // iP_dna CPU -6054636.256 vs GPU -6054636.260, iP_aa -7941914.563 vs -7941914.568, rel~6e-10) -- that
+        // evidence is real but it is for `ncat<=1`, NOT for fixed-pinvar, and the two were conflated.
+        // Until a fixed-pinvar cell actually passes, admission is OPT-IN (JOLT_FIXINVAR=1) and the default is the
+        // pre-coverage CPU decline. Flip back to a kill-switch the day a gate prints a real rel for this path.
+        // NB this also keeps `optPinv = jolt_fixp ? 2 : 1` (:2234) off by default; the FDFIX optPinv==1 guard in
+        // gpu_lnl_intree.cu stays load-bearing regardless, because brlen-only (:2251) reaches optPinv==2 too.
+        if (jolt_fixp && getenv("JOLT_FIXINVAR") == nullptr)          JOLT_DECLINE("fixed-pinvar-ungated");
         // PROBE 2026-07-15 (JOLT_PUREINVAR): pure +I (RateInvar, ncat==1) declined here as "out of scope". But the
         // rate machinery already handles it: meanR is init 1.0 (:2775) and applyAlpha is ncat>1-guarded (:2767/2905/3149),
         // so meanR[0] stays 1.0; bprop[0]=catProp[0]/(1-pinv0)=(1-pinv0)/(1-pinv0)=1.0; applyPinv(p) => catRate[0]=1/(1-p),

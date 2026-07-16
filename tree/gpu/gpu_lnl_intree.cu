@@ -2783,9 +2783,13 @@ extern "C" double gpu_jolt_optimize(
     // setChunk and are read-only to every kernel (verified: no kernel writes gbj_tip/gbj_ptnfreq/gbj_baseinvar).
     // So re-uploading the same chunk is redundant. nsys(173763069)+sqlite: at 1M this re-upload = 86.5% of H2D
     // (451.5s, the 93.5MB d_tip re-sent ~505x/candidate). Guard: skip the re-gather+3xH2D when the requested chunk
-    // is already resident. Byte-identical by construction (identical device bytes). Default OFF for the A/B gate;
+    // is already resident. Byte-identical by construction (identical device bytes).
     // loadedChunk is per-CALL (resets each gpu_jolt_optimize invocation) so a fresh candidate always re-uploads.
-    static const bool mf_resident = (getenv("JOLT_MF_RESIDENT") != nullptr);
+    // ✅ GRADUATED TO DEFAULT-ON 2026-07-17 (kill-switch JOLT_NO_MF_RESIDENT). Evidence: job 173781194 = 1.597x on
+    // DNA-1M -m MF, bit-identical (binary md5 26fba2bb), and the OMP-safety question was settled separately (the
+    // MF candidate loop is parallel, but loadedChunk is a per-call local, not shared state). Byte-identity is by
+    // construction, not by measurement: the guard only skips re-sending bytes the device already holds.
+    static const bool mf_resident = (getenv("JOLT_NO_MF_RESIDENT") == nullptr);
     int loadedChunk = -1;
     auto setChunk=[&](int t){
         int p0=t*chunk0, p1=p0+chunk0; if(p1>nptn)p1=nptn; int cw=p1-p0;
