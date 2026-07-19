@@ -3210,6 +3210,79 @@ extern "C" double gpu_jolt_optimize(
         double m=0; for(int c=0;c<ncat;c++) m+=bprop[c]*meanR[c];   // mean-1 base constraint Σ w·ρ (≈1 if getRate/getProp are in convention)
         if(m>0){ for(int c=0;c<ncat;c++) meanR[c]/=m; for(int v=0;v<nnodes;v++){ startB[v]*=m; if(startB[v]>20.0) startB[v]=20.0; } } }
     double lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+    // ===== GATE-0.5 part 2: RATE-ARM FD CHECK (JOLT_RGRADCHECK_RATE, default-OFF, byte-identical when unset) =====
+    // The planned OPG empirical-Fisher optimiser SQUARES g_y (the log-rate gradient); the shipped RGRADCHECK (:2907)
+    // validates ONLY the weight arm (perturbs z). Mode-L, JOLT's predecessor, died on the RATE gradient (10^54). This
+    // FD-checks g_y[c]=catRate[c]*gradR[c] (the shipping formula, :3361) against a central difference in y=log(meanR).
+    // 🔴 The rate FD MUST re-evaluate via evalLnL (which does the FULL rebuildEchild+postorder — rates feed echild
+    // len=brlen*catRate :2860). The weight FD's partials-frozen lnlW() shortcut would FALSE-PASS for rates. Gauge-free:
+    // we perturb the unconstrained meanR; gaugeFix runs only on accept (:3431), so the base state here is pre-gauge.
+    // Regime-aware gate: echild-rebuild + central-diff cancellation land ~1e-4 even when correct (blue-team recipe).
+    if(freeRate==1 && getenv("JOLT_RGRADCHECK_RATE")){
+        const double rgr_eps=1e-4;
+        std::vector<double> rgr_meanR_save=meanR;
+        double rgr_lg,rgr_ga; computeGradient(rgr_lg,rgr_ga);            // fills gradR[] + sets catRate=meanR/f at base
+        std::vector<double> rgr_gy(ncat);
+        for(int c=0;c<ncat;c++) rgr_gy[c]=catRate[c]*gradR[c];           // analytic d lnL/dy (the :3361 formula)
+        double rgr_maxrel=0, rgr_maxabs=0; int rgr_worst=-1, rgr_nfail=0;
+        for(int d=0; d<ncat; d++){
+            double y0=log(meanR[d]);
+            meanR[d]=exp(y0+rgr_eps); double lp=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+            meanR[d]=exp(y0-rgr_eps); double lm=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+            meanR[d]=rgr_meanR_save[d];
+            double fd=(lp-lm)/(2.0*rgr_eps);
+            double ad=fabs(rgr_gy[d]-fd);
+            double rel=ad/(fabs(fd)+1e-30);
+            if(rel>rgr_maxrel){ rgr_maxrel=rel; rgr_worst=d; }
+            if(ad>rgr_maxabs) rgr_maxabs=ad;
+            if(!((rel<1e-5)||(ad<1e-2))) rgr_nfail++;                     // per-cat HYBRID (blue-team): well-scaled OR near-zero g_y
+            fprintf(stderr,"[RGRADRATE] c=%d meanR=%.6e w=%.6e g_y=%.6e FD=%.6e rel=%.3e abs=%.3e\n",
+                    d, rgr_meanR_save[d], bprop[d], rgr_gy[d], fd, rel, ad);
+        }
+        fprintf(stderr,"[RGRADRATE] ncat=%d optPinv=%d pinv0=%.6f worst_c=%d maxrel=%.3e maxabs=%.3e nfail=%d -> %s\n",
+                ncat, (int)optPinv, curPinv, rgr_worst, rgr_maxrel, rgr_maxabs, rgr_nfail, (rgr_nfail==0)?"RGRADRATE PASS":"RGRADRATE FAIL");
+        fflush(stderr);
+        meanR=rgr_meanR_save;
+        lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;        // re-sync device to base for the LM loop
+    }
+    // ===== GATE-0.5 coverage: WEIGHT-OPT FD CHECK (JOLT_RGRADCHECK_WOPT, default-OFF, byte-identical when unset) =====
+    // The shipped RGRADCHECK (:2907) validates a STANDALONE weight-grad reimpl with pinv HARDCODED 0 (:2916/:2928) and the
+    // pure-+R formula gz=WN-w*N — it never exercises the OPTIMISER's real gzR (:3150, which the OPG will square) nor the
+    // +I+R path (wnorm=sumWN, not rN). This FD-checks the REAL gzR via computeGradient, perturbing z=log(bprop) (the
+    // optimiser's OWN softmax parameterisation, :3209) and re-evaluating via evalLnL at curPinv (so +I is live). bprop is
+    // the PINV-FREE weight (applyPinv sets catProp_v=f*bprop :2847), so we perturb bprop — perturbing catProp_v would be
+    // clobbered by evalLnL's applyPinv. At pinv=0 gzR==gz (part-1's validated formula) => this reproduces part 1 AND
+    // extends it to +I+R. Regime-aware <1e-3 gate (same echild-rebuild/central-diff floor as the rate arm).
+    if(freeRate==1 && getenv("JOLT_RGRADCHECK_WOPT")){
+        const double wgr_eps=1e-4;
+        std::vector<double> wgr_bprop_save=bprop;
+        double wgr_sb=0; for(int c=0;c<ncat;c++) wgr_sb+=wgr_bprop_save[c];   // SEV-4a: FD centres at softmax(log bprop)==bprop only if Σ==1
+        if(fabs(wgr_sb-1.0)>1e-9) fprintf(stderr,"[RGRADWOPT] WARN sum(bprop)=%.12f != 1 (base-point shift)\n",wgr_sb);
+        double wgr_lg,wgr_ga; computeGradient(wgr_lg,wgr_ga);            // fills gzR[] (the real +I-aware weight grad :3150)
+        std::vector<double> wgr_gz=gzR;                                  // snapshot analytic d lnL/dz
+        auto wgr_softmax=[&](const std::vector<double>& z){ double mx=z[0]; for(int c=1;c<ncat;c++) if(z[c]>mx)mx=z[c];
+            std::vector<double> o(ncat); double s=0; for(int c=0;c<ncat;c++){o[c]=exp(z[c]-mx); s+=o[c];} for(int c=0;c<ncat;c++)o[c]/=s; return o; };
+        double wgr_maxrel=0, wgr_maxabs=0; int wgr_worst=-1, wgr_nfail=0;
+        for(int d=0; d<ncat; d++){
+            std::vector<double> zp(ncat),zm(ncat); for(int c=0;c<ncat;c++){ zp[c]=log(wgr_bprop_save[c]); zm[c]=zp[c]; }
+            zp[d]+=wgr_eps; zm[d]-=wgr_eps;
+            bprop=wgr_softmax(zp); double lp=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+            bprop=wgr_softmax(zm); double lm=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+            bprop=wgr_bprop_save;
+            double fd=(lp-lm)/(2.0*wgr_eps);
+            double ad=fabs(wgr_gz[d]-fd);                                 // absolute residual (round-off floor ~deltaL/eps, worse at 1M sites)
+            double rel=ad/(fabs(fd)+1e-30);
+            if(rel>wgr_maxrel){ wgr_maxrel=rel; wgr_worst=d; }
+            if(ad>wgr_maxabs) wgr_maxabs=ad;
+            if(!((rel<1e-5)||(ad<1e-2))) wgr_nfail++;                     // per-cat HYBRID: well-scaled (rel) OR near-zero gz (abs); a wnorm=rN +I bug => O(1e4)
+            fprintf(stderr,"[RGRADWOPT] c=%d bprop=%.6e gz=%.6e FD=%.6e rel=%.3e abs=%.3e\n", d, wgr_bprop_save[d], wgr_gz[d], fd, rel, ad);
+        }
+        fprintf(stderr,"[RGRADWOPT] ncat=%d optPinv=%d pinv0=%.6f worst_c=%d maxrel=%.3e maxabs=%.3e nfail=%d -> %s\n",
+                ncat, (int)optPinv, curPinv, wgr_worst, wgr_maxrel, wgr_maxabs, wgr_nfail, (wgr_nfail==0)?"RGRADWOPT PASS":"RGRADWOPT FAIL");
+        fflush(stderr);
+        bprop=wgr_bprop_save;
+        lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;        // re-sync device to base for the LM loop
+    }
     // T5 BISECTION PROBE (JOLT_IR3, default-OFF): the +I+R constant +10.00-nat joltLnL-vs-CPU offset (iplus 173879879:
     // jolt=cpu+10.00 exactly, mirror==cpu, only freeRate&&optPinv, pinv-invariant). Force maxiter=0 for freeRate&&optPinv
     // so gpu_jolt_optimize RETURNS THIS SEED lnL and writes back the SEED brlen/rates/props => DEVCHECK's cpuLnL is
