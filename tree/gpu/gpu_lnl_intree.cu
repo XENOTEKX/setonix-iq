@@ -822,6 +822,113 @@ __global__ void kj_reduce_gradnum(int nptn, int ncat, const double* __restrict__
     }
 }
 
+// ================= OPG (empirical-Fisher) Gram — Phase 1 (JOLT_OPG, default-OFF) =================
+// H = Sum_p ptn_freq[p]*s_p*s_p^T over the 2K +R coords theta=(y_0..y_{K-1}, z_0..z_{K-1}), y_c=log(meanR_c),
+// z_c = softmax weight-logit. Per-SITE scores (OPG-SOLVER-IMPLEMENTATION.md section 1; both reductions FD-validated
+// by GATE-0.5 and the algebra re-derived by two independent audits):
+//     s^y_{p,c} = catRate[c]*catProp_v[c]*invl[p]*rnum[c][p]
+//     s^z_{p,c} = invl[p]*wnum[c][p] - bprop[c]*R_p,   R_p = Sum_k invl[p]*wnum[k][p]
+// R_p is NOT 1 under +I (=1-pinv*I_p/L_p); using the pure-+R rN shortcut here would be wrong -- the #1 bug-hiding spot.
+// TEMPLATED on K so the channel-loop (a,b) indices are COMPILE-TIME => s[2K] stays in REGISTERS. With a runtime ncat
+// the loop is dynamically indexed => nvcc spills s[] to LOCAL memory => ~2*NCH*Pn*8 B of local traffic per chunk
+// (~5-10% of the sweep, scaling as k^2) -- the real cost risk, not the barrier count. Warp-shuffle reduce gives ONE
+// __syncthreads per block instead of NCH shared-tree passes. Deterministic: no atomics, fixed shuffle/warp order.
+template<int K>
+__launch_bounds__(256,2)
+__global__ void kj_opg_gram(int Pn,                      // chunk width (buffers are Pn-strided; Pn shrinks on the last chunk)
+        const double* __restrict__ rnum, const double* __restrict__ wnum,
+        const double* __restrict__ invl, const double* __restrict__ ptnfreq,
+        const double* __restrict__ cRcP,                 // [K] catRate[c]*catProp_v[c]
+        const double* __restrict__ bpr,                  // [K] bprop[c]
+        int nblk, double* __restrict__ out){             // out[NCH*nblk], nblk == GB of THIS chunk
+    constexpr int N2  = 2*K;
+    constexpr int NCH = K*(2*K+1);                       // == N2*(N2+1)/2 upper-triangle channels
+    extern __shared__ double sm[];                       // [NCH * nWarp] doubles
+    const int tid=threadIdx.x, lane=tid&31, warp=tid>>5, nWarp=blockDim.x>>5;
+    const int p = blockIdx.x*blockDim.x + tid;
+    double s[N2]; double f=0.0;
+    if (p<Pn){
+        f = ptnfreq[p]; const double il = invl[p];
+        double Rp=0.0;
+        #pragma unroll
+        for(int c=0;c<K;c++) Rp += il*wnum[(size_t)c*Pn+p];
+        #pragma unroll
+        for(int c=0;c<K;c++){
+            s[c]   = cRcP[c]*il*rnum[(size_t)c*Pn+p];
+            s[K+c] = il*wnum[(size_t)c*Pn+p] - bpr[c]*Rp;
+        }
+    } else {
+        #pragma unroll
+        for(int c=0;c<N2;c++) s[c]=0.0;
+    }
+    int ch=0;
+    #pragma unroll
+    for(int a=0;a<N2;a++){
+        #pragma unroll
+        for(int b=a;b<N2;b++){
+            double v = f*s[a]*s[b];
+            #pragma unroll
+            for(int off=16; off>0; off>>=1) v += __shfl_down_sync(0xffffffffu, v, off);
+            if(lane==0) sm[ch*nWarp + warp] = v;
+            ch++;
+        }
+    }
+    __syncthreads();                                     // ONE barrier for the whole kernel
+    for(int c2=tid; c2<NCH; c2+=blockDim.x){
+        double acc=0.0;
+        for(int w=0; w<nWarp; w++) acc += sm[(size_t)c2*nWarp + w];   // fixed warp order => deterministic
+        out[(size_t)c2*nblk + blockIdx.x] = acc;
+    }
+}
+// Stage 2: one block per channel; fixed grid-stride + shared tree over the nblk per-block partials. Drops the D2H
+// from NCH*GB doubles (43.7 MB at avian nptn~20M) to NCH doubles (~1.7 KB) and removes a host loop over millions of
+// partials. Deterministic (fixed stride order + fixed tree, no atomics).
+__global__ void kj_opg_reduce2(int nblk, const double* __restrict__ in, double* __restrict__ out){
+    extern __shared__ double sm[];                       // blockDim doubles
+    const int ch=blockIdx.x, tid=threadIdx.x;
+    double acc=0.0;
+    for(int b=tid; b<nblk; b+=blockDim.x) acc += in[(size_t)ch*nblk + b];
+    sm[tid]=acc; __syncthreads();
+    for(int s=blockDim.x>>1; s>0; s>>=1){ if(tid<s) sm[tid]+=sm[tid+s]; __syncthreads(); }
+    if(tid==0) out[ch]=sm[0];
+}
+// ncat -> template dispatch. ncat>10 is a HARD diagonal fallback (no OPG): at ncat=64 s[128] would be 1 KB/thread of
+// local memory and NCH=8256 > TB=256 would silently break the epilogue. JOLT_FREERATE_HIGHK can push MAXCAT past 10.
+static inline bool jolt_opg_gram_launch(int ncat,int GB,int TB,size_t shbytes,int Pn,
+        const double* rnum,const double* wnum,const double* invl,const double* ptnfreq,
+        const double* cRcP,const double* bpr,int nblk,double* out){
+    switch(ncat){
+#define JOPG_CASE(N) case N: kj_opg_gram<N><<<GB,TB,shbytes>>>(Pn,rnum,wnum,invl,ptnfreq,cRcP,bpr,nblk,out); return true;
+        JOPG_CASE(2) JOPG_CASE(3) JOPG_CASE(4) JOPG_CASE(5) JOPG_CASE(6)
+        JOPG_CASE(7) JOPG_CASE(8) JOPG_CASE(9) JOPG_CASE(10)
+#undef JOPG_CASE
+        default: return false;
+    }
+}
+// Self-contained symmetric cyclic Jacobi (n<=32). Fixed sweep count + fixed (p,q) order => bit-reproducible; no malloc,
+// no external symbols. Deliberately NOT whtest/eigen_sym.h (C-linkage NR tred2/tqli in a GPL module whose header
+// #defines NUM_STATE 4 / ZERO / DVec20 would pollute this CUDA TU) and NOT utils/eigendecomposition.cpp (non-symmetric
+// rate-matrix path). Overwrites a[]; returns eigenvalues (unsorted) in ev[].
+static void jolt_jacobi_eig(double* a, int n, double* ev){
+    for(int sweep=0; sweep<12; sweep++){
+        double off=0.0;
+        for(int p=0;p<n;p++) for(int q=p+1;q<n;q++) off += a[p*n+q]*a[p*n+q];
+        if(off <= 1e-300) break;
+        for(int p=0;p<n;p++) for(int q=p+1;q<n;q++){
+            double apq=a[p*n+q]; if(fabs(apq)<1e-300) continue;
+            double app=a[p*n+p], aqq=a[q*n+q];
+            double th=(aqq-app)/(2.0*apq);
+            double t=(th>=0.0? 1.0:-1.0)/(fabs(th)+sqrt(th*th+1.0));
+            double c=1.0/sqrt(t*t+1.0), s=t*c;
+            for(int k=0;k<n;k++){ double akp=a[k*n+p], akq=a[k*n+q];
+                a[k*n+p]=c*akp-s*akq; a[k*n+q]=s*akp+c*akq; }
+            for(int k=0;k<n;k++){ double apk=a[p*n+k], aqk=a[q*n+k];
+                a[p*n+k]=c*apk-s*aqk; a[q*n+k]=s*apk+c*aqk; }
+        }
+    }
+    for(int i=0;i<n;i++) ev[i]=a[i*n+i];
+}
+
 #define GCK(x) do{ cudaError_t _e=(x); if(_e!=cudaSuccess){ \
     fprintf(stderr,"[GPU-XCHECK] %s failed at %s:%d: %s\n",#x,__FILE__,__LINE__,cudaGetErrorString(_e)); \
     return (double)NAN; } }while(0)
@@ -2606,7 +2713,8 @@ static DevBuf gbj_echild, gbj_partial, gbj_patlh, gbj_pdf, gbj_pddf,
               gbj_pretmp, gbj_tipeig, gbj_prepool, gbj_expfac, gbj_rnum, gbj_tip, gbj_baseinvar,
               gbj_ptnfreq, gbj_redpart,   // G.5.0: on-device ptn_freq + per-block reduction partials
               gbj_invlbase, gbj_redR,     // G.5.0 Part B: base-edge 1/L_p + per-category gradR partials
-              gbj_wnum, gbj_redW;         // G.5.1b: +R per-category Lc(p) (weight-grad numerator) + its block-reduction partials
+              gbj_wnum, gbj_redW,         // G.5.1b: +R per-category Lc(p) (weight-grad numerator) + its block-reduction partials
+              gbj_opgpart, gbj_opgh, gbj_opgvec;   // OPG Phase 1: Gram block-partials [NCH*GBmax], stage-2 result [NCH], K-vector uploads [2*ncat]
 
 // --jolt-diag (A3): per-eval HOST echild-rebuild tax (host loop + 2 blocking H2D in rebuildEchild). Gated by env
 // JOLT_DIAG (set by --jolt-diag; the CUDA TU cannot see Params). Accumulated across the LM loop; reported per call.
@@ -2622,6 +2730,12 @@ static long   g_jd_echild_n = 0;
 // Same MLE (same grad=0 stationary point), ~3-5 iters, ZERO new GPU work (the two-loop is host-side O(m*nedge)).
 static bool   g_lbfgs_init = false;
 static int    g_lbfgs_m = 0;
+// OPG Phase 1 (build+VALIDATE the empirical-Fisher Gram; NO step change in this phase). All default-OFF => the binary
+// is byte-identical to canonical unless an env var is set. JOLT_NO_OPG is the hard kill-switch (wins over everything).
+static bool   g_opg_init = false;
+static bool   g_opg_on   = false;   // build the Gram at all (alloc + launch)
+static bool   g_opg_gchk = false;   // GATE: Check A (independent per-pattern FD) + Check B (host-vs-device Gram)
+static bool   g_opg_lmin = false;   // report lambda_min of the D-scaled reduced Gram (identifiability diagnostic)
 
 extern "C" double gpu_jolt_optimize(
     int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
@@ -2651,6 +2765,15 @@ extern "C" double gpu_jolt_optimize(
     // across-model OpenMP concurrency (ModelFinder) can't tear the baseline read or race g_jdiag_init.
     if (!g_jdiag_init) { g_jdiag = (std::getenv("JOLT_DIAG") != nullptr); g_jdiag_init = true; }
     if (!g_lbfgs_init) { const char* e=std::getenv("JOLT_LBFGS_M"); int m=e?atoi(e):0; g_lbfgs_m=(m<0)?0:((m>32)?32:m); g_lbfgs_init=true; }
+    // OPG Phase 1 env gate (inside the same mutex as the others, so the ModelFinder OpenMP concurrency can't race it).
+    // GRAMCHECK/LMIN imply the Gram must be built; JOLT_NO_OPG kills all of it regardless.
+    if (!g_opg_init) {
+        const bool nogo = (std::getenv("JOLT_NO_OPG") != nullptr);
+        g_opg_gchk = !nogo && (std::getenv("JOLT_OPG_GRAMCHECK") != nullptr);
+        g_opg_lmin = !nogo && (std::getenv("JOLT_OPG_LMIN") != nullptr);
+        g_opg_on   = !nogo && ((std::getenv("JOLT_OPG") != nullptr) || g_opg_gchk || g_opg_lmin);
+        g_opg_init = true;
+    }
     double _jd_ech0 = g_jd_echild_sec; long _jd_echn0 = g_jd_echild_n;
     // Inc 2 reopt proof-counters (JOLT_DEBUG): per-call tally of reopt coefficient uploads via the OFF path
     // (cudaMemcpyToSymbol of g_val0/1/2+g_rscale) vs the ON path (ONE cudaMemcpyAsync of [v0|v1|v2|rs] into the
@@ -2822,6 +2945,22 @@ extern "C" double gpu_jolt_optimize(
     double* d_wnum=nullptr; double* d_redW=nullptr; std::vector<double> h_redW;
     if(freeRate==1){ DEVB(gbj_wnum,(size_t)ncat*chunk0*sizeof(double)); d_wnum=(double*)gbj_wnum.p;
                      DEVB(gbj_redW,(size_t)ncat*GBmax*sizeof(double)); d_redW=(double*)gbj_redW.p; h_redW.assign((size_t)ncat*GBmax,0.0); }
+    // ===== OPG Phase 1 state. The ALLOCATION is flag-gated (not just the launch): the DevBuf pool is never freed and
+    // the MFP VRAM balloon is an open defect, so an OFF run must not grow VRAM by even one buffer. ncat outside [2,10]
+    // => opgNCH=0 => OPG disabled entirely (hard fallback; JOLT_FREERATE_HIGHK can push ncat past 10).
+    const int  opgK   = ncat;
+    const int  opgNCH = (opgK>=2 && opgK<=10) ? opgK*(2*opgK+1) : 0;
+    const bool opgOK  = (freeRate==1) && g_opg_on && (opgNCH>0);
+    double *d_opgPart=nullptr,*d_opgH=nullptr,*d_opgCRCP=nullptr,*d_opgBpr=nullptr;
+    std::vector<double> opgH, opgHk, opgCR, opgBP;                 // Gram (upper-tri, Kahan across chunks) + the K-vectors
+    std::vector<double> opg_capt; std::vector<int> opg_captP; bool opg_captOn=false;   // Check-A analytic s_p capture
+    double opg_gram_sec=0.0; long opg_gram_n=0;                    // P5 cost micro-benchmark
+    if(opgOK){
+        DEVB(gbj_opgpart,(size_t)opgNCH*GBmax*sizeof(double)); d_opgPart=(double*)gbj_opgpart.p;
+        DEVB(gbj_opgh,   (size_t)opgNCH*sizeof(double));       d_opgH   =(double*)gbj_opgh.p;
+        DEVB(gbj_opgvec, (size_t)2*ncat*sizeof(double));       d_opgCRCP=(double*)gbj_opgvec.p; d_opgBpr=d_opgCRCP+ncat;
+        opgH.assign((size_t)opgNCH,0.0); opgHk.assign((size_t)opgNCH,0.0); opgCR.assign(ncat,0.0); opgBP.assign(ncat,0.0);
+    }
     std::vector<double> h_echild((size_t)nnodes*ecStride), h_expfac((size_t)nnodes*ncat*ns);
     std::vector<double> patlh(nptn),pdf(nptn),pddf(nptn);
     std::vector<double> catRate(ncat,1.0), catProp_v(catProp, catProp+ncat);
@@ -3014,6 +3153,7 @@ extern "C" double gpu_jolt_optimize(
     double rN=0.0; if(freeRate==1){ for(int p=0;p<nptn;p++) rN+=ptn_freq[p]; }
     auto computeGradient=[&](double& lnLout,double& galphaOut){
         applyPinv(curPinv);   // G.4.3b: align catRate=meanR/(1-curPinv) and catProp_v to the base pinv before the sweep
+        if(opgOK){ for(int q=0;q<opgNCH;q++){ opgH[q]=0.0; opgHk[q]=0.0; } }   // OPG: H accumulates over THIS sweep's chunks only
         // part8 #2 base-sweep skip (tiling-aware): echild/expfac are chunk-INDEPENDENT, so skip the rebuild when the
         // device echild already matches this base point (built by the immediately-preceding accepted evalLnL). The
         // POSTORDER partials, however, are present on device for ALL patterns only when nTile==1 (one chunk); with
@@ -3138,6 +3278,57 @@ extern "C" double gpu_jolt_optimize(
             cudaMemcpy(h_redR.data(),d_redR,(size_t)ncat*GB*sizeof(double),cudaMemcpyDeviceToHost);
             for(int c=0;c<ncat;c++){ long double a=0; for(int b=0;b<GB;b++) a+=(long double)h_redR[(size_t)c*GB+b];
                 double term=(double)a; double y=term-accRk[c], s=accR[c]+y; accRk[c]=(s-accR[c])-y; accR[c]=s; }
+            // ===== OPG Phase 1 (insertion E): Gram accumulation for THIS chunk. This is the ONLY point where all four
+            // inputs are simultaneously valid: d_rnum is complete after proc(root,-1) above (it is memset per chunk),
+            // and d_wnum / d_invLbase were filled at THIS chunk's first edge. Buffers are Pn-strided (Pn shrinks on the
+            // last chunk) and block partials are GB-strided, NOT GBmax. Phase 1 makes NO step change: opgH is only
+            // validated and reported.
+            if(opgOK){
+                for(int c=0;c<ncat;c++){ opgCR[c]=catRate[c]*catProp_v[c]; opgBP[c]=bprop[c]; }
+                cudaMemcpy(d_opgCRCP,opgCR.data(),(size_t)ncat*sizeof(double),cudaMemcpyHostToDevice);
+                cudaMemcpy(d_opgBpr, opgBP.data(),(size_t)ncat*sizeof(double),cudaMemcpyHostToDevice);
+                std::chrono::steady_clock::time_point _o0=std::chrono::steady_clock::now();
+                const size_t opgSh=(size_t)opgNCH*(size_t)(TB>>5)*sizeof(double);
+                if(!jolt_opg_gram_launch(ncat,GB,TB,opgSh,Pn,d_rnum,d_wnum,d_invLbase,d_ptnfreq,d_opgCRCP,d_opgBpr,GB,d_opgPart)){
+                    fprintf(stderr,"[OPG] gram dispatch failed for ncat=%d\n",ncat); fflush(stderr);
+                } else {
+                    kj_opg_reduce2<<<opgNCH,TB,(size_t)TB*sizeof(double)>>>(GB,d_opgPart,d_opgH);
+                    cudaDeviceSynchronize();
+                    opg_gram_sec += std::chrono::duration<double>(std::chrono::steady_clock::now()-_o0).count(); opg_gram_n++;
+                    std::vector<double> hch((size_t)opgNCH);
+                    cudaMemcpy(hch.data(),d_opgH,(size_t)opgNCH*sizeof(double),cudaMemcpyDeviceToHost);
+                    for(int q=0;q<opgNCH;q++){ double y=hch[q]-opgHk[q], s2=opgH[q]+y; opgHk[q]=(s2-opgH[q])-y; opgH[q]=s2; }
+                    // Check B (KERNEL) + Check-A capture. Gated on opg_captOn so the O(Pn*NCH) host reference runs on
+                    // exactly ONE sweep (driven from the gate block), not on all ~400 LM iterations.
+                    if(g_opg_gchk && opg_captOn){
+                        const int N2=2*ncat;
+                        std::vector<double> hr((size_t)ncat*Pn),hw((size_t)ncat*Pn),hi((size_t)Pn),hf((size_t)Pn);
+                        cudaMemcpy(hr.data(),d_rnum,     (size_t)ncat*Pn*sizeof(double),cudaMemcpyDeviceToHost);
+                        cudaMemcpy(hw.data(),d_wnum,     (size_t)ncat*Pn*sizeof(double),cudaMemcpyDeviceToHost);
+                        cudaMemcpy(hi.data(),d_invLbase, (size_t)Pn*sizeof(double),      cudaMemcpyDeviceToHost);
+                        cudaMemcpy(hf.data(),d_ptnfreq,  (size_t)Pn*sizeof(double),      cudaMemcpyDeviceToHost);
+                        std::vector<long double> ref((size_t)opgNCH,0.0L); std::vector<double> sv((size_t)N2);
+                        for(int p=0;p<Pn;p++){
+                            double il=hi[p], Rp=0.0;
+                            for(int c=0;c<ncat;c++) Rp += il*hw[(size_t)c*Pn+p];
+                            for(int c=0;c<ncat;c++){ sv[c]=opgCR[c]*il*hr[(size_t)c*Pn+p]; sv[ncat+c]=il*hw[(size_t)c*Pn+p]-opgBP[c]*Rp; }
+                            int q=0; for(int a=0;a<N2;a++) for(int b=a;b<N2;b++){ ref[q]+=(long double)hf[p]*sv[a]*sv[b]; q++; }
+                            int gp=pOff+p;   // Check-A: stash analytic s_p for the sampled GLOBAL patterns in this chunk
+                            for(size_t k=0;k<opg_captP.size();k++) if(opg_captP[k]==gp)
+                                for(int t=0;t<N2;t++) opg_capt[k*(size_t)N2+(size_t)t]=sv[t];
+                        }
+                        double mx=0; for(int q=0;q<opgNCH;q++) mx=fmax(mx,fabs((double)ref[q]));
+                        double wr=0; int wq=-1, nb=0;
+                        for(int q=0;q<opgNCH;q++){ double r=(double)ref[q], ad=fabs(hch[q]-r);
+                            double rel=ad/(fabs(r)+1e-300);
+                            if(!((rel<1e-10)||(ad<1e-12*mx))) nb++;                       // hybrid: rel, or negligible vs the largest channel
+                            if(rel>wr && fabs(r)>1e-8*mx){ wr=rel; wq=q; } }
+                        fprintf(stderr,"[OPGGRAM-B] pOff=%d Pn=%d nTile=%d NCH=%d worst_ch=%d worstrel=%.3e nbad=%d -> %s\n",
+                                pOff,Pn,nTile,opgNCH,wq,wr,nb,(nb==0)?"GRAMB PASS":"GRAMB FAIL");
+                        fflush(stderr);
+                    }
+                }
+            }
         }
         for(int e=0;e<nedge;e++){ g_df[e]=accDf[e]; g_ddf[e]=accDdf[e]; }
         for(int c=0;c<ncat;c++) gradR[c]=catProp_v[c]*accR[c];
@@ -3282,6 +3473,99 @@ extern "C" double gpu_jolt_optimize(
         fflush(stderr);
         bprop=wgr_bprop_save;
         lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;        // re-sync device to base for the LM loop
+    }
+    // ===== OPG Phase 1 GATE (JOLT_OPG_GRAMCHECK / JOLT_OPG_LMIN, default-OFF). NO step change in this phase. =====
+    if(opgOK && (g_opg_gchk || g_opg_lmin)){
+        const int N2=2*ncat;
+        auto opg_soft=[&](const std::vector<double>& z){ double mx=z[0]; for(int c=1;c<ncat;c++) if(z[c]>mx)mx=z[c];
+            std::vector<double> o(ncat); double s=0; for(int c=0;c<ncat;c++){o[c]=exp(z[c]-mx); s+=o[c];} for(int c=0;c<ncat;c++)o[c]/=s; return o; };
+        // ONE capture sweep: fills opgH over all chunks AND (under GRAMCHECK) the analytic s_p + runs Check B.
+        const int KP=16;
+        opg_captP.assign((size_t)KP,0); for(int k=0;k<KP;k++) opg_captP[k]=(int)((long long)k*nptn/KP);
+        opg_capt.assign((size_t)KP*N2,0.0);
+        opg_captOn=true; { double lg,ga; computeGradient(lg,ga); } opg_captOn=false;
+        std::vector<double> ana=opg_capt;
+        if(g_opg_gchk){
+            // ---- Check A (FORMULA, INDEPENDENT). Central-difference the per-pattern log-likelihood patlh[p]=log L_p
+            // through the TILE-AWARE snapPatlh path (D2H is +pOff/Pn per chunk => nTile>1 is covered for free) and
+            // compare to the analytic s_p. Check B restates the section-1 formula on the host, so it CANNOT catch a
+            // wrong formula; this can. log L_p ~ O(1-10) => the FD floor here is ~1e-11 abs, ~1e5x sharper than the
+            // aggregate gradient gate, so rel<1e-8 has real margin.
+            std::vector<double> Pp((size_t)nptn),Pm((size_t)nptn);
+            std::vector<double> mR=meanR, bP=bprop;
+            double eps=1e-4;   // JOLT_OPG_EPS: 3-point ladder (1e-3/1e-4/1e-5) pins the FD's own error floor, which is
+            if(const char* ee=getenv("JOLT_OPG_EPS")){ double v=atof(ee); if(v>0.0) eps=v; }   // what the Phase-3 lambda floor is derived from
+            double wrel=0,wabs=0; int wc=-1,wk=-1,nb=0;
+            for(int d=0; d<N2; d++){
+                if(d<ncat){ double y0=log(mR[d]);
+                    meanR[d]=exp(y0+eps); snapPatlh=Pp.data(); (void)evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+                    meanR[d]=exp(y0-eps); snapPatlh=Pm.data(); (void)evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+                    snapPatlh=nullptr; meanR=mR;
+                } else { int j=d-ncat;
+                    std::vector<double> zp(ncat),zm(ncat);
+                    for(int c=0;c<ncat;c++){ zp[c]=log(bP[c]); zm[c]=zp[c]; }
+                    zp[j]+=eps; zm[j]-=eps;
+                    bprop=opg_soft(zp); snapPatlh=Pp.data(); (void)evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+                    bprop=opg_soft(zm); snapPatlh=Pm.data(); (void)evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;
+                    snapPatlh=nullptr; bprop=bP;
+                }
+                for(int k=0;k<KP;k++){
+                    int p=opg_captP[k]; double fd=(Pp[(size_t)p]-Pm[(size_t)p])/(2.0*eps);
+                    double an=ana[(size_t)k*(size_t)N2+(size_t)d];
+                    double ad=fabs(an-fd), rel=ad/(fabs(fd)+1e-300);
+                    // per-coord hybrid gate. abs floor 1e-5 sits ABOVE the central-diff truncation floor (~2.5e-7 at
+                    // eps=1e-4, verified to scale as eps^2 on the eps-ladder => the analytic IS the true derivative) and
+                    // ~1e4x-1e5x BELOW any real per-pattern bug (a wrong R_p at pinv=0.19 => O(0.01-0.1) abs). rel<1e-5
+                    // catches large-score coords; abs<1e-5 rescues the many patterns whose per-coord score is ~0 (where
+                    // rel is a meaningless 0/0). The old 1e-9 abs floor was 250x below truncation => flapped (Phase-1 v1).
+                    if(!((rel<1e-5)||(ad<1e-5))) nb++;
+                    if(rel>wrel && fabs(fd)>1e-12){ wrel=rel; wc=d; wk=k; }
+                    if(ad>wabs) wabs=ad;
+                }
+            }
+            meanR=mR; bprop=bP;
+            fprintf(stderr,"[OPGGRAM-A] ncat=%d optPinv=%d pinv0=%.6f KP=%d coords=%d worst_coord=%d worst_k=%d worstrel=%.3e worstabs=%.3e nbad=%d -> %s\n",
+                    ncat,(int)optPinv,curPinv,KP,N2,wc,wk,wrel,wabs,nb,(nb==0)?"GRAMA PASS":"GRAMA FAIL");
+            fflush(stderr);
+        }
+        if(g_opg_lmin){
+            // ---- lambda_min of the D-scaled reduced Gram. STEP space (2k-1): project ONLY the softmax null n_z (at
+            // fixed brlen n_y is large-curvature and genuinely informative). DIAGNOSTIC space (2k-2): project BOTH
+            // gauges -- identifiability is a question about the gauge-fixed manifold, and keeping n_y inflates
+            // lambda_max, biasing the ratio toward "unidentifiable".
+            std::vector<double> Hf((size_t)N2*N2,0.0);
+            { int q=0; for(int a=0;a<N2;a++) for(int b=a;b<N2;b++){ Hf[(size_t)a*N2+b]=opgH[q]; Hf[(size_t)b*N2+a]=opgH[q]; q++; } }
+            const int km=ncat-1;
+            std::vector<double> C((size_t)ncat*km,0.0);           // Helmert: orthonormal basis of {v: sum v = 0}
+            for(int j=0;j<km;j++){ int m=j+1; double d1=1.0/sqrt((double)m*((double)m+1.0));
+                for(int i=0;i<=j;i++) C[(size_t)i*km+j]=d1;
+                C[(size_t)m*km+j]=-(double)m*d1; }
+            auto report=[&](const char* tag,bool projY){
+                const int ry = projY?km:ncat, rz=km, nr=ry+rz;
+                if(nr<1) return;
+                std::vector<double> Q((size_t)N2*nr,0.0);
+                for(int i=0;i<ncat;i++) for(int j=0;j<ry;j++) Q[(size_t)i*nr+j] = projY? C[(size_t)i*km+j] : ((i==j)?1.0:0.0);
+                for(int i=0;i<ncat;i++) for(int j=0;j<rz;j++) Q[(size_t)(ncat+i)*nr+(size_t)(ry+j)] = C[(size_t)i*km+j];
+                std::vector<double> T((size_t)N2*nr,0.0), Hr((size_t)nr*nr,0.0);
+                for(int a=0;a<N2;a++) for(int j=0;j<nr;j++){ double s=0; for(int b=0;b<N2;b++) s+=Hf[(size_t)a*N2+b]*Q[(size_t)b*nr+j]; T[(size_t)a*nr+j]=s; }
+                for(int i=0;i<nr;i++) for(int j=0;j<nr;j++){ double s=0; for(int a=0;a<N2;a++) s+=Q[(size_t)a*nr+i]*T[(size_t)a*nr+j]; Hr[(size_t)i*nr+j]=s; }
+                std::vector<double> D((size_t)nr,0.0); double dmax=0;
+                for(int i=0;i<nr;i++){ D[i]=Hr[(size_t)i*nr+i]; dmax=fmax(dmax,D[i]); }
+                for(int i=0;i<nr;i++) D[i]=fmax(D[i],1e-12*dmax);
+                for(int i=0;i<nr;i++) for(int j=0;j<nr;j++) Hr[(size_t)i*nr+j] /= sqrt(D[i]*D[j]);   // correlation matrix => dimensionless spectrum
+                std::vector<double> ev((size_t)nr,0.0);
+                jolt_jacobi_eig(Hr.data(),nr,ev.data());
+                double lo=ev[0],hi=ev[0]; for(int i=1;i<nr;i++){ lo=fmin(lo,ev[i]); hi=fmax(hi,ev[i]); }
+                fprintf(stderr,"[OPGLMIN] %-9s ncat=%d dim=%d lmin=%.6e lmax=%.6e ratio=%.6e\n",tag,ncat,nr,lo,hi,(hi>0.0?lo/hi:0.0));
+            };
+            report("step2k-1",false);
+            report("diag2k-2",true);
+            fflush(stderr);
+        }
+        if(opg_gram_n>0) fprintf(stderr,"[OPGCOST] ncat=%d NCH=%d gram_launches=%ld gram_sec=%.6f mean_ms=%.4f\n",
+                                 ncat,opgNCH,opg_gram_n,opg_gram_sec,1000.0*opg_gram_sec/(double)opg_gram_n);
+        fflush(stderr);
+        lnL=evalLnL(startB,curAlpha,curPinv,nullptr); nLnLEval++;   // re-sync device to base for the LM loop
     }
     // T5 BISECTION PROBE (JOLT_IR3, default-OFF): the +I+R constant +10.00-nat joltLnL-vs-CPU offset (iplus 173879879:
     // jolt=cpu+10.00 exactly, mirror==cpu, only freeRate&&optPinv, pinv-invariant). Force maxiter=0 for freeRate&&optPinv
