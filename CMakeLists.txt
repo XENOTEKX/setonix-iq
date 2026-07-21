@@ -762,6 +762,34 @@ elseif (ICC)
     endif()
 endif()
 
+# ---- AVX-512 kernel: built by DEFAULT on capable x86-64 multi-kernel builds (was -DIQTREE_FLAGS=KNL opt-in). ----
+# The AVX-512 instructions live ONLY in libkernelavx512.a and are dispatched at RUNTIME via Params::SSE, which
+# main.cpp:2459 clamps to min(SSE, instrset_detect()). So on a CPU without AVX-512 the binary transparently falls
+# back to AVX2/AVX/SSE (no SIGILL) — the same runtime-downgrade every upstream KNL build already relies on.
+# Excluded on 32-bit, novx/nosse/single-ISA (fma/avx) builds, non-x86 (__ARM_NEON), and MSVC (VCC has no -mavx512f
+# path above). Opt out with a DEDICATED option -DIQTREE_AVX512=OFF (NOT an IQTREE_FLAGS token — a "no…" token would
+# collide with the existing `MATCHES "avx"` substring test). Explicit -DIQTREE_FLAGS=KNL still forces it on.
+option(IQTREE_AVX512 "Build the AVX-512 likelihood kernel by default (runtime-dispatched; falls back to AVX2/AVX/SSE on CPUs without AVX-512). Set OFF for an AVX2-only build." ON)
+set(HAVE_AVX512 OFF)
+if (IQTREE_AVX512
+    AND NOT BINARY32
+    AND NOT IQTREE_FLAGS MATCHES "novx"
+    AND NOT IQTREE_FLAGS MATCHES "nosse"
+    AND NOT IQTREE_FLAGS MATCHES "fma"
+    AND NOT IQTREE_FLAGS MATCHES "avx"
+    AND NOT __ARM_NEON
+    AND NOT VCC)
+    set(HAVE_AVX512 ON)
+endif()
+if (IQTREE_FLAGS MATCHES "KNL")
+    set(HAVE_AVX512 ON)
+endif()
+if (HAVE_AVX512)
+    message("AVX-512 kernel : ON (default; disable with -DIQTREE_AVX512=OFF)")
+else()
+    message("AVX-512 kernel : OFF")
+endif()
+
 # further flag to improve performance
 
 if (IQTREE_FLAGS MATCHES "fma") # AVX+FMA instruction set
@@ -775,7 +803,7 @@ elseif (IQTREE_FLAGS MATCHES "avx") # AVX instruction set
     set(COMBINED_FLAGS "${COMBINED_FLAGS} ${AVX_FLAGS}")
     #SET(EXE_SUFFIX "${EXE_SUFFIX}-avx")
 elseif (NOT IQTREE_FLAGS MATCHES "nosse") #SSE intruction set
-    if (IQTREE_FLAGS MATCHES "KNL")
+    if (HAVE_AVX512)
         message("Vectorization : SSE3/AVX/AVX2/AVX-512")
         add_definitions(-D__AVX512KNL)
     elseif (NOT __ARM_NEON)
@@ -931,7 +959,7 @@ add_library(kernelsse tree/phylokernelsse.cpp)
 if (NOT BINARY32 AND NOT IQTREE_FLAGS MATCHES "novx")
     add_library(kernelavx tree/phylotreeavx.cpp)
     add_library(kernelfma tree/phylokernelfma.cpp)
-    if (IQTREE_FLAGS MATCHES "KNL")
+    if (HAVE_AVX512)
         add_library(kernelavx512 tree/phylokernelavx512.cpp)
     endif()
 endif()
@@ -1026,7 +1054,7 @@ if (NOT IQTREE_FLAGS MATCHES "avx" AND NOT IQTREE_FLAGS MATCHES "fma")
     if (NOT IQTREE_FLAGS MATCHES "novx")
         set_target_properties(kernelavx pllavx PROPERTIES COMPILE_FLAGS "${AVX_FLAGS}")
         set_target_properties(kernelfma PROPERTIES COMPILE_FLAGS "${FMA_FLAGS}")
-        if (IQTREE_FLAGS MATCHES "KNL")
+        if (HAVE_AVX512)
             set_target_properties(kernelavx512 PROPERTIES COMPILE_FLAGS "${AVX512_FLAGS}")
         endif()
     endif()
@@ -1160,7 +1188,7 @@ if (NOT BINARY32 AND NOT IQTREE_FLAGS MATCHES "novx")
     if (USE_CMAPLE_AA STREQUAL "ON")
     	target_link_libraries(iqtree3-aa pllavx kernelavx kernelfma)
     endif()
-    if (IQTREE_FLAGS MATCHES "KNL")
+    if (HAVE_AVX512)
         target_link_libraries(iqtree3 kernelavx512)
         LIST(APPEND STATIC_LIBS "${PROJECT_BINARY_DIR}/libkernelavx512.a")
         if (USE_CMAPLE_AA STREQUAL "ON")
