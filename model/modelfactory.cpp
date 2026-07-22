@@ -20,7 +20,8 @@
 #include <cmath>          // G.4.2: std::isnan for the JOLT eligibility/fallback check
 #include "rateinvar.h"
 #include "modelfactory.h"
-#include "freerateeval.h" // Stage-0 weight-block residual attribution (inert unless IQ_FR_ATTRIB)
+#include "freerateeval.h"
+#include "freeratesolver.h" // Stage-0 weight-block residual attribution (inert unless IQ_FR_ATTRIB)
 #include "rategamma.h"
 #include "rategammainvar.h"
 #include "modelmarkov.h"
@@ -1774,6 +1775,10 @@ double ModelFactory::optimizeParameters(int fixed_len, bool write_info,
     // above must see the state exactly as production published it, and this arm restores its full
     // parameter snapshot element-wise before returning.
     freerate::reportJointBlockAttribution(tree, "post-optimizeParameters");
+    // Phase-1 step-2 probe: measures what re-profiling weights at every rate trial (section 7.1 step 3)
+    // actually costs. Inert unless IQ_FR_SOLVE is set, and it restores unconditionally -- it measures,
+    // it does not commit.
+    freerate::reportPhase1SolveProbe(tree, "post-optimizeParameters");
 
 #ifdef _IQTREE_MPI
     // synchronize the checkpoints of the other processors

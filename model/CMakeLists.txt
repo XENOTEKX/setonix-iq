@@ -21,7 +21,8 @@ ratekategory.cpp ratekategory.h
 ratefree.cpp ratefree.h
 freeratefit.cpp freeratefit.h
 freerateprofile.cpp freerateprofile.h
-freerateeval.cpp freerateeval.h
+freerateeval.cpp freerateeval.h freerateinternal.h
+freeratesolver.cpp freeratesolver.h
 ratefreeinvar.cpp ratefreeinvar.h
 rateheterotachy.cpp rateheterotachy.h
 rateheterotachyinvar.cpp rateheterotachyinvar.h
