@@ -124,6 +124,12 @@ path); a process-wide `std::mutex` serialises JOLT on the 1 GPU (ModelFinder is 
 1. **N/S mutex-serialisation ceiling.** GPU is mutex-serialised at per-model speedup **S≈4.8**; CPU runs **N=103** concurrent.
    Aggregate **N/S = 103/4.8 ≈ 21× slower at ANY coverage**. Even batched: A100 g4 B=12×S=4.8=57 < 103 ⇒ full-data 100K
    breadth batching is coin-flip-to-loss. **This is a BREADTH property.**
+   <!-- ⚠️ CAVEAT (2026-07-10 red-team): the SERIALISATION mechanism is confirmed (process-global __constant__ eigensystem
+        g_U/g_Uinv/… gpu_lnl_intree.cu:34-43 + jolt_gpu_mtx), but the specific number **S≈4.8 is RETIRED** — it came from a
+        June single-model microbench (job 170361630, LG+G4 -te 47s/224s) that 2026-07 re-runs give ≈1.0× (per-model parity,
+        phase-9 memory). The N/S *direction* (one GPU serial vs N CPU concurrent) holds; the 21× magnitude does NOT — treat
+        it as "serial-per-model-latency-bound", not a calibrated 21×. -->
+
 2. **100K is not a clean GPU-specific win — but that's a REGIME property, NOT a parallelization failure.** JOLT's 27 cold
    iters → same MLE rel 2.5e-16 **proves** the per-model algorithm parallelizes; a 100K loss measures GPU occupancy at
    small N, not parallelizability. (Mode-L's L.1 gate, re-stated as **critical-path length not traversal count**, WON.)

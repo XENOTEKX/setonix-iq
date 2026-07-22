@@ -1,0 +1,332 @@
+diff --git a/tree/gpu/gpu_lnl_intree.cu b/tree/gpu/gpu_lnl_intree.cu
+index 72bcfcaa..beabccb5 100644
+--- a/tree/gpu/gpu_lnl_intree.cu
++++ b/tree/gpu/gpu_lnl_intree.cu
+@@ -909,7 +909,11 @@ static inline bool jolt_opg_gram_launch(int ncat,int GB,int TB,size_t shbytes,in
+ // no external symbols. Deliberately NOT whtest/eigen_sym.h (C-linkage NR tred2/tqli in a GPL module whose header
+ // #defines NUM_STATE 4 / ZERO / DVec20 would pollute this CUDA TU) and NOT utils/eigendecomposition.cpp (non-symmetric
+ // rate-matrix path). Overwrites a[]; returns eigenvalues (unsorted) in ev[].
+-static void jolt_jacobi_eig(double* a, int n, double* ev){
++// V (Phase 3, OPTIONAL — nullptr keeps the OPGLMIN eigenvalues-only path BYTE-IDENTICAL): on return the COLUMNS of V are
++// the eigenvectors (a = V·diag(ev)·Vᵀ, v_i = V[:,i]); accumulated as the product of Jacobi rotations in the SAME fixed
++// (sweep,(p,q)) order ⇒ deterministic. The spectral solve δ̂=Σ_i v_i(v_iᵀĝ)/(…) is invariant to eigen sign/order.
++static void jolt_jacobi_eig(double* a, int n, double* ev, double* V=nullptr){
++    if(V){ for(int i=0;i<n*n;i++) V[i]=0.0; for(int i=0;i<n;i++) V[i*n+i]=1.0; }   // V <- I
+     for(int sweep=0; sweep<12; sweep++){
+         double off=0.0;
+         for(int p=0;p<n;p++) for(int q=p+1;q<n;q++) off += a[p*n+q]*a[p*n+q];
+@@ -924,11 +928,65 @@ static void jolt_jacobi_eig(double* a, int n, double* ev){
+                 a[k*n+p]=c*akp-s*akq; a[k*n+q]=s*akp+c*akq; }
+             for(int k=0;k<n;k++){ double apk=a[p*n+k], aqk=a[q*n+k];
+                 a[p*n+k]=c*apk-s*aqk; a[q*n+k]=s*apk+c*aqk; }
++            if(V){ for(int k=0;k<n;k++){ double vkp=V[k*n+p], vkq=V[k*n+q];   // V <- V·J (same column update as a)
++                V[k*n+p]=c*vkp-s*vkq; V[k*n+q]=s*vkp+c*vkq; } }
+         }
+     }
+     for(int i=0;i<n;i++) ev[i]=a[i*n+i];
+ }
+ 
++// OPG Phase 3 / OPGLMIN SHARED reduction (blue-team: one validated path). Given the full 2k×2k Gram Hf (row-major),
++// build the reduced D-scaled CORRELATION matrix and its eigen-pairs. projY=false ⇒ STEP space nr=2k−1 (project ONLY the
++// softmax null n_z; n_y is informative at fixed brlen). projY=true ⇒ DIAGNOSTIC space nr=2k−2 (project both gauges).
++// Fills Q (N2×nr projector), Dscale (nr diag, floored), ev (nr eigenvalues), and — if want_V — V (nr×nr, columns =
++// eigenvectors of the correlation matrix). Returns nr. Deterministic (fixed-order loops + fixed-sweep Jacobi). N2=2*ncat.
++// FULL-HELMERT-ALWAYS (blue headline): the Helmert basis is over ALL ncat z-coords — no active set (a floored class's
++// s^z=O(1e-4) is intrinsically tiny and neutralised by the clamp-aware ρ-skip; an active gauge would break the exact null).
++static int jolt_opg_reduce(const double* Hf, int ncat, bool projY, bool want_V,
++        std::vector<double>& Q, std::vector<double>& Dscale, std::vector<double>& ev, std::vector<double>& V){
++    const int N2=2*ncat, km=ncat-1;
++    const int ry=projY?km:ncat, rz=km, nr=ry+rz;
++    if(nr<1) return 0;
++    std::vector<double> C((size_t)ncat*km,0.0);                       // Helmert: orthonormal basis of {v: Σv=0}
++    for(int j=0;j<km;j++){ int m=j+1; double d1=1.0/sqrt((double)m*((double)m+1.0));
++        for(int i=0;i<=j;i++) C[(size_t)i*km+j]=d1;
++        C[(size_t)m*km+j]=-(double)m*d1; }
++    Q.assign((size_t)N2*nr,0.0);
++    for(int i=0;i<ncat;i++) for(int j=0;j<ry;j++) Q[(size_t)i*nr+j] = projY? C[(size_t)i*km+j] : ((i==j)?1.0:0.0);
++    for(int i=0;i<ncat;i++) for(int j=0;j<rz;j++) Q[(size_t)(ncat+i)*nr+(size_t)(ry+j)] = C[(size_t)i*km+j];
++    std::vector<double> T((size_t)N2*nr,0.0), Hr((size_t)nr*nr,0.0);
++    for(int a=0;a<N2;a++) for(int j=0;j<nr;j++){ double s=0; for(int b=0;b<N2;b++) s+=Hf[(size_t)a*N2+b]*Q[(size_t)b*nr+j]; T[(size_t)a*nr+j]=s; }
++    for(int i=0;i<nr;i++) for(int j=0;j<nr;j++){ double s=0; for(int a=0;a<N2;a++) s+=Q[(size_t)a*nr+i]*T[(size_t)a*nr+j]; Hr[(size_t)i*nr+j]=s; }
++    Dscale.assign((size_t)nr,0.0); double dmax=0;
++    for(int i=0;i<nr;i++){ Dscale[i]=Hr[(size_t)i*nr+i]; dmax=fmax(dmax,Dscale[i]); }
++    for(int i=0;i<nr;i++) Dscale[i]=fmax(Dscale[i],1e-12*dmax);
++    for(int i=0;i<nr;i++) for(int j=0;j<nr;j++) Hr[(size_t)i*nr+j] /= sqrt(Dscale[i]*Dscale[j]);   // correlation ⇒ dimensionless spectrum
++    ev.assign((size_t)nr,0.0);
++    if(want_V) V.assign((size_t)nr*nr,0.0);
++    jolt_jacobi_eig(Hr.data(),nr,ev.data(), want_V? V.data():nullptr);
++    return nr;
++}
++// OPG Phase 3 dense spectral SOLVE (per-backtrack; base-fixed inputs precomputed once per outer iter). Given the reduced
++// eigen-pairs (V,ev,Dscale,Q), the precomputed projection coefficients a_i=v_iᵀĝ (ĝ=D^{-1/2}Qᵀg), and the current damping
++// lam + spectral floor lfloor: δ̂=Σ_i v_i·a_i/denom_i, denom_i=max(ev_i,lfloor)+lam; δ_red=D^{-1/2}δ̂; δ=Qδ_red split into
++// dy[ncat],dz[ncat]. Predicted increase P=Σ_i (a_i²/denom_i)(1−½·ev_i/denom_i) ≥ 0 (blue/red proof). All host FP64,
++// fixed-order ⇒ bit-reproducible. Returns false if any output is non-finite (⇒ caller falls back to |dd|+mu, Fix A).
++static bool jolt_opg_dense_solve(int nr, int ncat, const std::vector<double>& V, const std::vector<double>& ev,
++        const std::vector<double>& Dscale, const std::vector<double>& Q, const std::vector<double>& acoef,
++        double lam, double lfloor, std::vector<double>& dy, std::vector<double>& dz, double& Pout){
++    const int N2=2*ncat;
++    std::vector<double> dhat((size_t)nr,0.0); double P=0.0;
++    for(int i=0;i<nr;i++){ double den=fmax(ev[i],lfloor)+lam; if(!(den>0.0)) return false;
++        double coef=acoef[i]/den; for(int k=0;k<nr;k++) dhat[k]+=V[(size_t)k*nr+i]*coef;
++        P += (acoef[i]*acoef[i]/den)*(1.0-0.5*ev[i]/den); }
++    std::vector<double> dred((size_t)nr,0.0);
++    for(int k=0;k<nr;k++){ dred[k]=dhat[k]/sqrt(Dscale[k]); if(!std::isfinite(dred[k])) return false; }
++    dy.assign(ncat,0.0); dz.assign(ncat,0.0);
++    for(int i=0;i<ncat;i++){ double s=0; for(int j=0;j<nr;j++) s+=Q[(size_t)i*nr+j]*dred[j];        dy[i]=s; if(!std::isfinite(s)) return false; }
++    for(int i=0;i<ncat;i++){ double s=0; for(int j=0;j<nr;j++) s+=Q[(size_t)(ncat+i)*nr+j]*dred[j]; dz[i]=s; if(!std::isfinite(s)) return false; }
++    Pout=P; return std::isfinite(P);
++}
++
+ #define GCK(x) do{ cudaError_t _e=(x); if(_e!=cudaSuccess){ \
+     fprintf(stderr,"[GPU-XCHECK] %s failed at %s:%d: %s\n",#x,__FILE__,__LINE__,cudaGetErrorString(_e)); \
+     return (double)NAN; } }while(0)
+@@ -2736,6 +2794,18 @@ static bool   g_opg_init = false;
+ static bool   g_opg_on   = false;   // build the Gram at all (alloc + launch)
+ static bool   g_opg_gchk = false;   // GATE: Check A (independent per-pattern FD) + Check B (host-vs-device Gram)
+ static bool   g_opg_lmin = false;   // report lambda_min of the D-scaled reduced Gram (identifiability diagnostic)
++// OPG Phase 2 (STATE-CHANGING): replace ONLY the +R (y,z) block's secant curvature with the OPG Fisher DIAGONAL + a
++// multiplicative Marquardt/Nielsen lambda trust region. brlen/alpha/pinv/Q stay VERBATIM on |dd|+mu (minimal perturbation:
++// audits measured them benign). 0=off (canonical path, byte-identical); nonzero=on. Implies g_opg_on. (The "unified"
++// all-arm variant is deferred — a 3-line follow-up only if (y,z)-only underperforms on the gate.)
++static int    g_opg_step = 0;
++static double g_opg_lam0 = 1.0, g_opg_lmn = 1e-7, g_opg_lmx = 1e7;   // (Phase-2 diagonal; retired) lambda0 / clamp
++// OPG Phase 3 DENSE-phase constants (blue SEV-2b: lam is ADDITIVE on the D-scaled correlation matrix ⇒ do NOT inherit the
++// Phase-2 multiplicative 1e-7/1.0). g_opg_dlam0=lam0 (τ·max_diag=1 after correlation scaling); g_opg_dlfloor = spectral
++// floor λ̂_floor AND the lam clamp-lo; g_opg_lsat = Fix-A fallback trigger. JOLT_OPG_DLAM0 = the Phase-3-UNIQUE sentinel.
++static double g_opg_dlam0 = 1e-3, g_opg_dlfloor = 1e-4, g_opg_lsat = 1e3;
++static double g_opg_gtol = 1e-3;   // Phase-3 conv HARDENING (SEV-1): OPG path requires max|g_y|,max|g_z|<gtol AND dl<tol
++static bool   g_opg_baseretry = false;   // gated confirmatory arm (blue): within-backtrack baseline retry on dense-reject
+ 
+ extern "C" double gpu_jolt_optimize(
+     int nstates, int nptn, int ncat, int ntax, int nnodes, int root,
+@@ -2771,7 +2841,17 @@ extern "C" double gpu_jolt_optimize(
+         const bool nogo = (std::getenv("JOLT_NO_OPG") != nullptr);
+         g_opg_gchk = !nogo && (std::getenv("JOLT_OPG_GRAMCHECK") != nullptr);
+         g_opg_lmin = !nogo && (std::getenv("JOLT_OPG_LMIN") != nullptr);
+-        g_opg_on   = !nogo && ((std::getenv("JOLT_OPG") != nullptr) || g_opg_gchk || g_opg_lmin);
++        // Phase 2 step: JOLT_OPG_STEP nonzero => (y,z)-only OPG+Nielsen step ON. Needs the Gram => forces g_opg_on.
++        { const char* e=std::getenv("JOLT_OPG_STEP"); int s=(!nogo && e)?atoi(e):0; g_opg_step=(s!=0)?1:0; }
++        g_opg_on   = !nogo && ((std::getenv("JOLT_OPG") != nullptr) || g_opg_gchk || g_opg_lmin || g_opg_step!=0);
++        if(const char* e=std::getenv("JOLT_OPG_LAMBDA0")) g_opg_lam0=atof(e);
++        if(const char* e=std::getenv("JOLT_OPG_LAMMIN"))  g_opg_lmn =atof(e);   // lambda clamp lo (NOT JOLT_OPG_LMIN, which is the lambda_min diagnostic)
++        if(const char* e=std::getenv("JOLT_OPG_DLAM0"))   g_opg_dlam0 =atof(e);   // Phase-3 dense lam0 (also the unique build sentinel)
++        if(const char* e=std::getenv("JOLT_OPG_DLFLOOR")) g_opg_dlfloor=atof(e);  // Phase-3 spectral floor + lam clamp-lo
++        if(const char* e=std::getenv("JOLT_OPG_LSAT"))    g_opg_lsat =atof(e);    // Phase-3 Fix-A fallback trigger
++        if(const char* e=std::getenv("JOLT_OPG_GTOL"))    g_opg_gtol =atof(e);    // Phase-3 grad-norm conv hardening
++        g_opg_baseretry = !nogo && (std::getenv("JOLT_OPG_BASERETRY") != nullptr);
++        if(const char* e=std::getenv("JOLT_OPG_LAMMAX"))  g_opg_lmx =atof(e);
+         g_opg_init = true;
+     }
+     double _jd_ech0 = g_jd_echild_sec; long _jd_echn0 = g_jd_echild_n;
+@@ -3535,26 +3615,12 @@ extern "C" double gpu_jolt_optimize(
+             // lambda_max, biasing the ratio toward "unidentifiable".
+             std::vector<double> Hf((size_t)N2*N2,0.0);
+             { int q=0; for(int a=0;a<N2;a++) for(int b=a;b<N2;b++){ Hf[(size_t)a*N2+b]=opgH[q]; Hf[(size_t)b*N2+a]=opgH[q]; q++; } }
+-            const int km=ncat-1;
+-            std::vector<double> C((size_t)ncat*km,0.0);           // Helmert: orthonormal basis of {v: sum v = 0}
+-            for(int j=0;j<km;j++){ int m=j+1; double d1=1.0/sqrt((double)m*((double)m+1.0));
+-                for(int i=0;i<=j;i++) C[(size_t)i*km+j]=d1;
+-                C[(size_t)m*km+j]=-(double)m*d1; }
++            // Refactored to the SHARED jolt_opg_reduce (blue-team): byte-identical to the inline v1 (same ops, same order);
++            // the Phase-3 gate asserts these lmin/lmax/ratio prints are UNCHANGED vs cbb9f5a8.
+             auto report=[&](const char* tag,bool projY){
+-                const int ry = projY?km:ncat, rz=km, nr=ry+rz;
++                std::vector<double> Q,D,ev,Vd;
++                int nr=jolt_opg_reduce(Hf.data(),ncat,projY,false,Q,D,ev,Vd);
+                 if(nr<1) return;
+-                std::vector<double> Q((size_t)N2*nr,0.0);
+-                for(int i=0;i<ncat;i++) for(int j=0;j<ry;j++) Q[(size_t)i*nr+j] = projY? C[(size_t)i*km+j] : ((i==j)?1.0:0.0);
+-                for(int i=0;i<ncat;i++) for(int j=0;j<rz;j++) Q[(size_t)(ncat+i)*nr+(size_t)(ry+j)] = C[(size_t)i*km+j];
+-                std::vector<double> T((size_t)N2*nr,0.0), Hr((size_t)nr*nr,0.0);
+-                for(int a=0;a<N2;a++) for(int j=0;j<nr;j++){ double s=0; for(int b=0;b<N2;b++) s+=Hf[(size_t)a*N2+b]*Q[(size_t)b*nr+j]; T[(size_t)a*nr+j]=s; }
+-                for(int i=0;i<nr;i++) for(int j=0;j<nr;j++){ double s=0; for(int a=0;a<N2;a++) s+=Q[(size_t)a*nr+i]*T[(size_t)a*nr+j]; Hr[(size_t)i*nr+j]=s; }
+-                std::vector<double> D((size_t)nr,0.0); double dmax=0;
+-                for(int i=0;i<nr;i++){ D[i]=Hr[(size_t)i*nr+i]; dmax=fmax(dmax,D[i]); }
+-                for(int i=0;i<nr;i++) D[i]=fmax(D[i],1e-12*dmax);
+-                for(int i=0;i<nr;i++) for(int j=0;j<nr;j++) Hr[(size_t)i*nr+j] /= sqrt(D[i]*D[j]);   // correlation matrix => dimensionless spectrum
+-                std::vector<double> ev((size_t)nr,0.0);
+-                jolt_jacobi_eig(Hr.data(),nr,ev.data());
+                 double lo=ev[0],hi=ev[0]; for(int i=1;i<nr;i++){ lo=fmin(lo,ev[i]); hi=fmax(hi,ev[i]); }
+                 fprintf(stderr,"[OPGLMIN] %-9s ncat=%d dim=%d lmin=%.6e lmax=%.6e ratio=%.6e\n",tag,ncat,nr,lo,hi,(hi>0.0?lo/hi:0.0));
+             };
+@@ -3575,6 +3641,15 @@ extern "C" double gpu_jolt_optimize(
+     // (gaugeFix/applyPinv on accept). Bisects loop-vs-seed in ONE build. No production effect (flag-gated).
+     if (getenv("JOLT_IR3") && freeRate==1 && optPinv) maxiter = 0;
+     double mu=1.0, tol=1e-7; int it=0,nRej=0; bool conv=false;
++    // OPG Phase 2 (y,z)-block multiplicative Marquardt/Nielsen state — PERSISTENT across outer iters (resetting per iter
++    // would kill the trust-region adaptation). Only touched when opgStepOn; mu is untouched and still drives brlen/alpha/
++    // pinv/Q. Δθ_c = g_θ/((1+lam)·H_θθ+ε); accept&!clamped: lam·=max(1/3,1-(2ρ-1)³),nu=2; accept&clamped: lam·=0.5,nu=2;
++    // reject: lam·=nu,nu·=2.  H_θθ = OPG Fisher diagonal (opgH), ε relative floor.  clamp lam∈[g_opg_lmn,g_opg_lmx].
++    const bool opgStepOn = (freeRate==1) && opgOK && (g_opg_step!=0);   // opgOK already requires g_opg_on && ncat∈[2,10]
++    double lam=g_opg_dlam0, nu=2.0;   // Phase-3 dense lam0 (NOT the Phase-2 g_opg_lam0=1.0)
++    // OPG Phase 3 Fix-A hysteresis + honest-failure instrumentation (all persist across outer iters).
++    bool opgLatched=false;   // latched to the |dd|+mu (y,z) baseline until lam recovers below lsat/10 (blue: kills re-engage oscillation)
++    long dense_tried=0, dense_acc=0, fixA_fired=0, dense_clamp=0; int dnr_last=0;   // dnr_last: reduced dim (2k-1), for [OPGSTEP]
+     double aPrev=0,gaPrev=0; bool haveSec=false;
+     double pPrev=0,gpPrev=0;   // G.4.3b: pinv secant curvature (mirrors the alpha secant)
+     // ---- L-BFGS state (brlen subvector, edge space) — JOLT_LBFGS_M>0; lbM=0 keeps the diagonal path byte-identical ----
+@@ -3670,6 +3745,11 @@ extern "C" double gpu_jolt_optimize(
+         // for the reject restore (the trial staging below overwrites meanR/bprop in place).
+         std::vector<double> baseY(freeRate==1?ncat:0),baseZ(freeRate==1?ncat:0),g_y(freeRate==1?ncat:0),g_z(freeRate==1?ncat:0);
+         std::vector<double> ddY(freeRate==1?ncat:0,-1e6),ddZ(freeRate==1?ncat:0,-1e6);
++        // OPG Phase 3: per-outer-iter DENSE reduction of the full Gram opgH → the coupled (2k−1) step matrix, HOISTED here
++        // (inputs opgH/g_y/g_z base-fixed; only lam varies in the per-backtrack solve ⇒ result-neutral vs per-bt recompute).
++        // denseReady gates the dense (y,z) step; !denseReady (or Fix-A) ⇒ the |dd|+mu secant baseline. Filled below.
++        std::vector<double> dV, dev, dD, dQ, dacoef;   // eigenvectors / eigenvalues / D-scale / projector Q / a_i=v_iᵀĝ
++        int dnr=0; bool denseReady=false; double mgy=0.0, mgz=0.0;   // mgy/mgz: base-state grad-norms (conv hardening + IRCONV)
+         if(freeRate==1){
+             // ===== +I+R EXPORT-NORMALISATION FIX (default ON; kill-switch JOLT_IR_NOFDFIX restores old behaviour) =====
+             // BUG (root-caused rdiag 173984235 + red-team, source-confirmed): the pinv forward-FD at :3220-3223 calls
+@@ -3716,6 +3796,26 @@ extern "C" double gpu_jolt_optimize(
+             // G.5.1d (2b): the log-rate arm lives in the PINV-FREE basis y=log(meanR=ρ) (the trial staging writes meanR=exp(y)).
+             // g_y = d lnL/dy = meanR·dL/dmeanR = meanR·(gradR/(1-p)) = catRate·gradR (the (1-p) cancels). pure +R: meanR==catRate => byte-identical.
+             for(int c=0;c<ncat;c++){ baseY[c]=log(meanR[c]); baseZ[c]=zR[c]; g_y[c]=catRate[c]*gradR[c]; g_z[c]=gzR[c]; }
++            for(int c=0;c<ncat;c++){ mgy=fmax(mgy,fabs(g_y[c])); mgz=fmax(mgz,fabs(g_z[c])); }   // base-state grad-norms (conv hardening + IRCONV λ-stall detector)
++            if(opgStepOn && !JOLT_IR_FREEZE_MODEL){   // Phase 3: build the dense (2k−1) reduction ONCE for this base state
++                const int N2=2*ncat;
++                std::vector<double> Hf((size_t)N2*N2,0.0);
++                bool ok=true; int q=0;   // Inf/NaN guard: the Gram SQUARES scores; one underflow ⇒ Inf ⇒ skip dense (Fix-A fallback)
++                for(int a=0;a<N2;a++) for(int b=a;b<N2;b++){ double v=opgH[q++]; Hf[(size_t)a*N2+b]=v; Hf[(size_t)b*N2+a]=v; if(!std::isfinite(v)) ok=false; }
++                for(int c=0;c<ncat;c++) if(!(std::isfinite(g_y[c])&&std::isfinite(g_z[c]))) ok=false;
++                if(ok){
++                    dnr=jolt_opg_reduce(Hf.data(),ncat,false,true,dQ,dD,dev,dV);   // projY=false (STEP space 2k−1), want_V
++                    if(dnr>=1){
++                        std::vector<double> gred((size_t)dnr,0.0);    // g_red = Qᵀg (g=(g_y;g_z)); ĝ=D^{-1/2}g_red; a_i=v_iᵀĝ (base-fixed)
++                        for(int j=0;j<dnr;j++){ double s=0; for(int c=0;c<ncat;c++) s+=dQ[(size_t)c*dnr+j]*g_y[c]+dQ[(size_t)(ncat+c)*dnr+j]*g_z[c]; gred[j]=s; }
++                        std::vector<double> ghat((size_t)dnr,0.0); for(int j=0;j<dnr;j++) ghat[j]=gred[j]/sqrt(dD[j]);
++                        dacoef.assign((size_t)dnr,0.0);
++                        for(int i=0;i<dnr;i++){ double s=0; for(int k=0;k<dnr;k++) s+=dV[(size_t)k*dnr+i]*ghat[k]; dacoef[i]=s; }
++                        denseReady=true; for(int i=0;i<dnr&&denseReady;i++) if(!std::isfinite(dacoef[i])) denseReady=false;
++                        dnr_last=dnr;
++                    }
++                }
++            }
+             if(haveSec) for(int c=0;c<ncat;c++){
+                 if(fabs(baseY[c]-ryPrev[c])>1e-9) ddY[c]=(g_y[c]-rgyPrev[c])/(baseY[c]-ryPrev[c]);
+                 if(fabs(baseZ[c]-rzPrev[c])>1e-9) ddZ[c]=(g_z[c]-rgzPrev[c])/(baseZ[c]-rzPrev[c]); }
+@@ -3727,7 +3827,7 @@ extern "C" double gpu_jolt_optimize(
+         aPrev=baseA; gaPrev=ga; pPrev=baseP; gpPrev=gradPinv;
+         for(int k=0;k<nFreeQ;k++){ qPrev[k]=qcur[k]; gqPrev[k]=gradQ[k]; }
+         haveSec=true;
+-        bool acc=false; double muIn=mu; int nRej0=nRej;   // ④ CONVTRACE: mu at iteration entry + rejects-this-iter
++        bool acc=false; double muIn=mu; int nRej0=nRej; double lamIn=lam;   // ④ CONVTRACE: mu/lam at iteration entry + rejects-this-iter
+         if(lbM>0){
+             // ---- L-BFGS brlen direction (computed ONCE; textbook step-length line search on t) — red-team DEFECT A fix:
+             // a real step length t (NOT the mu ladder), so t*dir->0 always reaches acceptance for the SPD-ascent dir
+@@ -3762,24 +3862,64 @@ extern "C" double gpu_jolt_optimize(
+                 else { t*=0.5; nRej++; } }
+         } else {
+             for(int bt=0; bt<14; bt++){
++                double Ppred=0.0; bool clmp=false; bool bt_useDense=false;   // whole-step predicted increase (option d) + clamp/floor flag + "this trial used the dense (y,z) step" (all unused when opgStepOn=false)
+                 cand=base; if(!JOLT_IR_FREEZE_BRLEN) for(int e=0;e<nedge;e++){ int v=edgeV[e]; double dn=fabs(g_ddf[e])+mu; double nb=base[v]+g_df[e]/dn; if(nb<1e-6)nb=1e-6; if(nb>20.0)nb=20.0; cand[v]=nb; }   // ④ FREEZE_BRLEN: hold brlen at base
+                 double ca=baseA; if(optAlpha && ncat>1 && !JOLT_IR_FREEZE_MODEL){ double da=ga/(fabs(ddA)+mu); ca=baseA+da; if(ca<0.02)ca=0.02; if(ca>50.0)ca=50.0; }
+                 double cp=baseP; if(optPinv==1 && !JOLT_IR_FREEZE_MODEL){ double dp=gradPinv/(fabs(ddP)+mu); cp=baseP+dp; if(cp<pinvMin)cp=pinvMin; if(cp>pinvMax)cp=pinvMax; }   // L6: ==2 => cp stays baseP
+                 std::vector<double> cq(nFreeQ>0?nFreeQ:0);
+                 for(int k=0;k<nFreeQ;k++){ double dn=fabs(ddQ[k])+mu; double nq=qcur[k]+gradQ[k]/dn; if(nq<MINQ)nq=MINQ; if(nq>MAXQ)nq=MAXQ; cq[k]=nq; }
++                // OPG Phase 2 (option d): whole-step predicted increase P over the NON-(y,z) arms (they stay on |dd|+mu),
++                // recomputed here so the staging lines above stay byte-identical to canonical; the (y,z) terms are added in
++                // the staging loop below. Fixed order (edges->alpha->pinv->Q->y->z) for determinism. clmp: any arm clamped
++                // => applied Δ != solved Δ => rho contaminated => the accept branch skips the Nielsen update.
++                if(opgStepOn){
++                    if(!JOLT_IR_FREEZE_BRLEN) for(int e=0;e<nedge;e++){ double C=fabs(g_ddf[e]), d=g_df[e]/(C+mu);
++                        Ppred+=d*(g_df[e]-0.5*C*d); double nb=base[edgeV[e]]+d; if(nb<1e-6||nb>20.0) clmp=true; }
++                    if(optAlpha && ncat>1 && !JOLT_IR_FREEZE_MODEL){ double C=fabs(ddA), d=ga/(C+mu);
++                        Ppred+=d*(ga-0.5*C*d); double v=baseA+d; if(v<0.02||v>50.0) clmp=true; }
++                    if(optPinv==1 && !JOLT_IR_FREEZE_MODEL){ double C=fabs(ddP), d=gradPinv/(C+mu);
++                        Ppred+=d*(gradPinv-0.5*C*d); double v=baseP+d; if(v<pinvMin||v>pinvMax) clmp=true; }
++                    for(int k=0;k<nFreeQ;k++){ double C=fabs(ddQ[k]), d=gradQ[k]/(C+mu);
++                        Ppred+=d*(gradQ[k]-0.5*C*d); double v=qcur[k]+d; if(v<MINQ||v>MAXQ) clmp=true; }
++                }
+                 // G.5.1b +R: log-rate / softmax-weight arms at the SAME mu (mirror the alpha/pinv diagonal arms). Stage the
+                 // trial (cr,cw) into the PINV-FREE basis meanR/bprop so evalLnL's applyPinv(cp) (f=1-cp; ==1 for pure +R)
+                 // evaluates catRate=cr/(1-cp), catProp_v=(1-cp)cw — the +I-correct rates/props. cr lives in meanR=ρ space (baseY=log meanR).
+                 std::vector<double> cr,cw,cz;
+                 if(freeRate==1){ cr.resize(ncat); cw.resize(ncat); cz.resize(ncat);
+                     bool remW = (JOLT_REM_EN && optPinv==0);   // L7 Stage B: EM weight M-step (pure +R only)
+-                    for(int c=0;c<ncat;c++){ double ny=baseY[c]+(JOLT_IR_FREEZE_MODEL?0.0:g_y[c]/(fabs(ddY[c])+mu)); double r=exp(ny);   // FREEZE_MODEL holds rate
+-                        if(r<1e-4)r=1e-4; if(r>1000.0)r=1000.0; cr[c]=r;
+-                        if(!remW) cz[c]=baseZ[c]+(JOLT_IR_FREEZE_MODEL?0.0:g_z[c]/(fabs(ddZ[c])+mu)); }   // gradient arm (OFF path / +I+R); FREEZE_MODEL holds weight
++                    // ===== OPG PHASE 3: the (y,z) step =====
++                    // DENSE path: one coupled δ from the hoisted (2k−1) spectral solve (captures the off-diagonal
++                    // degeneracy the Phase-2 diagonal was blind to). FIX-A path: the canonical |dd|+mu secant baseline,
++                    // taken when latched / lam≥LSAT / the solve returned non-finite / denseReady false / OPG OFF.
++                    // OFF (opgStepOn=false) ⇒ denseWanted=false ⇒ baseline ⇒ baseY+stepY BIT-IDENTICAL to canonical.
++                    // FREEZE_MODEL ⇒ the reduce was short-circuited (denseReady=false) ⇒ baseline with stepY=stepZ=0.
++                    bool denseWanted = opgStepOn && denseReady && !JOLT_IR_FREEZE_MODEL;
++                    bool denseAct    = denseWanted && !opgLatched && (lam < g_opg_lsat);
++                    std::vector<double> ddy, ddz; double Pyz=0.0; bool useDense=false;
++                    if(denseAct){ dense_tried++;
++                        if(jolt_opg_dense_solve(dnr,ncat,dV,dev,dD,dQ,dacoef,lam,g_opg_dlfloor,ddy,ddz,Pyz)){
++                            useDense=true; Ppred+=Pyz; } }        // dense block-P added ONCE (option d)
++                    if(denseWanted && !useDense) fixA_fired++;     // the safety net carried this backtrack
++                    bt_useDense=useDense; bool yzClmp=false;
++                    for(int c=0;c<ncat;c++){
++                        double stepY = JOLT_IR_FREEZE_MODEL?0.0:(useDense? ddy[c] : g_y[c]/(fabs(ddY[c])+mu));
++                        double ny=baseY[c]+stepY; double r=exp(ny);   // FREEZE_MODEL holds rate
++                        if(r<1e-4){r=1e-4; clmp=true; yzClmp=true;} if(r>1000.0){r=1000.0; clmp=true; yzClmp=true;} cr[c]=r;
++                        double stepZ = JOLT_IR_FREEZE_MODEL?0.0:(useDense? ddz[c] : g_z[c]/(fabs(ddZ[c])+mu));
++                        if(!remW) cz[c]=baseZ[c]+stepZ;   // gradient arm (OFF path / +I+R); FREEZE_MODEL holds weight
++                        if(opgStepOn && !useDense){       // baseline (y,z) P-terms; the dense block-P was added above
++                            double Cy=fabs(ddY[c]); Ppred+=stepY*(g_y[c]-0.5*Cy*stepY);
++                            if(!remW){ double Cz=fabs(ddZ[c]); Ppred+=stepZ*(g_z[c]-0.5*Cz*stepZ); } } }
+                     if(remW){ double wn=0; for(int c=0;c<ncat;c++) wn+=WNc[c];   // EM closed-form: w_c = WNc[c]/Σ WNc
+                         double tt=0; for(int c=0;c<ncat;c++){ cw[c]=(wn>0.0? WNc[c]/wn : bprop[c]); if(cw[c]<1e-4)cw[c]=1e-4; tt+=cw[c]; }
+                         for(int c=0;c<ncat;c++){ cw[c]/=tt; cz[c]=log(cw[c]); } }   // floor+renorm (== softmaxApply MIN_PROP); logit state for zR consistency
+                     else softmaxApply(cz,cw);
++                    // H5: a floored weight (softmaxApply/EM set w_c to the 1e-4 floor => applied Δz != solved Δz) contaminates
++                    // rho => flag clamped so the accept branch skips the Nielsen update. dense_clamp counts dense steps that
++                    // hit a rate clamp or weight floor — the direct over-amplification instrument (blue SEV-2b).
++                    if(opgStepOn) for(int c=0;c<ncat;c++) if(cw[c]<=1e-4){ clmp=true; yzClmp=true; }
++                    if(useDense && yzClmp) dense_clamp++;
+                     for(int c=0;c<ncat;c++){ meanR[c]=cr[c]; bprop[c]=cw[c]; } }
+                 double ln=evalLnL(cand,ca,cp, nFreeQ>0?cq.data():nullptr); nLnLEval++;
+                 if(ln>lnL+1e-9){ double dl=ln-lnL; brlen=cand; curAlpha=ca; curPinv=cp; if(nFreeQ>0) qcur=cq;
+@@ -3800,14 +3940,32 @@ extern "C" double gpu_jolt_optimize(
+                                 it, ln, ln_g, ln_g-ln, sp, spr, curPinv, brlen[c0], catRate[0], catProp_v[0]);
+                     }
+                     lnL=ln; mu=fmax(mu*0.5,1e-9); acc=true;
++                    // Nielsen lambda update (clamp-aware). Trust rho=dl/P only when NO arm clamped/floored this trial (else
++                    // applied Δ != solved Δ => rho contaminated); accept-factor max(1/3,1-(2rho-1)³)∈[1/3,2]. Phase 3: lam is
++                    // ADDITIVE on the D-scaled correlation matrix ⇒ clamp-lo = g_opg_dlfloor (1e-4), NOT the Phase-2 1e-7
++                    // (blue SEV-2b: a 1e-7 lam floor lets the spectral floor alone regularize a near-null ⇒ 1e4× blow-up).
++                    // mu is untouched (still drives brlen/alpha/pinv/Q). OFF: opgStepOn=false => lam never moves.
++                    if(opgStepOn){
++                        if(bt_useDense) dense_acc++;
++                        if(!clmp && Ppred>1e-300){ double rho=dl/Ppred, w=2.0*rho-1.0, f=1.0-w*w*w; if(f<1.0/3.0)f=1.0/3.0; lam*=f; }
++                        else lam*=0.5;
++                        if(lam<g_opg_dlfloor)lam=g_opg_dlfloor; if(lam>g_opg_lmx)lam=g_opg_lmx; nu=2.0;
++                        if(opgLatched && lam < g_opg_lsat*0.1) opgLatched=false; }   // hysteresis RELEASE (blue): re-engage dense only after a real recovery
+                     if(out_patlh&&nTile==1){ cudaMemcpy(out_patlh,d_patlh,(size_t)nptn*sizeof(double),cudaMemcpyDeviceToHost); snapDone=true; }   // STAGE 2b snapshot-on-accept: d_patlh holds THIS just-accepted trial (nTile==1 => all nptn); host-only work above it (gaugeFix) never touches d_patlh
+                     // ②a defensive snapshot: this accept is the post-gauge, self-consistent state (JOLT_GAUGE_TRACE d=0) that evaluates to ln=lnL. Capture it so loop exit writes back THIS state, not the pinv-FD-perturbed reject-EXIT restore.
+                     if(JOLT_IR_BESTWB_EN && freeRate==1 && ln>bs_lnL){ bs_lnL=ln; bs_have=true;
+                         bs_brlen=brlen; bs_alpha=curAlpha; bs_pinv=curPinv; bs_catRate=catRate; bs_catProp=catProp_v; bs_meanR=meanR; bs_bprop=bprop; if(nFreeQ>0) bs_qcur=qcur; }
+-                    if(dl<tol)conv=true; break; }
+-                else { mu*=4.0; nRej++; } }
++                    // CONV HARDENING (Phase 3, red SEV-1): on the OPG path require a small GRADIENT as well as dl<tol, so a
++                    // tiny-but-accepted step at a still-large gradient (the lam-stall false-convergence band that [IRCONV]
++                    // could DETECT but not PREVENT) cannot terminate at a non-stationary point. OPG OFF ⇒ test unchanged.
++                    if(dl<tol && (!opgStepOn || (mgy<g_opg_gtol && mgz<g_opg_gtol))) conv=true; break; }
++                else { mu*=4.0; nRej++; if(opgStepOn){ lam*=nu; if(lam>g_opg_lmx)lam=g_opg_lmx; nu*=2.0;
++                        if(lam >= g_opg_lsat) opgLatched=true; } } }   // Nielsen nu-doubling on reject + Fix-A hysteresis LATCH (trust region collapsed => run the baseline (y,z) until it recovers)
+         }
+-        if(JOLT_IR_CONVTRACE && freeRate==1) fprintf(stderr,"[IRCONV] it=%d muIn=%.3e muOut=%.3e rej_it=%d acc=%d conv=%d lnL=%.6f exit=%s\n", it, muIn, mu, nRej-nRej0, acc?1:0, conv?1:0, lnL, acc?(conv?"CONV(dl<tol)":"accept"):"REJECT-EXIT");   // ④ H-diag
++        if(JOLT_IR_CONVTRACE && freeRate==1){   // mgy/mgz are the HOISTED base-state grad-norms (also drive the conv hardening)
++            // ④ H-diag + OPG Phase 2: lam trace + grad-norm. Distinguishes genuine conv (maxgy/maxgz≈0) from a lam-STALL
++            // (grad!=0 but lamOut high => the renamed mu->1e9 false-conv trap): a tiny true ascent still accepts + dl<tol exits.
++            fprintf(stderr,"[IRCONV] it=%d muIn=%.3e muOut=%.3e lamIn=%.3e lamOut=%.3e nu=%.0f rej_it=%d acc=%d conv=%d lnL=%.6f maxgy=%.3e maxgz=%.3e exit=%s\n", it, muIn, mu, lamIn, lam, nu, nRej-nRej0, acc?1:0, conv?1:0, lnL, mgy, mgz, acc?(conv?"CONV(dl<tol)":"accept"):"REJECT-EXIT"); }   // ④ H-diag
+         if(!acc){ brlen=base; curAlpha=baseA; curPinv=baseP;
+             // G.5.1d (2b): restore catRate/catProp_v AND the pinv-free basis. baseR_save/baseW_save are catRate/catProp_v at
+             // base; meanR=ρ=catRate·(1-baseP), bprop=w=catProp_v/(1-baseP). f==1 (pure +R) => meanR=baseR_save (byte-identical).
+@@ -3815,6 +3973,11 @@ extern "C" double gpu_jolt_optimize(
+                 for(int c=0;c<ncat;c++){ meanR[c]=baseR_save[c]*f; bprop[c]=baseW_save[c]/f; } }
+             if(nFreeQ>0) qApply(qcur.data()); break; }
+         if(conv) break; }
++    // OPG Phase 3 engagement + HONEST-FAILURE summary (the gate parses this). dense_tried/dense_acc/fixA_fired is the
++    // triplet that distinguishes "the dense solve worked" from "Fix A quietly carried it to the baseline": if fixA_fired
++    // ≈ every iteration and dense_acc≈0, the dense direction is bad too ⇒ pivot to the lambda_min DETECTION deliverable.
++    if(opgStepOn) fprintf(stderr,"[OPGSTEP] ncat=%d iters=%d nRej=%d lam_final=%.3e nu_final=%.0f dense_tried=%ld dense_acc=%ld fixA_fired=%ld dense_clamp=%ld latched=%d dnr=%d optPinv=%d\n",
++                                 ncat, it, nRej, lam, nu, dense_tried, dense_acc, fixA_fired, dense_clamp, opgLatched?1:0, dnr_last, optPinv);
+ 
+     // ②a RETRACTED (JOB C irsweep 173890952): the old JOLT_IR_REEVAL re-eval was HARMFUL — it re-scored the DRIFTED
+     // written-back state (props sum 1-1e-4, root cause :3227/:3322) and DEGRADED the reported optimum to MLE-10 (AA

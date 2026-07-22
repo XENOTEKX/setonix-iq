@@ -1,0 +1,65 @@
+diff --git a/main/phylotesting.cpp b/main/phylotesting.cpp
+index f4bbea16..516a6560 100644
+--- a/main/phylotesting.cpp
++++ b/main/phylotesting.cpp
+@@ -2674,6 +2674,39 @@ string CandidateModel::evaluate(Params &params,
+     logl += new_logl;
+     string tree_string = iqtree->getTreeString();
+ 
++    // ---- JOLT_MF_VALIDATE: deferred, competitive-only CPU self-check (MF-FULL-GPU-COVERAGE.md §3e/§3g) ----
++    // optimizeParametersJOLT skipped the per-candidate CPU postorder (phylotreegpu.cpp ~:2650) under this flag, so
++    // `logl` here is the GPU value. The fitted state is STILL LIVE and JOLT already cleared the partials at write-back,
++    // so iqtree->computeLikelihood() is a COLD CPU postorder == the old self-check — but we run it ONLY for candidates
++    // that are competitive for SELECTION (BIC within `margin` of the best seen so far). A diverged optimum that could
++    // change the winner is caught and corrected at rel>1e-9; the rest are trusted. Finalist clusters are 1-2 models
++    // within BIC 10 (spike 0.1), so few candidates pay the postorder. Default-OFF => never runs => byte-identical.
++    // Scope: single-alignment serial MF (super-alignments never set the JOLT skip, so they never reach here trusting
++    // the GPU; the static best assumes ONE test() invocation, which the non-super scope guarantees).
++    if (getenv("JOLT_MF_VALIDATE") && !in_aln->isSuperAlignment()) {
++        static double g_mf_val_best_bic = DBL_MAX;
++        const double margin = getenv("JOLT_MF_VALIDATE_MARGIN") ? atof(getenv("JOLT_MF_VALIDATE_MARGIN")) : 15.0;
++        const double VAL_REL = 1e-9;
++        int    vssize = (int)in_aln->getNSite();
++        double bic_this = computeInformationScore(new_logl, df, vssize, MTC_BIC);
++        if (bic_this <= g_mf_val_best_bic + margin) {          // competitive => verify on CPU (live state)
++            double cpuLnL = iqtree->computeLikelihood();
++            double vrel = (cpuLnL != 0.0) ? fabs((new_logl - cpuLnL) / cpuLnL) : fabs(new_logl - cpuLnL);
++            if (!std::isnan(cpuLnL) && !(vrel <= VAL_REL)) {
++                if (getenv("JOLT_DEBUG"))
++                    printf("[JOLT-VALIDATE] CORRECTED %s gpu=%.6f cpu=%.6f rel=%.2e\n",
++                           getName().c_str(), new_logl, cpuLnL, vrel);
++                logl += (cpuLnL - new_logl);                   // new_logl was already added to logl at :2674
++                new_logl = cpuLnL;
++                bic_this = computeInformationScore(new_logl, df, vssize, MTC_BIC);
++            } else if (getenv("JOLT_DEBUG")) {
++                printf("[JOLT-VALIDATE] verified %s rel=%.2e bic=%.3f best=%.3f\n",
++                       getName().c_str(), vrel, bic_this, g_mf_val_best_bic);
++            }
++        }
++        if (bic_this < g_mf_val_best_bic) g_mf_val_best_bic = bic_this;
++    }
++
+ 
+     if (syncChkPoint != nullptr)
+         iqtree->getModelFactory()->syncChkPoint = nullptr;
+diff --git a/tree/phylotreegpu.cpp b/tree/phylotreegpu.cpp
+index 51e594b9..90b5baa1 100644
+--- a/tree/phylotreegpu.cpp
++++ b/tree/phylotreegpu.cpp
+@@ -2641,6 +2641,16 @@ double PhyloTree::optimizeParametersJOLT(int fixed_len, bool brlenOnly, bool lea
+     static const bool g_mf_noselfcheck = (getenv("JOLT_MF_NOSELFCHECK") != nullptr);
+     if (g_mf_noselfcheck) { setCurScore(joltLnL); return joltLnL; }
+ 
++    // ---- JOLT_MF_VALIDATE (default OFF; byte-identical when unset): the SHIPPABLE self-check ----
++    // Unlike NOSELFCHECK (which trusts the GPU everywhere and removes the backstop), VALIDATE DEFERS the CPU postorder:
++    // it trusts joltLnL in the per-candidate loop but re-verifies the BIC FINALISTS exactly on the CPU at the end of
++    // CandidateModelSet::test (verifyFinalistsOnCPU, phylotesting.cpp). The finalist pass is where the rel<=1e-9 gate +
++    // CPU-fallback live now, so a diverged optimum that could change SELECTION is still caught, at a fraction of the
++    // cost (finalist clusters are 1-2 models within BIC 10 — spike 0.1). See MF-FULL-GPU-COVERAGE.md §3e/§3g.
++    // Scope: single-alignment JOLT-eligible candidates; super-alignments (-p) keep the per-candidate check below.
++    static const bool g_mf_validate = (getenv("JOLT_MF_VALIDATE") != nullptr);
++    if (g_mf_validate && !isSuperTree()) { setCurScore(joltLnL); return joltLnL; }
++
+     // ---- self-check: a FRESH CPU computeLikelihood() must reproduce the JOLT lnL (the load-bearing G.4.2a gate) ----
+     // Direction-A measurement (JOLT_MF_DEVCHECK, run-both, default-OFF, measurement-only -> behavior UNCHANGED):
+     // time the CPU postorder AND the independent on-device mirror (gpuComputeTreeLnLCleanRoom). The CPU value stays

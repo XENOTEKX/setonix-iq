@@ -216,7 +216,8 @@ it appears in §9 (the retraction log) rather than being silently deleted.
 IQ-TREE's FreeRate (`+Rk`) model fits a discrete rate distribution `G = Σ_j w_j δ(r_j)` subject to
 `w_j ≥ 0`, `Σ w_j = 1`, `Σ w_j r_j = 1` (public dimension `2k−2`). On hard real datasets the optimiser
 terminates at points that are *not* stationary: it exhausts an iteration cap while still climbing, and
-its stop rule (`modelEps = 0.010` nats on the most recent round's gain) cannot distinguish
+its stop rule (a per-round likelihood-gain threshold — see §7.5 for which epsilon, it is not one knob)
+cannot distinguish
 "near-stationary" from "about to find a lot more". Because ModelFinder then computes BIC from those
 endpoints and selects `k` from them, an under-optimised `+Rk` fit can change the selected model. The plan
 (`MODELFINDER-FULL-GPU-PLAN.md`) proposes replacing the boolean convergence test with a **certified**
@@ -366,8 +367,21 @@ backed by a certified weight solve, sits that far above the weight-committed inc
 claim that this is `φ`'s optimum. The corresponding one-block diagnostic on the same AA cell reports
 `STATUS=UNCONVERGED … gain is a LOWER BOUND on rate-block slack, not a block optimum`.
 
-For scale: IQ-TREE declared these cells converged at `modelEps = 0.010` nats. The DNA cycle total
-(`w1 + rate = 5.680392677`) is **568× that threshold**.
+### 7.5 Which epsilon these cells actually stopped at — the multiple depends on the path
+
+Both gate cells logged `Estimate model parameters (epsilon = 0.010)`, i.e. they ran the explicit-model
+path at `modelEps = 0.01` (`utils/tools.cpp:7643`). Against that, the DNA cycle total
+(`w1 + rate = 5.680392677`) is **568×** the threshold and AA (`3.500033407`) is **350×**.
+
+**But ModelFinder's own candidate loop does not use that value.** It passes
+`params.modelfinder_eps`, default **0.1** (`utils/tools.cpp:7645`), at `main/phylotesting.cpp:2619`,
+`:2630`, `:2650` — and it *overwrites* `params.modelEps` with it for the duration
+(`main/phylotesting.cpp:790-791`, restored `:867`). Against 0.1 the same slack is **57×** and **35×**.
+
+A looser epsilon breaks the loop no later on the same trajectory, so the ModelFinder path leaves **no
+less** unrecovered slack than measured here — but the *multiple* is 10× smaller, and quoting "568× the
+ModelFinder threshold" would be wrong. The stop test itself is at `model/modelfactory.cpp:1724`
+(`if (new_lh > cur_lh + logl_epsilon)`), and `modelEps` never appears in `modelfactory.cpp` at all.
 
 ### 8.2 ✅ The convex weight solver is exonerated
 
