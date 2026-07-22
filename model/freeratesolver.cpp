@@ -107,9 +107,11 @@ public:
     // degenerate tail (a solve giving up far ABOVE the forcing gap) or the arithmetic floor (a solve that
     // reached machine precision and tripped the negative-gap guard). They call for opposite responses --
     // fix the solver, or relabel the exit -- so the counter that cannot tell them apart is useless.
-    double max_gap_stall = 0.0;
+    double max_gap_stall = 0.0;        // worst TIGHTEST-VALID bound over stalls
+    double max_signed_stall = 0.0;     // worst |signed directional residual| -- diagnostic, NOT a bound
     double max_noise_floor = 0.0;
     std::size_t stall_below_forcing = 0;
+    std::size_t stall_no_valid_bound = 0;
     std::size_t uncertified_count = 0;
 
     // The domain rejections: trial points where phi is UNDEFINED, not merely expensive.
@@ -255,22 +257,44 @@ public:
         if (r.reason == freerate_profile::ExitReason::MAX_ITERATIONS) ++profile_capped_count;
         else if (r.reason == freerate_profile::ExitReason::NUMERICAL_STALL) {
             ++profile_stall_count;
-            // DO NOT discriminate on bestGapBound() here. The stall this split exists to classify is the
-            // negative-gap guard, and that guard's own path sets gap_is_valid_bound = false, so
-            // bestGapBound() returns +inf unless a GLOBAL Newton bound happens to exist. Testing a
-            // non-finite gap would skip both counters and print max_gap_stall = 0.000e+00 --
-            // indistinguishable from "there were no stalls", and reading naturally as "the stalls
-            // converged to zero gap". The signed directional residual and its resolution floor are the
-            // quantities that actually separate an arithmetic-floor stall from a degenerate tail.
-            const double signed_gap = r.signed_directional_gap;
+            // CLASSIFY ON THE TIGHTEST *VALID* BOUND, and count the no-bound case instead of hiding it.
+            //
+            // Two opposite errors are possible here and this code has now made both. Filtering on
+            // isfinite(bestGapBound()) skipped the negative-gap-guard path entirely -- that guard sets
+            // gap_is_valid_bound = false, so the bound is +inf there -- printing 0.000e+00,
+            // indistinguishable from "no stalls occurred". But replacing it with the raw
+            // signed_directional_gap over-corrected in the other direction: that residual is the
+            // Frank-Wolfe quantity this header records as overstating the true shortfall by >=1e7x on
+            // near-degenerate high-k problems. On dna_gap8 the two disagree by ~1.2e9x (4.5e-04 signed
+            // vs 3.9e-13 bounded), which is the difference between "a real degenerate tail" and "at the
+            // arithmetic floor" -- opposite verdicts from the same solves.
+            //
+            // The Newton decrement bound is rigorous (self-concordant) AND tight, so prefer it when it
+            // is GLOBAL; fall back to Frank-Wolfe when that is a valid bound; and when neither holds,
+            // say so rather than substituting a residual that is not a bound at all.
             const double floor_gap = r.gap_noise_floor;
-            if (std::isfinite(signed_gap)) {
-                max_gap_stall = std::max(max_gap_stall, std::fabs(signed_gap));
-                // At or below its own resolution floor the gap carries NO information about optimality,
-                // so such a stall is a converged solve wearing a failure label, not a tail.
-                if (std::fabs(signed_gap) <= std::max(floor_gap, forcing_gap)) ++stall_below_forcing;
-            }
             if (std::isfinite(floor_gap)) max_noise_floor = std::max(max_noise_floor, floor_gap);
+
+            double bound = std::numeric_limits<double>::infinity();
+            if (r.newton_bound_is_global && r.newton_gap_bound >= 0.0 &&
+                std::isfinite(r.newton_gap_bound))
+                bound = r.newton_gap_bound;
+            else if (r.gap_is_valid_bound && r.frank_wolfe_gap >= 0.0 &&
+                     std::isfinite(r.frank_wolfe_gap))
+                bound = r.frank_wolfe_gap;
+
+            if (!std::isfinite(bound)) {
+                ++stall_no_valid_bound;   // the case the isfinite filter used to swallow
+            } else {
+                max_gap_stall = std::max(max_gap_stall, bound);
+                // At or below its own resolution floor a gap carries NO information about optimality, so
+                // such a stall is a converged solve wearing a failure label, not a tail.
+                if (bound <= std::max(floor_gap, forcing_gap)) ++stall_below_forcing;
+            }
+            // Kept as a DIAGNOSTIC only, never as a bound: it preserves the sign that frank_wolfe_gap
+            // clamps, which is what would reveal a genuinely broken vertex enumeration.
+            if (std::isfinite(r.signed_directional_gap))
+                max_signed_stall = std::max(max_signed_stall, std::fabs(r.signed_directional_gap));
         }
         else if (r.reason != freerate_profile::ExitReason::CONVERGED_GAP) ++profile_other_count;
 
@@ -637,8 +661,8 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
             "rate_monotone=%d gain_suspect=%d best_lnl=%.9f endpoint_shortfall=%.9f "
             "domain_rejects=%zu injected_faults=%zu trials_attempted=%zu "
             "first_reject_eval=%zu first_reject_reason=%s max_start_resid=%.3e "
-            "forcing_gap=%.1e max_gap_seen=%.3e max_gap_stall=%.3e max_noise_floor=%.3e "
-            "stall_below_forcing=%zu "
+            "forcing_gap=%.1e max_gap_seen=%.3e max_gap_stall=%.3e max_signed_stall=%.3e "
+            "max_noise_floor=%.3e stall_below_forcing=%zu stall_no_valid_bound=%zu "
             "inf_gap=%zu w2_gap=%.3e moment_out=%.12f "
             "secs_total=%.2f secs_w1=%.2f secs_rate=%.2f secs_w2=%.2f "
             "secs_extract=%.3f secs_solve=%.3f secs_realise=%.3f solve_per_trial=%.4f\n",
@@ -651,8 +675,8 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
             oracle.domain_rejects, oracle.injected_faults, oracle.trials_attempted,
             oracle.first_reject_eval, oracle.first_reject_reason,
             oracle.max_start_resid, opt.forcing_gap,
-            oracle.max_gap_seen, oracle.max_gap_stall, oracle.max_noise_floor,
-            oracle.stall_below_forcing,
+            oracle.max_gap_seen, oracle.max_gap_stall, oracle.max_signed_stall,
+            oracle.max_noise_floor, oracle.stall_below_forcing, oracle.stall_no_valid_bound,
             oracle.inf_gap_count, w2_gap, moment_out,
             total_secs, w1_secs, rate_secs, w2_secs,
             oracle.secs_extract, oracle.secs_solve, oracle.secs_realise,
