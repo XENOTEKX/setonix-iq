@@ -511,14 +511,30 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
 
     // The identity point must reproduce the incumbent, or the parameterisation is wrong and every number
     // below is meaningless. Measured, not assumed. Note this costs one weight solve.
+    const std::size_t rejects_before_seed = oracle.domain_rejects;
     const double seed_lnl = -oracle.targetFunk(var.data());
     const double seed_err = seed_lnl - lnl_after_w1;
+    const bool seed_was_rejected = (oracle.domain_rejects > rejects_before_seed);
 
     // ...and ACT on it. An earlier revision measured seed_err, printed it, and branched on nothing, so a
     // seed that failed its own identity check simply proceeded. The bar is loose on purpose: this is a
     // re-profiled likelihood at the same point, so it should agree to solver resolution, and anything
     // near tau_L is a parameterisation error rather than noise.
     const double seed_bar = std::max(1.0e-6, 1.0e-9 * std::fabs(base_lnl));
+    if (seed_was_rejected) {
+        // NOT an identity failure, and saying so would repeat the exact mistake this probe already had
+        // to fix once: an error path naming the wrong cause. The parameterisation is untested here --
+        // the seed's own weight solve was refused (uncertified, or the problem had no finite solution),
+        // so `seed_lnl` is the rejection penalty and seed_err is meaningless. Reachable in practice:
+        // IQ_FR_SOLVE_GAP=1e-30 makes every solve fail certifiesTo() and lands exactly here.
+        fprintf(stderr,
+                "[FRSOLVE] ctx=%s PHASE1PROBE STATUS=SEED_REJECTED reason=%s forcing_gap=%.1e "
+                "uncertified=%zu -- the seed trial was refused as out-of-domain, so the identity check "
+                "never ran and NOTHING below is a measurement\n",
+                tag, oracle.first_reject_reason, opt.forcing_gap, oracle.uncertified_count);
+        restoreAll();
+        return;
+    }
     if (!std::isfinite(seed_err) || std::fabs(seed_err) > seed_bar) {
         fprintf(stderr,
                 "[FRSOLVE] ctx=%s PHASE1PROBE STATUS=SEED_IDENTITY_FAILED seed_err=%.6e bar=%.6e "
