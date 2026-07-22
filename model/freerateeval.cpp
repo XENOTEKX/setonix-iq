@@ -17,6 +17,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include "freerateinternal.h"
+
 #include <cstring>
 #include <memory>
 
@@ -319,8 +321,13 @@ void reportWeightBlockAttribution(PhyloTree *tree, const char *context) {
 // ---------------------------------------------------------------------------------------------------
 // Rate block
 // ---------------------------------------------------------------------------------------------------
-
-namespace {
+//
+// NOTE ON LINKAGE. The rate oracle, the ratio envelope and the env helper are declared in
+// model/freerateinternal.h and therefore have EXTERNAL linkage: the Phase-1 solver subclasses the oracle
+// to re-profile weights at every rate trial (plan section 7.1 step 3). Promoting them out of an
+// anonymous namespace is a linkage change only -- the definitions below are unchanged, and the shipped
+// one-block arm must remain bit-identical, which its gate proves by regression rather than assertion.
+// The solve-strength constants stay file-local: nothing outside this file may depend on them.
 
 /**
  * One-block rate oracle: optimises ONLY the k category rates, at fixed weights, branches and Q.
@@ -363,8 +370,8 @@ namespace {
 // Use the canonical rate-ratio envelope instead: the same [1e-7, 1] declared in FreeRateFitScope and
 // audited over 607 archived endpoints in Phase 0B. A wider box can only INCREASE the measured rate gain,
 // which is the conservative direction for any "the weight block dominates" reading.
-const double FR_RATIO_LOWER = 1e-7;
-const double FR_RATIO_UPPER = 1.0;
+extern const double FR_RATIO_LOWER = 1e-7;
+extern const double FR_RATIO_UPPER = 1.0;
 
 // Absolute gradient target in nats per unit ratio, converted to dfpmin's relative gtol by dividing by
 // |lnL| at the call site. See the solve-strength note in reportRateBlockAttribution.
@@ -391,86 +398,53 @@ double envPositiveDouble(const char *name, double fallback) {
 // alignment. Reported via passcap when it binds.
 const std::size_t FR_RATE_EVAL_BUDGET = 4000;
 
-class RateBlockOracle : public Optimization {
-public:
-    PhyloTree *tree = nullptr;
-    RateHeterogeneity *site_rate = nullptr;
-    int k = 0;
-    std::vector<double> w;              // FIXED weights
-    std::size_t evaluations = 0;
-    bool write_failed = false;
+// Out-of-line definitions for the oracle declared in freerateinternal.h. Bodies are unchanged from the
+// original in-class versions; only linkage moved. See the header for the gauge and support-event
+// rationale.
 
-    // SUPPORT-EVENT GENERALISATION. Default-inert: configureDefault() reproduces the original
-    // "anchor at k-1, optimise the other k-1 ratios" parameterisation exactly, including the order in
-    // which the pin denominator is accumulated, so the shipped one-block arm is bit-unchanged.
-    //
-    // WHY IT EXISTS. An exact convex weight solve legitimately drives weights to zero, and plan section
-    // 4.1 forbids a positive weight floor, so a committing loop WILL meet zero weights. A zero-weight
-    // category's rate is then an EXACT null coordinate: its column is multiplied by zero in the
-    // likelihood, and it drops out of the pin s = sum_j w_j ratio_j as well. Optimising it hands dfpmin a
-    // zero finite-difference gradient and degenerates the BFGS curvature denominator dg.xi
-    // (utils/optimization.cpp:`fac=dg[i]*xi[i]` region), so the reported maxgrad/predrem for that
-    // coordinate would be meaningless.
-    //
-    // Freeze rather than delete. Plan section 7.2: a zero-weight atom "has no identifiable location and is
-    // omitted from ordinary gradient convergence checks". Deleting it would drop to R(k-1) and measure a
-    // DIFFERENT model -- plan 4.1 keeps the nominal Rk parameter count and plan 6 forbids calling a
-    // collapsed support an Rk fit -- which would make the result incomparable with the fixed-k one-block
-    // gains this arm exists to sit beside.
-    std::vector<int> free_cat;          // categories this solve may move
-    std::vector<double> frozen_ratio;   // r_c / r_anchor for categories that are neither free nor anchor
-    int anchor = -1;                    // category carrying the gauge
+void RateBlockOracle::configureDefault() {
+    anchor = k - 1;
+    free_cat.clear();
+    for (int i = 0; i < k - 1; ++i) free_cat.push_back(i);
+    frozen_ratio.assign((std::size_t)k, 0.0);
+}
 
-    void configureDefault() {
-        anchor = k - 1;
-        free_cat.clear();
-        for (int i = 0; i < k - 1; ++i) free_cat.push_back(i);
-        frozen_ratio.assign((std::size_t)k, 0.0);
+double RateBlockOracle::ratioOf(int c, const double *v) const {
+    if (c == anchor) return 1.0;
+    for (std::size_t i = 0; i < free_cat.size(); ++i)
+        if (free_cat[i] == c) return v[i + 1];
+    return frozen_ratio[(std::size_t)c];
+}
+
+void RateBlockOracle::writeRates(const double *v) {
+    // Accumulate the anchor term FIRST and then the remaining categories in index order. That is the
+    // original summation order; changing it would perturb the last bits of s and break the bit-identity
+    // regression against the shipped arm.
+    double s = w[(std::size_t)anchor];
+    for (int c = 0; c < k; ++c) {
+        if (c == anchor) continue;
+        s += w[(std::size_t)c] * ratioOf(c, v);
     }
-
-    int getNDim() override { return (int)free_cat.size(); }
-
-    /** ratio_c = r_c / r_anchor, from the optimizer variables for free categories. */
-    double ratioOf(int c, const double *v) const {
-        if (c == anchor) return 1.0;
-        for (std::size_t i = 0; i < free_cat.size(); ++i)
-            if (free_cat[i] == c) return v[i + 1];
-        return frozen_ratio[(std::size_t)c];
+    // s is strictly positive for any feasible point: the weights are non-negative and sum to one, and
+    // every free ratio is bounded below by FR_RATIO_LOWER > 0. This guard is therefore unreachable in
+    // exact arithmetic and exists only for a non-finite v produced by an upstream NaN. Returning without
+    // writing would leave the model at the PREVIOUS rates, so targetFunk would stop being a function of
+    // its argument; refuse loudly rather than silently score a different point than the one requested.
+    if (!(s > 0.0) || !std::isfinite(s)) {
+        fprintf(stderr, "[FRATTRIB] RATEBLOCK STATUS=ARITHMETIC-FAILURE s=%.6e\n", s);
+        write_failed = true;
+        return;
     }
+    for (int c = 0; c < k; ++c) site_rate->setRate(c, ratioOf(c, v) / s);
+}
 
-    /** Write rates from optimizer variables, restoring sum_j w_j r_j == 1 by construction. */
-    void writeRates(const double *v) {
-        // Accumulate the anchor term FIRST and then the remaining categories in index order. That is the
-        // original summation order; changing it would perturb the last bits of s and break the
-        // bit-identity regression against the shipped arm.
-        double s = w[(std::size_t)anchor];
-        for (int c = 0; c < k; ++c) {
-            if (c == anchor) continue;
-            s += w[(std::size_t)c] * ratioOf(c, v);
-        }
-        // s = w_{k-1} + sum_{i<k-1} w_i v_i is strictly positive for any feasible point: the weights are
-        // non-negative and sum to one, and every v_i is bounded below by FR_RATIO_LOWER > 0. This guard is
-        // therefore unreachable in exact arithmetic and exists only for a non-finite v produced by an
-        // upstream NaN. Returning without writing leaves the model at the PREVIOUS rates, so targetFunk
-        // would stop being a function of its argument; refuse loudly rather than silently score a
-        // different point than the one requested.
-        if (!(s > 0.0) || !std::isfinite(s)) {
-            fprintf(stderr, "[FRATTRIB] RATEBLOCK STATUS=ARITHMETIC-FAILURE s=%.6e\n", s);
-            write_failed = true;
-            return;
-        }
-        for (int c = 0; c < k; ++c) site_rate->setRate(c, ratioOf(c, v) / s);
-    }
+double RateBlockOracle::targetFunk(double x[]) {
+    writeRates(x);
+    tree->clearAllPartialLH();
+    ++evaluations;
+    return -tree->computeLikelihood();
+}
 
-    double targetFunk(double x[]) override {
-        writeRates(x);
-        tree->clearAllPartialLH();
-        ++evaluations;
-        return -tree->computeLikelihood();
-    }
-};
-
-} // namespace
 
 void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     if (getenv("IQ_FR_ATTRIB") == nullptr)
@@ -838,8 +812,8 @@ static void reportWritebackValidation(PhyloTree *tree, const char *tag,
 //  * Branches and Q are held fixed throughout, so the global-scale direction that plan 7.2 assigns to the
 //    branch block is excluded by construction.
 //  * No stationarity certificate is claimed for the pair. The word "converged" must not be used of it.
-namespace {
-
+// Shared with the Phase-1 solver via freerateinternal.h; see that header for the argument that F is
+// proportion-independent, which is what makes this legal.
 /**
  * Extract the unweighted components at a well-conditioned UNIFORM proportion vector.
  *
@@ -914,6 +888,8 @@ bool extractComponentsAtUniformProp(PhyloTree *tree, ComponentExtraction *out, s
     *out = e;
     return true;
 }
+
+namespace {
 
 /** One committed block move: what it claimed, what production realised, and whether it stuck. */
 struct BlockCommit {
