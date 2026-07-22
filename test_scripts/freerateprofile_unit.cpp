@@ -556,6 +556,20 @@ void testFaceLocalBoundIsNotGlobal() {
     require(solved.max_inactive_reduced_cost <= solved.gap_noise_floor,
             "inactive reduced cost is positive at a certified optimum");
 
+    // Sub-unit multiplicities break self-concordance, so the second-order bound must be withheld.
+    {
+        ProfileProblem light = makeProblem(
+            2, 2, std::vector<double>{0.30, 0.70, 0.60, 0.40},
+            std::vector<double>{0.01, 0.01},
+            std::vector<double>{0.5, 1.5});
+        light.geometry = FeasibleGeometry::LITERAL_MASS_MEAN;
+        light.target_moment = 1.0;
+        const ProfileResult r = freerate_profile::solve(light, strictOptions());
+        require(!r.newton_bound_is_global,
+                "a problem with multiplicity below 1 published a global second-order bound, but "
+                "omega*(lambda) is not a bound there");
+    }
+
     // Now the unsound configuration: a tight face bound beside a loose but valid global one.
     ProfileResult facelocal = solved;
     facelocal.gap_is_valid_bound = true;
@@ -576,12 +590,100 @@ void testFaceLocalBoundIsNotGlobal() {
             "certifiesTo rejected a point carrying a valid global second-order bound");
 }
 
+/**
+ * Randomised property test: a published bound must never fall below a demonstrated feasible improvement.
+ *
+ * THIS IS THE TEST SHAPE THAT FINDS THIS CLASS OF BUG. A hand-built case cannot: the previous attempt
+ * declared moment bounds that the simplex could never reach, so it never entered the branch it guarded,
+ * and a corrected hand case was solved to optimality in one iteration, where a zero bound is CORRECT.
+ * The defect lives at TRUNCATED exits, which only a budgeted sweep reaches.
+ *
+ * The invariant is the whole contract in one line: for every feasible competitor v,
+ * l(v) - l(w) <= bestGapBound(). Any certificate that violates it is not a bound, whatever its provenance.
+ */
+void testPublishedBoundNeverUnderstatesAFeasibleImprovement() {
+    // Deterministic LCG; a unit test must not depend on the platform RNG.
+    unsigned long long seed = 0x9E3779B97F4A7C15ULL;
+    auto next = [&seed]() {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<double>((seed >> 11) & ((1ULL << 53) - 1)) /
+               static_cast<double>(1ULL << 53);
+    };
+
+    std::size_t checked = 0, violations = 0;
+    double worst_excess = 0.0;
+
+    for (int trial = 0; trial < 600; ++trial) {
+        const std::size_t k = 2 + static_cast<std::size_t>(next() * 4.0);   // 2..5
+        const std::size_t np = 2 + static_cast<std::size_t>(next() * 5.0);  // 2..6
+
+        std::vector<double> rates(k), comps(np * k), mult(np);
+        for (std::size_t j = 0; j < k; ++j) rates[j] = 0.05 + next() * 2.0;
+        std::sort(rates.begin(), rates.end());
+        for (std::size_t i = 0; i < np * k; ++i) comps[i] = 1e-3 + next();
+        // Multiplicities at or above 1: below that the second-order bound is withheld by design and the
+        // sweep would be testing a branch that never publishes.
+        for (std::size_t p = 0; p < np; ++p) mult[p] = 1.0 + std::floor(next() * 999.0);
+
+        ProfileProblem problem = makeProblem(np, k, comps, mult, rates);
+        problem.geometry = FeasibleGeometry::QUOTIENT_MOMENT_INTERVAL;
+        // An interval strictly inside the achievable moment range, so a bound really can be active.
+        const double lo = rates.front(), hi = rates.back();
+        const double a = lo + (hi - lo) * (0.10 + 0.30 * next());
+        const double b = a + (hi - a) * (0.05 + 0.40 * next());
+        problem.moment_lower = a;
+        problem.moment_upper = b;
+
+        ProfileOptions options = strictOptions();
+        options.max_iterations = 1 + static_cast<std::size_t>(next() * 4.0);  // force truncated exits
+
+        const ProfileResult r = freerate_profile::solve(problem, options);
+        if (r.weight.size() != k) continue;
+        const double bound = r.bestGapBound();
+        if (!std::isfinite(bound)) continue;
+        const double here = directLogLikelihood(problem, r.weight);
+        if (!std::isfinite(here)) continue;
+
+        // Feasible competitors: random simplex points kept only when the moment lies in the interval.
+        for (int c = 0; c < 40; ++c) {
+            std::vector<double> v(k, 0.0);
+            double sum = 0.0;
+            for (std::size_t j = 0; j < k; ++j) { v[j] = next(); sum += v[j]; }
+            if (!(sum > 0.0)) continue;
+            double moment = 0.0;
+            for (std::size_t j = 0; j < k; ++j) { v[j] /= sum; moment += v[j] * rates[j]; }
+            if (moment < problem.moment_lower - 1e-12 ||
+                moment > problem.moment_upper + 1e-12) continue;
+
+            const double there = directLogLikelihood(problem, v);
+            if (!std::isfinite(there)) continue;
+            ++checked;
+            const double improvement = there - here;
+            if (improvement > bound + 1e-6 * std::max(1.0, std::fabs(here))) {
+                ++violations;
+                if (improvement - bound > worst_excess) worst_excess = improvement - bound;
+            }
+        }
+    }
+
+    require(checked > 500,
+            "the bound-vs-competitor sweep produced too few feasible comparisons to be evidence");
+    if (violations != 0) {
+        std::cerr << "  published bound understated a feasible improvement in " << violations
+                  << " of " << checked << " comparisons; worst excess " << worst_excess
+                  << " nats\n";
+    }
+    require(violations == 0,
+            "a published bound fell below a demonstrated feasible improvement");
+}
+
 } // namespace
 
 int main() {
     testWideRateSpanVertexCompleteness();
     testSignedGapIsPublishedAndGatesCorrectly();
     testFaceLocalBoundIsNotGlobal();
+    testPublishedBoundNeverUnderstatesAFeasibleImprovement();
     testVertexEnumeration();
     testK2ThroughK10();
     testNarrowIntervalExactOracle();

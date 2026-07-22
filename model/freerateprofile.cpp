@@ -859,6 +859,21 @@ std::vector<double> vertexCentroid(
  * So this bound covers the face, and the Frank-Wolfe gap covers leaving it -- which is exactly why the
  * caller should take the min of the two rather than either alone.
  */
+// Relative floor on det(normal matrix)/(s0*s2) below which the two constraint rows are too close to
+// parallel for the multiplier solve to be trusted. det is the SQUARE of the row conditioning, so this
+// corresponds to a rate spread of roughly 1e-3 -- the point at which the measured multiplier error first
+// exceeded the acceptance tolerance.
+const double FREERATE_DUAL_CONDITION_FLOOR = 1e-6;
+
+/** Smallest pattern multiplicity in the problem; +inf when there are none. */
+double minMultiplicity(const ProfileProblem &problem) {
+    double m = std::numeric_limits<double>::infinity();
+    for (std::size_t p = 0; p < problem.multiplicity.size(); ++p) {
+        if (problem.multiplicity[p] < m) m = problem.multiplicity[p];
+    }
+    return m;
+}
+
 struct NewtonCertificate {
     bool valid;
     double decrement;
@@ -896,7 +911,7 @@ NewtonCertificate computeNewtonCertificate(const ProfileProblem &problem,
                                            const Evaluation &current,
                                            bool moment_lower_active,
                                            bool moment_upper_active,
-                                           double reduced_cost_noise) {
+                                           double min_multiplicity) {
     NewtonCertificate result;
     const std::size_t k = problem.category_count;
     if (current.curvature.size() != k * k || current.gradient.size() != k) {
@@ -914,9 +929,22 @@ NewtonCertificate computeNewtonCertificate(const ProfileProblem &problem,
         return result;
     }
 
+    // Self-concordance of sum_p n_p log(s_p) survives positive scaling only for n_p >= 1; below that the
+    // parameter degrades as 2/sqrt(min n_p) and omega*(lambda) STOPS being a bound. Measured: at
+    // n_p = 0.01 the published bound was exceeded on 86,841 of 120,000 probes, worst case by 6.3x. The
+    // multiplicity is a double fed straight from ptn_freq, and prepareProblem only rejects negatives, so
+    // withhold the second-order bound rather than publish an invalid one. The Frank-Wolfe gap is
+    // unaffected and still certifies.
+    if (min_multiplicity < 1.0) {
+        return result;
+    }
+
     // Constraint rows that bind on the active face.
     std::vector<std::vector<double> > rows;
     rows.push_back(std::vector<double>(n, 1.0));                 // mass always binds
+    const bool moment_inequality_active =
+        problem.geometry != FeasibleGeometry::LITERAL_MASS_MEAN &&
+        (moment_lower_active || moment_upper_active);
     const bool moment_binds =
         problem.geometry == FeasibleGeometry::LITERAL_MASS_MEAN ||
         moment_lower_active || moment_upper_active;
@@ -939,51 +967,98 @@ NewtonCertificate computeNewtonCertificate(const ProfileProblem &problem,
         for (std::size_t j = 0; j < k; ++j) {
             if (!(weight[j] > options.active_weight_tolerance)) inactive.push_back(j);
         }
-        if (inactive.empty()) {
-            // Nothing can leave a face that has no inactive coordinate; the face IS the feasible set.
-            result.global = true;
-            result.max_inactive_reduced_cost = -std::numeric_limits<double>::infinity();
-        } else {
-            long double s0 = static_cast<long double>(n), s1 = 0.0L, s2 = 0.0L;
-            long double gs = 0.0L, gr_ = 0.0L;
-            for (std::size_t i = 0; i < n; ++i) {
-                const long double r = problem.rate[active[i]];
-                const long double g = current.gradient[active[i]];
-                s1 += r; s2 += r * r; gs += g; gr_ += g * r;
-            }
-            double mu = 0.0, nu = 0.0;
-            bool priced = false;
-            if (moment_binds) {
-                const long double det = s0 * s2 - s1 * s1;
-                // Degenerate only when every active rate is identical, in which case the moment row is a
-                // multiple of the mass row and nu is not separately identified; fall back to mass alone.
-                if (std::fabs(static_cast<double>(det)) >
-                    1e-300 * std::fabs(static_cast<double>(s0 * s2))) {
-                    mu = static_cast<double>((gs * s2 - gr_ * s1) / det);
-                    nu = static_cast<double>((s0 * gr_ - s1 * gs) / det);
-                    priced = true;
-                }
-            }
-            if (!priced && n > 0) {
-                mu = static_cast<double>(gs / static_cast<long double>(n));
-                nu = 0.0;
-                priced = true;
-            }
-            if (priced) {
-                double worst = -std::numeric_limits<double>::infinity();
-                for (std::size_t t = 0; t < inactive.size(); ++t) {
-                    const std::size_t j = inactive[t];
-                    const double d = current.gradient[j] - mu - nu * problem.rate[j];
-                    if (d > worst) worst = d;
-                }
-                result.max_inactive_reduced_cost = worst;
-                // A reduced cost at or below the resolution floor of the directional arithmetic carries
-                // no information that an improving off-face direction exists. Above it, refuse.
-                const double tol = (reduced_cost_noise > 0.0 && std::isfinite(reduced_cost_noise))
-                                       ? reduced_cost_noise : 0.0;
-                result.global = (worst <= tol);
+        long double s0 = static_cast<long double>(n), s1 = 0.0L, s2 = 0.0L;
+        long double gs = 0.0L, gr_ = 0.0L, gmax = 0.0L, rmax = 0.0L;
+        for (std::size_t i = 0; i < n; ++i) {
+            const long double r = problem.rate[active[i]];
+            const long double g = current.gradient[active[i]];
+            s1 += r; s2 += r * r; gs += g; gr_ += g * r;
+            if (std::fabs(g) > gmax) gmax = std::fabs(g);
+            if (std::fabs(r) > rmax) rmax = std::fabs(r);
+        }
+
+        // Multipliers for g_i ~= mu + nu*r_i over the active coordinates.
+        //
+        // CONDITIONING. det = n^2 * Var(active rates), so it is the SQUARE of the constraint
+        // conditioning and collapses long before any underflow. The former guard admitted the solve
+        // unless |det| underflowed entirely, and the resulting multipliers are cancellation noise:
+        // at an active-rate separation of 1e-9 they come back as exact powers of two, with the reduced
+        // cost wrong in SIGN -- a real escape direction reported as pricing out. Near-duplicate rates are
+        // precisely the over-specified-k regime this workstream exists to study, so this is not a corner.
+        //
+        // Refuse the ill-conditioned solve and fall back to nu = 0, which is legitimate: for an EQUALITY
+        // the multiplier is sign-unrestricted, so ANY pair whose reduced costs are non-positive is a valid
+        // dual certificate; a worse-but-honest pair can only fail to certify, never falsely certify.
+        double mu = 0.0, nu = 0.0;
+        bool nu_free = false;
+        const long double det = s0 * s2 - s1 * s1;
+        const long double det_scale = s0 * s2;
+        const bool well_conditioned =
+            moment_binds && det_scale > 0.0L &&
+            det > FREERATE_DUAL_CONDITION_FLOOR * det_scale;
+        if (well_conditioned) {
+            mu = static_cast<double>((gs * s2 - gr_ * s1) / det);
+            nu = static_cast<double>((s0 * gr_ - s1 * gs) / det);
+            nu_free = true;
+        } else if (n > 0) {
+            mu = static_cast<double>(gs / static_cast<long double>(n));
+            nu = 0.0;
+        }
+
+        // Error budget for d_j = g_j - mu - nu*r_j. gap.noise models the rounding of ONE directional
+        // score difference and has no relation to this cancellation: it was measured 57x too small at a
+        // rate separation of 1e-3 and, in a near-degenerate case, 0.53 nats too LARGE -- which would
+        // dismiss a half-nat escape direction as rounding against a 1e-5 bar. Build the budget from the
+        // magnitudes that actually cancel here.
+        const double rc_noise =
+            64.0 * std::numeric_limits<double>::epsilon() *
+            (static_cast<double>(gmax) + std::fabs(mu) +
+             std::fabs(nu) * static_cast<double>(rmax) + 1.0);
+
+        // KKT sign condition on an ACTIVE MOMENT INEQUALITY.
+        //
+        // The moment row is promoted into the face-defining set whenever a quotient bound is active, so
+        // every direction that LEAVES that bound is excluded from the decrement. Nothing then priced the
+        // multiplier of that inequality, and the reduced-cost loop only ever looked at weight
+        // coordinates -- so a point pinned against a moment bound reported global with bound 0 while a
+        // feasible competitor sat over 1000 nats higher. For maximisation with r.w <= m_U the multiplier
+        // must satisfy nu >= 0, and for r.w >= m_L it must satisfy nu <= 0; a violated sign IS the
+        // improving direction. This is only meaningful when nu was actually identified.
+        bool moment_sign_ok = true;
+        if (moment_inequality_active) {
+            if (!nu_free) {
+                moment_sign_ok = false;      // could not price the binding inequality at all
+            } else if (moment_upper_active && nu < -rc_noise) {
+                moment_sign_ok = false;
+            } else if (moment_lower_active && nu > rc_noise) {
+                moment_sign_ok = false;
             }
         }
+
+        double worst = -std::numeric_limits<double>::infinity();
+        for (std::size_t t = 0; t < inactive.size(); ++t) {
+            const std::size_t j = inactive[t];
+            const double d = current.gradient[j] - mu - nu * problem.rate[j];
+            if (d > worst) worst = d;
+        }
+        // Categories held at a POSITIVE weight below the activity tolerance are dropped from the reduced
+        // Hessian, so the decrement cannot see them, and the loop above prices only the direction of
+        // INCREASE. Their improving move is to shed their remaining mass, worth about |d_j| * w_j, which
+        // no other test bounds. The activity tolerance is documented as a reporting knob, yet it silently
+        // scales this leak, so bound it explicitly instead of trusting the default.
+        double shed_bound = 0.0;
+        for (std::size_t t = 0; t < inactive.size(); ++t) {
+            const std::size_t j = inactive[t];
+            if (weight[j] > 0.0) {
+                const double d = current.gradient[j] - mu - nu * problem.rate[j];
+                if (d < 0.0) shed_bound += (-d) * weight[j];
+            }
+        }
+        result.max_inactive_reduced_cost =
+            inactive.empty() ? -std::numeric_limits<double>::infinity() : worst;
+        result.global = moment_sign_ok &&
+                        (inactive.empty() || worst <= rc_noise) &&
+                        shed_bound <= rc_noise;
     }
 
     // Orthonormal basis of the null space, by Gram-Schmidt against the constraint rows and each other.
@@ -1192,7 +1267,8 @@ void populateResultDiagnostics(const ProfileProblem &problem,
      * so it also cross-checks it -- two different derivations should not disagree about optimality. */
     const NewtonCertificate newton = computeNewtonCertificate(
         problem, options, weight, evaluation,
-        result->moment_lower_active, result->moment_upper_active, gap.noise);
+        result->moment_lower_active, result->moment_upper_active,
+        minMultiplicity(problem));
     result->newton_decrement = newton.valid ? newton.decrement : quietNaN();
     result->newton_gap_bound =
         newton.valid ? newton.bound : std::numeric_limits<double>::infinity();
