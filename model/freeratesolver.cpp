@@ -81,6 +81,11 @@ bool profiledPointIsFeasible(const freerate_profile::ProfileResult &r) {
 class ProfiledRateOracle : public RateBlockOracle {
 public:
     double forcing_gap = 1e-8;
+    // The measurement gap, and the flag that selects it. See Phase1ProbeOptions::measure_gap: a value
+    // realised at the SEARCH gap is not comparable across rungs, because the reported likelihood sits at
+    // weights certified only to that gap. Search cheap, measure tight.
+    double measure_gap = 1e-11;
+    bool measuring = false;
     std::size_t profile_max_iterations = 10000;
     std::size_t trial_budget = 250;
 
@@ -229,7 +234,8 @@ public:
         // hence the returned value -- depend on which trial ran last.
         freerate_profile::ProfileProblem problem = literalProblemFrom(e, 1.0);
         freerate_profile::ProfileOptions options;
-        options.gap_tolerance = forcing_gap;
+        const double active_gap = measuring ? measure_gap : forcing_gap;
+        options.gap_tolerance = active_gap;
         options.max_iterations = profile_max_iterations;
 
         // Measure how feasible the supplied start actually is. writeRates pins sum_j w_j r_j == 1, so this
@@ -289,7 +295,7 @@ public:
                 max_gap_stall = std::max(max_gap_stall, bound);
                 // At or below its own resolution floor a gap carries NO information about optimality, so
                 // such a stall is a converged solve wearing a failure label, not a tail.
-                if (bound <= std::max(floor_gap, forcing_gap)) ++stall_below_forcing;
+                if (bound <= std::max(floor_gap, active_gap)) ++stall_below_forcing;
             }
             // Kept as a DIAGNOSTIC only, never as a bound: it preserves the sign that frank_wolfe_gap
             // clamps, which is what would reveal a genuinely broken vertex enumeration.
@@ -326,7 +332,7 @@ public:
         // DEFINITION, so accepting one is exactly how a start-dependent value enters an objective this
         // file spends its opening comment insisting is a function of its argument. Refuse instead: an
         // uncertified weight solve does not define phi(r), so the point is treated as out of domain.
-        if (!r.certifiesTo(forcing_gap)) {
+        if (!r.certifiesTo(active_gap)) {
             ++uncertified_count;
             return rejectDomain(freerate_profile::exitReasonName(r.reason));
         }
@@ -383,6 +389,7 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
 
     Phase1ProbeOptions opt;
     opt.forcing_gap = envPositiveDouble("IQ_FR_SOLVE_GAP", opt.forcing_gap);
+    opt.measure_gap = envPositiveDouble("IQ_FR_SOLVE_MEASURE_GAP", opt.measure_gap);
     opt.rate_trial_budget =
         (std::size_t)envPositiveDouble("IQ_FR_SOLVE_TRIALS", (double)opt.rate_trial_budget);
     opt.profile_max_iterations =
@@ -425,7 +432,9 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
         return;
     }
     freerate_profile::ProfileOptions w_opt;
-    w_opt.gap_tolerance = opt.forcing_gap;
+    // w1 and w2 are MEASUREMENTS, not search steps, so they use the measurement gap. Solving them at the
+    // search gap made the reported cycle_gain depend on the search tolerance even when the endpoint did not.
+    w_opt.gap_tolerance = opt.measure_gap;
     w_opt.max_iterations = opt.profile_max_iterations;
     const freerate_profile::ProfileResult w1 =
         freerate_profile::solve(literalProblemFrom(e1, e1.actual_moment), w_opt, e1.weight);
@@ -469,6 +478,7 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     oracle.w = w_now;
     oracle.anchor = anchor;
     oracle.forcing_gap = opt.forcing_gap;
+    oracle.measure_gap = std::min(opt.measure_gap, opt.forcing_gap);   // never LOOSER than the search
     oracle.profile_max_iterations = opt.profile_max_iterations;
     oracle.trial_budget = opt.rate_trial_budget;
     oracle.fault_at_eval =
@@ -511,8 +521,13 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
 
     // The identity point must reproduce the incumbent, or the parameterisation is wrong and every number
     // below is meaningless. Measured, not assumed. Note this costs one weight solve.
+    // The seed is a MEASUREMENT (it is compared against lnl_after_w1, itself measured), so it uses the
+    // measurement gap. Solving it at the search gap while w1 used the measurement gap would make seed_err
+    // read up to `forcing_gap` on a perfectly correct parameterisation, and trip its own bar at loose gaps.
     const std::size_t rejects_before_seed = oracle.domain_rejects;
+    oracle.measuring = true;
     const double seed_lnl = -oracle.targetFunk(var.data());
+    oracle.measuring = false;
     const double seed_err = seed_lnl - lnl_after_w1;
     const bool seed_was_rejected = (oracle.domain_rejects > rejects_before_seed);
 
@@ -560,7 +575,9 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     double lnl_after_rate = lnl_after_w1;
     bool realised = false;
     if (!oracle.aborted) {
+        oracle.measuring = true;              // realise the ENDPOINT tightly, whatever the search used
         const double v = -oracle.targetFunk(var.data());
+        oracle.measuring = false;
         // If the re-profile at `var` itself rejects, `v` is the +1e6 penalty, not a likelihood. Reporting
         // it would print a catastrophic loss for a point the pass never actually stood on.
         if (oracle.domain_rejects == rejects_before_realise && !oracle.aborted) {
@@ -641,6 +658,9 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     // passes. Here it reads the live fitted proportions and rates, so a drift off the contract is visible.
     double moment_out = 0.0;
     for (int c = 0; c < k; ++c) moment_out += site_rate->getProp(c) * site_rate->getRate(c);
+    // Same capture point, same reason: after restoreAll() this reads the INCUMBENT anchor rate, which
+    // would make the printed endpoint a mix of endpoint ratios and a restored scale.
+    const double endpoint_anchor_rate = site_rate->getRate(anchor);
 
     // ---- restore and PROVE it element-wise ----
     restoreAll();
@@ -659,6 +679,32 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
             max_param_err = std::max(max_param_err, std::fabs(now_len[i] - saved_len[i]));
     } else {
         max_param_err = std::numeric_limits<double>::infinity();
+    }
+
+    // ---- THE ENDPOINT ITSELF, and why it must be printed ----
+    //
+    // Without this the probe reported a GAIN and never the POINT that produced it, so the question "did
+    // two runs land in the same basin?" was unanswerable from the artifacts -- and a 6.073e-03-nat spread
+    // across the forcing ladder was briefly read as one rung finding a better optimum, a claim about
+    // endpoints made with no endpoint ever observed. Section 8.3's MULTIBASIN_UNRESOLVED needs endpoint
+    // comparison, not gain comparison, so the endpoint is now emitted along with box activity: if a ratio
+    // sits on FR_RATIO_UPPER = 1 the search was forbidden from reordering that category past the anchor,
+    // and section 7.2 requires that be visible rather than absorbed into a clean-looking gain.
+    {
+        std::string endpoint;
+        char buf[64];
+        int at_lower = 0, at_upper = 0;
+        for (int i = 0; i < ndim; ++i) {
+            const double vi = var[(std::size_t)i + 1];
+            if (vi <= FR_RATIO_LOWER * (1.0 + 1e-9)) ++at_lower;
+            if (vi >= FR_RATIO_UPPER * (1.0 - 1e-9)) ++at_upper;
+            snprintf(buf, sizeof(buf), "%s%.12g", i ? "," : "", vi);
+            endpoint += buf;
+        }
+        fprintf(stderr,
+                "[FRSOLVE] ctx=%s PHASE1ENDPOINT ndim=%d anchor=%d anchor_rate=%.12g "
+                "box_lo_active=%d box_hi_active=%d ratios=%s\n",
+                tag, ndim, anchor, endpoint_anchor_rate, at_lower, at_upper, endpoint.c_str());
     }
 
     // ---- report: cost first, because cost is what step 2 exists to decide ----

@@ -44,6 +44,24 @@ struct Phase1ProbeOptions {
      */
     double forcing_gap = 1e-8;
 
+    /**
+     * Gap for the MEASUREMENT solves -- the w1 commit, the seed identity check, the endpoint realise and
+     * the w2 re-profile -- as distinct from the SEARCH solves inside the rate pass.
+     *
+     * THESE MUST NOT BE ONE KNOB, and conflating them invalidated a published comparison.
+     * `lnl_after_rate` is the exact tree likelihood at weights certified only to the gap they were solved
+     * at, so with a single knob a loose rung reports a value up to `forcing_gap` BELOW the true profiled
+     * value AT THE IDENTICAL ENDPOINT. Measured on DNA-100K R8: the three ladder rungs spread 6.073e-03
+     * nats, which is 60.7% of the loosest rung's own 1e-2 gap -- entirely inside what the instrument
+     * alone can manufacture -- and the loose 1e-2 rung actually BEAT the tighter 1e-5 rung, which no
+     * "tighter gap finds a better optimum" account can produce. That spread was briefly reported as a
+     * better optimum; it was measurement tolerance, not the point being measured.
+     *
+     * Pinning this tight and independent makes gains comparable ACROSS rungs, which is the only way the
+     * forcing ladder can speak to accuracy rather than cost alone.
+     */
+    double measure_gap = 1e-11;
+
     /** Hard ceiling on convex iterations per weight solve; binding is reported, never silently absorbed. */
     std::size_t profile_max_iterations = 10000;
 
