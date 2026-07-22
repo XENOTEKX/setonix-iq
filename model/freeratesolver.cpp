@@ -19,8 +19,23 @@ namespace freerate {
 
 namespace {
 
-/** Build the literal mass-and-mean weight problem at the CURRENT rates from an extraction. */
-freerate_profile::ProfileProblem literalProblemFrom(const ComponentExtraction &e) {
+/**
+ * Build the literal mass-and-mean weight problem at the CURRENT rates.
+ *
+ * `target_moment` is the CANONICAL 1.0, not the live state's moment. That distinction is the difference
+ * between measuring a function and measuring a random walk. The one-block diagnostics profile once, at
+ * the published state, and must not move it -- for them `actual_moment` is right. Inside a rate pass the
+ * live proportions are overwritten by the previous trial, so `actual_moment` makes the CONSTRAINT LEVEL
+ * itself history-dependent: the feasible set at trial n becomes {w : r_n'w = r_n . p_{n-1}}. The
+ * objective then stops being a function of its argument, and the realised mean rate drifts off the
+ * section 4.1 contract sum_j w_j r_j = 1 -- re-admitting the global-scale direction that section 7.2
+ * assigns to the branch block and explicitly excludes from the rate block.
+ *
+ * Pinning to 1.0 is legal at every trial precisely because writeRates pinned the rates so that
+ * sum_j w_j r_j == 1 for the pass's weight vector, which is therefore a FEASIBLE start by construction.
+ */
+freerate_profile::ProfileProblem literalProblemFrom(const ComponentExtraction &e,
+                                                   double target_moment) {
     freerate_profile::ProfileProblem problem;
     problem.pattern_count = e.pattern_count;
     problem.category_count = e.category_count;
@@ -29,10 +44,7 @@ freerate_profile::ProfileProblem literalProblemFrom(const ComponentExtraction &e
     problem.multiplicity = e.multiplicity;
     problem.rate = e.rate;
     problem.geometry = freerate_profile::FeasibleGeometry::LITERAL_MASS_MEAN;
-    // Profile on the surface the live state actually occupies. Hard-coding 1.0 would silently MOVE the
-    // point whenever the state sits off the unit-mean contract, and the reported gain would then include
-    // that displacement rather than measuring the block.
-    problem.target_moment = e.actual_moment;
+    problem.target_moment = target_moment;
     return problem;
 }
 
@@ -72,64 +84,94 @@ public:
     std::size_t profile_max_iterations = 10000;
     std::size_t trial_budget = 250;
 
-    // Telemetry -- the entire point of step 2.
+    // Cost, decomposed. A single seconds-per-solve ratio is not a measurement of the convex solver:
+    // every trial also pays three full tree traversals and two O(nptn*k) buffer builds, and the
+    // traversals are threaded while the convex solve is serial, so an undecomposed ratio is partly a
+    // function of the thread count. These three are what let the cost be attributed honestly.
+    double secs_extract = 0.0;
+    double secs_solve = 0.0;
+    double secs_realise = 0.0;
+
     std::size_t weight_solves = 0;
     std::size_t profile_iterations_total = 0;
-    std::size_t profile_capped_count = 0;
+    std::size_t profile_capped_count = 0;      // MAX_ITERATIONS
+    std::size_t profile_stall_count = 0;       // NUMERICAL_STALL -- the degenerate tail's ACTUAL exit
+    std::size_t profile_other_count = 0;       // anything not CONVERGED_GAP
     std::size_t refused_start_count = 0;
     std::size_t infeasible_count = 0;
     std::size_t extract_failed_count = 0;
-    double last_gap = std::numeric_limits<double>::infinity();
     double max_gap_seen = 0.0;
-    bool budget_hit = false;
+    bool saw_infinite_gap = false;
+
+    // A typed abort. The objective must never silently switch to a DIFFERENT function mid-solve: since
+    // phi(r) >= l(w_stale; r), such a switch is one-sided, the Armijo test fails, the line search
+    // collapses to the incumbent and dfpmin exits via TOLX -- reporting a small gain that reads as
+    // "the rate block is converged". Instead, latch a reason, return the last valid value so the pass
+    // terminates quickly and predictably, and refuse to report a gain at all.
+    bool aborted = false;
+    const char *abort_reason = "-";
+    double last_valid_value = 0.0;
+    bool have_last_valid = false;
+
+    double abortWith(const char *reason) {
+        if (!aborted) { aborted = true; abort_reason = reason; }
+        ++evaluations;
+        return have_last_valid ? last_valid_value : 0.0;
+    }
 
     double targetFunk(double x[]) override {
+        if (aborted) return abortWith(abort_reason);
         writeRates(x);
+        if (write_failed) return abortWith("arithmetic-failure");
         tree->clearAllPartialLH();
 
-        if (weight_solves >= trial_budget) {
-            // Budget bound. Return the fixed-weight value rather than spending another convex solve; the
-            // caller reports budget_hit so this is never mistaken for a converged pass.
-            budget_hit = true;
-            ++evaluations;
-            return -tree->computeLikelihood();
-        }
+        if (weight_solves >= trial_budget) return abortWith("trial-budget");
 
+        using Clock = std::chrono::steady_clock;
+        const auto t0 = Clock::now();
         ComponentExtraction e;
         std::string why;
-        if (!extractComponentsAtUniformProp(tree, &e, &why)) {
-            ++extract_failed_count;
-            ++evaluations;
-            return -tree->computeLikelihood();
-        }
+        const bool ok = extractComponentsAtUniformProp(tree, &e, &why);
+        secs_extract += std::chrono::duration<double>(Clock::now() - t0).count();
+        if (!ok) { ++extract_failed_count; return abortWith("extract-failed"); }
 
-        freerate_profile::ProfileProblem problem = literalProblemFrom(e);
+        // THE DETERMINISTIC START. `w` is the pass's fixed weight vector, and writeRates pinned the rates
+        // so that sum_j w_j r_j == 1, so `w` is feasible for the target_moment = 1 problem BY
+        // CONSTRUCTION at every trial. Using the LIVE proportions instead would make the start -- and
+        // hence the returned value -- depend on which trial ran last.
+        freerate_profile::ProfileProblem problem = literalProblemFrom(e, 1.0);
         freerate_profile::ProfileOptions options;
         options.gap_tolerance = forcing_gap;
         options.max_iterations = profile_max_iterations;
 
-        const freerate_profile::ProfileResult r =
-            freerate_profile::solve(problem, options, e.weight);
+        const auto t1 = Clock::now();
+        const freerate_profile::ProfileResult r = freerate_profile::solve(problem, options, w);
+        secs_solve += std::chrono::duration<double>(Clock::now() - t1).count();
+
         ++weight_solves;
         profile_iterations_total += r.iterations;
         if (r.reason == freerate_profile::ExitReason::MAX_ITERATIONS) ++profile_capped_count;
-        last_gap = r.bestGapBound();
-        if (std::isfinite(last_gap)) max_gap_seen = std::max(max_gap_seen, last_gap);
+        else if (r.reason == freerate_profile::ExitReason::NUMERICAL_STALL) ++profile_stall_count;
+        else if (r.reason != freerate_profile::ExitReason::CONVERGED_GAP) ++profile_other_count;
 
-        // A profiler that did not accept the incumbent as its start began from a hull vertex, which is a
-        // 1-or-2-support point; writing it would TELEPORT the weights and the resulting objective value
-        // would describe a different point than the one requested. Keep the incumbent weights instead.
-        if (!r.supplied_start_used) {
-            ++refused_start_count;
-        } else if (!profiledPointIsFeasible(r)) {
-            ++infeasible_count;
-        } else if (r.weight.size() == (std::size_t)k) {
-            for (int c = 0; c < k; ++c) site_rate->setProp(c, r.weight[(std::size_t)c]);
-        }
+        const double gap = r.bestGapBound();
+        if (std::isfinite(gap)) max_gap_seen = std::max(max_gap_seen, gap);
+        else saw_infinite_gap = true;   // an infinite gap must never read as a clean zero
 
+        if (!r.supplied_start_used) { ++refused_start_count; return abortWith("refused-start"); }
+        if (!profiledPointIsFeasible(r)) { ++infeasible_count; return abortWith("infeasible-profiled-point"); }
+        if (r.weight.size() != (std::size_t)k) return abortWith("size-mismatch");
+
+        for (int c = 0; c < k; ++c) site_rate->setProp(c, r.weight[(std::size_t)c]);
+        const auto t2 = Clock::now();
         tree->clearAllPartialLH();
+        const double value = -tree->computeLikelihood();
+        secs_realise += std::chrono::duration<double>(Clock::now() - t2).count();
+
+        last_valid_value = value;
+        have_last_valid = true;
         ++evaluations;
-        return -tree->computeLikelihood();
+        return value;
     }
 };
 
@@ -216,7 +258,7 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     w_opt.gap_tolerance = opt.forcing_gap;
     w_opt.max_iterations = opt.profile_max_iterations;
     const freerate_profile::ProfileResult w1 =
-        freerate_profile::solve(literalProblemFrom(e1), w_opt, e1.weight);
+        freerate_profile::solve(literalProblemFrom(e1, e1.actual_moment), w_opt, e1.weight);
     const double w1_secs = secondsSince(t_w1);
 
     double lnl_after_w1 = base_lnl;
@@ -298,12 +340,14 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(), bound_check.get(), gtol);
     const double rate_secs = secondsSince(t_rate);
 
-    // Realise the value the way production does: write the point, clear, ask IQ-TREE. Never report the
-    // optimizer's own returned scalar -- it is the value at whatever point the line search last
-    // evaluated, which need not be the point now written into the model.
-    oracle.writeRates(var.data());
-    tree->clearAllPartialLH();
-    const double lnl_after_rate = tree->computeLikelihood();
+    // Realise at a COHERENT point. Writing the rates alone is not enough: three of dfpmin's four exits
+    // leave the model holding the PROPORTIONS from a finite-difference probe or a rejected line-search
+    // trial, not the ones profiled at `var`. Reporting that pair would bias rate_gain DOWN and the
+    // following weight gain UP by the same amount -- a spurious transfer of gain from the rate block to
+    // the weight block, which is exactly the signature this track already had to retract once. Re-running
+    // targetFunk at `var` re-profiles the weights there, so the reported value is phi(var).
+    const double lnl_after_rate =
+        oracle.aborted ? lnl_after_w1 : -oracle.targetFunk(var.data());
 
     // ---- cycle step 5: re-profile weights at the new rates ----
     const auto t_w2 = Clock::now();
@@ -312,7 +356,7 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     double w2_gap = std::numeric_limits<double>::infinity();
     if (extractComponentsAtUniformProp(tree, &e2, &why)) {
         const freerate_profile::ProfileResult w2 =
-            freerate_profile::solve(literalProblemFrom(e2), w_opt, e2.weight);
+            freerate_profile::solve(literalProblemFrom(e2, e2.actual_moment), w_opt, e2.weight);
         w2_gap = w2.bestGapBound();
         if (w2.supplied_start_used && profiledPointIsFeasible(w2) &&
             w2.weight.size() == (std::size_t)k) {
@@ -349,6 +393,12 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     }
 
     // ---- report: cost first, because cost is what step 2 exists to decide ----
+    // The realised mean rate of the FITTED mixture. The section 4.1 contract is sum_j w_j r_j = 1, and
+    // nothing above enforces it on the live proportions -- only measuring it can show whether the pass
+    // stayed on the contract or drifted off it into the global-scale direction section 7.2 excludes.
+    double moment_out = 0.0;
+    for (int c = 0; c < k; ++c) moment_out += site_rate->getProp(c) * site_rate->getRate(c);
+
     const double weight_solves = (double)oracle.weight_solves;
     fprintf(stderr,
             "[FRSOLVE] ctx=%s PHASE1PROBE k=%d ndim=%d anchor=%d frozen=%d base_lnl=%.9f "
@@ -359,19 +409,26 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
             lnl_after_rate - lnl_after_w1, lnl_final - lnl_after_rate, seed_err);
     fprintf(stderr,
             "[FRSOLVE] ctx=%s PHASE1COST weight_solves=%zu rate_evals=%zu profile_iters=%zu "
-            "profile_capped=%zu refused_start=%zu infeasible=%zu extract_failed=%zu budget_hit=%d "
-            "forcing_gap=%.1e max_gap_seen=%.3e w2_gap=%.3e "
-            "secs_total=%.2f secs_w1=%.2f secs_rate=%.2f secs_w2=%.2f secs_per_weight_solve=%.4f\n",
+            "profile_capped=%zu profile_stall=%zu profile_other=%zu refused_start=%zu infeasible=%zu "
+            "extract_failed=%zu aborted=%d abort_reason=%s forcing_gap=%.1e max_gap_seen=%.3e "
+            "inf_gap=%d w2_gap=%.3e moment_out=%.12f "
+            "secs_total=%.2f secs_w1=%.2f secs_rate=%.2f secs_w2=%.2f "
+            "secs_extract=%.3f secs_solve=%.3f secs_realise=%.3f solve_per_trial=%.4f\n",
             tag, oracle.weight_solves, oracle.evaluations, oracle.profile_iterations_total,
-            oracle.profile_capped_count, oracle.refused_start_count, oracle.infeasible_count,
-            oracle.extract_failed_count, oracle.budget_hit ? 1 : 0, opt.forcing_gap,
-            oracle.max_gap_seen, w2_gap, total_secs, w1_secs, rate_secs, w2_secs,
-            weight_solves > 0.0 ? rate_secs / weight_solves : 0.0);
+            oracle.profile_capped_count, oracle.profile_stall_count, oracle.profile_other_count,
+            oracle.refused_start_count, oracle.infeasible_count,
+            oracle.extract_failed_count, oracle.aborted ? 1 : 0, oracle.abort_reason, opt.forcing_gap,
+            oracle.max_gap_seen, oracle.saw_infinite_gap ? 1 : 0, w2_gap, moment_out,
+            total_secs, w1_secs, rate_secs, w2_secs,
+            oracle.secs_extract, oracle.secs_solve, oracle.secs_realise,
+            weight_solves > 0.0 ? oracle.secs_solve / weight_solves : 0.0);
     fprintf(stderr,
-            "[FRSOLVE] ctx=%s PHASE1PROBE STATUS=LEGACY_UNCERTIFIED restore_err=%.3e max_param_err=%.3e "
+            "[FRSOLVE] ctx=%s PHASE1PROBE STATUS=%s restore_err=%.3e max_param_err=%.3e "
             "-- step 2 MEASURES the re-profiled objective's cost; it certifies nothing, applies no "
-            "section 7.6 acceptance, and commits nothing\n",
-            tag, restored_lnl - base_lnl, max_param_err);
+            "section 7.6 acceptance, and commits nothing%s\n",
+            tag, oracle.aborted ? "ABORTED" : "LEGACY_UNCERTIFIED",
+            restored_lnl - base_lnl, max_param_err,
+            oracle.aborted ? " -- the pass ABORTED, so its gain is NOT a measurement" : "");
 
     if (max_param_err > 0.0) {
         fprintf(stderr,
