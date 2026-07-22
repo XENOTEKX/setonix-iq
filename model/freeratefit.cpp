@@ -822,11 +822,19 @@ bool FreeRateFitResult::certifiedForSelection(std::string *reason) const {
 
     const double bound_tolerance = thresholds.constraint_residual;
     const bool zero_weight = pointHasZeroWeight(final_point, bound_tolerance);
-    // F7. Identifiability scale, NOT the feasibility scale. scaled_step is the solver's own accepted
-    // step in log-rate coordinates (plan §8.2 tau_x), so two atoms closer than that are the same
-    // component as far as the producer could tell.
+    // F7. Identifiability scale, NOT the feasibility scale, and NOT a producer-supplied one.
+    //
+    // An intermediate revision priced this on thresholds.scaled_step. That reintroduced the F4 family:
+    // valid() permits scaled_step == 0, so a producer could declare zero and silently disable collision
+    // detection altogether -- two identical rates would then read as distinct, no support boundary would
+    // be raised, and the point would certify with no continuous insertion pricing. A soundness test must
+    // not be switchable by the party it constrains.
+    //
+    // FREERATE_RATE_IDENTIFIABILITY_TOLERANCE is fixed at the plan's own tau_x (§8.2), which is stated
+    // as a constant rather than a tunable. A producer using a tighter step still gets collisions judged
+    // at 1e-6, which raises MORE support boundaries and so fails safe.
     const bool rate_collision =
-        pointHasRateCollision(final_point, thresholds.scaled_step);
+        pointHasRateCollision(final_point, FREERATE_RATE_IDENTIFIABILITY_TOLERANCE);
     bool rate_ratio_lower = false;
     const double reference_rate = final_point.rates.back();
     for (std::size_t i = 0; i + 1 < final_point.rates.size(); ++i) {
@@ -895,18 +903,25 @@ bool FreeRateFitResult::certifiedForSelection(std::string *reason) const {
         setError(reason, "boundary status was used for an interior point");
         return false;
     }
-    // F6. FALLBACK_CERTIFIED is production-certified but named no geometry, so it was the one success
-    // label that escaped both tests above. That let the SAME point certify or not depending only on which
-    // label the producer chose -- and only supportBoundary() forces insertion pricing, so a fallback
-    // sitting on a gauge-interval or branch bound certified with nothing recording it, while an identical
-    // LOCAL_STATIONARY_CERTIFIED point was rejected. A producer whose fallback genuinely lands on a
-    // boundary must say so with BOUNDARY_LOCAL_STATIONARY_CERTIFIED and accept that status's obligations.
-    if (status == FreeRateFitStatus::FALLBACK_CERTIFIED && boundary) {
-        setError(reason,
-                 "fallback status was used for a boundary point; declare the "
-                 "boundary status instead");
-        return false;
-    }
+    // FALLBACK_CERTIFIED is deliberately NOT constrained to interior or boundary geometry.
+    //
+    // A previous revision rejected it whenever boundary activity was present, on the theory that it was
+    // "escaping" the two tests above. That was a misdiagnosis and a regression. FALLBACK_CERTIFIED is a
+    // PROVENANCE label, not a geometry claim: MODELFINDER-FULL-GPU-PLAN.md §11.2 defines it as the result
+    // of re-running the higher-budget CPU solver after GPU fitting failed to certify, accepted only if it
+    // "meets the same certificate". Geometry is carried separately in metrics.boundary, which is already
+    // validated against the point by the disagreement check above.
+    //
+    // The rejection was also backwards on the plan's own primary use. §1.3 and §5.2 make the literal
+    // mass-and-mean profile "the production fallback whenever a quotient moment bound is active" -- that
+    // is, the fallback exists BECAUSE a bound is active. Rejecting boundary fallbacks therefore refused
+    // the canonical case, and by §11.2 step 5 a refused fallback escalates the WHOLE analysis to
+    // INCOMPLETE. A false rejection here is expensive, not merely conservative.
+    //
+    // Nothing is lost by allowing it: the support-boundary obligation (continuous insertion pricing)
+    // above is not gated on status and already binds every status, and schema v1 pins weight_formulation
+    // to LITERAL_MASS_MEAN, so the "literal must drive an active-bound fit" requirement holds by
+    // construction.
     if (metrics.boundary.supportBoundary() &&
         (!metrics.continuous_insertion_evaluated ||
         !finite(metrics.continuous_insertion_gain_upper_bound) ||

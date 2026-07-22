@@ -46,6 +46,16 @@ enum class FreeRateFitStatus {
     LEGACY_UNCERTIFIED
 };
 
+/**
+ * Smallest |log(r_i) - log(r_j)| at which two rate atoms count as distinct mixture components.
+ *
+ * Deliberately a constant and NOT a member of FreeRateCertificationThresholds. Identifiability is a
+ * property of the model, not a policy the fit producer may declare: a producer that could lower this
+ * could switch off collision detection and certify a degenerate point with no insertion pricing. Fixed
+ * at MODELFINDER-FULL-GPU-PLAN.md §8.2's tau_x, which that section states as a constant.
+ */
+static const double FREERATE_RATE_IDENTIFIABILITY_TOLERANCE = 1e-6;
+
 const char *freeRateFitStatusName(FreeRateFitStatus status);
 bool parseFreeRateFitStatus(const std::string &text,
                             FreeRateFitStatus *status);

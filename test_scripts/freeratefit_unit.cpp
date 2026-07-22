@@ -401,15 +401,18 @@ void testFailClosedCertification() {
     fit.metrics.termination_flags_tracked = false;
     CHECK(!fit.certifiedForSelection(&reason));
 
-    // F6. FALLBACK_CERTIFIED named no geometry, so it escaped BOTH the interior and the boundary test.
-    // The same point could certify or not depending only on which success label the producer chose.
+    // FALLBACK_CERTIFIED must certify at a BOUNDARY as well as in the interior.
     //
-    // The boundary must be one the recomputation above actually DERIVES from the point, or the fit is
-    // rejected by the "reported boundary activity disagrees with the point/domain" check and this test
-    // passes for the wrong reason -- it did, and the mutant survived. schema-v1 scope has
-    // optimize_branches/pinv/substitution all false, so branch and pinv boundaries are never derived.
-    // rate_ratio_lower is derivable and is NOT a support boundary, which isolates F6 exactly: no
-    // insertion pricing is owed, so the ONLY thing that can reject this point is the status/geometry test.
+    // This pins the corrected reading of the status. It is a provenance label -- plan §11.2, the
+    // higher-budget CPU re-run after GPU fitting failed -- not a geometry claim, and §1.3/§5.2 make the
+    // literal fallback the production path precisely WHEN a quotient moment bound is active. An earlier
+    // revision rejected boundary fallbacks; by §11.2 step 5 that escalates the whole analysis to
+    // INCOMPLETE, so the false rejection was expensive rather than conservative.
+    //
+    // rate_ratio_lower is used because the recomputation actually derives it (schema-v1 scope has
+    // optimize_branches/pinv/substitution false, so those boundaries are never derived and reporting one
+    // trips the disagreement check instead) and because it is NOT a support boundary, so no insertion
+    // pricing is owed and the geometry is the only thing under test.
     {
         FreeRateFitResult fb = passingFit();
         const double ratio = fb.scope.rate_ratio_lower;
@@ -421,11 +424,38 @@ void testFailClosedCertification() {
         fb.metrics.boundary.rate_ratio_lower = true;
 
         fb.status = FreeRateFitStatus::BOUNDARY_LOCAL_STATIONARY_CERTIFIED;
-        CHECK(fb.certifiedForSelection(&reason));    // the honest label for this point certifies
+        CHECK(fb.certifiedForSelection(&reason));
         fb.status = FreeRateFitStatus::FALLBACK_CERTIFIED;
-        CHECK(!fb.certifiedForSelection(&reason));   // relabelling it must NOT dodge the obligation
+        CHECK(fb.certifiedForSelection(&reason));
 
-        // ... and an interior fallback is still perfectly legitimate.
+        // A support boundary is different: its obligation is insertion pricing, and that binds EVERY
+        // status including the fallback. This is what actually stops a fallback from dodging anything.
+        FreeRateFitResult sb = passingFit();
+        sb.status = FreeRateFitStatus::FALLBACK_CERTIFIED;
+        sb.final_point.rates = {1.0, 1.0 + 2e-11};
+        sb.final_point.weights = {0.5, 0.5};
+        const double m2 = 0.5 * sb.final_point.rates[0] + 0.5 * sb.final_point.rates[1];
+        sb.final_point.rates[0] /= m2;
+        sb.final_point.rates[1] /= m2;
+        sb.metrics.boundary.rate_collision = true;
+        sb.metrics.continuous_insertion_evaluated = false;
+        CHECK(!sb.certifiedForSelection(&reason));
+
+        // The collision threshold must not be switchable by the producer it constrains. Declaring
+        // scaled_step = 0 (which valid() permits) previously disabled collision detection entirely:
+        // the colliding point below would report no collision, raise no support boundary, and certify
+        // with no insertion pricing.
+        FreeRateFitResult ev = passingFit();
+        ev.thresholds.scaled_step = 0.0;
+        ev.metrics.max_scaled_step = 0.0;
+        ev.final_point.rates = {1.0, 1.0 + 2e-11};
+        ev.final_point.weights = {0.5, 0.5};
+        const double m3 = 0.5 * ev.final_point.rates[0] + 0.5 * ev.final_point.rates[1];
+        ev.final_point.rates[0] /= m3;
+        ev.final_point.rates[1] /= m3;
+        ev.metrics.boundary.rate_collision = false;   // the evasion: claim there is no collision
+        CHECK(!ev.certifiedForSelection(&reason));
+
         fit = passingFit();
         fit.status = FreeRateFitStatus::FALLBACK_CERTIFIED;
         CHECK(fit.certifiedForSelection(&reason));
