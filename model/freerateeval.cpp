@@ -335,20 +335,46 @@ namespace {
  *
  * GAUGE. The parameterisation is the ratio form r_j = v_j / s with s chosen so that sum_j w_j r_j == 1
  * identically, which keeps every trial point on the same unit-mean cross-section the caller measured the
- * weight block on. This matters because likelihood is invariant along the orbit (r, b) -> (s*r, b/s):
- * rates enter only as rate*branch_length and MTree::scaleLength is a pure multiply. Without pinning the
- * gauge, the "rate block" would be free to walk that null direction, which is the branch block's global
- * scale (plan section 7.2) and not a rate-block gain at all.
+ * weight block on.
+ *
+ * BE PRECISE ABOUT WHY. It is tempting to justify the pin by invariance -- likelihood is unchanged along
+ * (r, b) -> (s*r, b/s), since rates enter only as rate*branch_length and MTree::scaleLength is a pure
+ * multiply. That argument does NOT apply here, because this arm holds branches FIXED. At fixed b the
+ * direction r -> s*r is not a null direction at all: its derivative is sum_e (dlnL/db_e) * b_e, which is
+ * nonzero whenever the published branches are off-optimum. So pinning the gauge EXCLUDES a genuinely
+ * likelihood-increasing direction.
+ *
+ * That exclusion is deliberate and is the definition, not an oversight. Plan section 7.2 defines rate
+ * directions as having zero common-scale component, assigning the global scale to the branch block. The
+ * reported number is therefore a lower bound on the slack of the GAUGE-FIXED rate block -- the object the
+ * plan defines -- and NOT of an unconstrained k-rate move. Do not describe it as the latter.
  */
-// Mirrors of model/ratefree.cpp:`const double MIN_FREE_RATE = 0.001;` and its MAX/TOL siblings, which
-// are translation-unit-local there and so cannot be included. Duplicated deliberately rather than
-// exported, because widening ratefree.cpp's search box is a production change that should not silently
-// widen a diagnostic's box too -- but the values MUST track it, or this arm optimises over a different
-// feasible set than the block it is standing in for. The reported bound_active count is what makes a
-// divergence visible.
-const double FR_MIN_FREE_RATE = 0.001;
-const double FR_MAX_FREE_RATE = 1000.0;
-const double FR_TOL_FREE_RATE = 0.0001;
+// Box on the RATIO coordinates v_i = r_i / r_{k-1}.
+//
+// This is deliberately NOT a copy of model/ratefree.cpp's MIN/MAX_FREE_RATE. Those bound the RAW rate
+// (`variables[i+1] = rates[i]` for optimizing_params == 1, with rates[k-1] pinned and never written),
+// whereas this arm optimises ratios because it must hold the gauge. Reusing the raw-rate numbers on a
+// ratio coordinate silently changes what they mean: with rates sorted ascending the anchor is the
+// LARGEST rate, so every ratio is <= 1, the upper bound becomes unreachable, and the lower bound turns
+// into a constraint on r_min/r_max rather than on r_min. On the published avian R8 state that is a
+// ~6x tighter downward span for the slowest category than production allows -- and the slow category is
+// exactly where the +R ridge lives, so the artificial squeeze would bias the measured gain toward zero.
+//
+// Use the canonical rate-ratio envelope instead: the same [1e-7, 1] declared in FreeRateFitScope and
+// audited over 607 archived endpoints in Phase 0B. A wider box can only INCREASE the measured rate gain,
+// which is the conservative direction for any "the weight block dominates" reading.
+const double FR_RATIO_LOWER = 1e-7;
+const double FR_RATIO_UPPER = 1.0;
+
+// Absolute gradient target in nats per unit ratio, converted to dfpmin's relative gtol by dividing by
+// |lnL| at the call site. See the solve-strength note in reportRateBlockAttribution.
+const double FR_RATE_GRAD_TARGET = 1e-3;
+// Re-enter the solver while a pass still pays more than this many nats.
+const double FR_RATE_STANDSTILL = 1e-4;
+const int FR_RATE_MAX_PASSES = 12;
+// Hard ceiling on full tree likelihoods spent by this arm, so its cost stays bounded on a 692k-pattern
+// alignment. Reported via passcap when it binds.
+const std::size_t FR_RATE_EVAL_BUDGET = 4000;
 
 class RateBlockOracle : public Optimization {
 public:
@@ -357,6 +383,7 @@ public:
     int k = 0;
     std::vector<double> w;              // FIXED weights
     std::size_t evaluations = 0;
+    bool write_failed = false;
 
     int getNDim() override { return k - 1; }
 
@@ -364,7 +391,17 @@ public:
     void writeRates(const double *v) {
         double s = w[k - 1];
         for (int i = 0; i < k - 1; ++i) s += w[i] * v[i + 1];
-        if (!(s > 0.0) || !std::isfinite(s)) return;      // caller sees this as a non-improving trial
+        // s = w_{k-1} + sum_{i<k-1} w_i v_i is strictly positive for any feasible point: the weights are
+        // non-negative and sum to one, and every v_i is bounded below by FR_RATIO_LOWER > 0. This guard is
+        // therefore unreachable in exact arithmetic and exists only for a non-finite v produced by an
+        // upstream NaN. Returning without writing leaves the model at the PREVIOUS rates, so targetFunk
+        // would stop being a function of its argument; refuse loudly rather than silently score a
+        // different point than the one requested.
+        if (!(s > 0.0) || !std::isfinite(s)) {
+            fprintf(stderr, "[FRATTRIB] RATEBLOCK STATUS=ARITHMETIC-FAILURE s=%.6e\n", s);
+            write_failed = true;
+            return;
+        }
         for (int i = 0; i < k - 1; ++i) site_rate->setRate(i, v[i + 1] / s);
         site_rate->setRate(k - 1, 1.0 / s);
     }
@@ -412,6 +449,14 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
                 tag);
         return;
     }
+    // Production may have been told to hold the rates. RateFree::getNDim() returns 0 in that case and the
+    // shipped optimiser never touches them, so measuring "available rate-block gain" would report slack
+    // for a block the user pinned.
+    if (free_rate->getNDim() == 0) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED reason=rate-params-fixed-by-user\n", tag);
+        return;
+    }
 
     std::vector<double> saved_rate((std::size_t)k), weight((std::size_t)k);
     for (int c = 0; c < k; ++c) {
@@ -423,11 +468,30 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
                 tag);
         return;
     }
+    // The weight arm refuses a cell whose smallest proportion is below its safe-division threshold. Mirror
+    // that refusal so the two arms cover the SAME set of cells: a RATEBLOCK line with no WEIGHTBLOCK
+    // control beside it is not a controlled comparison, it is one number pretending to be two.
+    for (int c = 0; c < k; ++c) {
+        if (weight[(std::size_t)c] < FREERATE_MIN_SAFE_PROPORTION) {
+            fprintf(stderr,
+                    "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED "
+                    "reason=degenerate-proportion-weight-arm-would-refuse minw=%.3e\n",
+                    tag, weight[(std::size_t)c]);
+            return;
+        }
+    }
     double moment_in = 0.0;
     for (int c = 0; c < k; ++c) moment_in += weight[(std::size_t)c] * saved_rate[(std::size_t)c];
 
-    // Branch lengths are never written by this arm, but snapshot them anyway: the restore must be exact
-    // and provable rather than argued, and a future edit that adds a regauge would otherwise go unnoticed.
+    // Branch lengths are never written by this arm, but snapshot them anyway so a future edit that adds
+    // a regauge does not go unnoticed.
+    //
+    // Note what restore_err below can and cannot show. setRate is a plain store and the saved values are
+    // the original doubles, so the PARAMETERS are bit-restored by construction; restore_err compares
+    // LIKELIHOODS at bit-identical parameters and is therefore a determinism probe, not a proof of
+    // restoration. It is still worth printing -- a nonzero value means computeLikelihood is not
+    // reproducible, which would invalidate every gain here -- but it must not be read as evidence that
+    // nothing else was perturbed.
     DoubleVector saved_len;
     tree->saveBranchLengths(saved_len);
 
@@ -446,8 +510,23 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     std::vector<double> upper((std::size_t)ndim + 1, 0.0);
     for (int i = 0; i < ndim; ++i) {
         var[(std::size_t)i + 1] = saved_rate[(std::size_t)i] / saved_rate[(std::size_t)k - 1];
-        lower[(std::size_t)i + 1] = FR_MIN_FREE_RATE;
-        upper[(std::size_t)i + 1] = FR_MAX_FREE_RATE;
+        lower[(std::size_t)i + 1] = FR_RATIO_LOWER;
+        upper[(std::size_t)i + 1] = FR_RATIO_UPPER;
+    }
+    // A box that excludes the incumbent is not a measurement. With rates sorted ascending the anchor
+    // r_{k-1} is the LARGEST, so every seed ratio is <= 1 and only the lower bound can bite. If the seed
+    // is outside, the first gradient is taken off-box while every line-search trial is clamped back, so
+    // the search can never return to the incumbent and the arm prints gain=0 -- indistinguishable from
+    // "the rate block is converged". Refuse instead.
+    for (int i = 0; i < ndim; ++i) {
+        const double vi = var[(std::size_t)i + 1];
+        if (vi < FR_RATIO_LOWER || vi > FR_RATIO_UPPER) {
+            fprintf(stderr,
+                    "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED reason=box-excludes-incumbent "
+                    "cat=%d ratio=%.6e box=[%.1e,%.1e]\n",
+                    tag, i, vi, FR_RATIO_LOWER, FR_RATIO_UPPER);
+            return;
+        }
     }
     // bound_check false everywhere, matching model/ratefree.cpp. It disables Optimization's random
     // boundary restart, so this measures one deterministic descent and cannot silently wander into a
@@ -457,13 +536,45 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
 
     // The identity point must reproduce the baseline; if it does not, the parameterisation is wrong and
     // every number below is meaningless. Measured, not assumed.
+    //
+    // It round-trips only because moment_in == 1: v_i = r_i/r_{k-1} gives s = moment_in/r_{k-1}, so
+    // writeRates maps r_j -> r_j/moment_in. That holds here because rescaleRates() runs a few lines
+    // before this hook in modelfactory.cpp. Move the hook and this silently starts measuring across two
+    // gauge slices -- which is exactly what seed_err is printed to catch.
     const double seed_lnl = -oracle.targetFunk(var.data());
     const double seed_err = seed_lnl - base_lnl;
 
-    const double neg = oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(),
-                                                 bound_check.get(),
-                                                 std::max(1e-4, FR_TOL_FREE_RATE));
-    (void)neg;
+    // SOLVE STRENGTH. dfpmin's gradient exit test is RELATIVE: it stops when
+    // max_i |g_i|*max(|p_i|,1) / max(|lnL|,1) < gtol. At the shipped gtol of 1e-4 and an avian |lnL| of
+    // 1.1e7 that permits an absolute coordinate gradient of ~1100 nats per unit ratio -- three orders
+    // above the gain being measured. Measured consequence on the first gate run: 24-41 evaluations, i.e.
+    // at most 2-3 BFGS iterations on 5-7 dimensional problems, FEWER ITERATIONS THAN DIMENSIONS, so the
+    // inverse-Hessian never leaves its identity seed and this was 2-3 steepest-descent steps rather than
+    // a block solve. A weak rate solve biases the gain toward zero, which manufactures exactly the
+    // "weights dominate the rate block" signature this arm exists to test. Scale gtol by |lnL| so the
+    // test becomes an ABSOLUTE gradient target, then re-enter until the pass gain stops paying.
+    const double gtol =
+        FR_RATE_GRAD_TARGET / std::max(std::fabs(base_lnl), 1.0);
+    // Bounded explicitly. dfpmin's own ITMAX is 200 and each of its iterations costs 1 line search plus
+    // (1+ndim) finite-difference evaluations, so an unbudgeted re-entry loop could reach ~20,000 full
+    // tree likelihoods on a 692k-pattern alignment -- hours per cell. A diagnostic must not be able to
+    // dominate the run it is diagnosing. Whichever limit binds is reported, so a budget-truncated result
+    // is never mistaken for a converged one.
+    double running = seed_lnl;
+    int passes = 0;
+    bool budget_hit = false;
+    for (passes = 1; passes <= FR_RATE_MAX_PASSES; ++passes) {
+        oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(),
+                                  bound_check.get(), gtol);
+        oracle.writeRates(var.data());
+        tree->clearAllPartialLH();
+        const double pass_lnl = tree->computeLikelihood();
+        const double pass_gain = pass_lnl - running;
+        running = pass_lnl;
+        if (!(pass_gain > FR_RATE_STANDSTILL)) break;
+        if (oracle.evaluations >= FR_RATE_EVAL_BUDGET) { budget_hit = true; break; }
+    }
+    const bool pass_cap_hit = (passes > FR_RATE_MAX_PASSES) || budget_hit;
 
     // Realise the value the way production does: write the point, clear, and ask IQ-TREE. Never report
     // the optimizer's own returned scalar -- it is the value at whatever point the line search last
@@ -472,19 +583,46 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     tree->clearAllPartialLH();
     const double opt_lnl = tree->computeLikelihood();
 
+    // Achieved ABSOLUTE gradient at the reported point, by forward differences in nats per unit ratio.
+    // Without this the reader cannot tell a converged rate block from a truncated descent, and the two
+    // support opposite conclusions. This is the same telemetry gap that cost the +R instrument track a
+    // whole build: a stop rule that reports no stationarity evidence proves nothing.
+    double max_abs_grad = 0.0;
+    {
+        std::vector<double> probe(var);
+        for (int i = 0; i < ndim; ++i) {
+            const double vi = var[(std::size_t)i + 1];
+            const double h = std::max(1e-9, 1e-6 * std::fabs(vi));
+            if (vi + h > FR_RATIO_UPPER) continue;
+            probe[(std::size_t)i + 1] = vi + h;
+            const double up = -oracle.targetFunk(probe.data());
+            probe[(std::size_t)i + 1] = vi;
+            const double g = (up - opt_lnl) / h;
+            if (std::fabs(g) > max_abs_grad) max_abs_grad = std::fabs(g);
+        }
+        oracle.writeRates(var.data());          // undo the last probe write
+        tree->clearAllPartialLH();
+    }
+
+    // Read the gauge back off the MODEL rather than recomputing it from the same arithmetic that wrote
+    // it. sum_j w_j r_j == 1 holds algebraically for every v by construction of writeRates, so a check
+    // built from `weight[]` and `var[]` is a tautology that prints 1.000000000000 unconditionally and
+    // can never fail. Reading getRate()/getProp() back tests that the model actually holds the state.
     double moment_out = 0.0, minr = 0.0, maxr = 0.0;
     for (int c = 0; c < k; ++c) {
         const double rc = site_rate->getRate(c);
-        moment_out += weight[(std::size_t)c] * rc;
+        moment_out += site_rate->getProp(c) * rc;
         if (c == 0 || rc < minr) minr = rc;
         if (c == 0 || rc > maxr) maxr = rc;
     }
-    // Bound activity makes the result a CONSTRAINED optimum, not a stationary point, and the published
-    // avian rates put the smallest ratio within a factor of ~1.4 of the lower bound. Report it.
-    int bound_active = 0;
+    // Bound activity makes the result a CONSTRAINED optimum, not a stationary point. Counted per side:
+    // with sorted rates the upper bound is structurally unreachable, so a single count would have been a
+    // one-sided indicator wearing a two-sided name.
+    int bound_lo = 0, bound_hi = 0;
     for (int i = 0; i < ndim; ++i) {
         const double vi = var[(std::size_t)i + 1];
-        if (vi <= FR_MIN_FREE_RATE * (1.0 + 1e-6) || vi >= FR_MAX_FREE_RATE * (1.0 - 1e-6)) ++bound_active;
+        if (vi <= FR_RATIO_LOWER * (1.0 + 1e-6)) ++bound_lo;
+        if (vi >= FR_RATIO_UPPER * (1.0 - 1e-6)) ++bound_hi;
     }
 
     for (int c = 0; c < k; ++c) site_rate->setRate(c, saved_rate[(std::size_t)c]);
@@ -494,16 +632,32 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
 
     fprintf(stderr,
             "[FRATTRIB] ctx=%s RATEBLOCK k=%d dim=%d base_lnl=%.9f opt_lnl=%.9f gain=%.9f "
-            "seed_err=%.3e moment_in=%.12f moment_out=%.12f evals=%zu bound_active=%d "
+            "seed_err=%.3e moment_in=%.12f moment_out=%.12f evals=%zu passes=%d passcap=%d "
+            "maxgrad=%.6e gtol=%.3e bound_lo=%d bound_hi=%d "
             "minrate=%.6e maxrate=%.6e restore_err=%.6e\n",
             tag, k, ndim, base_lnl, opt_lnl, opt_lnl - base_lnl, seed_err, moment_in, moment_out,
-            oracle.evaluations, bound_active, minr, maxr, restored_lnl - base_lnl);
+            oracle.evaluations, passes, pass_cap_hit ? 1 : 0, max_abs_grad, gtol,
+            bound_lo, bound_hi, minr, maxr, restored_lnl - base_lnl);
+    // maxgrad is the field that decides whether `gain` is a converged rate-block optimum or a truncated
+    // descent. The two support opposite conclusions and nothing else printed here separates them.
+    if (max_abs_grad > 10.0 * FR_RATE_GRAD_TARGET || pass_cap_hit) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=UNCONVERGED maxgrad=%.6e passcap=%d "
+                "-- gain is a LOWER BOUND on rate-block slack, not a block optimum\n",
+                tag, max_abs_grad, pass_cap_hit ? 1 : 0);
+    }
 
     if (std::fabs(restored_lnl - base_lnl) > 1e-6) {
         fprintf(stderr,
                 "[FRATTRIB] ctx=%s RATEBLOCK STATUS=STATE-NOT-RESTORED restore_err=%.6e "
                 "-- this run has been perturbed and its result must not be used\n",
                 tag, restored_lnl - base_lnl);
+    }
+    if (oracle.write_failed) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=VOID reason=rate-write-failed-during-search "
+                "-- at least one trial scored a different point than requested\n",
+                tag);
     }
 }
 
