@@ -400,12 +400,54 @@ public:
     std::size_t evaluations = 0;
     bool write_failed = false;
 
-    int getNDim() override { return k - 1; }
+    // SUPPORT-EVENT GENERALISATION. Default-inert: configureDefault() reproduces the original
+    // "anchor at k-1, optimise the other k-1 ratios" parameterisation exactly, including the order in
+    // which the pin denominator is accumulated, so the shipped one-block arm is bit-unchanged.
+    //
+    // WHY IT EXISTS. An exact convex weight solve legitimately drives weights to zero, and plan section
+    // 4.1 forbids a positive weight floor, so a committing loop WILL meet zero weights. A zero-weight
+    // category's rate is then an EXACT null coordinate: its column is multiplied by zero in the
+    // likelihood, and it drops out of the pin s = sum_j w_j ratio_j as well. Optimising it hands dfpmin a
+    // zero finite-difference gradient and degenerates the BFGS curvature denominator dg.xi
+    // (utils/optimization.cpp:`fac=dg[i]*xi[i]` region), so the reported maxgrad/predrem for that
+    // coordinate would be meaningless.
+    //
+    // Freeze rather than delete. Plan section 7.2: a zero-weight atom "has no identifiable location and is
+    // omitted from ordinary gradient convergence checks". Deleting it would drop to R(k-1) and measure a
+    // DIFFERENT model -- plan 4.1 keeps the nominal Rk parameter count and plan 6 forbids calling a
+    // collapsed support an Rk fit -- which would make the result incomparable with the fixed-k one-block
+    // gains this arm exists to sit beside.
+    std::vector<int> free_cat;          // categories this solve may move
+    std::vector<double> frozen_ratio;   // r_c / r_anchor for categories that are neither free nor anchor
+    int anchor = -1;                    // category carrying the gauge
+
+    void configureDefault() {
+        anchor = k - 1;
+        free_cat.clear();
+        for (int i = 0; i < k - 1; ++i) free_cat.push_back(i);
+        frozen_ratio.assign((std::size_t)k, 0.0);
+    }
+
+    int getNDim() override { return (int)free_cat.size(); }
+
+    /** ratio_c = r_c / r_anchor, from the optimizer variables for free categories. */
+    double ratioOf(int c, const double *v) const {
+        if (c == anchor) return 1.0;
+        for (std::size_t i = 0; i < free_cat.size(); ++i)
+            if (free_cat[i] == c) return v[i + 1];
+        return frozen_ratio[(std::size_t)c];
+    }
 
     /** Write rates from optimizer variables, restoring sum_j w_j r_j == 1 by construction. */
     void writeRates(const double *v) {
-        double s = w[k - 1];
-        for (int i = 0; i < k - 1; ++i) s += w[i] * v[i + 1];
+        // Accumulate the anchor term FIRST and then the remaining categories in index order. That is the
+        // original summation order; changing it would perturb the last bits of s and break the
+        // bit-identity regression against the shipped arm.
+        double s = w[(std::size_t)anchor];
+        for (int c = 0; c < k; ++c) {
+            if (c == anchor) continue;
+            s += w[(std::size_t)c] * ratioOf(c, v);
+        }
         // s = w_{k-1} + sum_{i<k-1} w_i v_i is strictly positive for any feasible point: the weights are
         // non-negative and sum to one, and every v_i is bounded below by FR_RATIO_LOWER > 0. This guard is
         // therefore unreachable in exact arithmetic and exists only for a non-finite v produced by an
@@ -417,8 +459,7 @@ public:
             write_failed = true;
             return;
         }
-        for (int i = 0; i < k - 1; ++i) site_rate->setRate(i, v[i + 1] / s);
-        site_rate->setRate(k - 1, 1.0 / s);
+        for (int c = 0; c < k; ++c) site_rate->setRate(c, ratioOf(c, v) / s);
     }
 
     double targetFunk(double x[]) override {
@@ -518,6 +559,8 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     oracle.site_rate = site_rate;
     oracle.k = k;
     oracle.w = weight;
+    // Every category free, anchor at k-1: the shipped one-block parameterisation, unchanged.
+    oracle.configureDefault();
 
     const int ndim = k - 1;
     std::vector<double> var((std::size_t)ndim + 1, 0.0);
@@ -757,6 +800,473 @@ static void reportWritebackValidation(PhyloTree *tree, const char *tag,
                 "-- this run has been perturbed and its result must not be used\n",
                 tag, restore_error);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Joint block attribution -- the CONDITIONAL second-block gain
+// ---------------------------------------------------------------------------------------------------
+//
+// WHAT QUESTION THIS ANSWERS, AND WHAT IT DELIBERATELY DOES NOT MEASURE.
+//
+// The two one-block arms each report a gain measured from the SAME published point, so they cannot tell
+// whether those gains are the same nats seen through two coordinate systems or genuinely different nats.
+// The plan forbids adding G_w and G_r (the blocks share the mixture Hessian's off-diagonal), so the
+// decomposition is unavailable and the joint quantity has to be MEASURED.
+//
+// The obvious design -- alternate the two solves for many rounds and report the cumulative total -- does
+// NOT answer it. That cumulative is the distance from the published point to a block-coordinate fixed
+// point, not a decomposition, and `joint >= max(G_w, G_r)` holds TRIVIALLY (round one alone attains it if
+// you order the blocks accordingly). A large total is then equally well explained by a narrow curved
+// valley that either block would eventually traverse alone, by motion generated by the bilinear moment
+// constraint rather than by likelihood curvature, or by an under-solved block.
+//
+// The statistic that does answer it is the CONDITIONAL second-block gain, and it needs two commits:
+//
+//   G_r|w : commit the weight optimum, then solve the rate block FROM THERE.
+//   G_w|r : commit the rate optimum, then solve the weight block FROM THERE.
+//
+//   G_r|w / G_r ~ 1  =>  the weight commit consumed none of the rate slack  => blocks near-orthogonal,
+//                        both are load-bearing and a weight-only solver addresses half the problem.
+//   G_r|w / G_r ~ 0  =>  the weight commit already consumed it              => same nats, one solver
+//                        suffices and the second block is redundant here.
+//
+// SCOPE, stated so the number is not over-read:
+//  * This is the LITERAL mass-and-mean pocket (k-2 weight DOF, plan 5.4), not the production QUOTIENT
+//    pocket (k-1 DOF, plan 5.1/5.2). Plan 5.4 authorises literal as the independent diagnostic.
+//  * Plan 7.1 step 3 re-profiles weights at EVERY rate trial. This arm re-profiles once per block. Its
+//    fixed point is therefore not plan 7.1's, and the number LOWER-BOUNDS what that cycle could reach.
+//  * Branches and Q are held fixed throughout, so the global-scale direction that plan 7.2 assigns to the
+//    branch block is excluded by construction.
+//  * No stationarity certificate is claimed for the pair. The word "converged" must not be used of it.
+namespace {
+
+/**
+ * Extract the unweighted components at a well-conditioned UNIFORM proportion vector.
+ *
+ * WHY. `extractUnweightedComponents` recovers F by dividing the folded proportion back out, so it refuses
+ * outright when any proportion is below the safe-division threshold. An exact convex weight solve
+ * legitimately drives weights to zero and plan section 4.1 forbids a positive weight floor, so a
+ * committing loop meets that refusal on round one -- on the CHEAP cells first, since those are the ones
+ * measured at active=6/8 and 7/8.
+ *
+ * F does not depend on the weights. `prop` multiplies the whole category block as a scalar
+ * (tree/phylokernelnew.h:`this_val[i] = exp(eval_ptr[i]*len) * prop;`) and the partial-likelihood pass
+ * never reads a proportion at all, so the partial likelihoods AND the integer scaling exponents that set
+ * the common per-pattern offset are prop-independent. Evaluating at prop = 1/k therefore returns the same
+ * F with no ill-conditioned division.
+ *
+ * Equality is to a few ulp, NOT bit-exact: prop is folded in before the dot product, so the summation
+ * rounding differs. Every check against this F must be relative.
+ *
+ * The fields extraction derives FROM the proportions (weight, moment, min_weight, and the reconstruction
+ * diagnostics) are computed at the uniform vector and are therefore wrong on return. They are recomputed
+ * here against the true weights, which doubles as a direct test of the trick: reconstructing at the TRUE
+ * weights from a UNIFORM-prop F must reproduce production's own likelihood.
+ */
+bool extractComponentsAtUniformProp(PhyloTree *tree, ComponentExtraction *out, std::string *why) {
+    RateHeterogeneity *site_rate = tree->getRate();
+    if (site_rate == nullptr) { *why = "no rate model"; return false; }
+    const int k = site_rate->getNRate();
+    if (k < 2) { *why = "k too small"; return false; }
+
+    std::vector<double> true_prop((std::size_t)k);
+    for (int c = 0; c < k; ++c) true_prop[(std::size_t)c] = site_rate->getProp(c);
+
+    for (int c = 0; c < k; ++c) site_rate->setProp(c, 1.0 / (double)k);
+    tree->clearAllPartialLH();
+    ComponentExtraction e = extractUnweightedComponents(tree);
+    for (int c = 0; c < k; ++c) site_rate->setProp(c, true_prop[(std::size_t)c]);
+    tree->clearAllPartialLH();
+
+    if (!e.ok) { *why = e.failure_reason; return false; }
+    if (e.category_count != (std::size_t)k) { *why = "category count changed under uniform prop"; return false; }
+
+    // Restore the proportion-derived fields to the TRUE point.
+    double moment = 0.0, minw = std::numeric_limits<double>::infinity();
+    for (int c = 0; c < k; ++c) {
+        e.weight[(std::size_t)c] = true_prop[(std::size_t)c];
+        moment += true_prop[(std::size_t)c] * e.rate[(std::size_t)c];
+        if (true_prop[(std::size_t)c] < minw) minw = true_prop[(std::size_t)c];
+    }
+    e.actual_moment = moment;
+    e.moment_deviation = std::fabs(moment - 1.0);
+    e.min_weight = minw;
+    e.degenerate_weight_count = 0;
+
+    // Reconstruct at the true weights and compare against production. This is the validation of the
+    // uniform-prop trick, not a formality: if F were prop-dependent, this is where it would show.
+    long double recon = 0.0L;
+    for (std::size_t p = 0; p < e.pattern_count; ++p) {
+        long double s = 0.0L;
+        for (int c = 0; c < k; ++c)
+            s += (long double)e.weight[(std::size_t)c] *
+                 e.component_likelihood[p * (std::size_t)k + (std::size_t)c];
+        if (!(s > 0.0L)) { *why = "non-positive mixture likelihood at true weights"; return false; }
+        // Accumulate in long double; the log itself is taken in double, matching the extraction path.
+        recon += (long double)e.multiplicity[p] *
+                 ((long double)std::log((double)s) + (long double)e.component_log_scale[p]);
+    }
+    const double prod = tree->computeLikelihood();
+    e.reconstructed_log_likelihood = (double)recon;
+    e.production_log_likelihood = prod;
+    e.total_likelihood_abs_error = std::fabs(prod - (double)recon);
+
+    *out = e;
+    return true;
+}
+
+/** One committed block move: what it claimed, what production realised, and whether it stuck. */
+struct BlockCommit {
+    bool attempted = false;
+    bool committed = false;
+    double claimed_gain = 0.0;
+    double realised_gain = 0.0;
+    double lnl_after = 0.0;
+    int nonmonotone = 0;
+    int refused_start = 0;          // weight arm: profiler did not accept the incumbent as its start
+    std::size_t active = 0;
+    std::string exit_reason = "-";
+    double best_bound = 0.0;
+    double abs_err = 0.0;
+    // rate-arm fields
+    std::size_t evals = 0;
+    int bound_lo = 0, bound_hi = 0, frozen = 0;
+    double moment_out = 0.0;
+};
+
+/**
+ * Solve the weight block at the current state and COMMIT it.
+ *
+ * Rolls the block back and reports rather than aborting if production does not realise an improvement.
+ * Plan section 7.6 governs acceptance for a real outer solver; this is a diagnostic, so it records what
+ * happened instead of enforcing a trust region.
+ */
+BlockCommit commitWeightBlock(PhyloTree *tree, double lnl_before) {
+    BlockCommit r;
+    r.attempted = true;
+    RateHeterogeneity *site_rate = tree->getRate();
+    const int k = site_rate->getNRate();
+
+    ComponentExtraction e;
+    std::string why;
+    if (!extractComponentsAtUniformProp(tree, &e, &why)) {
+        r.exit_reason = "EXTRACT_FAILED:" + why;
+        r.lnl_after = lnl_before;
+        return r;
+    }
+    r.abs_err = e.total_likelihood_abs_error;
+
+    freerate_profile::ProfileProblem problem;
+    problem.pattern_count = e.pattern_count;
+    problem.category_count = e.category_count;
+    problem.component_likelihood = e.component_likelihood;
+    problem.component_log_scale = e.component_log_scale;
+    problem.multiplicity = e.multiplicity;
+    problem.rate = e.rate;
+    problem.geometry = freerate_profile::FeasibleGeometry::LITERAL_MASS_MEAN;
+    problem.target_moment = e.actual_moment;
+
+    freerate_profile::ProfileOptions options;
+    freerate_profile::ProfileResult res = freerate_profile::solve(problem, options, e.weight);
+    r.exit_reason = freerate_profile::exitReasonName(res.reason);
+    r.best_bound = res.bestGapBound();
+    r.active = res.active_weight_count;
+    r.claimed_gain = res.log_likelihood - e.reconstructed_log_likelihood;
+
+    // A profiler that did not accept the incumbent as its start began from a hull vertex instead, which is
+    // a 1-or-2-support point. Committing that would TELEPORT the state and the "gain" would be recovery
+    // from the teleport rather than a block move. Refuse.
+    if (!res.supplied_start_used) {
+        r.refused_start = 1;
+        r.lnl_after = lnl_before;
+        return r;
+    }
+    if (res.weight.size() != (std::size_t)k) {
+        r.exit_reason += "|SIZE_MISMATCH";
+        r.lnl_after = lnl_before;
+        return r;
+    }
+
+    std::vector<double> saved((std::size_t)k);
+    for (int c = 0; c < k; ++c) saved[(std::size_t)c] = site_rate->getProp(c);
+    for (int c = 0; c < k; ++c) site_rate->setProp(c, res.weight[(std::size_t)c]);
+    tree->clearAllPartialLH();
+    const double moved = tree->computeLikelihood();
+
+    if (!(moved > lnl_before)) {
+        for (int c = 0; c < k; ++c) site_rate->setProp(c, saved[(std::size_t)c]);
+        tree->clearAllPartialLH();
+        r.nonmonotone = 1;
+        r.lnl_after = tree->computeLikelihood();
+        return r;
+    }
+    r.committed = true;
+    r.realised_gain = moved - lnl_before;
+    r.lnl_after = moved;
+    return r;
+}
+
+/**
+ * Solve the rate block at the current state and COMMIT it, freezing zero-weight atoms.
+ *
+ * The anchor is chosen as the LARGEST rate among active categories, which is plan section 4.1's own
+ * definition of the ratio envelope (q_i = r_i/r_k after sorting). Choosing it by VALUE rather than by
+ * index keeps the box meaningful even after a weight commit has disturbed the published sort order --
+ * nothing in this path re-sorts, and the shipped sort lives inside RateFree's own optimisers, which this
+ * oracle bypasses.
+ */
+BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_floor) {
+    BlockCommit r;
+    r.attempted = true;
+    RateHeterogeneity *site_rate = tree->getRate();
+    const int k = site_rate->getNRate();
+
+    std::vector<double> saved_rate((std::size_t)k), w((std::size_t)k);
+    for (int c = 0; c < k; ++c) {
+        saved_rate[(std::size_t)c] = site_rate->getRate(c);
+        w[(std::size_t)c] = site_rate->getProp(c);
+    }
+
+    // Active = carries enough weight for its rate to be identifiable. A zero-weight atom's rate is an
+    // exact null coordinate (plan 7.2), so it is frozen, not optimised and not deleted.
+    std::vector<int> active;
+    for (int c = 0; c < k; ++c) if (w[(std::size_t)c] >= active_floor) active.push_back(c);
+    r.active = active.size();
+    r.frozen = k - (int)active.size();
+    if (active.size() < 2) {
+        r.exit_reason = "TOO_FEW_ACTIVE";
+        r.lnl_after = lnl_before;
+        return r;
+    }
+
+    int anchor = active[0];
+    for (std::size_t i = 1; i < active.size(); ++i)
+        if (saved_rate[(std::size_t)active[i]] > saved_rate[(std::size_t)anchor]) anchor = active[i];
+    if (!(saved_rate[(std::size_t)anchor] > 0.0)) {
+        r.exit_reason = "NONPOSITIVE_ANCHOR";
+        r.lnl_after = lnl_before;
+        return r;
+    }
+
+    RateBlockOracle oracle;
+    oracle.tree = tree;
+    oracle.site_rate = site_rate;
+    oracle.k = k;
+    oracle.w = w;
+    oracle.anchor = anchor;
+    oracle.frozen_ratio.assign((std::size_t)k, 0.0);
+    oracle.free_cat.clear();
+    for (std::size_t i = 0; i < active.size(); ++i)
+        if (active[i] != anchor) oracle.free_cat.push_back(active[i]);
+    for (int c = 0; c < k; ++c)
+        oracle.frozen_ratio[(std::size_t)c] =
+            saved_rate[(std::size_t)c] / saved_rate[(std::size_t)anchor];
+
+    const int ndim = (int)oracle.free_cat.size();
+    std::vector<double> var((std::size_t)ndim + 1, 0.0), lower((std::size_t)ndim + 1, 0.0),
+        upper((std::size_t)ndim + 1, 0.0);
+    for (int i = 0; i < ndim; ++i) {
+        var[(std::size_t)i + 1] =
+            saved_rate[(std::size_t)oracle.free_cat[(std::size_t)i]] / saved_rate[(std::size_t)anchor];
+        lower[(std::size_t)i + 1] = FR_RATIO_LOWER;
+        upper[(std::size_t)i + 1] = FR_RATIO_UPPER;
+        if (var[(std::size_t)i + 1] < FR_RATIO_LOWER) {
+            r.exit_reason = "BOX_EXCLUDES_INCUMBENT";
+            r.lnl_after = lnl_before;
+            return r;
+        }
+        // Anchor is the largest ACTIVE rate by construction, so ratio <= 1 holds up to rounding.
+        if (var[(std::size_t)i + 1] > FR_RATIO_UPPER) var[(std::size_t)i + 1] = FR_RATIO_UPPER;
+    }
+    std::unique_ptr<bool[]> bound_check(new bool[(std::size_t)ndim + 1]);
+    for (int i = 0; i <= ndim; ++i) bound_check[(std::size_t)i] = false;
+
+    const double grad_target = envPositiveDouble("IQ_FR_RATE_GRAD", FR_RATE_GRAD_TARGET);
+    const double standstill = envPositiveDouble("IQ_FR_RATE_STANDSTILL", FR_RATE_STANDSTILL);
+    const int max_passes = (int)envPositiveDouble("IQ_FR_RATE_PASSES", (double)FR_RATE_MAX_PASSES);
+    const std::size_t eval_budget =
+        (std::size_t)envPositiveDouble("IQ_FR_RATE_BUDGET", (double)FR_RATE_EVAL_BUDGET);
+    const double gtol = grad_target / std::max(std::fabs(lnl_before), 1.0);
+
+    // The identity point must reproduce the incumbent. If it does not, the parameterisation is wrong here
+    // and every number below is meaningless -- measured, not assumed.
+    const double seed_lnl = -oracle.targetFunk(var.data());
+    if (std::fabs(seed_lnl - lnl_before) > 1e-4) {
+        for (int c = 0; c < k; ++c) site_rate->setRate(c, saved_rate[(std::size_t)c]);
+        tree->clearAllPartialLH();
+        r.exit_reason = "SEED_MISMATCH";
+        r.lnl_after = tree->computeLikelihood();
+        return r;
+    }
+
+    double running = seed_lnl;
+    for (int pass = 1; pass <= max_passes; ++pass) {
+        oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(), bound_check.get(), gtol);
+        oracle.writeRates(var.data());
+        tree->clearAllPartialLH();
+        const double pass_lnl = tree->computeLikelihood();
+        const double pass_gain = pass_lnl - running;
+        running = pass_lnl;
+        if (!(pass_gain > standstill)) break;
+        if (oracle.evaluations >= eval_budget) break;
+    }
+    oracle.writeRates(var.data());
+    tree->clearAllPartialLH();
+    const double moved = tree->computeLikelihood();
+    r.evals = oracle.evaluations;
+    r.claimed_gain = moved - lnl_before;
+
+    for (int i = 0; i < ndim; ++i) {
+        const double vi = var[(std::size_t)i + 1];
+        if (vi <= FR_RATIO_LOWER * (1.0 + 1e-6)) ++r.bound_lo;
+        if (vi >= FR_RATIO_UPPER * (1.0 - 1e-6)) ++r.bound_hi;
+    }
+    for (int c = 0; c < k; ++c) r.moment_out += site_rate->getProp(c) * site_rate->getRate(c);
+
+    if (!(moved > lnl_before) || oracle.write_failed) {
+        for (int c = 0; c < k; ++c) site_rate->setRate(c, saved_rate[(std::size_t)c]);
+        tree->clearAllPartialLH();
+        r.nonmonotone = 1;
+        r.exit_reason = oracle.write_failed ? "ARITHMETIC_FAILURE" : "NO_IMPROVEMENT";
+        r.lnl_after = tree->computeLikelihood();
+        return r;
+    }
+    r.committed = true;
+    r.realised_gain = moved - lnl_before;
+    r.lnl_after = moved;
+    r.exit_reason = "OK";
+    return r;
+}
+
+void emitBlockLine(const char *tag, const char *arm, const char *block, const BlockCommit &b) {
+    fprintf(stderr,
+            "[FRATTRIB] ctx=%s JOINTSTEP arm=%s block=%s committed=%d claimed=%.9f realised=%.9f "
+            "lnl_after=%.9f active=%zu frozen=%d nonmono=%d refused_start=%d exit=%s bound=%.6e "
+            "abs_err=%.3e evals=%zu bound_lo=%d bound_hi=%d moment_out=%.12f\n",
+            tag, arm, block, b.committed ? 1 : 0, b.claimed_gain, b.realised_gain, b.lnl_after,
+            b.active, b.frozen, b.nonmonotone, b.refused_start, b.exit_reason.c_str(), b.best_bound,
+            b.abs_err, b.evals, b.bound_lo, b.bound_hi, b.moment_out);
+}
+
+} // namespace
+
+void reportJointBlockAttribution(PhyloTree *tree, const char *context) {
+    if (getenv("IQ_FR_ATTRIB") == nullptr || getenv("IQ_FR_JOINT") == nullptr)
+        return;                       // inert unless BOTH are set
+
+    const char *tag = (context != nullptr) ? context : "?";
+    if (tree == nullptr) return;
+
+    if (tree->isSuperTree()) {
+        fprintf(stderr, "[FRATTRIB] ctx=%s JOINTBLOCK STATUS=DECLINED reason=partitioned\n", tag);
+        return;
+    }
+    RateHeterogeneity *site_rate = tree->getRate();
+    RateFree *free_rate = dynamic_cast<RateFree *>(site_rate);
+    if (free_rate == nullptr) {
+        fprintf(stderr, "[FRATTRIB] ctx=%s JOINTBLOCK STATUS=DECLINED reason=not-a-freerate-model\n", tag);
+        return;
+    }
+    const int k = site_rate->getNRate();
+    if (k < 3) {
+        // k-2 literal weight DOF, so k=2 has none and the conditional is undefined (plan 5.4).
+        fprintf(stderr, "[FRATTRIB] ctx=%s JOINTBLOCK STATUS=DECLINED reason=k-too-small k=%d\n", tag, k);
+        return;
+    }
+    if (site_rate->getPInvar() > 0.0) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s JOINTBLOCK STATUS=UNSUPPORTED reason=additive-invariant-background\n",
+                tag);
+        return;
+    }
+    if (free_rate->getNDim() == 0) {
+        fprintf(stderr, "[FRATTRIB] ctx=%s JOINTBLOCK STATUS=DECLINED reason=rate-params-fixed-by-user\n",
+                tag);
+        return;
+    }
+
+    // Full parameter snapshot. restore_err compares LIKELIHOODS and is only a determinism probe, so the
+    // restoration itself is verified PARAMETER BY PARAMETER against these arrays. Unlike the one-block
+    // arms, every exit below is post-mutation, and a failed restore here would corrupt the published
+    // model: modelfactory.cpp prints the live +R parameters and sets the tree score AFTER this hook.
+    std::vector<double> saved_rate((std::size_t)k), saved_prop((std::size_t)k);
+    for (int c = 0; c < k; ++c) {
+        saved_rate[(std::size_t)c] = site_rate->getRate(c);
+        saved_prop[(std::size_t)c] = site_rate->getProp(c);
+    }
+    DoubleVector saved_len;
+    tree->saveBranchLengths(saved_len);
+
+    tree->clearAllPartialLH();
+    const double base_lnl = tree->computeLikelihood();
+    const double active_floor = envPositiveDouble("IQ_FR_JOINT_ACTIVE_FLOOR", 1e-8);
+
+    auto restoreAll = [&]() {
+        for (int c = 0; c < k; ++c) {
+            site_rate->setRate(c, saved_rate[(std::size_t)c]);
+            site_rate->setProp(c, saved_prop[(std::size_t)c]);
+        }
+        tree->restoreBranchLengths(saved_len);
+        tree->clearAllPartialLH();
+    };
+
+    // ---- ARM 1: weight first, then rates. Yields G_w (unconditional) and G_r|w. ----
+    const BlockCommit w1 = commitWeightBlock(tree, base_lnl);
+    emitBlockLine(tag, "weight-first", "W", w1);
+    const BlockCommit r1 = commitRateBlock(tree, w1.lnl_after, active_floor);
+    emitBlockLine(tag, "weight-first", "R|W", r1);
+    const double joint_wf = r1.lnl_after - base_lnl;
+    restoreAll();
+    const double mid_err = tree->computeLikelihood() - base_lnl;
+
+    // ---- ARM 2: rates first, then weights. Yields G_r (unconditional) and G_w|r. ----
+    const BlockCommit r2 = commitRateBlock(tree, base_lnl, active_floor);
+    emitBlockLine(tag, "rate-first", "R", r2);
+    const BlockCommit w2 = commitWeightBlock(tree, r2.lnl_after);
+    emitBlockLine(tag, "rate-first", "W|R", w2);
+    const double joint_rf = w2.lnl_after - base_lnl;
+    restoreAll();
+    const double restored_lnl = tree->computeLikelihood();
+
+    // Parameter-level restoration proof.
+    double max_param_err = 0.0;
+    for (int c = 0; c < k; ++c) {
+        max_param_err = std::max(max_param_err, std::fabs(site_rate->getRate(c) - saved_rate[(std::size_t)c]));
+        max_param_err = std::max(max_param_err, std::fabs(site_rate->getProp(c) - saved_prop[(std::size_t)c]));
+    }
+
+    // THE HEADLINE. surv_r is the fraction of the rate block's slack that SURVIVES a weight commit, and
+    // surv_w the converse. Near 1 => the blocks hold different nats. Near 0 => the same nats.
+    const double gw = w1.realised_gain, gr = r2.realised_gain;
+    const double grw = r1.realised_gain, gwr = w2.realised_gain;
+    // A survival ratio is only defined when the FIRST block actually moved. If that commit refused or
+    // rolled back, the second block was solved from the base point, so G_r|w degenerates to G_r and the
+    // ratio would read exactly 1.0 -- indistinguishable from the "blocks are orthogonal" result this arm
+    // exists to detect, and pointing the same way. Emit NaN rather than a confident wrong answer.
+    const double nan_ = std::numeric_limits<double>::quiet_NaN();
+    const double surv_r = (w1.committed && gr > 0.0) ? grw / gr : nan_;
+    const double surv_w = (r2.committed && gw > 0.0) ? gwr / gw : nan_;
+
+    fprintf(stderr,
+            "[FRATTRIB] ctx=%s JOINTBLOCK k=%d base_lnl=%.9f G_w=%.9f G_r=%.9f G_r_given_w=%.9f "
+            "G_w_given_r=%.9f surv_r=%.6f surv_w=%.6f joint_wf=%.9f joint_rf=%.9f order_gap=%.9f "
+            "mid_err=%.3e restore_err=%.3e max_param_err=%.3e active_floor=%.1e\n",
+            tag, k, base_lnl, gw, gr, grw, gwr, surv_r, surv_w, joint_wf, joint_rf,
+            joint_wf - joint_rf, mid_err, restored_lnl - base_lnl, max_param_err, active_floor);
+
+    if (max_param_err > 0.0) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s JOINTBLOCK STATUS=STATE-NOT-RESTORED max_param_err=%.6e "
+                "-- this run has been perturbed and its result must not be used\n",
+                tag, max_param_err);
+    }
+    // joint >= max(G_w, G_r) is TRUE BY CONSTRUCTION and is not evidence of anything. Only surv_r/surv_w
+    // discriminate, and only the blocks' own commits are certified -- the pair is not.
+    fprintf(stderr,
+            "[FRATTRIB] ctx=%s JOINTBLOCK NOTE joint totals are a distance to a block-coordinate fixed "
+            "point, NOT a decomposition; read surv_r/surv_w, and note this is the LITERAL pocket at fixed "
+            "branches/Q and a LOWER bound on plan 7.1's cycle\n",
+            tag);
 }
 
 } // namespace freerate

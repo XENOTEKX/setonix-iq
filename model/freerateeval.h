@@ -150,6 +150,31 @@ void reportWeightBlockAttribution(PhyloTree *tree, const char *context);
 void reportRateBlockAttribution(PhyloTree *tree, const char *context);
 
 /**
+ * Joint block attribution — the CONDITIONAL second-block gain.
+ *
+ * The two one-block arms are both measured from the SAME point, so between them they cannot say whether
+ * their gains are the same nats seen through two coordinate systems or genuinely different nats. Adding
+ * them is forbidden, so the joint quantity has to be measured.
+ *
+ * 🔴 A CUMULATIVE ALTERNATING TOTAL DOES NOT ANSWER THIS. That total is the distance from the published
+ * point to a block-coordinate fixed point, not a decomposition, and `joint ≥ max(G_w, G_r)` holds
+ * TRIVIALLY — round one attains it if the blocks are ordered accordingly.
+ *
+ * What discriminates is the conditional gain: commit one block's optimum, then solve the other FROM
+ * THERE. `surv_r = G_r|w / G_r` near 1 means the weight commit consumed none of the rate slack, so the
+ * blocks hold different nats and both are load-bearing; near 0 means they hold the same nats.
+ *
+ * ⚠️ Scope: this is the LITERAL mass-and-mean pocket (§5.4), not the production quotient pocket (§5.1);
+ * branches and Q are fixed throughout; and because it re-profiles once per block rather than at every
+ * rate trial (§7.1 step 3), it LOWER-BOUNDS what that cycle could reach. No stationarity certificate is
+ * claimed for the pair.
+ *
+ * Inert unless BOTH IQ_FR_ATTRIB and IQ_FR_JOINT are set. Every exit is post-mutation, so the arm restores
+ * a full parameter snapshot and proves it element-wise rather than by likelihood alone.
+ */
+void reportJointBlockAttribution(PhyloTree *tree, const char *context);
+
+/**
  * Emit an explicit typed decline for an edge-linked partitioned model.
  *
  * `-p`/`-q` set BRLEN_SCALE/BRLEN_FIX, which route to PartitionModelPlen::optimizeParameters. That

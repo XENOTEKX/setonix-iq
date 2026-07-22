@@ -1770,6 +1770,10 @@ double ModelFactory::optimizeParameters(int fixed_len, bool write_info,
     // exactly (restore_err = 0 on every measured cell), so running it first leaves this arm the identical
     // point, and the two one-block gains are then measured against a common baseline.
     freerate::reportRateBlockAttribution(tree, "post-optimizeParameters");
+    // The joint arm runs LAST because it is the only one that COMMITS block moves. Both one-block arms
+    // above must see the state exactly as production published it, and this arm restores its full
+    // parameter snapshot element-wise before returning.
+    freerate::reportJointBlockAttribution(tree, "post-optimizeParameters");
 
 #ifdef _IQTREE_MPI
     // synchronize the checkpoints of the other processors
