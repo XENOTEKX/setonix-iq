@@ -13,10 +13,12 @@
 #include "tree/phylotree.h"
 #include "utils/tools.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 namespace freerate {
 
@@ -314,6 +316,197 @@ void reportWeightBlockAttribution(PhyloTree *tree, const char *context) {
  * The original weights are restored unconditionally, including on every early return, so the run this
  * measurement is embedded in continues from exactly the state it would otherwise have had.
  */
+// ---------------------------------------------------------------------------------------------------
+// Rate block
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+/**
+ * One-block rate oracle: optimises ONLY the k category rates, at fixed weights, branches and Q.
+ *
+ * WHY THIS IS NOT THE WEIGHT BLOCK'S CHEAP TRICK. The weight block is solvable from a single likelihood
+ * evaluation because the component columns F[p][j] do not depend on w. Rates do appear in them -- a rate
+ * multiplies a branch length inside the transition-matrix exponential
+ * (tree/phylokernelnew.h:`cat_length[c] = site_rate->getRate(c) * dad_branch->length;`) -- so every trial
+ * rate vector needs a genuine tree traversal. This class therefore pays a full likelihood per evaluation,
+ * exactly as IQ-TREE's own rate block does (model/ratefree.cpp clears the partials whenever
+ * optimizing_params != 2).
+ *
+ * GAUGE. The parameterisation is the ratio form r_j = v_j / s with s chosen so that sum_j w_j r_j == 1
+ * identically, which keeps every trial point on the same unit-mean cross-section the caller measured the
+ * weight block on. This matters because likelihood is invariant along the orbit (r, b) -> (s*r, b/s):
+ * rates enter only as rate*branch_length and MTree::scaleLength is a pure multiply. Without pinning the
+ * gauge, the "rate block" would be free to walk that null direction, which is the branch block's global
+ * scale (plan section 7.2) and not a rate-block gain at all.
+ */
+// Mirrors of model/ratefree.cpp:`const double MIN_FREE_RATE = 0.001;` and its MAX/TOL siblings, which
+// are translation-unit-local there and so cannot be included. Duplicated deliberately rather than
+// exported, because widening ratefree.cpp's search box is a production change that should not silently
+// widen a diagnostic's box too -- but the values MUST track it, or this arm optimises over a different
+// feasible set than the block it is standing in for. The reported bound_active count is what makes a
+// divergence visible.
+const double FR_MIN_FREE_RATE = 0.001;
+const double FR_MAX_FREE_RATE = 1000.0;
+const double FR_TOL_FREE_RATE = 0.0001;
+
+class RateBlockOracle : public Optimization {
+public:
+    PhyloTree *tree = nullptr;
+    RateHeterogeneity *site_rate = nullptr;
+    int k = 0;
+    std::vector<double> w;              // FIXED weights
+    std::size_t evaluations = 0;
+
+    int getNDim() override { return k - 1; }
+
+    /** Write rates from optimizer variables, restoring sum_j w_j r_j == 1 by construction. */
+    void writeRates(const double *v) {
+        double s = w[k - 1];
+        for (int i = 0; i < k - 1; ++i) s += w[i] * v[i + 1];
+        if (!(s > 0.0) || !std::isfinite(s)) return;      // caller sees this as a non-improving trial
+        for (int i = 0; i < k - 1; ++i) site_rate->setRate(i, v[i + 1] / s);
+        site_rate->setRate(k - 1, 1.0 / s);
+    }
+
+    double targetFunk(double x[]) override {
+        writeRates(x);
+        tree->clearAllPartialLH();
+        ++evaluations;
+        return -tree->computeLikelihood();
+    }
+};
+
+} // namespace
+
+void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
+    if (getenv("IQ_FR_ATTRIB") == nullptr)
+        return;
+
+    const char *tag = (context != nullptr) ? context : "?";
+    if (tree == nullptr) return;
+
+    if (tree->isSuperTree()) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED reason=partitioned-no-joint-rate-block\n",
+                tag);
+        return;
+    }
+    RateHeterogeneity *site_rate = tree->getRate();
+    RateFree *free_rate = dynamic_cast<RateFree *>(site_rate);
+    if (free_rate == nullptr) {
+        fprintf(stderr, "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED reason=not-a-freerate-model\n", tag);
+        return;
+    }
+    const int k = site_rate->getNRate();
+    if (k < 2) {
+        fprintf(stderr, "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED reason=k-too-small k=%d\n", tag, k);
+        return;
+    }
+    // Match the weight arm's scope exactly, so the two gains describe the same cell. The rate block has
+    // no structural objection to p_invar, but a cell the weight arm refused must not silently appear
+    // here with only one of the two numbers reported.
+    if (site_rate->getPInvar() > 0.0) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=UNSUPPORTED reason=additive-invariant-background\n",
+                tag);
+        return;
+    }
+
+    std::vector<double> saved_rate((std::size_t)k), weight((std::size_t)k);
+    for (int c = 0; c < k; ++c) {
+        saved_rate[(std::size_t)c] = site_rate->getRate(c);
+        weight[(std::size_t)c] = site_rate->getProp(c);
+    }
+    if (!(saved_rate[(std::size_t)k - 1] > 0.0)) {
+        fprintf(stderr, "[FRATTRIB] ctx=%s RATEBLOCK STATUS=DECLINED reason=nonpositive-anchor-rate\n",
+                tag);
+        return;
+    }
+    double moment_in = 0.0;
+    for (int c = 0; c < k; ++c) moment_in += weight[(std::size_t)c] * saved_rate[(std::size_t)c];
+
+    // Branch lengths are never written by this arm, but snapshot them anyway: the restore must be exact
+    // and provable rather than argued, and a future edit that adds a regauge would otherwise go unnoticed.
+    DoubleVector saved_len;
+    tree->saveBranchLengths(saved_len);
+
+    tree->clearAllPartialLH();
+    const double base_lnl = tree->computeLikelihood();
+
+    RateBlockOracle oracle;
+    oracle.tree = tree;
+    oracle.site_rate = site_rate;
+    oracle.k = k;
+    oracle.w = weight;
+
+    const int ndim = k - 1;
+    std::vector<double> var((std::size_t)ndim + 1, 0.0);
+    std::vector<double> lower((std::size_t)ndim + 1, 0.0);
+    std::vector<double> upper((std::size_t)ndim + 1, 0.0);
+    for (int i = 0; i < ndim; ++i) {
+        var[(std::size_t)i + 1] = saved_rate[(std::size_t)i] / saved_rate[(std::size_t)k - 1];
+        lower[(std::size_t)i + 1] = FR_MIN_FREE_RATE;
+        upper[(std::size_t)i + 1] = FR_MAX_FREE_RATE;
+    }
+    // bound_check false everywhere, matching model/ratefree.cpp. It disables Optimization's random
+    // boundary restart, so this measures one deterministic descent and cannot silently wander into a
+    // different basin and report the difference as a rate-block gain.
+    std::unique_ptr<bool[]> bound_check(new bool[(std::size_t)ndim + 1]);
+    for (int i = 0; i <= ndim; ++i) bound_check[(std::size_t)i] = false;
+
+    // The identity point must reproduce the baseline; if it does not, the parameterisation is wrong and
+    // every number below is meaningless. Measured, not assumed.
+    const double seed_lnl = -oracle.targetFunk(var.data());
+    const double seed_err = seed_lnl - base_lnl;
+
+    const double neg = oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(),
+                                                 bound_check.get(),
+                                                 std::max(1e-4, FR_TOL_FREE_RATE));
+    (void)neg;
+
+    // Realise the value the way production does: write the point, clear, and ask IQ-TREE. Never report
+    // the optimizer's own returned scalar -- it is the value at whatever point the line search last
+    // evaluated, which is not necessarily the point now written into the model.
+    oracle.writeRates(var.data());
+    tree->clearAllPartialLH();
+    const double opt_lnl = tree->computeLikelihood();
+
+    double moment_out = 0.0, minr = 0.0, maxr = 0.0;
+    for (int c = 0; c < k; ++c) {
+        const double rc = site_rate->getRate(c);
+        moment_out += weight[(std::size_t)c] * rc;
+        if (c == 0 || rc < minr) minr = rc;
+        if (c == 0 || rc > maxr) maxr = rc;
+    }
+    // Bound activity makes the result a CONSTRAINED optimum, not a stationary point, and the published
+    // avian rates put the smallest ratio within a factor of ~1.4 of the lower bound. Report it.
+    int bound_active = 0;
+    for (int i = 0; i < ndim; ++i) {
+        const double vi = var[(std::size_t)i + 1];
+        if (vi <= FR_MIN_FREE_RATE * (1.0 + 1e-6) || vi >= FR_MAX_FREE_RATE * (1.0 - 1e-6)) ++bound_active;
+    }
+
+    for (int c = 0; c < k; ++c) site_rate->setRate(c, saved_rate[(std::size_t)c]);
+    tree->restoreBranchLengths(saved_len);
+    tree->clearAllPartialLH();
+    const double restored_lnl = tree->computeLikelihood();
+
+    fprintf(stderr,
+            "[FRATTRIB] ctx=%s RATEBLOCK k=%d dim=%d base_lnl=%.9f opt_lnl=%.9f gain=%.9f "
+            "seed_err=%.3e moment_in=%.12f moment_out=%.12f evals=%zu bound_active=%d "
+            "minrate=%.6e maxrate=%.6e restore_err=%.6e\n",
+            tag, k, ndim, base_lnl, opt_lnl, opt_lnl - base_lnl, seed_err, moment_in, moment_out,
+            oracle.evaluations, bound_active, minr, maxr, restored_lnl - base_lnl);
+
+    if (std::fabs(restored_lnl - base_lnl) > 1e-6) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=STATE-NOT-RESTORED restore_err=%.6e "
+                "-- this run has been perturbed and its result must not be used\n",
+                tag, restored_lnl - base_lnl);
+    }
+}
+
 static void reportWritebackValidation(PhyloTree *tree, const char *tag,
                                       const ComponentExtraction &e,
                                       const freerate_profile::ProfileResult &r,

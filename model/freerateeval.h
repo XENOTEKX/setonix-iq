@@ -125,6 +125,31 @@ extern const double FREERATE_MIN_SAFE_PROPORTION;
 void reportWeightBlockAttribution(PhyloTree *tree, const char *context);
 
 /**
+ * Stage-0 residual attribution for the RATE block — the control for the weight-block number.
+ *
+ * A weight-block gain measured alone establishes only that the weight block has that much available. It
+ * places NO upper bound on what another block would yield at the same point: the blocks are not
+ * orthogonal and the shortfall is not additive. MODELFINDER-FULL-GPU-PLAN.md §3.5 has two different rows
+ * for the two outcomes ("material weight gap" versus "weight block certified but rate residual is
+ * material"), and without this arm there is no evidence to choose between them.
+ *
+ * Optimises ONLY the k category rates, holding weights, branch lengths and Q fixed, on the gauge-fixed
+ * cross-section Σ_j w_j r_j = 1 so the common-scale null direction — which belongs to the branch block,
+ * §7.2 — cannot leak into the reported gain. The gain is IQ-TREE's own recomputed likelihood, never the
+ * optimizer's returned scalar.
+ *
+ * 🔴 THE TWO GAINS DO NOT DECOMPOSE THE SHORTFALL AND MUST NEVER BE ADDED. They are also measured on
+ * slices of different dimension — the weight block carries both Σw=1 and the moment constraint, leaving
+ * k-2 free directions, while the gauge-fixed rate block has k-1 — so `dim` is reported alongside each.
+ *
+ * ⚠️ This drives BFGS directly. IQ-TREE's DEFAULT +R path is EM (`optimize_alg_freerate` contains "EM"),
+ * so the number is "what a rate block could recover", NOT "what the shipped optimiser failed to recover".
+ *
+ * Inert unless IQ_FR_ATTRIB is set.
+ */
+void reportRateBlockAttribution(PhyloTree *tree, const char *context);
+
+/**
  * Emit an explicit typed decline for an edge-linked partitioned model.
  *
  * `-p`/`-q` set BRLEN_SCALE/BRLEN_FIX, which route to PartitionModelPlen::optimizeParameters. That

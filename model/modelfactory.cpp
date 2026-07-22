@@ -1766,6 +1766,10 @@ double ModelFactory::optimizeParameters(int fixed_len, bool write_info,
     // Placed AFTER the rescaleRates/scaleLength block above so the state measured is the canonical one
     // that production actually publishes. Returns immediately unless IQ_FR_ATTRIB is set.
     freerate::reportWeightBlockAttribution(tree, "post-optimizeParameters");
+    // The rate-block control, at the SAME state. Ordering matters: the weight arm is proven to restore
+    // exactly (restore_err = 0 on every measured cell), so running it first leaves this arm the identical
+    // point, and the two one-block gains are then measured against a common baseline.
+    freerate::reportRateBlockAttribution(tree, "post-optimizeParameters");
 
 #ifdef _IQTREE_MPI
     // synchronize the checkpoints of the other processors
