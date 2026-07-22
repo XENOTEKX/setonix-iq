@@ -932,7 +932,39 @@ struct BlockCommit {
     std::size_t evals = 0;
     int bound_lo = 0, bound_hi = 0, frozen = 0;
     double moment_out = 0.0;
+    int ndim = -1;                  // free dimensions actually solved; -1 = not applicable
+    int anchor = -1;                // gauge-carrying category; -1 = not applicable
+    int capped = 0;                 // pass cap or eval budget bound this solve
+    int frozen_above_anchor = 0;    // frozen categories written back with ratio > 1 (outside 4.1's envelope)
+    std::vector<char> active_mask;  // which categories this solve treated as active
 };
+
+/**
+ * A survival ratio is only meaningful when BOTH solves it compares actually happened, the denominator is
+ * a real gain rather than rounding, and the two solves ranged over the SAME subspace. Anything else and
+ * the ratio must be NaN with a reason attached, never a number.
+ *
+ * This is not defensive padding. `BlockCommit::realised_gain` is zero on every declining path, so an
+ * unguarded ratio prints 0.000000 for a REFUSAL -- which reads on the legend as "the first commit already
+ * consumed the second block's slack", the precise conclusion this arm exists to test, arrived at without
+ * a measurement.
+ */
+const char *survivalRefusalReason(const BlockCommit &first, const BlockCommit &second,
+                                  const BlockCommit *control, double denom, double tau_l) {
+    if (!first.attempted)  return "first-block-not-attempted";
+    if (!first.committed)  return "first-block-declined";
+    if (!second.attempted) return "second-block-not-attempted";
+    if (!second.committed) return "second-block-declined";
+    if (control != nullptr) {
+        if (!control->committed) return "control-declined";
+        if (control->active_mask != second.active_mask) return "subspace-mismatch";
+    }
+    // Plan section 8.3's tau_L. A first-block gain of 1e-12 nats still "commits", and the ratio then
+    // reads 1.000000 -- "the blocks hold different nats" -- vacuously, because there was nothing for the
+    // first block to consume. A denominator below the resolution bar cannot support a verdict.
+    if (!(denom > tau_l)) return "denominator-below-tau_L";
+    return nullptr;
+}
 
 /**
  * Solve the weight block at the current state and COMMIT it.
@@ -986,6 +1018,19 @@ BlockCommit commitWeightBlock(PhyloTree *tree, double lnl_before) {
         r.lnl_after = lnl_before;
         return r;
     }
+    // The profiled point must be a LEGAL +R state before it is written anywhere -- the same guard the
+    // shipped write-back validation applies. The monotonicity test below cannot substitute for it:
+    //  * a mass residual is a mechanical likelihood shift of roughly N_sites * eps with no model content,
+    //    which on a 37M-site alignment is a measurable "gain" from rounding alone; and
+    //  * a NEGATIVE proportion is not caught at all, because the kernel takes
+    //    tree/phylokernelnew.h:`lh_ptn = abs(lh_ptn) + ptn_invar[ptn]`, turning an infeasible mixture into
+    //    a plausible finite likelihood that can exceed the base and be committed.
+    if (!(res.primal.mass <= 1e-9) || !(res.primal.literal_moment <= 1e-9) ||
+        !(res.primal.negativity <= 0.0)) {
+        r.exit_reason += "|INFEASIBLE_POINT";
+        r.lnl_after = lnl_before;
+        return r;
+    }
 
     std::vector<double> saved((std::size_t)k);
     for (int c = 0; c < k; ++c) saved[(std::size_t)c] = site_rate->getProp(c);
@@ -1015,7 +1060,8 @@ BlockCommit commitWeightBlock(PhyloTree *tree, double lnl_before) {
  * nothing in this path re-sorts, and the shipped sort lives inside RateFree's own optimisers, which this
  * oracle bypasses.
  */
-BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_floor) {
+BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_floor,
+                            const std::vector<char> *force_active) {
     BlockCommit r;
     r.attempted = true;
     RateHeterogeneity *site_rate = tree->getRate();
@@ -1029,8 +1075,20 @@ BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_fl
 
     // Active = carries enough weight for its rate to be identifiable. A zero-weight atom's rate is an
     // exact null coordinate (plan 7.2), so it is frozen, not optimised and not deleted.
+    // `force_active` exists so the SUBSPACE can be matched across arms. A weight commit legitimately
+    // zeroes categories, so a rate solve run after one ranges over a strictly SMALLER feasible set than
+    // one run at the published point. Dividing those two gains would attribute support reduction to the
+    // weight commit, and the smaller problem also burns the shared evaluation budget more slowly -- so
+    // the unmatched ratio is biased toward "the blocks are orthogonal", which is the conclusion under
+    // test. The caller therefore re-measures the control on the SAME mask.
     std::vector<int> active;
-    for (int c = 0; c < k; ++c) if (w[(std::size_t)c] >= active_floor) active.push_back(c);
+    r.active_mask.assign((std::size_t)k, 0);
+    for (int c = 0; c < k; ++c) {
+        const bool on = (force_active != nullptr && force_active->size() == (std::size_t)k)
+                            ? ((*force_active)[(std::size_t)c] != 0)
+                            : (w[(std::size_t)c] >= active_floor);
+        if (on) { active.push_back(c); r.active_mask[(std::size_t)c] = 1; }
+    }
     r.active = active.size();
     r.frozen = k - (int)active.size();
     if (active.size() < 2) {
@@ -1058,11 +1116,20 @@ BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_fl
     oracle.free_cat.clear();
     for (std::size_t i = 0; i < active.size(); ++i)
         if (active[i] != anchor) oracle.free_cat.push_back(active[i]);
-    for (int c = 0; c < k; ++c)
+    for (int c = 0; c < k; ++c) {
         oracle.frozen_ratio[(std::size_t)c] =
             saved_rate[(std::size_t)c] / saved_rate[(std::size_t)anchor];
+        // The anchor is the largest ACTIVE rate, so a FROZEN category may sit above it and be written
+        // back with q > 1 -- outside plan 4.1's declared [1e-7, 1] envelope. Only the free coordinates
+        // are box-checked below, so this would otherwise be invisible. It is benign for the likelihood
+        // (the category carries ~no weight) but it is an envelope excursion and must be reported.
+        if (r.active_mask[(std::size_t)c] == 0 && oracle.frozen_ratio[(std::size_t)c] > FR_RATIO_UPPER)
+            ++r.frozen_above_anchor;
+    }
 
     const int ndim = (int)oracle.free_cat.size();
+    r.ndim = ndim;
+    r.anchor = anchor;
     std::vector<double> var((std::size_t)ndim + 1, 0.0), lower((std::size_t)ndim + 1, 0.0),
         upper((std::size_t)ndim + 1, 0.0);
     for (int i = 0; i < ndim; ++i) {
@@ -1099,8 +1166,14 @@ BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_fl
         return r;
     }
 
+    // Track whichever limit binds. The sibling one-block arm already does this (`pass_cap_hit`), and a
+    // capped solve reported as converged is exactly the failure that produced -- and then had to retract
+    // -- this track's "weights dominate" headline: a truncated block solve manufactures the very
+    // signature the comparison is testing for. A capped gain is a LOWER BOUND, never a block optimum.
     double running = seed_lnl;
-    for (int pass = 1; pass <= max_passes; ++pass) {
+    int passes = 0;
+    bool budget_hit = false;
+    for (passes = 1; passes <= max_passes; ++passes) {
         oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(), bound_check.get(), gtol);
         oracle.writeRates(var.data());
         tree->clearAllPartialLH();
@@ -1108,8 +1181,9 @@ BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_fl
         const double pass_gain = pass_lnl - running;
         running = pass_lnl;
         if (!(pass_gain > standstill)) break;
-        if (oracle.evaluations >= eval_budget) break;
+        if (oracle.evaluations >= eval_budget) { budget_hit = true; break; }
     }
+    r.capped = ((passes > max_passes) || budget_hit) ? 1 : 0;
     oracle.writeRates(var.data());
     tree->clearAllPartialLH();
     const double moved = tree->computeLikelihood();
@@ -1134,18 +1208,38 @@ BlockCommit commitRateBlock(PhyloTree *tree, double lnl_before, double active_fl
     r.committed = true;
     r.realised_gain = moved - lnl_before;
     r.lnl_after = moved;
-    r.exit_reason = "OK";
+    r.exit_reason = r.capped ? "CAPPED_LOWER_BOUND" : "OK";
     return r;
 }
 
+/**
+ * One line per committed (or declined) block move.
+ *
+ * The two blocks print DIFFERENT field sets on purpose. A single shared format made the weight block
+ * report `moment_out=0.000000000000` and `evals=0` -- fields it never sets -- and in a log that elsewhere
+ * gates on moment drift, a structural zero reads as a collapsed moment rather than as "not applicable".
+ * `active=` was worse: on a weight line it counts categories above the profiler's 1e-12 activity
+ * tolerance, on a rate line those above this arm's 1e-8 floor, so the two were silently incomparable.
+ */
 void emitBlockLine(const char *tag, const char *arm, const char *block, const BlockCommit &b) {
-    fprintf(stderr,
-            "[FRATTRIB] ctx=%s JOINTSTEP arm=%s block=%s committed=%d claimed=%.9f realised=%.9f "
-            "lnl_after=%.9f active=%zu frozen=%d nonmono=%d refused_start=%d exit=%s bound=%.6e "
-            "abs_err=%.3e evals=%zu bound_lo=%d bound_hi=%d moment_out=%.12f\n",
-            tag, arm, block, b.committed ? 1 : 0, b.claimed_gain, b.realised_gain, b.lnl_after,
-            b.active, b.frozen, b.nonmonotone, b.refused_start, b.exit_reason.c_str(), b.best_bound,
-            b.abs_err, b.evals, b.bound_lo, b.bound_hi, b.moment_out);
+    if (b.ndim < 0) {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s JOINTSTEP arm=%s block=%s kind=weight committed=%d claimed=%.9f "
+                "realised=%.9f lnl_after=%.9f w_active=%zu nonmono=%d refused_start=%d exit=%s "
+                "bound=%.6e abs_err=%.3e\n",
+                tag, arm, block, b.committed ? 1 : 0, b.claimed_gain, b.realised_gain, b.lnl_after,
+                b.active, b.nonmonotone, b.refused_start, b.exit_reason.c_str(), b.best_bound,
+                b.abs_err);
+    } else {
+        fprintf(stderr,
+                "[FRATTRIB] ctx=%s JOINTSTEP arm=%s block=%s kind=rate committed=%d claimed=%.9f "
+                "realised=%.9f lnl_after=%.9f r_active=%zu frozen=%d ndim=%d anchor=%d capped=%d "
+                "nonmono=%d exit=%s evals=%zu bound_lo=%d bound_hi=%d frozen_above_anchor=%d "
+                "moment_out=%.12f\n",
+                tag, arm, block, b.committed ? 1 : 0, b.claimed_gain, b.realised_gain, b.lnl_after,
+                b.active, b.frozen, b.ndim, b.anchor, b.capped, b.nonmonotone, b.exit_reason.c_str(),
+                b.evals, b.bound_lo, b.bound_hi, b.frozen_above_anchor, b.moment_out);
+    }
 }
 
 } // namespace
@@ -1213,14 +1307,30 @@ void reportJointBlockAttribution(PhyloTree *tree, const char *context) {
     // ---- ARM 1: weight first, then rates. Yields G_w (unconditional) and G_r|w. ----
     const BlockCommit w1 = commitWeightBlock(tree, base_lnl);
     emitBlockLine(tag, "weight-first", "W", w1);
-    const BlockCommit r1 = commitRateBlock(tree, w1.lnl_after, active_floor);
+    const BlockCommit r1 = commitRateBlock(tree, w1.lnl_after, active_floor, nullptr);
     emitBlockLine(tag, "weight-first", "R|W", r1);
     const double joint_wf = r1.lnl_after - base_lnl;
     restoreAll();
     const double mid_err = tree->computeLikelihood() - base_lnl;
 
-    // ---- ARM 2: rates first, then weights. Yields G_r (unconditional) and G_w|r. ----
-    const BlockCommit r2 = commitRateBlock(tree, base_lnl, active_floor);
+    // ---- CONTROL for surv_r: the SAME rate block on the SAME subspace, from the BASE point. ----
+    //
+    // Without this the ratio would divide a rate solve over the REDUCED support the weight commit left
+    // behind by one over the FULL support, and three things would be charged to the weight commit that
+    // it did not do: the support reduction itself; a different gauge anchor, since the anchor is the
+    // largest ACTIVE rate and the largest rate may be one of the zeroed categories; and a truncation
+    // difference, because the larger problem burns the shared evaluation budget faster per pass and so is
+    // cut off sooner. That last one biases the unmatched ratio TOWARD "the blocks are orthogonal" -- the
+    // conclusion under test -- by exactly the mechanism that produced this track's retracted "weights
+    // dominate" headline, with the sign flipped.
+    const BlockCommit rc = commitRateBlock(tree, base_lnl, active_floor,
+                                           r1.active_mask.empty() ? nullptr : &r1.active_mask);
+    emitBlockLine(tag, "control", "R_on_mask_of_RgivenW", rc);
+    restoreAll();
+    const double ctl_err = tree->computeLikelihood() - base_lnl;
+
+    // ---- ARM 2: rates first, then weights. Yields G_r (full support) and G_w|r. ----
+    const BlockCommit r2 = commitRateBlock(tree, base_lnl, active_floor, nullptr);
     emitBlockLine(tag, "rate-first", "R", r2);
     const BlockCommit w2 = commitWeightBlock(tree, r2.lnl_after);
     emitBlockLine(tag, "rate-first", "W|R", w2);
@@ -1228,31 +1338,53 @@ void reportJointBlockAttribution(PhyloTree *tree, const char *context) {
     restoreAll();
     const double restored_lnl = tree->computeLikelihood();
 
-    // Parameter-level restoration proof.
+    // Parameter-level restoration proof -- rates, proportions AND branch lengths. restore_err compares
+    // LIKELIHOODS and is only a determinism probe; the branch block is not written by this arm, but the
+    // snapshot is compared anyway so that a future edit adding a regauge cannot leak unnoticed, which is
+    // exactly the failure the one-block arm's own comment warns about.
     double max_param_err = 0.0;
     for (int c = 0; c < k; ++c) {
         max_param_err = std::max(max_param_err, std::fabs(site_rate->getRate(c) - saved_rate[(std::size_t)c]));
         max_param_err = std::max(max_param_err, std::fabs(site_rate->getProp(c) - saved_prop[(std::size_t)c]));
     }
+    DoubleVector now_len;
+    tree->saveBranchLengths(now_len);
+    double max_len_err = 0.0;
+    if (now_len.size() == saved_len.size())
+        for (std::size_t i = 0; i < now_len.size(); ++i)
+            max_len_err = std::max(max_len_err, std::fabs(now_len[i] - saved_len[i]));
+    else
+        max_len_err = std::numeric_limits<double>::infinity();
+    max_param_err = std::max(max_param_err, max_len_err);
 
     // THE HEADLINE. surv_r is the fraction of the rate block's slack that SURVIVES a weight commit, and
     // surv_w the converse. Near 1 => the blocks hold different nats. Near 0 => the same nats.
     const double gw = w1.realised_gain, gr = r2.realised_gain;
     const double grw = r1.realised_gain, gwr = w2.realised_gain;
-    // A survival ratio is only defined when the FIRST block actually moved. If that commit refused or
-    // rolled back, the second block was solved from the base point, so G_r|w degenerates to G_r and the
-    // ratio would read exactly 1.0 -- indistinguishable from the "blocks are orthogonal" result this arm
-    // exists to detect, and pointing the same way. Emit NaN rather than a confident wrong answer.
+    const double gr_ctl = rc.realised_gain;   // subspace-matched denominator for surv_r
     const double nan_ = std::numeric_limits<double>::quiet_NaN();
-    const double surv_r = (w1.committed && gr > 0.0) ? grw / gr : nan_;
-    const double surv_w = (r2.committed && gw > 0.0) ? gwr / gw : nan_;
+    const double tau_l = envPositiveDouble("IQ_FR_JOINT_TAU_L", 1e-4);
+
+    // BOTH failure directions have to be refused, and the earlier version of this only refused one.
+    //  * If the FIRST block declines, the second is solved from the base point, so the conditional
+    //    degenerates to the unconditional and the ratio reads 1.0 => "different nats, both load-bearing".
+    //  * If the SECOND block declines, realised_gain is left at its 0.0 default and the ratio reads
+    //    0.0 => "same nats, one solver suffices".
+    // Either way a REFUSAL prints as one of the two verdicts this arm exists to choose between. Emit NaN
+    // with an attributable reason instead of a number nobody can audit.
+    const char *why_r = survivalRefusalReason(w1, r1, &rc, gr_ctl, tau_l);
+    const char *why_w = survivalRefusalReason(r2, w2, nullptr, gw, tau_l);
+    const double surv_r = (why_r == nullptr) ? grw / gr_ctl : nan_;
+    const double surv_w = (why_w == nullptr) ? gwr / gw : nan_;
 
     fprintf(stderr,
-            "[FRATTRIB] ctx=%s JOINTBLOCK k=%d base_lnl=%.9f G_w=%.9f G_r=%.9f G_r_given_w=%.9f "
-            "G_w_given_r=%.9f surv_r=%.6f surv_w=%.6f joint_wf=%.9f joint_rf=%.9f order_gap=%.9f "
-            "mid_err=%.3e restore_err=%.3e max_param_err=%.3e active_floor=%.1e\n",
-            tag, k, base_lnl, gw, gr, grw, gwr, surv_r, surv_w, joint_wf, joint_rf,
-            joint_wf - joint_rf, mid_err, restored_lnl - base_lnl, max_param_err, active_floor);
+            "[FRATTRIB] ctx=%s JOINTBLOCK k=%d base_lnl=%.9f G_w=%.9f G_r=%.9f G_r_ctl=%.9f "
+            "G_r_given_w=%.9f G_w_given_r=%.9f surv_r=%.6f surv_r_why=%s surv_w=%.6f surv_w_why=%s "
+            "joint_wf=%.9f joint_rf=%.9f order_gap=%.9f tau_l=%.1e mid_err=%.3e ctl_err=%.3e "
+            "restore_err=%.3e max_param_err=%.3e max_len_err=%.3e active_floor=%.1e\n",
+            tag, k, base_lnl, gw, gr, gr_ctl, grw, gwr, surv_r, why_r ? why_r : "-",
+            surv_w, why_w ? why_w : "-", joint_wf, joint_rf, joint_wf - joint_rf, tau_l,
+            mid_err, ctl_err, restored_lnl - base_lnl, max_param_err, max_len_err, active_floor);
 
     if (max_param_err > 0.0) {
         fprintf(stderr,
