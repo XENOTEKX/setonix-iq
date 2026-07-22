@@ -372,6 +372,21 @@ const double FR_RATE_GRAD_TARGET = 1e-3;
 // Re-enter the solver while a pass still pays more than this many nats.
 const double FR_RATE_STANDSTILL = 1e-4;
 const int FR_RATE_MAX_PASSES = 12;
+
+/**
+ * Read a positive double from the environment, or return the default.
+ *
+ * The solve-strength constants are overridable ONLY so the arm's own convergence can be tested against
+ * itself: a reported gain that moves when the budget moves is not a block optimum, and there is no other
+ * way to establish that without rebuilding. They are not tuning knobs -- the gate pins the defaults, and
+ * a run that overrides them says so in its own telemetry.
+ */
+double envPositiveDouble(const char *name, double fallback) {
+    const char *raw = getenv(name);
+    if (raw == nullptr || *raw == '\0') return fallback;
+    const double value = atof(raw);
+    return (value > 0.0 && std::isfinite(value)) ? value : fallback;
+}
 // Hard ceiling on full tree likelihoods spent by this arm, so its cost stays bounded on a 692k-pattern
 // alignment. Reported via passcap when it binds.
 const std::size_t FR_RATE_EVAL_BUDGET = 4000;
@@ -553,8 +568,13 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     // a block solve. A weak rate solve biases the gain toward zero, which manufactures exactly the
     // "weights dominate the rate block" signature this arm exists to test. Scale gtol by |lnL| so the
     // test becomes an ABSOLUTE gradient target, then re-enter until the pass gain stops paying.
-    const double gtol =
-        FR_RATE_GRAD_TARGET / std::max(std::fabs(base_lnl), 1.0);
+    const double grad_target = envPositiveDouble("IQ_FR_RATE_GRAD", FR_RATE_GRAD_TARGET);
+    const double standstill = envPositiveDouble("IQ_FR_RATE_STANDSTILL", FR_RATE_STANDSTILL);
+    const int max_passes =
+        (int)envPositiveDouble("IQ_FR_RATE_PASSES", (double)FR_RATE_MAX_PASSES);
+    const std::size_t eval_budget =
+        (std::size_t)envPositiveDouble("IQ_FR_RATE_BUDGET", (double)FR_RATE_EVAL_BUDGET);
+    const double gtol = grad_target / std::max(std::fabs(base_lnl), 1.0);
     // Bounded explicitly. dfpmin's own ITMAX is 200 and each of its iterations costs 1 line search plus
     // (1+ndim) finite-difference evaluations, so an unbudgeted re-entry loop could reach ~20,000 full
     // tree likelihoods on a 692k-pattern alignment -- hours per cell. A diagnostic must not be able to
@@ -563,7 +583,7 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     double running = seed_lnl;
     int passes = 0;
     bool budget_hit = false;
-    for (passes = 1; passes <= FR_RATE_MAX_PASSES; ++passes) {
+    for (passes = 1; passes <= max_passes; ++passes) {
         oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(),
                                   bound_check.get(), gtol);
         oracle.writeRates(var.data());
@@ -571,10 +591,10 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
         const double pass_lnl = tree->computeLikelihood();
         const double pass_gain = pass_lnl - running;
         running = pass_lnl;
-        if (!(pass_gain > FR_RATE_STANDSTILL)) break;
-        if (oracle.evaluations >= FR_RATE_EVAL_BUDGET) { budget_hit = true; break; }
+        if (!(pass_gain > standstill)) break;
+        if (oracle.evaluations >= eval_budget) { budget_hit = true; break; }
     }
-    const bool pass_cap_hit = (passes > FR_RATE_MAX_PASSES) || budget_hit;
+    const bool pass_cap_hit = (passes > max_passes) || budget_hit;
 
     // Realise the value the way production does: write the point, clear, and ask IQ-TREE. Never report
     // the optimizer's own returned scalar -- it is the value at whatever point the line search last
@@ -587,18 +607,26 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     // Without this the reader cannot tell a converged rate block from a truncated descent, and the two
     // support opposite conclusions. This is the same telemetry gap that cost the +R instrument track a
     // whole build: a stop rule that reports no stationarity evidence proves nothing.
+    const double probe_h = envPositiveDouble("IQ_FR_RATE_PROBE_H", 1e-6);
     double max_abs_grad = 0.0;
+    double predicted_remaining = 0.0;
     {
         std::vector<double> probe(var);
         for (int i = 0; i < ndim; ++i) {
             const double vi = var[(std::size_t)i + 1];
-            const double h = std::max(1e-9, 1e-6 * std::fabs(vi));
-            if (vi + h > FR_RATIO_UPPER) continue;
+            const double h = std::max(1e-12, probe_h * std::fabs(vi));
+            if (vi + h > FR_RATIO_UPPER || vi - h < FR_RATIO_LOWER) continue;
             probe[(std::size_t)i + 1] = vi + h;
             const double up = -oracle.targetFunk(probe.data());
+            probe[(std::size_t)i + 1] = vi - h;
+            const double dn = -oracle.targetFunk(probe.data());
             probe[(std::size_t)i + 1] = vi;
-            const double g = (up - opt_lnl) / h;
+
+            const double g = (up - dn) / (2.0 * h);          // central: no curvature bias
+            const double curv = (up - 2.0 * opt_lnl + dn) / (h * h);
             if (std::fabs(g) > max_abs_grad) max_abs_grad = std::fabs(g);
+            // Newton step value along this coordinate, g^2/(2|H|), summed over coordinates.
+            if (curv < 0.0) predicted_remaining += (g * g) / (2.0 * (-curv));
         }
         oracle.writeRates(var.data());          // undo the last probe write
         tree->clearAllPartialLH();
@@ -633,18 +661,33 @@ void reportRateBlockAttribution(PhyloTree *tree, const char *context) {
     fprintf(stderr,
             "[FRATTRIB] ctx=%s RATEBLOCK k=%d dim=%d base_lnl=%.9f opt_lnl=%.9f gain=%.9f "
             "seed_err=%.3e moment_in=%.12f moment_out=%.12f evals=%zu passes=%d passcap=%d "
-            "maxgrad=%.6e gtol=%.3e bound_lo=%d bound_hi=%d "
+            "maxgrad=%.6e predrem=%.3e probeh=%.1e gtol=%.3e bound_lo=%d bound_hi=%d "
             "minrate=%.6e maxrate=%.6e restore_err=%.6e\n",
             tag, k, ndim, base_lnl, opt_lnl, opt_lnl - base_lnl, seed_err, moment_in, moment_out,
-            oracle.evaluations, passes, pass_cap_hit ? 1 : 0, max_abs_grad, gtol,
+            oracle.evaluations, passes, pass_cap_hit ? 1 : 0, max_abs_grad, predicted_remaining, probe_h, gtol,
             bound_lo, bound_hi, minr, maxr, restored_lnl - base_lnl);
     // maxgrad is the field that decides whether `gain` is a converged rate-block optimum or a truncated
     // descent. The two support opposite conclusions and nothing else printed here separates them.
-    if (max_abs_grad > 10.0 * FR_RATE_GRAD_TARGET || pass_cap_hit) {
+    // Gate on the CURVATURE-AWARE estimate, not on |g|.
+    //
+    // A raw gradient threshold flagged every real cell UNCONVERGED with maxgrad 11-24, and that was a
+    // FALSE ALARM: on the DNA-10K cell the measured slope is ~0.93 while the measured curvature is
+    // ~1.7e4, so the achievable remaining gain g^2/(2|H|) is ~2.6e-5 nats -- 4,700x below the gain
+    // already captured and 380x below IQ-TREE's own 0.010-nat stopping epsilon. Confirmed independently:
+    // the reported gain is byte-identical under a 200x larger pass budget and a 60,000-evaluation
+    // ceiling, so the solve really has nowhere left to go. This is the same error the weight block
+    // taught -- the Frank-Wolfe gap extrapolates a gradient linearly and overstates the shortfall by
+    // orders on a curved ridge, which is exactly why the Newton bound exists there.
+    //
+    // 🔴 predrem is an ESTIMATE, NOT A BOUND. It is built from DIAGONAL secants, so it is blind to
+    // off-diagonal coupling and under-predicts on a ridge -- the precise mechanism that killed the `dec`
+    // stop rule on the sister instrument track. The weight block's Newton bound is rigorous; this is not,
+    // and must never be described as though it were.
+    if (predicted_remaining > standstill || pass_cap_hit) {
         fprintf(stderr,
-                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=UNCONVERGED maxgrad=%.6e passcap=%d "
+                "[FRATTRIB] ctx=%s RATEBLOCK STATUS=UNCONVERGED predrem=%.3e maxgrad=%.6e passcap=%d "
                 "-- gain is a LOWER BOUND on rate-block slack, not a block optimum\n",
-                tag, max_abs_grad, pass_cap_hit ? 1 : 0);
+                tag, predicted_remaining, max_abs_grad, pass_cap_hit ? 1 : 0);
     }
 
     if (std::fabs(restored_lnl - base_lnl) > 1e-6) {
