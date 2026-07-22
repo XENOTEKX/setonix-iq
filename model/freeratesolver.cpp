@@ -108,10 +108,14 @@ public:
     // reached machine precision and tripped the negative-gap guard). They call for opposite responses --
     // fix the solver, or relabel the exit -- so the counter that cannot tell them apart is useless.
     double max_gap_stall = 0.0;
+    double max_noise_floor = 0.0;
     std::size_t stall_below_forcing = 0;
+    std::size_t uncertified_count = 0;
 
     // The domain rejections: trial points where phi is UNDEFINED, not merely expensive.
     std::size_t domain_rejects = 0;
+    std::size_t injected_faults = 0;
+    std::size_t trials_attempted = 0;
     std::size_t first_reject_eval = 0;
     const char *first_reject_reason = "-";
     double max_start_resid = 0.0;
@@ -126,15 +130,25 @@ public:
     double last_valid_value = 0.0;
     bool have_last_valid = false;
 
-    // THE BEST POINT ACTUALLY VISITED, and why it must be tracked separately from the endpoint.
+    // THE BEST VALUE ACTUALLY VISITED, and why it is tracked separately from the endpoint.
     // dfpmin returns wherever its loop happened to stop, which is NOT necessarily the best point it
     // evaluated: a rejected trial perturbs the inverse-Hessian update and the forward-difference
-    // gradient, and the search can then walk DOWNHILL and exit there. Measured, not assumed --
-    // injecting a single rejection at evaluation 12 on the example alignment turned a +0.0377-nat rate
-    // gain into -0.4246, reported as a clean realised endpoint. Recording the best visited value is what
-    // makes that visible instead of silently publishing a loss as "the gain".
+    // gradient, and the search can then walk DOWNHILL and exit there. Measured, not assumed -- a single
+    // injected rejection turned a +0.0377-nat rate gain into -0.4246 on example.phy, reported as a clean
+    // realised endpoint.
+    //
+    // KNOWN BLIND SPOT, stated because a guard whose limits are undocumented is worse than none. This
+    // catches only the "walked past a better point" mode. The OTHER mode -- a rejected forward-difference
+    // probe poisoning the gradient by ~1e6/h ~ 1e10, so the search never moves at all -- produces zero
+    // shortfall BY CONSTRUCTION, because a search that does not move cannot walk past anything. On real
+    // data (gate 174461894, dna_fault6) that mode reported rate_monotone=1 and shortfall=0.005 while
+    // 4.19 nats sat unrecovered. `gain_suspect` below is what covers it; section 7.2's trust region in
+    // step 3 is what removes it.
+    //
+    // Only the VALUE is kept. An earlier revision also stored the best point's coordinates and never
+    // read them -- dead state that reads as a safeguard is worse than absent state. Step 3's section 7.6
+    // acceptance is where a best-point restore belongs, because there it is acted on.
     double best_value = std::numeric_limits<double>::infinity();
-    std::vector<double> best_var;
     bool have_best = false;
 
     double abortWith(const char *reason) {
@@ -146,27 +160,34 @@ public:
     /**
      * REJECT a trial point rather than abort the pass.
      *
-     * This is the correction to step 2's first cut, and the distinction is not cosmetic. An out-of-domain
-     * trial is not a solver failure: phi(r) = max_w l(w; r) is genuinely UNDEFINED where no feasible w
-     * gives a finite likelihood, so on the extended reals the minimised objective is +INF there and the
-     * line search is supposed to back off. Aborting instead threw away the whole pass on the first
-     * overshoot -- which is exactly what happened, on 4 of 4 cells, and it reported the loss as a
-     * "refused start" because the start check sat in front of the exit-reason check.
+     * An out-of-domain trial is not a solver failure: phi(r) = max_w l(w; r) is genuinely UNDEFINED where
+     * no feasible w gives a finite likelihood, so on the extended reals the minimised objective is +INF
+     * there and a LINE SEARCH is supposed to back off. Aborting instead threw away the whole pass on the
+     * first overshoot -- which is what happened on 4 of 4 cells, mislabelled "refused start" because the
+     * start check sat in front of the exit-reason check.
      *
-     * A large FINITE value is returned, not HUGE_VAL: dfpmin does arithmetic on f (slopes, quadratic and
-     * cubic interpolation inside lnsrch), and an infinity there propagates NaN into the step length
-     * instead of shortening it. The offset is scaled off the incumbent so it dominates any real gain at
-     * any alignment size without overflowing.
+     * A large FINITE value is returned, not HUGE_VAL. Measured in a harness driving IQ-TREE's own lnsrch:
+     * the FIRST infinity is survivable (tmplam = -slope/(2*(inf-fold-slope)) = 0, so alam shrinks 10x),
+     * but a SECOND consecutive infinity computes inf-inf in the cubic branch, alam becomes NaN, the
+     * `alam < alamin` exit test is false for NaN, and lnsrch NEVER TERMINATES.
+     *
+     * THE BASE IS FIXED FOR THE WHOLE PASS, and both properties are load-bearing:
+     *   * FIXED, because `last_valid_value` moves as the pass moves, so the same rejected r returned two
+     *     different values depending on when it was asked -- reintroducing, inside the fix, the very
+     *     "phi is not a function of its argument" defect that 774776fc was written to remove.
+     *   * SCALED off the incumbent objective, because a flat 1e6 is NOT a penalty on a real alignment:
+     *     both DNA cells sit at |lnL| = 5.697e6 and the AA cell at 7.608e6, so a rejected point would
+     *     score BETTER than every feasible point in the problem. That mattered most at the seed, where
+     *     there was no `last_valid_value` at all and the old code fell back to base = 0.
      */
+    double penalty_value = 0.0;      // set once, before any evaluation, from the incumbent objective
+
     double rejectDomain(const char *why) {
         ++domain_rejects;
         if (first_reject_eval == 0) { first_reject_eval = evaluations + 1; first_reject_reason = why; }
         ++evaluations;
-        const double base = have_last_valid ? last_valid_value : 0.0;
-        return base + 1.0e-3 * std::fabs(base) + 1.0e6;
+        return penalty_value;
     }
-
-    std::size_t ndimOfFree() const { return free_cat.size(); }
 
     // FAULT INJECTION, and why it is not optional. The out-of-domain path only fires when a trial point
     // makes the weight problem insoluble, which on a cheap cell never happens -- so a cheap-cell run
@@ -180,10 +201,17 @@ public:
         if (write_failed) return abortWith("arithmetic-failure");
         tree->clearAllPartialLH();
 
-        if (fault_at_eval != 0 && evaluations + 1 == fault_at_eval)
-            return rejectDomain("injected-fault");
+        if (fault_at_eval != 0 && evaluations + 1 == fault_at_eval) {
+            ++injected_faults;            // counted separately: a cell with NATURAL rejects cannot be
+            return rejectDomain("injected-fault");   // audited by the total, only by this
+        }
 
-        if (weight_solves >= trial_budget) return abortWith("trial-budget");
+        // Budget on TRIALS ATTEMPTED, not weight solves completed. Now that a rejection extends the pass
+        // instead of ending it, a trial that rejects before its solve (extract-failed, or the injected
+        // fault) still costs a full component extraction -- 0.33-2.39 s per cell in gate 174461894 -- and
+        // counting only completed solves let that cost escape the ceiling the option documents.
+        ++trials_attempted;
+        if (trials_attempted > trial_budget) return abortWith("trial-budget");
 
         using Clock = std::chrono::steady_clock;
         const auto t0 = Clock::now();
@@ -227,10 +255,22 @@ public:
         if (r.reason == freerate_profile::ExitReason::MAX_ITERATIONS) ++profile_capped_count;
         else if (r.reason == freerate_profile::ExitReason::NUMERICAL_STALL) {
             ++profile_stall_count;
-            if (std::isfinite(gap)) {
-                max_gap_stall = std::max(max_gap_stall, gap);
-                if (gap <= forcing_gap) ++stall_below_forcing;
+            // DO NOT discriminate on bestGapBound() here. The stall this split exists to classify is the
+            // negative-gap guard, and that guard's own path sets gap_is_valid_bound = false, so
+            // bestGapBound() returns +inf unless a GLOBAL Newton bound happens to exist. Testing a
+            // non-finite gap would skip both counters and print max_gap_stall = 0.000e+00 --
+            // indistinguishable from "there were no stalls", and reading naturally as "the stalls
+            // converged to zero gap". The signed directional residual and its resolution floor are the
+            // quantities that actually separate an arithmetic-floor stall from a degenerate tail.
+            const double signed_gap = r.signed_directional_gap;
+            const double floor_gap = r.gap_noise_floor;
+            if (std::isfinite(signed_gap)) {
+                max_gap_stall = std::max(max_gap_stall, std::fabs(signed_gap));
+                // At or below its own resolution floor the gap carries NO information about optimality,
+                // so such a stall is a converged solve wearing a failure label, not a tail.
+                if (std::fabs(signed_gap) <= std::max(floor_gap, forcing_gap)) ++stall_below_forcing;
             }
+            if (std::isfinite(floor_gap)) max_noise_floor = std::max(max_noise_floor, floor_gap);
         }
         else if (r.reason != freerate_profile::ExitReason::CONVERGED_GAP) ++profile_other_count;
 
@@ -243,13 +283,29 @@ public:
             r.reason == freerate_profile::ExitReason::INFEASIBLE_POLYTOPE)
             return rejectDomain(freerate_profile::exitReasonName(r.reason));
 
-        // A refused start is NOT a failure. The literal weight problem is concave over a polytope, so a
-        // solve certified to gap G returns the same maximiser to within G whatever point it started from;
-        // the start buys iterations, not correctness. Count it as the cost signal it is.
+        // A refused start is not, by itself, a failure: it costs iterations, not correctness, PROVIDED the
+        // solve that ran is certified. Count it as the cost signal it is.
+        //
+        // What this must NOT say, and what an earlier revision of this comment did say, is that
+        // "concavity means a solve certified to gap G returns the same maximiser to within G whatever
+        // point it started from". That is false: a gap bounds the OBJECTIVE shortfall l* - l(w), not the
+        // distance ||w - w*||, and freerateprofile.h records that on near-degenerate high-k problems the
+        // Frank-Wolfe gap overstates the true shortfall by >=1e7x. Nothing about a gap pins the argmax.
         if (!r.supplied_start_used) ++refused_start_count;
 
-        if (!profiledPointIsFeasible(r)) { ++infeasible_count; return rejectDomain("infeasible-profiled-point"); }
         if (r.weight.size() != (std::size_t)k) return abortWith("size-mismatch");
+        if (!profiledPointIsFeasible(r)) { ++infeasible_count; return rejectDomain("infeasible-profiled-point"); }
+
+        // THE CERTIFICATION GATE. MAX_ITERATIONS and NUMERICAL_STALL are not hard failures, so they fall
+        // through the reason check above -- and without this they would be written into the model and
+        // returned as phi(r) with the gap never consulted. A truncated iterate is start-dependent BY
+        // DEFINITION, so accepting one is exactly how a start-dependent value enters an objective this
+        // file spends its opening comment insisting is a function of its argument. Refuse instead: an
+        // uncertified weight solve does not define phi(r), so the point is treated as out of domain.
+        if (!r.certifiesTo(forcing_gap)) {
+            ++uncertified_count;
+            return rejectDomain(freerate_profile::exitReasonName(r.reason));
+        }
 
         for (int c = 0; c < k; ++c) site_rate->setProp(c, r.weight[(std::size_t)c]);
         const auto t2 = Clock::now();
@@ -259,11 +315,7 @@ public:
 
         last_valid_value = value;
         have_last_valid = true;
-        if (value < best_value) {
-            best_value = value;
-            best_var.assign(x + 1, x + 1 + ndimOfFree());   // dfpmin indexes from 1
-            have_best = true;
-        }
+        if (value < best_value) { best_value = value; have_best = true; }
         ++evaluations;
         return value;
     }
@@ -397,6 +449,13 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     oracle.trial_budget = opt.rate_trial_budget;
     oracle.fault_at_eval =
         (std::size_t)envPositiveDouble("IQ_FR_SOLVE_FAULT_AT", 0.0);   // 0 = off; gate-only
+
+    // Fix the rejection penalty BEFORE any evaluation, including the seed. The incumbent objective is
+    // -lnl_after_w1, so this is strictly worse than the incumbent and worse than any improving trial, at
+    // whatever magnitude this alignment happens to have. Setting it here rather than lazily is what makes
+    // a rejection AT THE SEED a penalty instead of a reward.
+    oracle.penalty_value =
+        std::fabs(lnl_after_w1) * 1.001 + 1.0e6;
     oracle.frozen_ratio.assign((std::size_t)k, 0.0);
     oracle.free_cat.clear();
     for (std::size_t i = 0; i < active.size(); ++i)
@@ -431,6 +490,21 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     const double seed_lnl = -oracle.targetFunk(var.data());
     const double seed_err = seed_lnl - lnl_after_w1;
 
+    // ...and ACT on it. An earlier revision measured seed_err, printed it, and branched on nothing, so a
+    // seed that failed its own identity check simply proceeded. The bar is loose on purpose: this is a
+    // re-profiled likelihood at the same point, so it should agree to solver resolution, and anything
+    // near tau_L is a parameterisation error rather than noise.
+    const double seed_bar = std::max(1.0e-6, 1.0e-9 * std::fabs(base_lnl));
+    if (!std::isfinite(seed_err) || std::fabs(seed_err) > seed_bar) {
+        fprintf(stderr,
+                "[FRSOLVE] ctx=%s PHASE1PROBE STATUS=SEED_IDENTITY_FAILED seed_err=%.6e bar=%.6e "
+                "-- the identity point did not reproduce the incumbent, so the parameterisation is wrong "
+                "and no gain below would be a measurement\n",
+                tag, seed_err, seed_bar);
+        restoreAll();
+        return;
+    }
+
     const double gtol = opt.rate_grad_target / std::max(std::fabs(base_lnl), 1.0);
     const auto t_rate = Clock::now();
     oracle.minimizeMultiDimen(var.data(), ndim, lower.data(), upper.data(), bound_check.get(), gtol);
@@ -458,16 +532,47 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     // How much better was the BEST point the pass visited than the point it stopped at? This is a
     // property of the OPTIMISER, not of the model, and step 3's section 7.6 acceptance is what will
     // eventually make it zero by construction. Step 2 only has to refuse to hide it.
-    const double best_lnl = oracle.have_best ? -oracle.best_value : lnl_after_rate;
-    const double endpoint_shortfall = realised ? std::max(0.0, best_lnl - lnl_after_rate) : 0.0;
-    const bool rate_monotone = realised && (lnl_after_rate >= lnl_after_w1);
+    const double kNan = std::numeric_limits<double>::quiet_NaN();
+    const double best_lnl = oracle.have_best ? -oracle.best_value : kNan;
+    // NaN, not 0.0, when the endpoint was never realised: zero is the most reassuring possible value and
+    // it was being printed for the least trustworthy case.
+    const double endpoint_shortfall =
+        realised && oracle.have_best ? std::max(0.0, best_lnl - lnl_after_rate) : kNan;
+    const int rate_monotone = !realised ? -1 : (lnl_after_rate >= lnl_after_w1 ? 1 : 0);
+
+    // THE FROZEN-PASS DETECTOR -- the blind spot endpoint_shortfall cannot cover.
+    //
+    // A rejected forward-difference probe corrupts one gradient component by ~penalty/h ~ 1e10 and the
+    // search then never moves, so it walks past nothing and the shortfall is zero BY CONSTRUCTION. On
+    // real data (gate 174461894, dna_fault6) that printed rate_monotone=1, shortfall=0.005 while the
+    // un-injected control on the same cell recovered 4.192 nats.
+    //
+    // So: if the pass rejected at least one point AND ended up with essentially no gain, the zero cannot
+    // be distinguished from a converged zero and must not be read as one. This deliberately does NOT
+    // fire on the healthy case -- dna_gap8 rejected 10 points and still gained 4.19 nats, because those
+    // rejections landed in line-search evaluations, which backtrack correctly.
+    const double kMeaningful = 1.0e-6;
+    const bool gain_suspect =
+        (oracle.domain_rejects > 0) &&
+        (!realised || !(lnl_after_rate - lnl_after_w1 > kMeaningful));
 
     // ---- cycle step 5: re-profile weights at the new rates ----
+    //
+    // SKIPPED ENTIRELY unless the rate endpoint was realised, and this is not caution -- it is the fix for
+    // a measured defect. When the realise call rejects, `lnl_after_rate` is reset to `lnl_after_w1`, but
+    // the model has ALREADY been mutated: writeRates(var) wrote the endpoint rates, while the proportions
+    // are whichever trial last succeeded. Running step 5 on that mismatched (r, w) pair would (a) read
+    // e2.actual_moment != 1 and pin the constraint level to an arbitrary history-dependent value -- the
+    // exact defect this file's opening comment condemns -- and (b) compare `moved` against a likelihood
+    // from the INCUMBENT rates, so any gain the weight block picked up would be credited against the
+    // wrong baseline. Gate 174461894 showed precisely that: dna_fault12 reported rate_gain = 0.000 and
+    // w2_gain = 4.198, transferring the rate block's entire gain to the weight block -- the "weights
+    // dominate" signature this track has already retracted twice.
     const auto t_w2 = Clock::now();
     ComponentExtraction e2;
-    double lnl_final = lnl_after_rate;
+    double lnl_final = realised ? lnl_after_rate : kNan;
     double w2_gap = std::numeric_limits<double>::infinity();
-    if (extractComponentsAtUniformProp(tree, &e2, &why)) {
+    if (realised && extractComponentsAtUniformProp(tree, &e2, &why)) {
         const freerate_profile::ProfileResult w2 =
             freerate_profile::solve(literalProblemFrom(e2, e2.actual_moment), w_opt, e2.weight);
         w2_gap = w2.bestGapBound();
@@ -485,6 +590,17 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     }
     const double w2_secs = secondsSince(t_w2);
     const double total_secs = secondsSince(t_start);
+
+    // ---- the section 4.1 contract, measured on the FITTED state, BEFORE the restore ----
+    //
+    // This capture point is the whole measurement. An earlier revision computed it after restoreAll(),
+    // where RateFree has already renormalised so that sum_j prop_j * rate_j == 1 by construction -- so it
+    // printed 1.000000000000 for any input whatsoever and certified nothing. The artifact of gate
+    // 174459875 says so plainly in hindsight: all four cells ABORTED, and all four still printed exactly
+    // 1.000000000000. A genuine measurement of a fitted mixture cannot be exactly 1 on four aborted
+    // passes. Here it reads the live fitted proportions and rates, so a drift off the contract is visible.
+    double moment_out = 0.0;
+    for (int c = 0; c < k; ++c) moment_out += site_rate->getProp(c) * site_rate->getRate(c);
 
     // ---- restore and PROVE it element-wise ----
     restoreAll();
@@ -506,12 +622,6 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     }
 
     // ---- report: cost first, because cost is what step 2 exists to decide ----
-    // The realised mean rate of the FITTED mixture. The section 4.1 contract is sum_j w_j r_j = 1, and
-    // nothing above enforces it on the live proportions -- only measuring it can show whether the pass
-    // stayed on the contract or drifted off it into the global-scale direction section 7.2 excludes.
-    double moment_out = 0.0;
-    for (int c = 0; c < k; ++c) moment_out += site_rate->getProp(c) * site_rate->getRate(c);
-
     const double weight_solves = (double)oracle.weight_solves;
     fprintf(stderr,
             "[FRSOLVE] ctx=%s PHASE1PROBE k=%d ndim=%d anchor=%d frozen=%d base_lnl=%.9f "
@@ -523,21 +633,26 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
     fprintf(stderr,
             "[FRSOLVE] ctx=%s PHASE1COST weight_solves=%zu rate_evals=%zu profile_iters=%zu "
             "profile_capped=%zu profile_stall=%zu profile_other=%zu refused_start=%zu infeasible=%zu "
-            "extract_failed=%zu aborted=%d abort_reason=%s realised=%d "
-            "rate_monotone=%d best_lnl=%.9f endpoint_shortfall=%.9f "
-            "domain_rejects=%zu first_reject_eval=%zu first_reject_reason=%s max_start_resid=%.3e "
-            "forcing_gap=%.1e max_gap_seen=%.3e max_gap_stall=%.3e stall_below_forcing=%zu "
+            "extract_failed=%zu uncertified=%zu aborted=%d abort_reason=%s realised=%d "
+            "rate_monotone=%d gain_suspect=%d best_lnl=%.9f endpoint_shortfall=%.9f "
+            "domain_rejects=%zu injected_faults=%zu trials_attempted=%zu "
+            "first_reject_eval=%zu first_reject_reason=%s max_start_resid=%.3e "
+            "forcing_gap=%.1e max_gap_seen=%.3e max_gap_stall=%.3e max_noise_floor=%.3e "
+            "stall_below_forcing=%zu "
             "inf_gap=%zu w2_gap=%.3e moment_out=%.12f "
             "secs_total=%.2f secs_w1=%.2f secs_rate=%.2f secs_w2=%.2f "
             "secs_extract=%.3f secs_solve=%.3f secs_realise=%.3f solve_per_trial=%.4f\n",
             tag, oracle.weight_solves, oracle.evaluations, oracle.profile_iterations_total,
             oracle.profile_capped_count, oracle.profile_stall_count, oracle.profile_other_count,
             oracle.refused_start_count, oracle.infeasible_count,
-            oracle.extract_failed_count, oracle.aborted ? 1 : 0, oracle.abort_reason, realised ? 1 : 0,
-            rate_monotone ? 1 : 0, best_lnl, endpoint_shortfall,
-            oracle.domain_rejects, oracle.first_reject_eval, oracle.first_reject_reason,
+            oracle.extract_failed_count, oracle.uncertified_count,
+            oracle.aborted ? 1 : 0, oracle.abort_reason, realised ? 1 : 0,
+            rate_monotone, gain_suspect ? 1 : 0, best_lnl, endpoint_shortfall,
+            oracle.domain_rejects, oracle.injected_faults, oracle.trials_attempted,
+            oracle.first_reject_eval, oracle.first_reject_reason,
             oracle.max_start_resid, opt.forcing_gap,
-            oracle.max_gap_seen, oracle.max_gap_stall, oracle.stall_below_forcing,
+            oracle.max_gap_seen, oracle.max_gap_stall, oracle.max_noise_floor,
+            oracle.stall_below_forcing,
             oracle.inf_gap_count, w2_gap, moment_out,
             total_secs, w1_secs, rate_secs, w2_secs,
             oracle.secs_extract, oracle.secs_solve, oracle.secs_realise,
@@ -546,12 +661,20 @@ void reportPhase1SolveProbe(PhyloTree *tree, const char *context) {
             "[FRSOLVE] ctx=%s PHASE1PROBE STATUS=%s restore_err=%.3e max_param_err=%.3e "
             "-- step 2 MEASURES the re-profiled objective's cost; it certifies nothing, applies no "
             "section 7.6 acceptance, and commits nothing%s\n",
-            tag, oracle.aborted ? "ABORTED" : (realised ? "LEGACY_UNCERTIFIED" : "NOT_REALISED"),
+            tag,
+            oracle.aborted ? "ABORTED"
+                           : (!realised ? "NOT_REALISED"
+                                        : (gain_suspect ? "GAIN_SUSPECT" : "LEGACY_UNCERTIFIED")),
             restored_lnl - base_lnl, max_param_err,
             oracle.aborted
                 ? " -- the pass ABORTED, so its gain is NOT a measurement"
-                : (realised ? ""
-                            : " -- the endpoint could not be realised, so its gain is NOT a measurement"));
+                : (!realised
+                       ? " -- the endpoint could not be realised, so its gain is NOT a measurement"
+                       : (gain_suspect
+                              ? " -- the pass rejected a trial point AND ended with no material gain, so"
+                                " this zero cannot be distinguished from a converged zero and is NOT a"
+                                " measurement"
+                              : "")));
 
     if (max_param_err > 0.0) {
         fprintf(stderr,
