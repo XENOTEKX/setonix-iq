@@ -20,6 +20,7 @@
 #include <cmath>          // G.4.2: std::isnan for the JOLT eligibility/fallback check
 #include "rateinvar.h"
 #include "modelfactory.h"
+#include "freerateeval.h" // Stage-0 weight-block residual attribution (inert unless IQ_FR_ATTRIB)
 #include "rategamma.h"
 #include "rategammainvar.h"
 #include "modelmarkov.h"
@@ -1760,6 +1761,11 @@ double ModelFactory::optimizeParameters(int fixed_len, bool write_info,
             tree->clearAllPartialLH();
         }
     }
+
+    // Stage-0 residual attribution for the weight block (MODELFINDER-FULL-GPU-PLAN.md §3.4 items 1-2).
+    // Placed AFTER the rescaleRates/scaleLength block above so the state measured is the canonical one
+    // that production actually publishes. Returns immediately unless IQ_FR_ATTRIB is set.
+    freerate::reportWeightBlockAttribution(tree, "post-optimizeParameters");
 
 #ifdef _IQTREE_MPI
     // synchronize the checkpoints of the other processors

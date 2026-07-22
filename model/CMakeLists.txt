@@ -19,6 +19,9 @@ ratemeyerdiscrete.cpp ratemeyerdiscrete.h
 ratemeyerhaeseler.cpp ratemeyerhaeseler.h
 ratekategory.cpp ratekategory.h
 ratefree.cpp ratefree.h
+freeratefit.cpp freeratefit.h
+freerateprofile.cpp freerateprofile.h
+freerateeval.cpp freerateeval.h
 ratefreeinvar.cpp ratefreeinvar.h
 rateheterotachy.cpp rateheterotachy.h
 rateheterotachyinvar.cpp rateheterotachyinvar.h

@@ -10,6 +10,7 @@
 #include "model/partitionmodelplen.h"
 #include "utils/timeutil.h"
 #include "model/modelmarkov.h"
+#include "model/freerateeval.h" // Stage-0 attribution: typed decline for partitions
 
 /**********************************************************
  * class PartitionModelPlen
@@ -189,7 +190,13 @@ double PartitionModelPlen::optimizeParameters(int fixed_len, bool write_info, do
     }
 
     cout << "Parameters optimization took " << i-1 << " rounds (" << getRealTime()-begin_time << " sec)" << endl << endl;
-    
+
+    // This override never calls ModelFactory::optimizeParameters, so the Stage-0 weight-block
+    // attribution hook living there is unreachable for -p/-q and such a run would otherwise emit
+    // nothing at all. Announce the gap explicitly rather than leaving a silent hole that reads as a pass.
+    freerate::reportPartitionedDecline(tree, "post-optimizeParameters",
+                                       "PartitionModelPlen", (int)ntrees);
+
     return tree_lh;
 }
 
