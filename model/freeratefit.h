@@ -208,6 +208,19 @@ struct FreeRateBlockMetrics {
         std::numeric_limits<double>::infinity();
 
     bool iteration_cap_reached = false;
+
+    /**
+     * Witness that the producer actually TRACKED the terminal failure conditions below.
+     *
+     * Without it those three flags are unfalsifiable. They default to false, so a producer that never
+     * looked -- or that has no line search to fail, or no support-event handler at all -- passes the
+     * "no terminal failure occurred" requirement of MODELFINDER-FULL-GPU-PLAN.md §8.2 by silence.
+     * Absence of evidence was being read as evidence of absence, on the one gate whose entire purpose is
+     * to catch a solve that went wrong. Every other metric in this struct already carries such a witness
+     * (support_events_evaluated, restart_portfolio_evaluated, cpu_gpu_parity_evaluated,
+     * final_likelihood_verified); these three were the omission.
+     */
+    bool termination_flags_tracked = false;
     bool line_search_failed = false;
     bool unresolved_support_event = false;
     bool arithmetic_error = false;

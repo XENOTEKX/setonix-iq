@@ -98,6 +98,9 @@ FreeRateFitResult passingFit() {
     // point; without this witness the result is not certifiable, by design.
     fit.metrics.final_likelihood_verified = true;
     fit.metrics.final_likelihood_recheck_delta = 1e-9;
+    // The producer must witness that it tracked the terminal failure conditions; unset flags alone are
+    // not evidence that nothing went wrong.
+    fit.metrics.termination_flags_tracked = true;
     fit.starts_attempted = 2;
     fit.starts_completed = 2;
     fit.counts.value = 12;
@@ -391,6 +394,66 @@ void testFailClosedCertification() {
     fit.metrics.weight_gap = 10.0 * fit.thresholds.weight_gap;
     fit.metrics.weight_best_bound = fit.metrics.weight_gap;
     CHECK(!fit.certifiedForSelection(&reason));
+
+    // F9. Unset failure flags certify only when something was watching. A producer with no line search
+    // and no support-event handler must not pass the "nothing went wrong" gate by silence.
+    fit = passingFit();
+    fit.metrics.termination_flags_tracked = false;
+    CHECK(!fit.certifiedForSelection(&reason));
+
+    // F6. FALLBACK_CERTIFIED named no geometry, so it escaped BOTH the interior and the boundary test.
+    // The same point could certify or not depending only on which success label the producer chose.
+    //
+    // The boundary must be one the recomputation above actually DERIVES from the point, or the fit is
+    // rejected by the "reported boundary activity disagrees with the point/domain" check and this test
+    // passes for the wrong reason -- it did, and the mutant survived. schema-v1 scope has
+    // optimize_branches/pinv/substitution all false, so branch and pinv boundaries are never derived.
+    // rate_ratio_lower is derivable and is NOT a support boundary, which isolates F6 exactly: no
+    // insertion pricing is owed, so the ONLY thing that can reject this point is the status/geometry test.
+    {
+        FreeRateFitResult fb = passingFit();
+        const double ratio = fb.scope.rate_ratio_lower;
+        const double w0 = 0.5, w1 = 0.5;
+        const double r1 = 1.0 / (w0 * ratio + w1);   // pins sum(w*r) == 1
+        const double r0 = ratio * r1;                // pins r0/r1 == rate_ratio_lower
+        fb.final_point.rates = {r0, r1};
+        fb.final_point.weights = {w0, w1};
+        fb.metrics.boundary.rate_ratio_lower = true;
+
+        fb.status = FreeRateFitStatus::BOUNDARY_LOCAL_STATIONARY_CERTIFIED;
+        CHECK(fb.certifiedForSelection(&reason));    // the honest label for this point certifies
+        fb.status = FreeRateFitStatus::FALLBACK_CERTIFIED;
+        CHECK(!fb.certifiedForSelection(&reason));   // relabelling it must NOT dodge the obligation
+
+        // ... and an interior fallback is still perfectly legitimate.
+        fit = passingFit();
+        fit.status = FreeRateFitStatus::FALLBACK_CERTIFIED;
+        CHECK(fit.certifiedForSelection(&reason));
+    }
+
+    // F7. Two rates 2e-11 apart are the same mixture component to twelve significant figures, and an
+    // unidentifiable direction. Priced on the feasibility tolerance (1e-12) they read as DISTINCT, so the
+    // point certified as interior with no continuous insertion pricing. Priced on the solver's own
+    // log-rate resolution they are a collision, which is a support boundary and demands pricing.
+    {
+        FreeRateFitResult collide = passingFit();
+        collide.final_point.rates = {1.0, 1.0 + 2e-11};
+        collide.final_point.weights = {0.5, 0.5};
+        // Re-gauge so the point stays legal: sum(w)=1 and sum(w*r)=1 must still hold.
+        const double m = 0.5 * collide.final_point.rates[0] +
+                         0.5 * collide.final_point.rates[1];
+        collide.final_point.rates[0] /= m;
+        collide.final_point.rates[1] /= m;
+        collide.status = FreeRateFitStatus::BOUNDARY_LOCAL_STATIONARY_CERTIFIED;
+        // Without insertion pricing a collided point must NOT certify.
+        collide.metrics.continuous_insertion_evaluated = false;
+        CHECK(!collide.certifiedForSelection(&reason));
+        // With pricing it may.
+        collide.metrics.boundary.rate_collision = true;
+        collide.metrics.continuous_insertion_evaluated = true;
+        collide.metrics.continuous_insertion_gain_upper_bound = 1e-9;
+        CHECK(collide.certifiedForSelection(&reason));
+    }
 
     fit = passingFit();
     fit.final_point.rates = {1.25, 0.5};

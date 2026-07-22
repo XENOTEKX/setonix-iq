@@ -149,16 +149,34 @@ bool pointHasZeroWeight(const FreeRatePoint &point,
     return false;
 }
 
+/**
+ * Do two adjacent rate atoms name the same mixture component?
+ *
+ * F7. This used to be called with the FEASIBILITY tolerance (constraint_residual, 1e-12), which is the
+ * wrong quantity entirely: that number says how exactly an equality constraint is satisfied, not how far
+ * apart two rates must be to be distinguishable model components. At 1e-12 two rates 2e-11 apart -- the
+ * same component to twelve significant figures, and a genuinely unidentifiable direction in the mixture
+ * -- were reported as distinct, so rate_collision stayed false, supportBoundary() stayed false, and the
+ * point certified as interior with NO continuous insertion pricing required.
+ *
+ * The right scale is the solver's own resolution. Plan §8.2 measures rate directions as max_j |d log r_j|
+ * and accepts steps up to tau_x = 1e-6 in those scaled coordinates, so two atoms closer than that in LOG
+ * ratio are indistinguishable to the solver that produced them. Comparing log ratios rather than scaled
+ * absolute differences also makes the test scale-free, which matters because the gauge fixes only the
+ * weighted mean and the individual rates span orders of magnitude.
+ */
 bool pointHasRateCollision(const FreeRatePoint &point,
                            double tolerance) {
     for (std::size_t i = 1; i < point.rates.size(); ++i) {
-        const double scale = std::max(1.0,
-            std::max(std::fabs(point.rates[i - 1]),
-                     std::fabs(point.rates[i])));
-        if (std::fabs(point.rates[i] - point.rates[i - 1]) <=
-            tolerance * scale) {
-            return true;
+        const double a = point.rates[i - 1];
+        const double b = point.rates[i];
+        if (!(a > 0.0) || !(b > 0.0)) {
+            // A non-positive atom is not a rate; fall back to the absolute test rather than take a log.
+            const double scale = std::max(1.0, std::max(std::fabs(a), std::fabs(b)));
+            if (std::fabs(b - a) <= tolerance * scale) return true;
+            continue;
         }
+        if (std::fabs(std::log(b) - std::log(a)) <= tolerance) return true;
     }
     return false;
 }
@@ -804,8 +822,11 @@ bool FreeRateFitResult::certifiedForSelection(std::string *reason) const {
 
     const double bound_tolerance = thresholds.constraint_residual;
     const bool zero_weight = pointHasZeroWeight(final_point, bound_tolerance);
+    // F7. Identifiability scale, NOT the feasibility scale. scaled_step is the solver's own accepted
+    // step in log-rate coordinates (plan §8.2 tau_x), so two atoms closer than that are the same
+    // component as far as the producer could tell.
     const bool rate_collision =
-        pointHasRateCollision(final_point, bound_tolerance);
+        pointHasRateCollision(final_point, thresholds.scaled_step);
     bool rate_ratio_lower = false;
     const double reference_rate = final_point.rates.back();
     for (std::size_t i = 0; i + 1 < final_point.rates.size(); ++i) {
@@ -874,6 +895,18 @@ bool FreeRateFitResult::certifiedForSelection(std::string *reason) const {
         setError(reason, "boundary status was used for an interior point");
         return false;
     }
+    // F6. FALLBACK_CERTIFIED is production-certified but named no geometry, so it was the one success
+    // label that escaped both tests above. That let the SAME point certify or not depending only on which
+    // label the producer chose -- and only supportBoundary() forces insertion pricing, so a fallback
+    // sitting on a gauge-interval or branch bound certified with nothing recording it, while an identical
+    // LOCAL_STATIONARY_CERTIFIED point was rejected. A producer whose fallback genuinely lands on a
+    // boundary must say so with BOUNDARY_LOCAL_STATIONARY_CERTIFIED and accept that status's obligations.
+    if (status == FreeRateFitStatus::FALLBACK_CERTIFIED && boundary) {
+        setError(reason,
+                 "fallback status was used for a boundary point; declare the "
+                 "boundary status instead");
+        return false;
+    }
     if (metrics.boundary.supportBoundary() &&
         (!metrics.continuous_insertion_evaluated ||
         !finite(metrics.continuous_insertion_gain_upper_bound) ||
@@ -915,6 +948,14 @@ bool FreeRateFitResult::certifiedForSelection(std::string *reason) const {
     // over their last ten iterations.  A capped fit whose residuals do not
     // pass is rejected by those gates and reported as MAXITER.
     // metrics.iteration_cap_reached remains recorded and serialized.
+    // F9. The witness is checked BEFORE the flags: unset flags mean "nothing went wrong" only if
+    // something was watching. Otherwise this gate is satisfied by a producer that never implemented it.
+    if (!metrics.termination_flags_tracked) {
+        setError(reason,
+                 "terminal failure conditions were not tracked; unset flags are "
+                 "not evidence that nothing went wrong");
+        return false;
+    }
     if (metrics.line_search_failed ||
         metrics.unresolved_support_event || metrics.arithmetic_error) {
         setError(reason, "a terminal failure flag is set");
@@ -1028,6 +1069,8 @@ std::string stableJson(const FreeRateBlockMetrics &metrics) {
         stableDouble(metrics.final_likelihood_recheck_delta);
     result += ",\"iteration_cap_reached\":" +
         stableBool(metrics.iteration_cap_reached);
+    result += ",\"termination_flags_tracked\":" +
+        stableBool(metrics.termination_flags_tracked);
     result += ",\"line_search_failed\":" +
         stableBool(metrics.line_search_failed);
     result += ",\"unresolved_support_event\":" +
